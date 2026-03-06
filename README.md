@@ -62,6 +62,16 @@ All lifecycle transitions use three-phase locking with optimistic concurrency (v
 
 ## Quick start
 
+One command to start everything:
+
+```bash
+./start.sh
+```
+
+This checks prerequisites, starts the orchestrator via Docker, waits for it to be healthy, then starts the proxy. If Docker isn't available, it runs the orchestrator directly.
+
+### Manual steps (if you prefer)
+
 ### 1. Start the orchestrator
 
 ```bash
