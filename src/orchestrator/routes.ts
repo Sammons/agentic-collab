@@ -45,6 +45,30 @@ export type RouteContext = {
   orchestratorSecret: string | null;
 };
 
+/**
+ * Resolve the proxy ID for an agent at spawn/resume time.
+ * Priority: explicit body value > agent's existing proxyId > proxyHost match > any available proxy.
+ */
+function resolveProxyId(ctx: RouteContext, agent: { proxyId: string | null; proxyHost: string | null }, bodyProxyId?: string): string {
+  // 1. Explicit override from request body
+  if (bodyProxyId) return bodyProxyId;
+
+  // 2. Already assigned (e.g. from a previous spawn)
+  if (agent.proxyId) return agent.proxyId;
+
+  // 3. Match by proxyHost preference
+  const proxies = ctx.db.listProxies();
+  if (agent.proxyHost) {
+    const match = proxies.find(p => p.proxyId === agent.proxyHost);
+    if (match) return match.proxyId;
+  }
+
+  // 4. Fall back to any registered proxy
+  if (proxies.length > 0) return proxies[0]!.proxyId;
+
+  return '';
+}
+
 type RouteHandler = (req: IncomingMessage, res: ServerResponse, match: URLPatternResult, ctx: RouteContext) => Promise<void>;
 
 type Route = {
@@ -422,7 +446,7 @@ route('POST', '/api/agents/:name/spawn', async (req, res, match, ctx) => {
       thinking: (body.thinking as string | undefined) ?? agent.thinking ?? undefined,
       cwd: (body.cwd as string | undefined) ?? agent.cwd,
       persona: (body.persona as string | undefined) ?? agent.persona ?? undefined,
-      proxyId: (body.proxyId as string | undefined) ?? agent.proxyId ?? '',
+      proxyId: resolveProxyId(ctx, agent, body.proxyId as string | undefined),
       task: body.task as string | undefined,
     });
 
@@ -439,6 +463,15 @@ route('POST', '/api/agents/:name/resume', async (req, res, match, ctx) => {
 
   try {
     const lifecycleCtx = makeLifecycleCtx(ctx);
+    const agent = ctx.db.getAgent(name);
+    if (!agent) return json(res, 404, { error: 'Agent not found' });
+
+    // Pre-assign proxy if the agent doesn't have one (e.g. first resume after persona sync)
+    const proxyId = resolveProxyId(ctx, agent, body.proxyId as string | undefined);
+    if (proxyId && !agent.proxyId) {
+      ctx.db.updateAgentState(name, agent.state, agent.version, { proxyId });
+    }
+
     const result = await resumeAgent(lifecycleCtx, name, {
       task: body.task as string | undefined,
     });

@@ -18,7 +18,9 @@ function exec(cmd: string): string {
 
 export function createSession(sessionName: string, cwd: string): void {
   validateSessionName(sessionName);
-  exec(`tmux new-session -d -s '${esc(sessionName)}' -c '${esc(cwd)}'`);
+  // Unset CLAUDECODE so spawned Claude Code instances don't think they're nested.
+  // The proxy may itself be launched from within a Claude Code session.
+  exec(`tmux new-session -d -s '${esc(sessionName)}' -c '${esc(cwd)}' -e CLAUDECODE=`);
 }
 
 export function hasSession(sessionName: string): boolean {

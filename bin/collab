@@ -1,0 +1,308 @@
+#!/usr/bin/env node
+
+/**
+ * collab — CLI for agentic-collab orchestrator.
+ *
+ * Auto-discovers orchestrator URL and shared secret.
+ * Designed to be used by agents inside tmux sessions or by humans on the host.
+ *
+ * Environment variables (all optional — auto-discovery handles the common case):
+ *   ORCHESTRATOR_URL        — Override orchestrator URL
+ *   ORCHESTRATOR_SECRET     — Override secret
+ *   ORCHESTRATOR_SECRET_FILE — Override secret file path
+ *   COLLAB_AGENT            — Default agent name for send/reply (set by orchestrator)
+ */
+
+import { readFileSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { homedir } from 'node:os';
+import { execSync } from 'node:child_process';
+
+// ── Config Resolution ──
+
+const CONFIG_DIR = process.env['AGENTIC_COLLAB_CONFIG_DIR']
+  ?? join(homedir(), '.config', 'agentic-collab');
+
+function resolveSecret() {
+  const env = process.env['ORCHESTRATOR_SECRET'];
+  if (env !== undefined) return env || null;
+
+  const file = process.env['ORCHESTRATOR_SECRET_FILE'];
+  if (file) {
+    try { return readFileSync(file, 'utf-8').trim() || null; } catch { return null; }
+  }
+
+  try {
+    return readFileSync(join(CONFIG_DIR, 'secret'), 'utf-8').trim() || null;
+  } catch { return null; }
+}
+
+function discoverViaDocker() {
+  try {
+    const raw = execSync(
+      'docker ps --filter "label=io.agentic-collab.role=orchestrator" --format "{{.Ports}}"',
+      { timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] },
+    ).toString().trim();
+    if (!raw) return null;
+    const match = raw.match(/(?:\d+\.\d+\.\d+\.\d+|::):(\d+)->/);
+    if (match) return `http://localhost:${match[1]}`;
+  } catch {}
+  return null;
+}
+
+async function discoverOrchestrator() {
+  const env = process.env['ORCHESTRATOR_URL'];
+  if (env) return env;
+
+  const docker = discoverViaDocker();
+  if (docker) {
+    try {
+      const r = await fetch(`${docker}/api/orchestrator/status`, { signal: AbortSignal.timeout(3000) });
+      if (r.ok) return docker;
+    } catch {}
+  }
+
+  for (const port of [3000, 3001]) {
+    const url = `http://localhost:${port}`;
+    try {
+      const r = await fetch(`${url}/api/orchestrator/status`, { signal: AbortSignal.timeout(3000) });
+      if (r.ok) return url;
+    } catch {}
+  }
+
+  return null;
+}
+
+// ── HTTP Helpers ──
+
+let _host = null;
+let _secret = null;
+
+async function init() {
+  _secret = resolveSecret();
+  _host = await discoverOrchestrator();
+  if (!_host) {
+    console.error('error: could not find orchestrator (tried Docker discovery + localhost:3000/3001)');
+    console.error('  set ORCHESTRATOR_URL or start the orchestrator first');
+    process.exit(1);
+  }
+}
+
+function headers() {
+  const h = { 'content-type': 'application/json' };
+  if (_secret) h['authorization'] = `Bearer ${_secret}`;
+  return h;
+}
+
+async function api(method, path, body) {
+  const opts = { method, headers: headers() };
+  if (body !== undefined) opts.body = JSON.stringify(body);
+  const resp = await fetch(`${_host}${path}`, opts);
+  const text = await resp.text();
+  let data;
+  try { data = JSON.parse(text); } catch { data = text; }
+  if (!resp.ok) {
+    const msg = typeof data === 'object' ? data.error || JSON.stringify(data) : data;
+    console.error(`error: ${resp.status} ${msg}`);
+    process.exit(1);
+  }
+  return data;
+}
+
+function agentName() {
+  return process.env['COLLAB_AGENT'] || null;
+}
+
+function requireAgentName(explicit) {
+  const name = explicit || agentName();
+  if (!name) {
+    console.error('error: agent name required (pass as argument or set COLLAB_AGENT)');
+    process.exit(1);
+  }
+  return name;
+}
+
+// ── Commands ──
+
+const COMMANDS = {};
+
+function cmd(name, usage, desc, fn) {
+  COMMANDS[name] = { usage, desc, fn };
+}
+
+cmd('agents', 'agents', 'List all agents', async () => {
+  const agents = await api('GET', '/api/agents');
+  if (agents.length === 0) { console.log('No agents'); return; }
+  const maxName = Math.max(...agents.map(a => a.name.length), 4);
+  for (const a of agents) {
+    const ctx = a.lastContextPct != null ? `${a.lastContextPct}%` : '--';
+    console.log(
+      `${a.name.padEnd(maxName)}  ${a.state.padEnd(10)}  ${a.engine.padEnd(8)}  ctx:${ctx}`
+    );
+  }
+});
+
+cmd('status', 'status', 'Orchestrator status', async () => {
+  const s = await api('GET', '/api/orchestrator/status');
+  console.log(`agents: ${s.totalAgents}  proxies: ${s.totalProxies}`);
+  if (s.byState && Object.keys(s.byState).length > 0) {
+    console.log(`  ${Object.entries(s.byState).map(([k, v]) => `${k}:${v}`).join('  ')}`);
+  }
+});
+
+cmd('send', 'send <to> <message>', 'Send a message to another agent', async (args) => {
+  const to = args[0];
+  const message = args.slice(1).join(' ');
+  if (!to || !message) { console.error('usage: collab send <to> <message>'); process.exit(1); }
+  const from = requireAgentName();
+  const data = await api('POST', '/api/agents/send', { from, to, message });
+  console.log(`queued (id:${data.queueId})`);
+});
+
+cmd('reply', 'reply <message> [--topic <topic>]', 'Reply to the dashboard', async (args) => {
+  let topic = null;
+  const filtered = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--topic' && args[i + 1]) { topic = args[++i]; }
+    else { filtered.push(args[i]); }
+  }
+  const message = filtered.join(' ');
+  if (!message) { console.error('usage: collab reply <message>'); process.exit(1); }
+  const agent = requireAgentName();
+  await api('POST', '/api/dashboard/reply', { agent, message, topic });
+  console.log('sent');
+});
+
+cmd('spawn', 'spawn <name> [task...]', 'Spawn an agent', async (args) => {
+  const name = args[0];
+  if (!name) { console.error('usage: collab spawn <name> [task...]'); process.exit(1); }
+  const task = args.slice(1).join(' ') || undefined;
+  const data = await api('POST', `/api/agents/${encodeURIComponent(name)}/spawn`, { task });
+  console.log(`${data.name} → ${data.state}`);
+});
+
+cmd('create', 'create <name> <engine> <cwd>', 'Create a new agent', async (args) => {
+  const [name, engine, cwd] = args;
+  if (!name || !engine || !cwd) { console.error('usage: collab create <name> <engine> <cwd>'); process.exit(1); }
+  const data = await api('POST', '/api/agents', { name, engine, cwd });
+  console.log(`created ${data.name} (${data.engine})`);
+});
+
+cmd('suspend', 'suspend <name>', 'Suspend an agent', async (args) => {
+  const name = args[0];
+  if (!name) { console.error('usage: collab suspend <name>'); process.exit(1); }
+  await api('POST', `/api/agents/${encodeURIComponent(name)}/suspend`);
+  console.log(`${name} suspended`);
+});
+
+cmd('resume', 'resume <name> [task...]', 'Resume a suspended agent', async (args) => {
+  const name = args[0];
+  if (!name) { console.error('usage: collab resume <name> [task...]'); process.exit(1); }
+  const task = args.slice(1).join(' ') || undefined;
+  const data = await api('POST', `/api/agents/${encodeURIComponent(name)}/resume`, { task });
+  console.log(`${data.name} → ${data.state}`);
+});
+
+cmd('interrupt', 'interrupt <name>', 'Interrupt an agent', async (args) => {
+  const name = args[0];
+  if (!name) { console.error('usage: collab interrupt <name>'); process.exit(1); }
+  await api('POST', `/api/agents/${encodeURIComponent(name)}/interrupt`);
+  console.log(`${name} interrupted`);
+});
+
+cmd('compact', 'compact <name>', 'Compact agent context', async (args) => {
+  const name = args[0];
+  if (!name) { console.error('usage: collab compact <name>'); process.exit(1); }
+  await api('POST', `/api/agents/${encodeURIComponent(name)}/compact`);
+  console.log(`${name} compacting`);
+});
+
+cmd('kill', 'kill <name>', 'Kill an agent session', async (args) => {
+  const name = args[0];
+  if (!name) { console.error('usage: collab kill <name>'); process.exit(1); }
+  await api('POST', `/api/agents/${encodeURIComponent(name)}/kill`);
+  console.log(`${name} killed`);
+});
+
+cmd('destroy', 'destroy <name>', 'Permanently destroy an agent', async (args) => {
+  const name = args[0];
+  if (!name) { console.error('usage: collab destroy <name>'); process.exit(1); }
+  await api('DELETE', `/api/agents/${encodeURIComponent(name)}`);
+  console.log(`${name} destroyed`);
+});
+
+cmd('queue', 'queue [--agent <name>]', 'List pending messages', async (args) => {
+  let agent = '';
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--agent' && args[i + 1]) agent = args[++i];
+  }
+  const params = agent ? `?agent=${encodeURIComponent(agent)}` : '';
+  const messages = await api('GET', `/api/queue${params}`);
+  if (messages.length === 0) { console.log('No pending messages'); return; }
+  for (const m of messages) {
+    console.log(`[${m.id}] ${m.sourceAgent || 'dashboard'} → ${m.targetAgent}  ${m.status}  ${m.envelope.slice(0, 80)}`);
+  }
+});
+
+cmd('events', 'events <name> [--limit N]', 'View agent event log', async (args) => {
+  const name = args[0];
+  if (!name) { console.error('usage: collab events <name>'); process.exit(1); }
+  let limit = 20;
+  for (let i = 1; i < args.length; i++) {
+    if (args[i] === '--limit' && args[i + 1]) limit = parseInt(args[++i], 10);
+  }
+  const events = await api('GET', `/api/events/${encodeURIComponent(name)}?limit=${limit}`);
+  if (events.length === 0) { console.log('No events'); return; }
+  for (const e of events) {
+    console.log(`${e.createdAt}  ${e.event}${e.meta ? '  ' + e.meta : ''}`);
+  }
+});
+
+cmd('reload', 'reload <name> [task...]', 'Reload an agent (kill + respawn)', async (args) => {
+  const name = args[0];
+  if (!name) { console.error('usage: collab reload <name> [task...]'); process.exit(1); }
+  const task = args.slice(1).join(' ') || undefined;
+  await api('POST', `/api/agents/${encodeURIComponent(name)}/reload`, { immediate: true, task });
+  console.log(`${name} reloading`);
+});
+
+// ── Main ──
+
+function showHelp() {
+  console.log('collab — CLI for agentic-collab orchestrator\n');
+  console.log('Usage: collab <command> [args...]\n');
+  console.log('Commands:');
+  const maxUsage = Math.max(...Object.values(COMMANDS).map(c => c.usage.length));
+  for (const [, c] of Object.entries(COMMANDS)) {
+    console.log(`  ${c.usage.padEnd(maxUsage + 2)}  ${c.desc}`);
+  }
+  console.log('\nEnvironment:');
+  console.log('  COLLAB_AGENT            Your agent name (auto-set by orchestrator)');
+  console.log('  ORCHESTRATOR_URL        Override orchestrator URL');
+  console.log('  ORCHESTRATOR_SECRET     Override secret');
+}
+
+async function main() {
+  const args = process.argv.slice(2);
+  const command = args[0];
+
+  if (!command || command === '--help' || command === '-h' || command === 'help') {
+    showHelp();
+    process.exit(0);
+  }
+
+  const handler = COMMANDS[command];
+  if (!handler) {
+    console.error(`unknown command: ${command}`);
+    console.error(`run 'collab help' for usage`);
+    process.exit(1);
+  }
+
+  await init();
+  await handler.fn(args.slice(1));
+}
+
+main().catch((err) => {
+  console.error(`error: ${err.message}`);
+  process.exit(1);
+});

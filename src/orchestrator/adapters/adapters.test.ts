@@ -110,21 +110,57 @@ describe('Engine Adapters', () => {
       assert.ok(keys.every(k => k === 'Escape'));
     });
 
-    it('detects idle state from prompt', () => {
+    it('detects idle state from ASCII > prompt', () => {
       assert.equal(adapter.detectIdleState('some output\n> '), 'waiting_for_input');
+    });
+
+    it('detects idle state from Unicode ❯ prompt', () => {
+      assert.equal(adapter.detectIdleState('some output\n❯ '), 'waiting_for_input');
+      assert.equal(adapter.detectIdleState('some output\n❯'), 'waiting_for_input');
+    });
+
+    it('detects idle state skipping status bar lines', () => {
+      // Real Claude Code v2.x output: status bar at bottom, prompt above it
+      const pane = [
+        '  What would you like to work on?',
+        '',
+        '──────────────────────────── ▪▪▪ ─',
+        '❯ ',
+        '────────────────────────────────────',
+        '  ⏵⏵ bypass permissions on (shift+tab to cyc…      /ide for Visual Studio Code',
+        '                                                                  15048 tokens',
+        '                                               current: 2.1.70 · latest: 2.1.…',
+      ].join('\n');
+      assert.equal(adapter.detectIdleState(pane), 'waiting_for_input');
     });
 
     it('detects running state from spinner', () => {
       assert.equal(adapter.detectIdleState('some output\n⠋ Running task...'), 'running_tool');
     });
 
+    it('detects running state from tool name', () => {
+      assert.equal(adapter.detectIdleState('some output\n  Bash git status'), 'running_tool');
+    });
+
     it('returns unknown for ambiguous output', () => {
       assert.equal(adapter.detectIdleState('some random text'), 'unknown');
     });
 
-    it('parses context percent', () => {
+    it('parses context percent from percentage format', () => {
       const result = adapter.parseContextPercent('some output\n45% context remaining\nmore text');
       assert.equal(result.contextPct, 45);
+      assert.equal(result.confident, true);
+    });
+
+    it('parses context percent from token count format', () => {
+      const result = adapter.parseContextPercent('some output\n                                                                  15048 tokens');
+      assert.equal(result.contextPct, 8); // 15048/200000 ≈ 7.5% rounds to 8%
+      assert.equal(result.confident, true);
+    });
+
+    it('parses context percent from large token count', () => {
+      const result = adapter.parseContextPercent('  160000 tokens');
+      assert.equal(result.contextPct, 80);
       assert.equal(result.confident, true);
     });
 
