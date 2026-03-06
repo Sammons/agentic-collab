@@ -53,6 +53,7 @@ export function listSessions(): string[] {
  * Paste text into a tmux pane via load-buffer + paste-buffer.
  * Optionally press Enter after pasting.
  */
+// Delay between paste and Enter to let tmux flush the buffer to the pane
 const PASTE_ENTER_DELAY_MS = 500;
 
 export async function pasteText(sessionName: string, text: string, pressEnter: boolean): Promise<void> {
@@ -78,11 +79,16 @@ export function capturePaneLines(sessionName: string, lines: number): string {
 
 /**
  * Send raw keys to a tmux session.
+ * Keys are validated to prevent shell injection — only known tmux key names
+ * and safe patterns (e.g. "Escape Escape Escape", "C-c", "Enter") are allowed.
  */
+const SAFE_KEYS_RE = /^[a-zA-Z0-9 -]+$/;
+
 export function sendKeys(sessionName: string, keys: string): void {
   validateSessionName(sessionName);
-  // Don't quote key names — tmux send-keys interprets bare words as key names
-  // (e.g., "Escape" sends the Escape key, but "'Escape'" types the literal text)
+  if (!SAFE_KEYS_RE.test(keys)) {
+    throw new Error(`Invalid keys: "${keys}" — only alphanumeric, spaces, and hyphens allowed`);
+  }
   exec(`tmux send-keys -t '${esc(sessionName)}' ${keys}`);
 }
 

@@ -6,6 +6,7 @@
 import { createServer } from 'node:http';
 import { readFileSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
+import { timingSafeEqual } from 'node:crypto';
 import { Database } from './database.ts';
 import { createRouter, type RouteContext } from './routes.ts';
 import { WebSocketServer } from '../shared/websocket-server.ts';
@@ -19,7 +20,7 @@ import type { ProxyCommand, ProxyResponse } from '../shared/types.ts';
 const PORT = parseInt(process.env['PORT'] ?? '3000', 10);
 const DB_PATH = process.env['DB_PATH'] ?? join(process.env['HOME'] ?? '/data', '.agentic-collab', 'orchestrator.db');
 const ORCHESTRATOR_HOST = process.env['ORCHESTRATOR_HOST'] ?? `http://localhost:${PORT}`;
-const ORCHESTRATOR_SECRET = process.env['ORCHESTRATOR_SECRET'] ?? null;
+const ORCHESTRATOR_SECRET = process.env['ORCHESTRATOR_SECRET'] || null;
 
 if (!ORCHESTRATOR_SECRET) {
   console.warn('[orchestrator] WARNING: ORCHESTRATOR_SECRET not set — auth is disabled');
@@ -154,8 +155,10 @@ server.on('upgrade', (req, socket, head) => {
   if (url.pathname === '/ws') {
     // Validate auth token on WS upgrade when secret is set
     if (ORCHESTRATOR_SECRET) {
-      const token = url.searchParams.get('token');
-      if (token !== ORCHESTRATOR_SECRET) {
+      const token = url.searchParams.get('token') ?? '';
+      const valid = token.length === ORCHESTRATOR_SECRET.length
+        && timingSafeEqual(Buffer.from(token), Buffer.from(ORCHESTRATOR_SECRET));
+      if (!valid) {
         socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
         socket.destroy();
         return;
@@ -194,7 +197,7 @@ wss.onMessage((_client, data) => {
 
 // ── Stale Proxy Cleanup (every 30s) ──
 
-setInterval(() => {
+const staleProxyTimer = setInterval(() => {
   const stale = db.listStaleProxies(45); // 45s = 3 missed heartbeats
   for (const proxy of stale) {
     console.log(`[proxy] Removing stale proxy: ${proxy.proxyId} (last heartbeat: ${proxy.lastHeartbeat})`);
@@ -218,6 +221,7 @@ setInterval(() => {
 
 function shutdown(): void {
   console.log('[orchestrator] Shutting down...');
+  clearInterval(staleProxyTimer);
   healthMonitor.stop();
 
   // Save agent states for network restore

@@ -110,5 +110,40 @@ describe('Network', () => {
       const count = await restoreAllAgents(freshCtx);
       assert.equal(count, 0);
     });
+
+    it('recovers agents stuck in suspending state (crash recovery)', async () => {
+      db.createAgent({ name: 'net-suspending', engine: 'claude', cwd: '/tmp', proxyId: 'p1' });
+      const a = db.getAgent('net-suspending')!;
+      db.updateAgentState('net-suspending', 'suspending', a.version, {
+        tmuxSession: 'agent-net-suspending',
+        proxyId: 'p1',
+      });
+
+      proxyCommands = [];
+      const count = await restoreAllAgents(ctx);
+      assert.ok(count >= 1);
+
+      // Agent should have been marked failed then resumed
+      const agent = db.getAgent('net-suspending');
+      assert.ok(agent);
+      assert.equal(agent!.state, 'active');
+    });
+
+    it('recovers agents stuck in resuming state (crash recovery)', async () => {
+      db.createAgent({ name: 'net-resuming', engine: 'claude', cwd: '/tmp', proxyId: 'p1' });
+      const a = db.getAgent('net-resuming')!;
+      db.updateAgentState('net-resuming', 'resuming', a.version, {
+        tmuxSession: 'agent-net-resuming',
+        proxyId: 'p1',
+      });
+
+      proxyCommands = [];
+      const count = await restoreAllAgents(ctx);
+      assert.ok(count >= 1);
+
+      const agent = db.getAgent('net-resuming');
+      assert.ok(agent);
+      assert.equal(agent!.state, 'active');
+    });
   });
 });

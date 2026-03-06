@@ -219,7 +219,8 @@ export class HealthMonitor {
   }
 
   /**
-   * Check if an idle agent has exceeded the suspend timeout. Logs but does not auto-suspend.
+   * Check if an idle agent has exceeded the suspend timeout.
+   * Currently logs only — auto-suspend is not implemented yet.
    */
   private checkIdleSuspendTimeout(agentName: string): void {
     const agent = this.db.getAgent(agentName);
@@ -227,9 +228,10 @@ export class HealthMonitor {
 
     const idleDuration = Date.now() - new Date(agent.lastActivity).getTime();
     if (idleDuration > this.idleSuspendMs) {
-      console.log(`[health] ${agent.name} idle for ${Math.round(idleDuration / 1000)}s — suspending`);
-      this.db.logEvent(agent.name, 'idle_suspend_triggered', undefined, {
+      console.log(`[health] ${agent.name} idle for ${Math.round(idleDuration / 1000)}s (exceeds ${Math.round(this.idleSuspendMs / 1000)}s threshold)`);
+      this.db.logEvent(agent.name, 'idle_timeout_exceeded', undefined, {
         idleDurationMs: idleDuration,
+        thresholdMs: this.idleSuspendMs,
       });
     }
   }

@@ -69,8 +69,8 @@ async function heartbeat(): Promise<void> {
     try {
       token = generateToken();
       await register();
-    } catch {
-      // Will retry on next heartbeat
+    } catch (err) {
+      console.warn(`[proxy] Re-register failed:`, (err as Error).message);
     }
   }
 }
@@ -124,7 +124,7 @@ async function executeCommand(command: ProxyCommand): Promise<ProxyResponse> {
         return { ok: true };
 
       default:
-        return { ok: false, error: `Unknown action: ${(command as ProxyCommand).action}` };
+        return { ok: false, error: `Unknown action: ${(command as Record<string, unknown>).action}` };
     }
   } catch (err) {
     return { ok: false, error: (err as Error).message };
