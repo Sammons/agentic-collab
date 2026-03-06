@@ -5,9 +5,10 @@
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { createWriteStream, existsSync, realpathSync } from 'node:fs';
+import { createWriteStream, existsSync, realpathSync, unlinkSync } from 'node:fs';
 import { join, relative, isAbsolute } from 'node:path';
 import { pipeline } from 'node:stream/promises';
+import { Transform } from 'node:stream';
 import { generateToken } from '../shared/sanitize.ts';
 import * as tmux from './tmux.ts';
 import type { ProxyCommand, ProxyResponse } from '../shared/types.ts';
@@ -137,6 +138,7 @@ async function executeCommand(command: ProxyCommand): Promise<ProxyResponse> {
 // ── HTTP Server ──
 
 const MAX_BODY_BYTES = 1_048_576; // 1 MB
+const MAX_UPLOAD_BYTES = parseInt(process.env['MAX_UPLOAD_BYTES'] ?? String(512 * 1024 * 1024), 10); // 512 MB default
 
 async function readBody(req: IncomingMessage): Promise<string> {
   const chunks: Buffer[] = [];
@@ -195,16 +197,29 @@ const server = createServer(async (req, res) => {
       return;
     }
 
-    // Stream to disk with proper backpressure and error cleanup
+    // Stream to disk with size limit, backpressure, and error cleanup
     const ws = createWriteStream(targetPath);
     let size = 0;
-    req.on('data', (chunk: Buffer) => { size += chunk.length; });
+
+    // Transform that enforces the upload size limit
+    const meter = new Transform({
+      transform(chunk: Buffer, _encoding, cb) {
+        size += chunk.length;
+        if (size > MAX_UPLOAD_BYTES) {
+          cb(new Error(`Upload exceeds maximum size of ${MAX_UPLOAD_BYTES} bytes`));
+        } else {
+          cb(null, chunk);
+        }
+      },
+    });
 
     try {
-      await pipeline(req, ws);
+      await pipeline(req, meter, ws);
       json(res, 200, { ok: true, data: { path: targetPath, size } });
     } catch (err) {
       req.destroy();
+      // Clean up partial file
+      try { unlinkSync(targetPath); } catch { /* may not exist yet */ }
       json(res, 500, { ok: false, error: (err as Error).message });
     }
     return;
