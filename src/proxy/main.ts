@@ -2,6 +2,9 @@
  * Tmux proxy service. Runs on the host outside Docker.
  * Registers with the orchestrator, receives commands, executes tmux operations.
  * Heartbeats every 15s. Re-registers on missed heartbeat.
+ *
+ * Auto-discovery: finds the orchestrator via Docker labels or localhost fallback.
+ * Secret: reads from env, file, or ~/.config/agentic-collab/secret (waits if missing).
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
@@ -9,26 +12,27 @@ import { createWriteStream, existsSync, realpathSync, unlinkSync } from 'node:fs
 import { join, relative, isAbsolute } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { Transform } from 'node:stream';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { hostname } from 'node:os';
 import { generateToken } from '../shared/sanitize.ts';
+import { resolveSecret, waitForSecret, discoverOrchestrator, getSecretPath, hasDocker } from '../shared/config.ts';
 import * as tmux from './tmux.ts';
 import type { ProxyCommand, ProxyResponse } from '../shared/types.ts';
 
 const PROXY_PORT = parseInt(process.env['PROXY_PORT'] ?? '3100', 10);
-const ORCHESTRATOR_URL = process.env['ORCHESTRATOR_URL'] ?? 'http://localhost:3000';
 const PROXY_HOST = process.env['PROXY_HOST'] ?? `host.docker.internal:${PROXY_PORT}`;
-import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { hostname } from 'node:os';
 const PROXY_ID = process.env['PROXY_ID'] ?? hostname();
-const ORCHESTRATOR_SECRET = process.env['ORCHESTRATOR_SECRET'] ?? null;
 
+let orchestratorUrl = '';
+let orchestratorSecret: string | null = null;
 let token = generateToken();
 let registered = false;
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 
 function authHeaders(): Record<string, string> {
   const headers: Record<string, string> = { 'content-type': 'application/json' };
-  if (ORCHESTRATOR_SECRET) {
-    headers['authorization'] = `Bearer ${ORCHESTRATOR_SECRET}`;
+  if (orchestratorSecret) {
+    headers['authorization'] = `Bearer ${orchestratorSecret}`;
   }
   return headers;
 }
@@ -37,7 +41,7 @@ function authHeaders(): Record<string, string> {
 
 async function register(): Promise<void> {
   try {
-    const resp = await fetch(`${ORCHESTRATOR_URL}/api/proxy/register`, {
+    const resp = await fetch(`${orchestratorUrl}/api/proxy/register`, {
       method: 'POST',
       headers: authHeaders(),
       body: JSON.stringify({ proxyId: PROXY_ID, token, host: PROXY_HOST }),
@@ -58,7 +62,7 @@ async function register(): Promise<void> {
 
 async function heartbeat(): Promise<void> {
   try {
-    const resp = await fetch(`${ORCHESTRATOR_URL}/api/proxy/heartbeat`, {
+    const resp = await fetch(`${orchestratorUrl}/api/proxy/heartbeat`, {
       method: 'POST',
       headers: authHeaders(),
       body: JSON.stringify({ proxyId: PROXY_ID }),
@@ -82,7 +86,7 @@ async function heartbeat(): Promise<void> {
 
 async function deregister(): Promise<void> {
   try {
-    await fetch(`${ORCHESTRATOR_URL}/api/proxy/${PROXY_ID}`, {
+    await fetch(`${orchestratorUrl}/api/proxy/${PROXY_ID}`, {
       method: 'DELETE',
       headers: authHeaders(),
     });
@@ -255,11 +259,83 @@ function json(res: ServerResponse, status: number, body: unknown): void {
 
 // ── Lifecycle ──
 
+async function resolveConfig(): Promise<{ url: string; secret: string | null }> {
+  // Phase 1: Resolve secret
+  let secret = resolveSecret();
+  if (!secret) {
+    const secretPath = getSecretPath();
+    console.log(`[proxy] No secret found.`);
+    console.log(`[proxy]   Checked: ORCHESTRATOR_SECRET env var`);
+    console.log(`[proxy]   Checked: ORCHESTRATOR_SECRET_FILE env var`);
+    console.log(`[proxy]   Checked: ${secretPath}`);
+    console.log(`[proxy] Watching for secret file at ${secretPath} ...`);
+    console.log(`[proxy] To create one: echo "$(openssl rand -base64 32)" > ${secretPath}`);
+    console.log(`[proxy] Or start orchestrator — it will create the secret file.`);
+    console.log(`[proxy] To run without auth: set ORCHESTRATOR_SECRET="" (empty string)`);
+
+    // If env var is explicitly empty string, skip waiting
+    if (process.env['ORCHESTRATOR_SECRET'] === '') {
+      console.log(`[proxy] ORCHESTRATOR_SECRET="" — running without auth`);
+      secret = null;
+    } else {
+      secret = await waitForSecret();
+      console.log(`[proxy] Secret file detected.`);
+    }
+  }
+
+  // Phase 2: Discover orchestrator
+  console.log(`[proxy] Discovering orchestrator...`);
+  if (hasDocker()) {
+    console.log(`[proxy]   Docker: available`);
+  } else {
+    console.log(`[proxy]   Docker: not found (skipping container discovery)`);
+  }
+
+  const discovered = await discoverOrchestrator();
+  if (!discovered) {
+    // Wait and retry with backoff
+    console.log(`[proxy] No orchestrator found. Retrying every 5s...`);
+    console.log(`[proxy]   Start one with: docker compose up -d`);
+    console.log(`[proxy]   Or set ORCHESTRATOR_URL=http://host:port`);
+    const url = await waitForOrchestrator();
+    return { url, secret };
+  }
+
+  if (discovered.fromDocker) {
+    console.log(`[proxy] Found orchestrator via Docker: ${discovered.url}`);
+  } else if (process.env['ORCHESTRATOR_URL']) {
+    console.log(`[proxy] Using orchestrator from ORCHESTRATOR_URL: ${discovered.url}`);
+  } else {
+    console.log(`[proxy] Found orchestrator at ${discovered.url}`);
+  }
+
+  return { url: discovered.url, secret };
+}
+
+async function waitForOrchestrator(): Promise<string> {
+  const retryMs = 5000;
+  while (true) {
+    await new Promise<void>(r => setTimeout(r, retryMs));
+    const discovered = await discoverOrchestrator();
+    if (discovered) {
+      console.log(`[proxy] Found orchestrator at ${discovered.url}`);
+      return discovered.url;
+    }
+  }
+}
+
 async function start(): Promise<void> {
+  console.log(`[proxy] Agentic Collab Proxy starting...`);
+  console.log(`[proxy] Proxy ID: ${PROXY_ID}`);
+
+  // Resolve config (may wait for secret file and/or orchestrator)
+  const config = await resolveConfig();
+  orchestratorUrl = config.url;
+  orchestratorSecret = config.secret;
+
   server.listen(PROXY_PORT, '0.0.0.0', () => {
     console.log(`[proxy] Listening on port ${PROXY_PORT}`);
-    console.log(`[proxy] Proxy ID: ${PROXY_ID}`);
-    console.log(`[proxy] Orchestrator: ${ORCHESTRATOR_URL}`);
+    console.log(`[proxy] Orchestrator: ${orchestratorUrl}`);
   });
 
   await register();
@@ -270,7 +346,7 @@ async function start(): Promise<void> {
 async function shutdown(): Promise<void> {
   console.log('[proxy] Shutting down...');
   if (heartbeatTimer) clearInterval(heartbeatTimer);
-  await deregister();
+  if (registered) await deregister();
   server.close();
   process.exit(0);
 }
