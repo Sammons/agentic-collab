@@ -122,10 +122,10 @@ describe('Persona', () => {
         orchestratorHost: 'http://localhost:3000',
       });
       assert.ok(prompt.includes('test-agent'));
-      assert.ok(prompt.includes('http://localhost:3000'));
-      assert.ok(prompt.includes('curl'));
-      assert.ok(prompt.includes('/api/agents/send'));
-      assert.ok(prompt.includes('/api/dashboard/reply'));
+      assert.ok(prompt.includes('collab send'));
+      assert.ok(prompt.includes('collab reply'));
+      assert.ok(prompt.includes('collab agents'));
+      assert.ok(prompt.includes('COLLAB_AGENT=test-agent'));
     });
 
     it('includes persona content when provided', () => {

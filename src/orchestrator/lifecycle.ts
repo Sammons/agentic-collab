@@ -42,6 +42,11 @@ const POST_SPAWN_ACTIVE_DELAY_MS = parseInt(process.env['POST_SPAWN_ACTIVE_DELAY
 const POST_RENAME_TASK_DELAY_MS = parseInt(process.env['POST_RENAME_TASK_DELAY_MS'] ?? '1000', 10);
 const INTERRUPT_KEY_DELAY_MS = parseInt(process.env['INTERRUPT_KEY_DELAY_MS'] ?? '300', 10);
 
+/** Wrap a CLI command with `export COLLAB_AGENT=<name>` so the agent identity is available. */
+function withAgentEnv(name: string, cmd: string): string {
+  return `export COLLAB_AGENT=${name} && ${cmd}`;
+}
+
 // ── Watchdog helper ──
 
 /**
@@ -171,7 +176,7 @@ export async function spawnAgent(
     await ctx.proxyDispatch(opts.proxyId, {
       action: 'paste',
       sessionName: tmuxSession,
-      text: spawnCmd,
+      text: withAgentEnv(opts.name, spawnCmd),
       pressEnter: true,
     });
 
@@ -294,7 +299,7 @@ export async function resumeAgent(
     await ctx.proxyDispatch(proxyId, {
       action: 'paste',
       sessionName: tmuxSession,
-      text: cmd,
+      text: withAgentEnv(name, cmd),
       pressEnter: true,
     });
 
@@ -565,7 +570,7 @@ export async function reloadAgent(
     await ctx.proxyDispatch(proxyId, {
       action: 'paste',
       sessionName: tmuxSession,
-      text: resumeCmd,
+      text: withAgentEnv(name, resumeCmd),
       pressEnter: true,
     });
 

@@ -168,25 +168,43 @@ export function composeSystemPrompt(opts: {
     parts.push('\n---\n');
   }
 
-  // Messaging instructions
+  // Messaging instructions — prefer collab CLI, fall back to curl
   parts.push(`Messages from other agents arrive as text in your tmux pane
 formatted as: [from: <sender>, reply with /collaboration reply]: '<message>'
 
-When you need to communicate with another agent:
-  curl -s -X POST ${opts.orchestratorHost}/api/agents/send \\
-    -H 'Content-Type: application/json' \\
-    -d '{"from":"${opts.agentName}","to":"TARGET","message":"YOUR MESSAGE"}'
+You have the \`collab\` CLI on your PATH. It auto-discovers auth and the orchestrator.
+Your agent name is set via COLLAB_AGENT=${opts.agentName}.
 
-To include reply context:
-  -d '{"from":"${opts.agentName}","to":"TARGET","message":"...","re":"topic"}'
+Send a message to another agent:
+  collab send <to> <message>
 
-To reply to the dashboard (human operator):
-  curl -s -X POST ${opts.orchestratorHost}/api/dashboard/reply \\
-    -H 'Content-Type: application/json' \\
-    -d '{"agent":"${opts.agentName}","message":"YOUR REPLY","topic":"optional-topic"}'
+Reply to the dashboard (human operator):
+  collab reply <message> [--topic <topic>]
 
-To list active agents:
-  curl -s ${opts.orchestratorHost}/api/agents`);
+List all agents:
+  collab agents
+
+Check orchestrator status:
+  collab status
+
+Spawn a new agent:
+  collab spawn <name> [task...]
+
+Agent lifecycle:
+  collab suspend <name>
+  collab resume <name> [task...]
+  collab interrupt <name>
+  collab compact <name>
+  collab kill <name>
+  collab reload <name> [task...]
+
+View message queue:
+  collab queue [--agent <name>]
+
+View agent events:
+  collab events <name> [--limit N]
+
+Run \`collab help\` for full usage.`);
 
   if (opts.peers && opts.peers.length > 0) {
     parts.push(`\n\nKnown peers: ${opts.peers.join(', ')}`);
