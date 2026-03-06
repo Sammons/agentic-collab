@@ -133,15 +133,14 @@ export async function spawnAgent(
       } catch { /* watchdog is best-effort */ }
     }, SPAWN_TIMEOUT_MS);
 
-    // 6. Transition to active
+    // 6. Transition to active (cancel watchdog first to prevent race)
     await sleep(POST_SPAWN_ACTIVE_DELAY_MS);
+    clearTimeout(watchdogTimer);
     current = ctx.db.updateAgentState(opts.name, 'active', current.version, {
       lastActivity: new Date().toISOString(),
       spawnCount: current.spawnCount + 1,
       lastContextPct: 0,
     });
-
-    clearTimeout(watchdogTimer);
     ctx.db.logEvent(opts.name, 'spawned', undefined, { engine: agent.engine, model: opts.model });
 
     return current;
@@ -300,7 +299,6 @@ export async function destroyAgent(
     ctx.db.deleteAgent(name);
     ctx.db.logEvent(name, 'destroyed');
   });
-  ctx.locks.forceUnlock(name);
 }
 
 /**
@@ -311,16 +309,21 @@ export async function reloadAgent(
   name: string,
   opts?: { immediate?: boolean; task?: string },
 ): Promise<AgentRecord> {
-  // Queue mode: set flag and return (no lock needed for flag set)
+  // Queue mode: set flag and return
   if (!opts?.immediate) {
-    const agent = ctx.db.getAgent(name);
-    if (!agent) throw new Error(`Agent "${name}" not found`);
-    const updated = ctx.db.updateAgentState(name, agent.state, agent.version, {
-      reloadQueued: 1,
-      reloadTask: opts?.task ?? null,
+    return ctx.locks.withLock(name, async () => {
+      const agent = ctx.db.getAgent(name);
+      if (!agent) throw new Error(`Agent "${name}" not found`);
+      if (!canSuspend(agent)) {
+        throw new Error(`Agent "${name}" is in state "${agent.state}", cannot queue reload`);
+      }
+      const updated = ctx.db.updateAgentState(name, agent.state, agent.version, {
+        reloadQueued: 1,
+        reloadTask: opts?.task ?? null,
+      });
+      ctx.db.logEvent(name, 'reload_queued');
+      return updated;
     });
-    ctx.db.logEvent(name, 'reload_queued');
-    return updated;
   }
 
   // Immediate mode: execute now
@@ -435,14 +438,14 @@ export async function interruptAgent(
   ctx: LifecycleContext,
   name: string,
 ): Promise<void> {
-  const agent = ctx.db.getAgent(name);
-  if (!agent) throw new Error(`Agent "${name}" not found`);
-  const proxyId = requireProxy(agent);
-
-  const adapter = getAdapter(agent.engine);
-  const keys = adapter.interruptKeys();
-
   await ctx.locks.withLock(name, async () => {
+    const agent = ctx.db.getAgent(name);
+    if (!agent) throw new Error(`Agent "${name}" not found`);
+    const proxyId = requireProxy(agent);
+
+    const adapter = getAdapter(agent.engine);
+    const keys = adapter.interruptKeys();
+
     for (const key of keys) {
       await ctx.proxyDispatch(proxyId, {
         action: 'send_keys',
@@ -463,13 +466,13 @@ export async function compactAgent(
   ctx: LifecycleContext,
   name: string,
 ): Promise<void> {
-  const agent = ctx.db.getAgent(name);
-  if (!agent) throw new Error(`Agent "${name}" not found`);
-  const proxyId = requireProxy(agent);
-
-  const adapter = getAdapter(agent.engine);
-
   await ctx.locks.withLock(name, async () => {
+    const agent = ctx.db.getAgent(name);
+    if (!agent) throw new Error(`Agent "${name}" not found`);
+    const proxyId = requireProxy(agent);
+
+    const adapter = getAdapter(agent.engine);
+
     await ctx.proxyDispatch(proxyId, {
       action: 'paste',
       sessionName: sessionName(agent),

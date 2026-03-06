@@ -78,7 +78,7 @@ async function deregister(): Promise<void> {
 
 // ── Command Execution ──
 
-function executeCommand(command: ProxyCommand): ProxyResponse {
+async function executeCommand(command: ProxyCommand): Promise<ProxyResponse> {
   try {
     switch (command.action) {
       case 'create_session':
@@ -86,7 +86,7 @@ function executeCommand(command: ProxyCommand): ProxyResponse {
         return { ok: true };
 
       case 'paste':
-        tmux.pasteText(command.sessionName, command.text, command.pressEnter);
+        await tmux.pasteText(command.sessionName, command.text, command.pressEnter);
         return { ok: true };
 
       case 'capture': {
@@ -154,7 +154,7 @@ const server = createServer(async (req, res) => {
 
     try {
       const body = JSON.parse(await readBody(req)) as ProxyCommand;
-      const result = executeCommand(body);
+      const result = await executeCommand(body);
       json(res, result.ok ? 200 : 500, result);
     } catch (err) {
       json(res, 400, { ok: false, error: `Invalid request: ${(err as Error).message}` });

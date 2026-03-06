@@ -155,7 +155,7 @@ async function handleAgent(
 
     case 'spawn': {
       if (!name) throw new Error('Usage: agent spawn <name>');
-      const result = await api('POST', `/api/agents/${name}/spawn`, {
+      const result = await api('POST', `/api/agents/${encodeURIComponent(name)}/spawn`, {
         task: flags.task ?? undefined,
         proxyId: flags.proxy ?? undefined,
       });
@@ -165,7 +165,7 @@ async function handleAgent(
 
     case 'resume': {
       if (!name) throw new Error('Usage: agent resume <name>');
-      const result = await api('POST', `/api/agents/${name}/resume`, {
+      const result = await api('POST', `/api/agents/${encodeURIComponent(name)}/resume`, {
         task: flags.task ?? undefined,
       });
       console.log(`Resumed agent: ${(result as Record<string, unknown>).name} [${(result as Record<string, unknown>).state}]`);
@@ -174,14 +174,14 @@ async function handleAgent(
 
     case 'suspend': {
       if (!name) throw new Error('Usage: agent suspend <name>');
-      const result = await api('POST', `/api/agents/${name}/suspend`);
+      const result = await api('POST', `/api/agents/${encodeURIComponent(name)}/suspend`);
       console.log(`Suspended agent: ${(result as Record<string, unknown>).name}`);
       break;
     }
 
     case 'reload': {
       if (!name) throw new Error('Usage: agent reload <name>');
-      const result = await api('POST', `/api/agents/${name}/reload`, {
+      const result = await api('POST', `/api/agents/${encodeURIComponent(name)}/reload`, {
         immediate: flags.immediate === true,
         task: flags.task ?? undefined,
       });
@@ -192,35 +192,35 @@ async function handleAgent(
 
     case 'interrupt': {
       if (!name) throw new Error('Usage: agent interrupt <name>');
-      await api('POST', `/api/agents/${name}/interrupt`);
+      await api('POST', `/api/agents/${encodeURIComponent(name)}/interrupt`);
       console.log(`Interrupted agent: ${name}`);
       break;
     }
 
     case 'compact': {
       if (!name) throw new Error('Usage: agent compact <name>');
-      await api('POST', `/api/agents/${name}/compact`);
+      await api('POST', `/api/agents/${encodeURIComponent(name)}/compact`);
       console.log(`Compact requested for: ${name}`);
       break;
     }
 
     case 'kill': {
       if (!name) throw new Error('Usage: agent kill <name>');
-      await api('POST', `/api/agents/${name}/kill`);
+      await api('POST', `/api/agents/${encodeURIComponent(name)}/kill`);
       console.log(`Killed agent: ${name}`);
       break;
     }
 
     case 'destroy': {
       if (!name) throw new Error('Usage: agent destroy <name>');
-      await api('POST', `/api/agents/${name}/destroy`);
+      await api('POST', `/api/agents/${encodeURIComponent(name)}/destroy`);
       console.log(`Destroyed agent: ${name}`);
       break;
     }
 
     case 'status': {
       if (!name) throw new Error('Usage: agent status <name>');
-      const agent = await api('GET', `/api/agents/${name}`) as Record<string, unknown>;
+      const agent = await api('GET', `/api/agents/${encodeURIComponent(name)}`) as Record<string, unknown>;
       console.log(JSON.stringify(agent, null, 2));
       break;
     }
@@ -241,8 +241,8 @@ async function handleAgent(
 
     case 'events': {
       if (!name) throw new Error('Usage: agent events <name>');
-      const limit = flags.limit ? parseInt(flags.limit as string, 10) : 20;
-      const events = await api('GET', `/api/events/${name}?limit=${limit}`) as Record<string, unknown>[];
+      const limit = flags.limit ? (parseInt(flags.limit as string, 10) || 20) : 20;
+      const events = await api('GET', `/api/events/${encodeURIComponent(name)}?limit=${limit}`) as Record<string, unknown>[];
       for (const e of events) {
         const meta = e.meta ? ` ${e.meta}` : '';
         console.log(`  [${e.createdAt}] ${e.event}${meta}`);

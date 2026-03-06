@@ -64,6 +64,11 @@ route('POST', '/api/agents', async (req, res, _match, ctx) => {
     return json(res, 400, { error: 'name, engine, cwd required' });
   }
 
+  const VALID_ENGINES = new Set(['claude', 'codex', 'opencode']);
+  if (!VALID_ENGINES.has(body.engine as string)) {
+    return json(res, 400, { error: 'engine must be claude, codex, or opencode' });
+  }
+
   const existing = ctx.db.getAgent(body.name);
   if (existing) return json(res, 409, { error: 'Agent already exists' });
 
@@ -203,7 +208,8 @@ route('POST', '/api/proxy/heartbeat', async (req, res, _match, ctx) => {
 
 route('DELETE', '/api/proxy/:proxyId', async (_req, res, match, ctx) => {
   const proxyId = match.pathname.groups['proxyId']!;
-  ctx.db.removeProxy(proxyId);
+  const removed = ctx.db.removeProxy(proxyId);
+  if (!removed) return json(res, 404, { error: 'Proxy not found' });
   broadcastProxyUpdate(ctx);
   json(res, 200, { ok: true });
 });

@@ -168,7 +168,7 @@ export class Database {
     if (extra) {
       for (const [key, value] of Object.entries(extra)) {
         if (value !== undefined) {
-          sets.push(`${toSnakeCase(key)} = ?`);
+          sets.push(`${toColumnName(key)} = ?`);
           params.push(value);
         }
       }
@@ -393,6 +393,22 @@ function mapProxyRow(row: Record<string, unknown>): ProxyRegistration {
   };
 }
 
-function toSnakeCase(str: string): string {
-  return str.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
+const COLUMN_MAP: Record<string, string> = {
+  currentSessionId: 'current_session_id',
+  tmuxSession: 'tmux_session',
+  proxyId: 'proxy_id',
+  lastActivity: 'last_activity',
+  lastContextPct: 'last_context_pct',
+  reloadQueued: 'reload_queued',
+  reloadTask: 'reload_task',
+  failedAt: 'failed_at',
+  failureReason: 'failure_reason',
+  stateBeforeShutdown: 'state_before_shutdown',
+  spawnCount: 'spawn_count',
+};
+
+function toColumnName(key: string): string {
+  const col = COLUMN_MAP[key];
+  if (!col) throw new Error(`Unknown agent column: "${key}"`);
+  return col;
 }

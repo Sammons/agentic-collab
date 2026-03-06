@@ -11,7 +11,7 @@ export class ClaudeAdapter implements EngineAdapter {
   buildSpawnCommand(opts: SpawnOptions): string {
     const parts = ['claude'];
 
-    if (opts.dangerouslySkipPermissions !== false) {
+    if (opts.dangerouslySkipPermissions === true) {
       parts.push('--dangerously-skip-permissions');
     }
 

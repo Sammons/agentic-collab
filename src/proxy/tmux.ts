@@ -17,10 +17,12 @@ function exec(cmd: string): string {
 }
 
 export function createSession(sessionName: string, cwd: string): void {
+  validateSessionName(sessionName);
   exec(`tmux new-session -d -s '${esc(sessionName)}' -c '${esc(cwd)}'`);
 }
 
 export function hasSession(sessionName: string): boolean {
+  validateSessionName(sessionName);
   try {
     exec(`tmux has-session -t '${esc(sessionName)}'`);
     return true;
@@ -30,6 +32,7 @@ export function hasSession(sessionName: string): boolean {
 }
 
 export function killSession(sessionName: string): void {
+  validateSessionName(sessionName);
   try {
     exec(`tmux kill-session -t '${esc(sessionName)}'`);
   } catch {
@@ -50,14 +53,16 @@ export function listSessions(): string[] {
  * Paste text into a tmux pane via load-buffer + paste-buffer.
  * Optionally press Enter after pasting.
  */
-export function pasteText(sessionName: string, text: string, pressEnter: boolean): void {
+const PASTE_ENTER_DELAY_MS = 500;
+
+export async function pasteText(sessionName: string, text: string, pressEnter: boolean): Promise<void> {
+  validateSessionName(sessionName);
   // Pass text via stdin (input option) to avoid all shell escaping issues
   execSync('tmux load-buffer -', { ...EXEC_OPTS, input: text });
   exec(`tmux paste-buffer -t '${esc(sessionName)}'`);
 
   if (pressEnter) {
-    // Wait 500ms then press Enter (as per spec)
-    execSync('sleep 0.5', { timeout: 5000 });
+    await new Promise<void>((r) => setTimeout(r, PASTE_ENTER_DELAY_MS));
     exec(`tmux send-keys -t '${esc(sessionName)}' Enter`);
   }
 }
@@ -66,14 +71,28 @@ export function pasteText(sessionName: string, text: string, pressEnter: boolean
  * Capture the last N lines from the tmux pane.
  */
 export function capturePaneLines(sessionName: string, lines: number): string {
-  return exec(`tmux capture-pane -t '${esc(sessionName)}' -p -S -${lines}`);
+  validateSessionName(sessionName);
+  const safeLines = Math.max(1, Math.min(Math.floor(lines) || 50, 10000));
+  return exec(`tmux capture-pane -t '${esc(sessionName)}' -p -S -${safeLines}`);
 }
 
 /**
  * Send raw keys to a tmux session.
  */
 export function sendKeys(sessionName: string, keys: string): void {
+  validateSessionName(sessionName);
   exec(`tmux send-keys -t '${esc(sessionName)}' '${esc(keys)}'`);
+}
+
+/**
+ * Validate tmux session name — only allow safe characters.
+ */
+const SESSION_NAME_RE = /^[a-zA-Z0-9_-]+$/;
+
+function validateSessionName(name: string): void {
+  if (!SESSION_NAME_RE.test(name)) {
+    throw new Error(`Invalid session name: "${name}" — only [a-zA-Z0-9_-] allowed`);
+  }
 }
 
 /**

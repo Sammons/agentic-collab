@@ -4,23 +4,33 @@
  * Composes system prompt: persona + messaging instructions + orchestrator rules.
  */
 
-import { readFileSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { readFileSync, existsSync, realpathSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 
-const PERSONAS_DIR = process.env['PERSONAS_DIR'] ?? join(process.env['HOME'] ?? '/data', 'persistent-agents');
+export const PERSONAS_DIR = process.env['PERSONAS_DIR'] ?? join(process.env['HOME'] ?? '/data', 'persistent-agents');
 
 /**
  * Resolve persona file path for an agent.
- * 1. Check persistent-agents/<name>.md (convention)
- * 2. If explicit path provided, use that instead
+ * 1. If explicit path provided, validate it's within personasDir
+ * 2. Check personasDir/<name>.md (convention)
  * 3. If neither found, return null
  */
-export function resolvePersonaPath(agentName: string, explicitPath?: string | null): string | null {
-  if (explicitPath && existsSync(explicitPath)) {
-    return explicitPath;
+export function resolvePersonaPath(agentName: string, explicitPath?: string | null, personasDir: string = PERSONAS_DIR): string | null {
+  if (explicitPath) {
+    const resolved = resolve(explicitPath);
+    if (!existsSync(resolved)) return null;
+    // Restrict to personasDir to prevent path traversal
+    try {
+      const real = realpathSync(resolved);
+      const baseReal = realpathSync(personasDir);
+      if (!real.startsWith(baseReal + '/')) return null;
+    } catch {
+      return null;
+    }
+    return resolved;
   }
 
-  const conventionPath = join(PERSONAS_DIR, `${agentName}.md`);
+  const conventionPath = join(personasDir, `${agentName}.md`);
   if (existsSync(conventionPath)) {
     return conventionPath;
   }
