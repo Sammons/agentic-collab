@@ -130,6 +130,13 @@ After upload, the agent receives: `I uploaded /path/to/cwd/config.json` via the 
 | `DB_PATH` | `/data/.agentic-collab/orchestrator.db` | SQLite database path |
 | `ORCHESTRATOR_HOST` | `http://localhost:{PORT}` | Public URL (used in agent system prompts) |
 | `ORCHESTRATOR_SECRET` | _(none)_ | Bearer token for API auth; unset = no auth |
+| `RATE_LIMIT_MAX` | `120` | Max POST requests per IP per minute |
+| `RATE_LIMIT_UPLOAD_MAX` | `30` | Max file uploads per IP per minute |
+| `RATE_LIMIT_WINDOW_MS` | `60000` | Rate limit sliding window (ms) |
+| `SPAWN_TIMEOUT_MS` | `30000` | Watchdog timeout for spawn operations |
+| `SUSPEND_TIMEOUT_MS` | `60000` | Watchdog timeout for suspend operations |
+| `RESUME_TIMEOUT_MS` | `60000` | Watchdog timeout for resume operations |
+| `RELOAD_TIMEOUT_MS` | `90000` | Watchdog timeout for reload operations |
 
 ### Proxy
 
@@ -140,6 +147,7 @@ After upload, the agent receives: `I uploaded /path/to/cwd/config.json` via the 
 | `PROXY_HOST` | `host.docker.internal:{PROXY_PORT}` | How the orchestrator reaches this proxy |
 | `PROXY_ID` | `proxy-{random}` | Unique proxy identifier |
 | `ORCHESTRATOR_SECRET` | _(none)_ | Must match orchestrator's secret |
+| `MAX_UPLOAD_BYTES` | `536870912` | Max upload size in bytes (512MB) |
 
 ## API
 
@@ -218,7 +226,7 @@ Supported engines: `claude`, `codex`, `opencode`.
 node --test 'src/**/*.test.ts'
 ```
 
-244 tests across 46 suites covering lifecycle operations, database persistence, networking, locking, health monitoring, adapters, message delivery, crash recovery, file upload, integration tests, and input validation.
+319 tests across 53 suites covering lifecycle operations, database persistence, networking, locking, health monitoring, adapters, message delivery, crash recovery, file upload, streaming upload, rate limiting, path traversal, integration tests, and input validation.
 
 ## Project structure
 

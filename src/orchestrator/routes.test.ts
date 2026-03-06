@@ -482,3 +482,74 @@ describe('API Routes — Auth', () => {
     assert.equal(status, 401);
   });
 });
+
+describe('API Routes — Rate Limiting', () => {
+  let server: Server;
+  let db: Database;
+  let wss: WebSocketServer;
+  let port: number;
+  let tmpDir: string;
+  const SECRET = 'rate-limit-secret';
+
+  before(async () => {
+    // Override rate limit env for testing: very low limits
+    process.env['RATE_LIMIT_MAX'] = '5';
+    process.env['RATE_LIMIT_UPLOAD_MAX'] = '3';
+    process.env['RATE_LIMIT_WINDOW_MS'] = '60000';
+
+    tmpDir = mkdtempSync(join(tmpdir(), 'agentic-rate-test-'));
+    db = new Database(join(tmpDir, 'test.db'));
+    wss = new WebSocketServer();
+
+    const ctx: RouteContext = {
+      db,
+      wss,
+      locks: new LockManager(db.rawDb),
+      proxyDispatch: async () => ({ ok: true }),
+      getDashboardHtml: () => '<html>Dashboard</html>',
+      orchestratorHost: 'http://localhost:3000',
+      orchestratorSecret: SECRET,
+    };
+
+    const router = createRouter(ctx);
+    server = createServer(async (req, res) => {
+      await router(req, res);
+    });
+
+    await new Promise<void>((resolve) => {
+      server.listen(0, () => {
+        const addr = server.address();
+        port = typeof addr === 'object' && addr ? addr.port : 0;
+        resolve();
+      });
+    });
+  });
+
+  after(() => {
+    wss.close();
+    server.close();
+    db.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+    delete process.env['RATE_LIMIT_MAX'];
+    delete process.env['RATE_LIMIT_UPLOAD_MAX'];
+    delete process.env['RATE_LIMIT_WINDOW_MS'];
+  });
+
+  it('GET requests are not rate limited', async () => {
+    // GET should work unlimited times
+    for (let i = 0; i < 10; i++) {
+      const resp = await fetch(`http://localhost:${port}/api/agents`);
+      assert.equal(resp.status, 200);
+    }
+  });
+
+  it('unauthenticated POST requests are rejected with 401 before rate limit applies', async () => {
+    // Should get 401, not 429
+    const resp = await fetch(`http://localhost:${port}/api/agents`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'x', engine: 'claude', cwd: '/tmp' }),
+    });
+    assert.equal(resp.status, 401);
+  });
+});

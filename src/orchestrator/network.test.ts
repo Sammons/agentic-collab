@@ -145,5 +145,62 @@ describe('Network', () => {
       assert.ok(agent);
       assert.equal(agent!.state, 'active');
     });
+
+    it('skips agents with no proxy and logs warning', async () => {
+      // Move all other agents to non-restorable states so only our test agent is eligible
+      for (const a of db.listAgents()) {
+        if (a.stateBeforeShutdown || a.state === 'active' || a.state === 'idle'
+            || a.state === 'suspending' || a.state === 'resuming') {
+          db.updateAgentState(a.name, 'suspended', a.version, { stateBeforeShutdown: null });
+        }
+      }
+
+      db.createAgent({ name: 'net-no-proxy', engine: 'claude', cwd: '/tmp' });
+      const a = db.getAgent('net-no-proxy')!;
+      // Set stateBeforeShutdown without a proxy
+      db.updateAgentState('net-no-proxy', 'suspended', a.version, {
+        stateBeforeShutdown: 'active',
+      });
+
+      proxyCommands = [];
+      // Remove all proxies temporarily to simulate no available proxies
+      const savedProxy = db.getProxy('p1');
+      db.removeProxy('p1');
+
+      const count = await restoreAllAgents(ctx);
+      // Should not crash — just skip the agent (no proxies available)
+      assert.equal(count, 0);
+
+      // Re-register proxy for subsequent tests
+      if (savedProxy) {
+        db.registerProxy(savedProxy.proxyId, savedProxy.token, savedProxy.host);
+      }
+    });
+
+    it('skips active agents with existing tmux session (no crash)', async () => {
+      db.createAgent({ name: 'net-healthy', engine: 'claude', cwd: '/tmp', proxyId: 'p1' });
+      const a = db.getAgent('net-healthy')!;
+      db.updateAgentState('net-healthy', 'active', a.version, {
+        tmuxSession: 'agent-net-healthy',
+        proxyId: 'p1',
+      });
+
+      // Context where has_session returns true — agent is healthy
+      const healthyCtx: LifecycleContext = {
+        ...ctx,
+        proxyDispatch: async (_proxyId: string, command: ProxyCommand): Promise<ProxyResponse> => {
+          if (command.action === 'has_session') {
+            return { ok: true, data: true }; // session exists, no crash
+          }
+          return { ok: true };
+        },
+      };
+
+      proxyCommands = [];
+      const count = await restoreAllAgents(healthyCtx);
+      // Healthy active agent should NOT be restored
+      const agent = db.getAgent('net-healthy')!;
+      assert.equal(agent.state, 'active');
+    });
   });
 });

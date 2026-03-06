@@ -538,6 +538,38 @@ route('GET', '/api/orchestrator/status', async (_req, res, _match, ctx) => {
   return routes;
 }
 
+// ── Rate Limiter ──
+
+const RATE_LIMIT_WINDOW_MS = parseInt(process.env['RATE_LIMIT_WINDOW_MS'] ?? '60000', 10);   // 1 minute
+const RATE_LIMIT_MAX = parseInt(process.env['RATE_LIMIT_MAX'] ?? '120', 10);                  // 120 requests/min for POST
+const RATE_LIMIT_UPLOAD_MAX = parseInt(process.env['RATE_LIMIT_UPLOAD_MAX'] ?? '30', 10);     // 30 uploads/min
+
+type RateBucket = { timestamps: number[]; };
+const rateBuckets = new Map<string, RateBucket>();
+
+// Clean up stale buckets every 5 minutes
+setInterval(() => {
+  const cutoff = Date.now() - RATE_LIMIT_WINDOW_MS;
+  for (const [key, bucket] of rateBuckets) {
+    bucket.timestamps = bucket.timestamps.filter((t) => t > cutoff);
+    if (bucket.timestamps.length === 0) rateBuckets.delete(key);
+  }
+}, 5 * 60_000).unref();
+
+function checkRateLimit(ip: string, limit: number): boolean {
+  const now = Date.now();
+  const cutoff = now - RATE_LIMIT_WINDOW_MS;
+  let bucket = rateBuckets.get(ip);
+  if (!bucket) {
+    bucket = { timestamps: [] };
+    rateBuckets.set(ip, bucket);
+  }
+  bucket.timestamps = bucket.timestamps.filter((t) => t > cutoff);
+  if (bucket.timestamps.length >= limit) return false;
+  bucket.timestamps.push(now);
+  return true;
+}
+
 // ── Route Matcher ──
 
 export function createRouter(ctx: RouteContext): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
@@ -550,6 +582,21 @@ export function createRouter(ctx: RouteContext): (req: IncomingMessage, res: Ser
     if (req.method !== 'GET' && req.method !== 'OPTIONS') {
       if (!authorize(ctx.orchestratorSecret, req)) {
         json(res, 401, { error: 'Unauthorized' });
+        return;
+      }
+
+      // Rate limiting for POST/DELETE — applied after auth to avoid wasting
+      // rate limit tokens on unauthenticated requests
+      const clientIp = req.socket.remoteAddress ?? 'unknown';
+      const isUpload = url.pathname === '/api/dashboard/upload';
+      const limit = isUpload ? RATE_LIMIT_UPLOAD_MAX : RATE_LIMIT_MAX;
+      const bucketKey = isUpload ? `upload:${clientIp}` : `post:${clientIp}`;
+      if (!checkRateLimit(bucketKey, limit)) {
+        res.writeHead(429, {
+          'content-type': 'application/json',
+          'retry-after': String(Math.ceil(RATE_LIMIT_WINDOW_MS / 1000)),
+        });
+        res.end(JSON.stringify({ error: 'Too many requests' }));
         return;
       }
     }
