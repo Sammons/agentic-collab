@@ -430,6 +430,54 @@
     gap: 10px;
   }
 
+  /* ── Thread tabs ── */
+  .thread-tabs {
+    display: flex;
+    gap: 2px;
+    margin-left: auto;
+    background: var(--bg);
+    border-radius: var(--radius);
+    padding: 2px;
+  }
+  .thread-tabs button {
+    padding: 4px 12px;
+    border: none;
+    border-radius: calc(var(--radius) - 2px);
+    background: transparent;
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+  }
+  .thread-tabs button:hover { color: var(--fg); }
+  .thread-tabs button.active {
+    background: var(--surface);
+    color: var(--fg);
+  }
+
+  /* ── Persona panel ── */
+  .persona-panel {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px;
+    font-size: 13px;
+    line-height: 1.7;
+    color: var(--fg);
+  }
+  .persona-panel .persona-empty {
+    color: var(--muted);
+    font-style: italic;
+    text-align: center;
+    padding: 40px 20px;
+  }
+  .persona-panel pre {
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    font-family: inherit;
+    margin: 0;
+  }
+
   /* ── Toast ── */
   .toast {
     position: fixed;
@@ -523,6 +571,7 @@
     <div class="thread-messages" id="threadMessages">
       <div class="thread-empty">Select an agent to view messages</div>
     </div>
+    <div class="persona-panel" id="personaPanel" style="display:none"></div>
     <div class="thread-input" id="threadInput" style="display:none">
       <input type="file" id="fileInput" style="display:none" multiple />
       <input type="text" id="msgInput" placeholder="Type a message..." />
@@ -605,6 +654,8 @@
     selected: null,
     connected: false,
     unread: {},  // { agentName: count }
+    threadView: 'messages',  // 'messages' | 'persona'
+    personaCache: {},  // { agentName: { content, fetched } }
   };
 
   let ws = null;
@@ -813,19 +864,37 @@
   function renderThread() {
     const header = document.getElementById('threadHeader');
     const messages = document.getElementById('threadMessages');
+    const personaPanel = document.getElementById('personaPanel');
     const input = document.getElementById('threadInput');
 
     if (!state.selected) {
       header.textContent = 'Select an agent';
       messages.innerHTML = '<div class="thread-empty">Select an agent to view messages</div>';
+      personaPanel.style.display = 'none';
       input.style.display = 'none';
       return;
     }
 
     const selectedAgent = state.agents.find(a => a.name === state.selected);
     const headerBadge = selectedAgent ? `<span class="state-badge state-${selectedAgent.state}">${selectedAgent.state}</span>` : '';
-    header.innerHTML = `<span>${esc(state.selected)}</span>${headerBadge}`;
-    input.style.display = 'flex';
+    const tabs = `<div class="thread-tabs">
+      <button class="${state.threadView === 'messages' ? 'active' : ''}" data-tab="messages">Messages</button>
+      <button class="${state.threadView === 'persona' ? 'active' : ''}" data-tab="persona">Persona</button>
+    </div>`;
+    header.innerHTML = `<span>${esc(state.selected)}</span>${headerBadge}${tabs}`;
+    header.querySelectorAll('.thread-tabs button').forEach(btn => {
+      btn.onclick = () => { state.threadView = btn.dataset.tab; renderThread(); };
+    });
+
+    const showMessages = state.threadView === 'messages';
+    messages.style.display = showMessages ? 'flex' : 'none';
+    personaPanel.style.display = showMessages ? 'none' : 'block';
+    input.style.display = showMessages ? 'flex' : 'none';
+
+    if (!showMessages) {
+      renderPersona();
+      return;
+    }
 
     const thread = state.threads[state.selected] || [];
     if (thread.length === 0) {
@@ -870,10 +939,44 @@
   function selectAgent(name) {
     state.selected = name;
     state.unread[name] = 0;
+    state.threadView = 'messages';
     renderAgents();
     renderThread();
     updateSendability();
     document.getElementById('msgInput').focus();
+  }
+
+  async function fetchPersona(name) {
+    const cached = state.personaCache[name];
+    if (cached && Date.now() - cached.fetched < 30000) return cached.content;
+    try {
+      const token = getToken();
+      const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+      const res = await fetch(`/api/personas/${encodeURIComponent(name)}`, { headers });
+      if (res.status === 404) {
+        state.personaCache[name] = { content: null, fetched: Date.now() };
+        return null;
+      }
+      if (!res.ok) return null;
+      const data = await res.json();
+      state.personaCache[name] = { content: data.content, fetched: Date.now() };
+      return data.content;
+    } catch {
+      return null;
+    }
+  }
+
+  async function renderPersona() {
+    const panel = document.getElementById('personaPanel');
+    if (!state.selected) return;
+    panel.innerHTML = '<div class="persona-empty">Loading…</div>';
+    const content = await fetchPersona(state.selected);
+    if (state.threadView !== 'persona' || !state.selected) return;
+    if (!content) {
+      panel.innerHTML = '<div class="persona-empty">No persona defined for this agent.<br>Create <code>persistent-agents/' + esc(state.selected) + '.md</code> to add one.</div>';
+    } else {
+      panel.innerHTML = '<pre>' + esc(content) + '</pre>';
+    }
   }
 
   // ── Toast ──

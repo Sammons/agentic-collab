@@ -123,10 +123,10 @@ export async function spawnAgent(
       lastActivity: new Date().toISOString(),
     });
 
-    return { current, tmuxSession, engine: agent.engine, spawnCount: agent.spawnCount };
+    return { current, tmuxSession, engine: agent.engine, spawnCount: agent.spawnCount, permissions: agent.permissions };
   });
 
-  const { tmuxSession, engine, spawnCount } = phase1;
+  const { tmuxSession, engine, spawnCount, permissions } = phase1;
   const watchdog = startWatchdog(ctx, opts.name, 'spawning', SPAWN_TIMEOUT_MS, opts.proxyId, tmuxSession);
 
   try {
@@ -165,7 +165,7 @@ export async function spawnAgent(
       thinking: opts.thinking,
       task: opts.task,
       appendSystemPrompt: systemPrompt,
-      dangerouslySkipPermissions: true,
+      dangerouslySkipPermissions: permissions === 'skip',
     });
 
     await ctx.proxyDispatch(opts.proxyId, {
@@ -249,11 +249,12 @@ export async function resumeAgent(
       engine: agent.engine,
       cwd: agent.cwd,
       persona: agent.persona,
+      permissions: agent.permissions,
       currentSessionId: agent.currentSessionId,
     };
   });
 
-  const { proxyId, tmuxSession, engine, cwd, persona, currentSessionId } = phase1;
+  const { proxyId, tmuxSession, engine, cwd, persona, permissions, currentSessionId } = phase1;
   const watchdog = startWatchdog(ctx, name, 'resuming', RESUME_TIMEOUT_MS, proxyId, tmuxSession);
 
   try {
@@ -286,7 +287,7 @@ export async function resumeAgent(
         cwd,
         task: opts?.task,
         appendSystemPrompt: systemPrompt,
-        dangerouslySkipPermissions: true,
+        dangerouslySkipPermissions: permissions === 'skip',
       });
     }
 
@@ -500,6 +501,7 @@ export async function reloadAgent(
       engine: agent.engine,
       cwd: agent.cwd,
       persona: agent.persona,
+      permissions: agent.permissions,
       previousContextPct: agent.lastContextPct,
       currentSessionId: agent.currentSessionId,
       spawnCount: agent.spawnCount,
@@ -509,7 +511,7 @@ export async function reloadAgent(
   });
 
   const {
-    proxyId, engine, cwd, persona, previousContextPct,
+    proxyId, engine, cwd, persona, permissions, previousContextPct,
     currentSessionId, spawnCount, reloadTask, oldTmuxSession,
   } = phase1;
   const watchdog = startWatchdog(ctx, name, 'suspending', RELOAD_TIMEOUT_MS, proxyId, oldTmuxSession);
@@ -557,7 +559,7 @@ export async function reloadAgent(
           name,
           cwd,
           appendSystemPrompt: systemPrompt,
-          dangerouslySkipPermissions: true,
+          dangerouslySkipPermissions: permissions === 'skip',
         });
 
     await ctx.proxyDispatch(proxyId, {

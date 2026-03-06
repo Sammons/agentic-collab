@@ -7,11 +7,14 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { request as httpRequest } from 'node:http';
 import { pipeline } from 'node:stream/promises';
 import { timingSafeEqual } from 'node:crypto';
+import { readdirSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { join } from 'node:path';
 import type { Database } from './database.ts';
 import type { WebSocketServer } from '../shared/websocket-server.ts';
 import type { AgentState, EngineType, ProxyCommand, ProxyResponse } from '../shared/types.ts';
 import { sanitizeMessage, generateMessageId } from '../shared/sanitize.ts';
 import type { LockManager } from '../shared/lock.ts';
+import { getPersonasDir, parseFrontmatter } from './persona.ts';
 import {
   spawnAgent, resumeAgent, suspendAgent, destroyAgent,
   reloadAgent, interruptAgent, compactAgent, killAgent,
@@ -22,7 +25,7 @@ import { shutdownAgents, restoreAllAgents } from './network.ts';
 /**
  * Shared context injected into all route handlers.
  *
- * - db: SQLite persistence (agents, events, messages, proxies, workstreams)
+ * - db: SQLite persistence (agents, events, messages, proxies)
  * - wss: WebSocket server for real-time dashboard updates
  * - locks: Per-agent SQLite locks for lifecycle serialization
  * - proxyDispatch: Sends commands to tmux proxies (with retry)
@@ -359,24 +362,46 @@ route('GET', '/api/queue', async (req, res, _match, ctx) => {
   json(res, 200, messages);
 });
 
-// ── Workstreams ──
+// ── Personas ──
 
-route('GET', '/api/workstreams', async (_req, res, _match, ctx) => {
-  const workstreams = ctx.db.listWorkstreams();
-  json(res, 200, workstreams);
+const PERSONA_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$/;
+
+route('GET', '/api/personas', async (_req, res) => {
+  try {
+    const dir = getPersonasDir();
+    const files = readdirSync(dir).filter(f => f.endsWith('.md')).sort();
+    const personas = files.map(f => ({ name: f.replace(/\.md$/, ''), filename: f }));
+    json(res, 200, personas);
+  } catch {
+    json(res, 200, []);
+  }
 });
 
-route('POST', '/api/workstreams', async (req, res, _match, ctx) => {
-  const body = await readJson(req);
-  if (!body.name || !body.goal) return json(res, 400, { error: 'name, goal required' });
-
-  const ws = ctx.db.createWorkstream(body.name, body.goal, body.plan);
-  if (body.agents && Array.isArray(body.agents)) {
-    for (const agent of body.agents) {
-      ctx.db.addAgentToWorkstream(body.name, agent);
-    }
+route('GET', '/api/personas/:name', async (_req, res, match) => {
+  const name = match.pathname.groups['name']!;
+  if (!PERSONA_NAME_RE.test(name)) return json(res, 400, { error: 'Invalid persona name' });
+  try {
+    const raw = readFileSync(join(getPersonasDir(), `${name}.md`), 'utf-8');
+    const { frontmatter, body } = parseFrontmatter(raw);
+    json(res, 200, { name, content: raw, frontmatter, body });
+  } catch {
+    json(res, 404, { error: 'Persona not found' });
   }
-  json(res, 201, ws);
+});
+
+route('PUT', '/api/personas/:name', async (req, res, match) => {
+  const name = match.pathname.groups['name']!;
+  if (!PERSONA_NAME_RE.test(name)) return json(res, 400, { error: 'Invalid persona name' });
+  const body = await readJson(req);
+  if (typeof body.content !== 'string') return json(res, 400, { error: 'content (string) required' });
+  try {
+    const dir = getPersonasDir();
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, `${name}.md`), body.content, 'utf-8');
+    json(res, 200, { name, content: body.content });
+  } catch (err) {
+    json(res, 500, { error: `Failed to write persona: ${(err as Error).message}` });
+  }
 });
 
 // ── Agent Lifecycle Operations ──

@@ -1,7 +1,7 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:http';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { Database } from './database.ts';
@@ -258,24 +258,6 @@ describe('API Routes', () => {
 
   it('GET /api/events/:agentName returns events', async () => {
     const { status, data } = await api('GET', '/api/events/api-agent-1');
-    assert.equal(status, 200);
-    assert.ok(Array.isArray(data));
-  });
-
-  // ── Workstreams ──
-
-  it('POST /api/workstreams creates workstream', async () => {
-    const { status, data } = await api('POST', '/api/workstreams', {
-      name: 'test-ws',
-      goal: 'Test goal',
-      agents: ['api-agent-1'],
-    });
-    assert.equal(status, 201);
-    assert.equal((data as Record<string, unknown>).name, 'test-ws');
-  });
-
-  it('GET /api/workstreams lists workstreams', async () => {
-    const { status, data } = await api('GET', '/api/workstreams');
     assert.equal(status, 200);
     assert.ok(Array.isArray(data));
   });
@@ -551,5 +533,135 @@ describe('API Routes — Rate Limiting', () => {
       body: JSON.stringify({ name: 'x', engine: 'claude', cwd: '/tmp' }),
     });
     assert.equal(resp.status, 401);
+  });
+});
+
+describe('API Routes — Personas', () => {
+  let server: Server;
+  let db: Database;
+  let wss: WebSocketServer;
+  let port: number;
+  let tmpDir: string;
+  let personasDir: string;
+
+  before(async () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'agentic-persona-route-test-'));
+    personasDir = join(tmpDir, 'personas');
+    process.env['PERSONAS_DIR'] = personasDir;
+    mkdtempSync; // force eval
+    const { mkdirSync } = await import('node:fs');
+    mkdirSync(personasDir, { recursive: true });
+
+    writeFileSync(join(personasDir, 'researcher.md'), '# Researcher\nYou are a research agent.');
+    writeFileSync(join(personasDir, 'builder.md'), '# Builder\nYou build things.');
+
+    db = new Database(join(tmpDir, 'test.db'));
+    wss = new WebSocketServer();
+
+    const ctx: RouteContext = {
+      db,
+      wss,
+      locks: new LockManager(db.rawDb),
+      proxyDispatch: async () => ({ ok: true }),
+      getDashboardHtml: () => '<html>Dashboard</html>',
+      orchestratorHost: 'http://localhost:3000',
+      orchestratorSecret: null,
+    };
+
+    const router = createRouter(ctx);
+    server = createServer(async (req, res) => {
+      await router(req, res);
+    });
+
+    await new Promise<void>((resolve) => {
+      server.listen(0, () => {
+        const addr = server.address();
+        port = typeof addr === 'object' && addr ? addr.port : 0;
+        resolve();
+      });
+    });
+  });
+
+  after(() => {
+    delete process.env['PERSONAS_DIR'];
+    wss.close();
+    server.close();
+    db.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  async function api(method: string, path: string, body?: unknown): Promise<{ status: number; data: unknown }> {
+    const headers: Record<string, string> = {};
+    if (body) headers['content-type'] = 'application/json';
+    const resp = await fetch(`http://localhost:${port}${path}`, {
+      method,
+      headers,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const data = await resp.json();
+    return { status: resp.status, data };
+  }
+
+  it('GET /api/personas lists persona files', async () => {
+    const { status, data } = await api('GET', '/api/personas');
+    assert.equal(status, 200);
+    const personas = data as Array<{ name: string; filename: string }>;
+    assert.equal(personas.length, 2);
+    assert.equal(personas[0]!.name, 'builder');
+    assert.equal(personas[1]!.name, 'researcher');
+  });
+
+  it('GET /api/personas/:name returns persona content', async () => {
+    const { status, data } = await api('GET', '/api/personas/researcher');
+    assert.equal(status, 200);
+    const persona = data as { name: string; content: string };
+    assert.equal(persona.name, 'researcher');
+    assert.ok(persona.content.includes('research agent'));
+  });
+
+  it('GET /api/personas/:name returns 404 for missing persona', async () => {
+    const { status } = await api('GET', '/api/personas/nonexistent');
+    assert.equal(status, 404);
+  });
+
+  it('GET /api/personas/:name rejects invalid names', async () => {
+    const { status } = await api('GET', '/api/personas/..etc');
+    assert.equal(status, 400);
+  });
+
+  it('PUT /api/personas/:name creates a new persona', async () => {
+    const { status, data } = await api('PUT', '/api/personas/tester', {
+      content: '# Tester\nYou test things.',
+    });
+    assert.equal(status, 200);
+    const persona = data as { name: string; content: string };
+    assert.equal(persona.name, 'tester');
+    assert.ok(persona.content.includes('test things'));
+
+    // Verify it shows up in list
+    const { data: list } = await api('GET', '/api/personas');
+    const personas = list as Array<{ name: string }>;
+    assert.ok(personas.some(p => p.name === 'tester'));
+  });
+
+  it('PUT /api/personas/:name updates an existing persona', async () => {
+    const { status, data } = await api('PUT', '/api/personas/builder', {
+      content: '# Builder v2\nYou build better things.',
+    });
+    assert.equal(status, 200);
+    const persona = data as { name: string; content: string };
+    assert.ok(persona.content.includes('better things'));
+  });
+
+  it('PUT /api/personas/:name rejects missing content', async () => {
+    const { status } = await api('PUT', '/api/personas/bad', {});
+    assert.equal(status, 400);
+  });
+
+  it('PUT /api/personas/:name rejects invalid names', async () => {
+    const { status } = await api('PUT', '/api/personas/..etc', {
+      content: 'evil',
+    });
+    assert.equal(status, 400);
   });
 });
