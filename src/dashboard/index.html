@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agentic Collab</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --text-dim: #8b949e;
+    --accent: #58a6ff;
+    --green: #3fb950;
+    --yellow: #d29922;
+    --red: #f85149;
+    --orange: #d18616;
+    --purple: #bc8cff;
+    --radius: 8px;
+    --shadow: 0 2px 8px rgba(0,0,0,0.3);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+  }
+
+  /* ── Header ── */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 20px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+  }
+  header h1 { font-size: 16px; font-weight: 600; }
+  .conn-status {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+  .conn-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--red);
+  }
+  .conn-dot.connected { background: var(--green); }
+
+  /* ── Layout ── */
+  .layout {
+    display: grid;
+    grid-template-columns: 340px 1fr;
+    height: calc(100vh - 49px);
+  }
+
+  /* ── Agent Grid ── */
+  .agent-list {
+    border-right: 1px solid var(--border);
+    overflow-y: auto;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .agent-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px;
+    cursor: pointer;
+    transition: border-color 0.15s;
+  }
+  .agent-card:hover { border-color: var(--accent); }
+  .agent-card.selected { border-color: var(--accent); background: #1c2333; }
+  .agent-card.flash { animation: flash-card 0.6s ease; }
+
+  @keyframes flash-card {
+    0%,100% { background: var(--surface); }
+    50% { background: #1a2a1a; }
+  }
+
+  .agent-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 6px;
+  }
+  .agent-name { font-weight: 600; font-size: 14px; }
+  .state-badge {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .state-active   { background: rgba(63,185,80,0.15); color: var(--green); }
+  .state-idle     { background: rgba(139,148,158,0.15); color: var(--text-dim); }
+  .state-spawning { background: rgba(88,166,255,0.15); color: var(--accent); }
+  .state-suspended { background: rgba(210,153,34,0.15); color: var(--yellow); }
+  .state-failed   { background: rgba(248,81,73,0.15); color: var(--red); }
+  .state-void     { background: rgba(139,148,158,0.1); color: var(--text-dim); }
+
+  .agent-meta {
+    display: flex;
+    gap: 12px;
+    font-size: 12px;
+    color: var(--text-dim);
+    margin-bottom: 8px;
+  }
+  .agent-meta span { display: flex; align-items: center; gap: 4px; }
+
+  .agent-actions {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .agent-actions button {
+    font-size: 11px;
+    padding: 3px 10px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .agent-actions button:hover { border-color: var(--accent); color: var(--accent); }
+  .agent-actions button.danger:hover { border-color: var(--red); color: var(--red); }
+
+  /* ── Thread Panel ── */
+  .thread-panel {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+  }
+  .thread-header {
+    padding: 12px 20px;
+    border-bottom: 1px solid var(--border);
+    font-weight: 600;
+    font-size: 14px;
+    background: var(--surface);
+  }
+  .thread-messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .thread-empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: var(--text-dim);
+    font-size: 14px;
+  }
+
+  .msg {
+    max-width: 70%;
+    padding: 8px 12px;
+    border-radius: var(--radius);
+    font-size: 13px;
+    line-height: 1.5;
+    word-break: break-word;
+  }
+  .msg.to-agent {
+    align-self: flex-end;
+    background: #1a3a5c;
+    border: 1px solid rgba(88,166,255,0.3);
+  }
+  .msg.from-agent {
+    align-self: flex-start;
+    background: var(--surface);
+    border: 1px solid var(--border);
+  }
+  .msg-sender {
+    font-size: 11px;
+    color: var(--text-dim);
+    margin-bottom: 2px;
+  }
+  .msg-time {
+    font-size: 10px;
+    color: var(--text-dim);
+    margin-top: 4px;
+    text-align: right;
+  }
+
+  /* ── Input ── */
+  .thread-input {
+    padding: 12px 20px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    gap: 8px;
+    background: var(--surface);
+  }
+  .thread-input input {
+    flex: 1;
+    padding: 8px 12px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text);
+    font-size: 13px;
+    outline: none;
+  }
+  .thread-input input:focus { border-color: var(--accent); }
+  .thread-input button {
+    padding: 8px 16px;
+    border-radius: 6px;
+    border: none;
+    background: var(--accent);
+    color: #fff;
+    font-weight: 600;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .thread-input button:hover { opacity: 0.9; }
+  .thread-input button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .thread-input input:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  /* ── Toast ── */
+  .toast {
+    position: fixed;
+    top: 16px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 9999;
+    padding: 10px 18px;
+    border-radius: var(--radius);
+    font-size: 13px;
+    font-weight: 500;
+    color: #fff;
+    box-shadow: var(--shadow);
+    pointer-events: none;
+    animation: toast-in 0.2s ease;
+  }
+  .toast.error   { background: var(--red); }
+  .toast.warning { background: var(--orange); }
+
+  @keyframes toast-in {
+    from { opacity: 0; transform: translateX(-50%) translateY(-8px); }
+    to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+  }
+
+  /* ── Responsive ── */
+  @media (max-width: 768px) {
+    .layout { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+    .agent-list { max-height: 40vh; border-right: none; border-bottom: 1px solid var(--border); }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Agentic Collab</h1>
+  <div class="conn-status">
+    <div class="conn-dot" id="connDot"></div>
+    <span id="connLabel">Disconnected</span>
+  </div>
+</header>
+<div class="layout">
+  <div class="agent-list" id="agentList"></div>
+  <div class="thread-panel" id="threadPanel">
+    <div class="thread-header" id="threadHeader">Select an agent</div>
+    <div class="thread-messages" id="threadMessages">
+      <div class="thread-empty">Select an agent to view messages</div>
+    </div>
+    <div class="thread-input" id="threadInput" style="display:none">
+      <input type="text" id="msgInput" placeholder="Type a message..." />
+      <button id="sendBtn" disabled>Send</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function() {
+  // ── State ──
+  const state = {
+    agents: [],
+    threads: {},
+    selected: null,
+    connected: false,
+  };
+
+  let ws = null;
+  let reconnectTimer = null;
+  let reconnectDelay = 1000;
+
+  // ── WebSocket ──
+  function connect() {
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    ws = new WebSocket(`${proto}://${location.host}/ws`);
+
+    ws.onopen = () => {
+      state.connected = true;
+      reconnectDelay = 1000;
+      updateConnStatus();
+      if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+    };
+
+    ws.onclose = () => {
+      state.connected = false;
+      updateConnStatus();
+      const jitter = Math.random() * 1000;
+      reconnectTimer = setTimeout(connect, reconnectDelay + jitter);
+      reconnectDelay = Math.min(reconnectDelay * 2, 30000);
+    };
+
+    ws.onerror = () => ws.close();
+
+    ws.onmessage = (evt) => {
+      let data;
+      try {
+        data = JSON.parse(evt.data);
+      } catch (err) {
+        console.warn('Malformed WebSocket frame:', err);
+        return;
+      }
+      switch (data.type) {
+        case 'init':
+          state.agents = data.agents;
+          state.threads = data.threads;
+          renderAgents();
+          renderThread();
+          break;
+        case 'agent_update':
+          updateAgent(data.agent);
+          break;
+        case 'message':
+          addMessage(data.msg);
+          break;
+      }
+    };
+  }
+
+  function updateConnStatus() {
+    const dot = document.getElementById('connDot');
+    const label = document.getElementById('connLabel');
+    dot.classList.toggle('connected', state.connected);
+    label.textContent = state.connected ? 'Connected' : 'Disconnected';
+  }
+
+  // ── State Updates ──
+  function updateAgent(agent) {
+    const idx = state.agents.findIndex(a => a.name === agent.name);
+    if (idx >= 0) state.agents[idx] = agent;
+    else state.agents.push(agent);
+    renderAgents();
+    if (agent.name === state.selected) updateSendability();
+  }
+
+  function addMessage(msg) {
+    if (!state.threads[msg.agent]) state.threads[msg.agent] = [];
+    state.threads[msg.agent].push(msg);
+    if (state.selected === msg.agent) renderThread();
+
+    // Flash the agent card
+    const card = document.querySelector(`[data-agent="${msg.agent}"]`);
+    if (card && state.selected !== msg.agent) {
+      card.classList.add('flash');
+      setTimeout(() => card.classList.remove('flash'), 600);
+    }
+  }
+
+  // ── Render ──
+  function renderAgents() {
+    const list = document.getElementById('agentList');
+    list.innerHTML = '';
+    for (const agent of state.agents) {
+      const card = document.createElement('div');
+      card.className = `agent-card${state.selected === agent.name ? ' selected' : ''}`;
+      card.dataset.agent = agent.name;
+
+      const stateClass = `state-${agent.state}`;
+      const modelStr = [agent.engine, agent.model, agent.thinking].filter(Boolean).join(' ');
+      const ctxStr = agent.lastContextPct != null ? `${agent.lastContextPct}%` : '--';
+
+      const activeIdle = agent.state === 'active' || agent.state === 'idle';
+      const suspendedFailed = agent.state === 'suspended' || agent.state === 'failed';
+      card.innerHTML = `
+        <div class="agent-header">
+          <span class="agent-name">${esc(agent.name)}</span>
+          <span class="state-badge ${stateClass}">${agent.state}</span>
+        </div>
+        <div class="agent-meta">
+          <span>${esc(modelStr)}</span>
+          <span>ctx: ${ctxStr}</span>
+        </div>
+        <div class="agent-actions">
+          ${activeIdle ? `
+            <button data-action="interrupt">Interrupt</button>
+            <button data-action="compact">Compact</button>
+            <button class="danger" data-action="kill">Kill</button>
+          ` : ''}
+          ${suspendedFailed ? `
+            <button data-action="resume">Resume</button>
+            <button class="danger" data-action="destroy">Destroy</button>
+          ` : ''}
+        </div>
+      `;
+      list.appendChild(card);
+    }
+  }
+
+  function renderThread() {
+    const header = document.getElementById('threadHeader');
+    const messages = document.getElementById('threadMessages');
+    const input = document.getElementById('threadInput');
+
+    if (!state.selected) {
+      header.textContent = 'Select an agent';
+      messages.innerHTML = '<div class="thread-empty">Select an agent to view messages</div>';
+      input.style.display = 'none';
+      return;
+    }
+
+    header.textContent = `Thread: ${state.selected}`;
+    input.style.display = 'flex';
+
+    const thread = state.threads[state.selected] || [];
+    if (thread.length === 0) {
+      messages.innerHTML = '<div class="thread-empty">No messages yet</div>';
+      return;
+    }
+
+    messages.innerHTML = '';
+    for (const msg of thread) {
+      const div = document.createElement('div');
+      div.className = `msg ${msg.direction === 'to_agent' ? 'to-agent' : 'from-agent'}`;
+      const sender = msg.direction === 'to_agent' ? 'you' : state.selected;
+      const time = new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const topicStr = msg.topic ? ` (re: ${esc(msg.topic)})` : '';
+      div.innerHTML = `
+        <div class="msg-sender">${esc(sender)}${topicStr}</div>
+        <div>${esc(msg.message)}</div>
+        <div class="msg-time">${time}</div>
+      `;
+      messages.appendChild(div);
+    }
+    messages.scrollTop = messages.scrollHeight;
+  }
+
+  function selectAgent(name) {
+    state.selected = name;
+    renderAgents();
+    renderThread();
+    updateSendability();
+    document.getElementById('msgInput').focus();
+  }
+
+  // ── Toast ──
+  function showToast(message, type = 'error') {
+    const existing = document.querySelector('.toast');
+    if (existing) existing.remove();
+    const t = document.createElement('div');
+    t.className = `toast ${type}`;
+    t.textContent = message;
+    document.body.appendChild(t);
+    setTimeout(() => t.remove(), 3000);
+  }
+
+  // ── Send enable/disable based on agent state ──
+  const CANT_RECEIVE = new Set(['void', 'failed', 'spawning']);
+
+  function updateSendability() {
+    const msgInput = document.getElementById('msgInput');
+    const sendBtn = document.getElementById('sendBtn');
+    if (!state.selected) return;
+    const agent = state.agents.find(a => a.name === state.selected);
+    const blocked = agent && CANT_RECEIVE.has(agent.state);
+    sendBtn.disabled = blocked;
+    msgInput.disabled = blocked;
+    msgInput.placeholder = blocked
+      ? `Agent is ${agent ? agent.state : 'unavailable'} — cannot receive messages`
+      : 'Type a message...';
+  }
+
+  // ── Actions ──
+  async function agentAction(name, act) {
+    try {
+      const res = await fetch(`/api/agents/${encodeURIComponent(name)}/${act}`, { method: 'POST' });
+      if (!res.ok) {
+        let msg = `Action "${act}" failed (HTTP ${res.status})`;
+        try {
+          const body = await res.json();
+          if (body && body.error) msg = body.error;
+        } catch (_) {}
+        showToast(msg, 'error');
+      }
+    } catch (err) {
+      console.error(`Action ${act} failed:`, err);
+      showToast(`Action "${act}" failed — network error`, 'error');
+    }
+  }
+
+  // Event delegation on agent list — handles both card selection and action buttons.
+  document.getElementById('agentList').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-action]');
+    if (btn) {
+      e.stopPropagation();
+      const card = btn.closest('[data-agent]');
+      if (card) agentAction(card.dataset.agent, btn.dataset.action);
+      return;
+    }
+    const card = e.target.closest('[data-agent]');
+    if (card) selectAgent(card.dataset.agent);
+  });
+
+  // ── Send Message ──
+  async function sendMessage() {
+    if (!state.selected) return;
+    const input = document.getElementById('msgInput');
+    const sendBtn = document.getElementById('sendBtn');
+    const text = input.value.trim();
+    if (!text) return;
+
+    // Clear any previous error state
+    input.style.borderColor = '';
+    const existingErr = document.getElementById('sendError');
+    if (existingErr) existingErr.remove();
+
+    sendBtn.disabled = true;
+    try {
+      const res = await fetch('/api/dashboard/send', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ agent: state.selected, message: text }),
+      });
+      if (!res.ok) {
+        let body = null;
+        try { body = await res.json(); } catch (_) {}
+        if (body && body.msg) {
+          // Message was persisted but delivery failed — partial success
+          input.value = '';
+          showToast('Message saved but delivery failed \u2014 agent may be unreachable', 'warning');
+        } else {
+          // Full failure — message not saved, keep input
+          console.error('Send failed: HTTP', res.status);
+          input.style.borderColor = 'var(--red)';
+          const errEl = document.createElement('span');
+          errEl.id = 'sendError';
+          errEl.style.cssText = 'color:var(--red);font-size:11px;align-self:center;white-space:nowrap';
+          errEl.textContent = 'Send failed';
+          input.parentNode.insertBefore(errEl, sendBtn);
+          setTimeout(() => {
+            errEl.remove();
+            input.style.borderColor = '';
+          }, 3000);
+        }
+      } else {
+        input.value = '';
+      }
+    } catch (err) {
+      console.error('Send failed:', err);
+      input.style.borderColor = 'var(--red)';
+      const errEl = document.createElement('span');
+      errEl.id = 'sendError';
+      errEl.style.cssText = 'color:var(--red);font-size:11px;align-self:center;white-space:nowrap';
+      errEl.textContent = 'Send failed';
+      input.parentNode.insertBefore(errEl, sendBtn);
+      setTimeout(() => {
+        errEl.remove();
+        input.style.borderColor = '';
+      }, 3000);
+    } finally {
+      updateSendability();
+    }
+  }
+
+  document.getElementById('sendBtn').onclick = sendMessage;
+  document.getElementById('msgInput').onkeydown = (e) => {
+    if (e.key === 'Enter') sendMessage();
+  };
+
+  // ── Helpers ──
+  function esc(s) {
+    if (!s) return '';
+    const div = document.createElement('div');
+    div.textContent = s;
+    return div.innerHTML;
+  }
+
+  // ── Init ──
+  connect();
+})();
+</script>
+</body>
+</html>
