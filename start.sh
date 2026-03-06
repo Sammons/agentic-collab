@@ -241,7 +241,9 @@ info "Dashboard: http://localhost:3000/dashboard"
 info "Press Ctrl+C to stop the proxy"
 echo ""
 
-if [ "$HAS_MISE" = true ]; then
+# Prefer mise if it has the proxy task available (requires trusted config).
+# Fall back to direct node invocation otherwise.
+if [ "$HAS_MISE" = true ] && mise task ls 2>/dev/null | grep -q '^proxy '; then
   exec mise run proxy
 else
   exec node src/proxy/main.ts
