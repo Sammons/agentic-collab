@@ -222,28 +222,6 @@ describe('Integration: full lifecycle via HTTP', () => {
     await api('POST', '/api/agents/status-agent/destroy');
   });
 
-  it('workstreams: create and list', async () => {
-    await api('POST', '/api/agents', { name: 'ws-agent-1', engine: 'claude', cwd: '/tmp' });
-    await api('POST', '/api/agents', { name: 'ws-agent-2', engine: 'claude', cwd: '/tmp' });
-
-    const create = await api('POST', '/api/workstreams', {
-      name: 'feature-x',
-      goal: 'Build feature X',
-      plan: 'Step 1: design. Step 2: implement.',
-      agents: ['ws-agent-1', 'ws-agent-2'],
-    });
-    assert.equal(create.status, 201);
-
-    const list = await api('GET', '/api/workstreams');
-    assert.equal(list.status, 200);
-    const workstreams = list.data as Record<string, unknown>[];
-    assert.ok(workstreams.some(w => w.name === 'feature-x'));
-
-    // Cleanup
-    await api('DELETE', '/api/agents/ws-agent-1');
-    await api('DELETE', '/api/agents/ws-agent-2');
-  });
-
   it('shutdown and restore cycle', async () => {
     await api('POST', '/api/agents', { name: 'cycle-agent', engine: 'claude', cwd: '/tmp' });
     await api('POST', '/api/agents/cycle-agent/spawn', { proxyId: 'int-proxy' });

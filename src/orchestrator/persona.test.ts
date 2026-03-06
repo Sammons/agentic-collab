@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, mkdirSync, symlinkSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { resolvePersonaPath, loadPersona, composeSystemPrompt } from './persona.ts';
+import { resolvePersonaPath, loadPersona, composeSystemPrompt, parseFrontmatter, scanPersonas, syncPersonasToDb } from './persona.ts';
+import { Database } from './database.ts';
 
 describe('Persona', () => {
   let tmpDir: string;
@@ -99,10 +100,10 @@ describe('Persona', () => {
       assert.equal(loadPersona('/nonexistent/persona.md'), null);
     });
 
-    it('loads empty file content', () => {
+    it('returns null for empty file', () => {
       const path = join(tmpDir, 'empty-persona.md');
       writeFileSync(path, '');
-      assert.equal(loadPersona(path), '');
+      assert.equal(loadPersona(path), null);
     });
 
     it('returns null for directory path', () => {
@@ -164,6 +165,157 @@ describe('Persona', () => {
       });
       assert.ok(prompt.includes('/compact'));
       assert.ok(prompt.includes('context'));
+    });
+  });
+
+  describe('parseFrontmatter', () => {
+    it('parses frontmatter and body', () => {
+      const raw = '---\nengine: claude\nmodel: opus\ncwd: /tmp\n---\n# Agent\nBody text.';
+      const { frontmatter, body } = parseFrontmatter(raw);
+      assert.equal(frontmatter['engine'], 'claude');
+      assert.equal(frontmatter['model'], 'opus');
+      assert.equal(frontmatter['cwd'], '/tmp');
+      assert.ok(body.includes('# Agent'));
+      assert.ok(body.includes('Body text.'));
+    });
+
+    it('returns empty frontmatter for files without delimiters', () => {
+      const raw = '# Just a heading\nSome content.';
+      const { frontmatter, body } = parseFrontmatter(raw);
+      assert.deepEqual(frontmatter, {});
+      assert.equal(body, raw);
+    });
+
+    it('handles frontmatter with no body', () => {
+      const raw = '---\nengine: claude\n---\n';
+      const { frontmatter, body } = parseFrontmatter(raw);
+      assert.equal(frontmatter['engine'], 'claude');
+      assert.equal(body, '');
+    });
+
+    it('ignores lines without colons in frontmatter', () => {
+      const raw = '---\nengine: claude\nbadline\nmodel: opus\n---\nBody';
+      const { frontmatter } = parseFrontmatter(raw);
+      assert.equal(frontmatter['engine'], 'claude');
+      assert.equal(frontmatter['model'], 'opus');
+      assert.equal(Object.keys(frontmatter).length, 2);
+    });
+
+    it('handles all persona frontmatter fields', () => {
+      const raw = '---\nengine: claude\nmodel: opus\nthinking: high\ncwd: /project\nproxy_host: crankshaft\npermissions: skip\n---\nBody';
+      const { frontmatter } = parseFrontmatter(raw);
+      assert.equal(frontmatter['engine'], 'claude');
+      assert.equal(frontmatter['model'], 'opus');
+      assert.equal(frontmatter['thinking'], 'high');
+      assert.equal(frontmatter['cwd'], '/project');
+      assert.equal(frontmatter['proxy_host'], 'crankshaft');
+      assert.equal(frontmatter['permissions'], 'skip');
+    });
+  });
+
+  describe('scanPersonas', () => {
+    it('scans persona files with frontmatter', () => {
+      const scanDir = mkdtempSync(join(tmpdir(), 'persona-scan-'));
+      writeFileSync(join(scanDir, 'researcher.md'), '---\nengine: claude\ncwd: /tmp\n---\n# Researcher');
+      writeFileSync(join(scanDir, 'builder.md'), '---\nengine: codex\ncwd: /work\n---\n# Builder');
+      const personas = scanPersonas(scanDir);
+      assert.equal(personas.length, 2);
+      assert.equal(personas[0]!.name, 'builder');
+      assert.equal(personas[0]!.frontmatter.engine, 'codex');
+      assert.equal(personas[1]!.name, 'researcher');
+      assert.equal(personas[1]!.frontmatter.engine, 'claude');
+      rmSync(scanDir, { recursive: true, force: true });
+    });
+
+    it('returns empty array for missing directory', () => {
+      const personas = scanPersonas('/nonexistent/dir');
+      assert.deepEqual(personas, []);
+    });
+  });
+
+  describe('syncPersonasToDb', () => {
+    let db: Database;
+    let syncDir: string;
+
+    before(() => {
+      syncDir = mkdtempSync(join(tmpdir(), 'persona-sync-test-'));
+      db = new Database(join(syncDir, 'test.db'));
+    });
+
+    after(() => {
+      db.close();
+      rmSync(syncDir, { recursive: true, force: true });
+    });
+
+    it('creates agents from persona files', () => {
+      const personasDir = join(syncDir, 'personas');
+      mkdirSync(personasDir);
+      writeFileSync(join(personasDir, 'alpha.md'), '---\nengine: claude\nmodel: opus\nthinking: high\ncwd: /alpha\nproxy_host: crankshaft\npermissions: skip\n---\n# Alpha agent');
+      writeFileSync(join(personasDir, 'beta.md'), '---\nengine: codex\ncwd: /beta\n---\n# Beta agent');
+
+      const synced = syncPersonasToDb(db, personasDir);
+      assert.equal(synced, 2);
+
+      const alpha = db.getAgent('alpha');
+      assert.ok(alpha);
+      assert.equal(alpha.engine, 'claude');
+      assert.equal(alpha.model, 'opus');
+      assert.equal(alpha.thinking, 'high');
+      assert.equal(alpha.cwd, '/alpha');
+      assert.equal(alpha.permissions, 'skip');
+      assert.equal(alpha.proxyHost, 'crankshaft');
+      assert.equal(alpha.persona, 'alpha');
+      assert.equal(alpha.state, 'void');
+
+      const beta = db.getAgent('beta');
+      assert.ok(beta);
+      assert.equal(beta.engine, 'codex');
+      assert.equal(beta.cwd, '/beta');
+      assert.equal(beta.model, null);
+    });
+
+    it('updates config but preserves runtime state on re-sync', () => {
+      const personasDir = join(syncDir, 'personas');
+      // Simulate agent being active
+      const alpha = db.getAgent('alpha')!;
+      db.updateAgentState('alpha', 'active', alpha.version, {
+        tmuxSession: 'agent-alpha',
+        proxyId: 'proxy-1',
+      });
+
+      // Update the persona file
+      writeFileSync(join(personasDir, 'alpha.md'), '---\nengine: claude\nmodel: sonnet\ncwd: /alpha-v2\n---\n# Alpha v2');
+
+      const synced = syncPersonasToDb(db, personasDir);
+      assert.equal(synced, 2);
+
+      const updated = db.getAgent('alpha')!;
+      assert.equal(updated.model, 'sonnet');
+      assert.equal(updated.cwd, '/alpha-v2');
+      assert.equal(updated.state, 'active'); // runtime state preserved
+      assert.equal(updated.tmuxSession, 'agent-alpha'); // runtime state preserved
+      assert.equal(updated.proxyId, 'proxy-1'); // runtime state preserved
+    });
+
+    it('skips persona files missing required fields', () => {
+      const personasDir = join(syncDir, 'personas');
+      writeFileSync(join(personasDir, 'invalid.md'), '---\nmodel: opus\n---\n# No engine or cwd');
+
+      const beforeCount = db.listAgents().length;
+      syncPersonasToDb(db, personasDir);
+      const afterCount = db.listAgents().length;
+      assert.equal(afterCount, beforeCount); // no new agent created
+    });
+  });
+
+  describe('loadPersona strips frontmatter', () => {
+    it('returns body only, not frontmatter', () => {
+      const path = join(tmpDir, 'fm-agent.md');
+      writeFileSync(path, '---\nengine: claude\ncwd: /tmp\n---\n# The Agent\nDoes things.');
+      const content = loadPersona(path);
+      assert.ok(content);
+      assert.ok(content.includes('# The Agent'));
+      assert.ok(!content.includes('engine: claude'));
     });
   });
 });

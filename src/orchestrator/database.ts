@@ -14,7 +14,6 @@ import type {
   PendingMessage,
   PendingMessageStatus,
   ProxyRegistration,
-  WorkstreamRecord,
 } from '../shared/types.ts';
 
 const SCHEMA = `
@@ -29,6 +28,8 @@ const SCHEMA = `
     thinking           TEXT,
     cwd                TEXT NOT NULL,
     persona            TEXT,
+    permissions        TEXT,
+    proxy_host         TEXT,
     state              TEXT NOT NULL DEFAULT 'void',
     state_before_shutdown TEXT,
     current_session_id TEXT,
@@ -43,20 +44,6 @@ const SCHEMA = `
     version            INTEGER NOT NULL DEFAULT 0,
     spawn_count        INTEGER NOT NULL DEFAULT 0,
     created_at         TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
-  );
-
-  CREATE TABLE IF NOT EXISTS workstreams (
-    name       TEXT PRIMARY KEY,
-    goal       TEXT NOT NULL,
-    plan       TEXT,
-    status     TEXT NOT NULL DEFAULT 'active',
-    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
-  );
-
-  CREATE TABLE IF NOT EXISTS workstream_agents (
-    workstream TEXT NOT NULL REFERENCES workstreams(name) ON DELETE CASCADE,
-    agent      TEXT NOT NULL REFERENCES agents(name) ON DELETE CASCADE,
-    PRIMARY KEY (workstream, agent)
   );
 
   CREATE TABLE IF NOT EXISTS events (
@@ -118,10 +105,19 @@ export class Database {
 
   private migrate(): void {
     // Add queue_id to dashboard_messages if not present
-    const columns = this.db.prepare('PRAGMA table_info(dashboard_messages)').all() as Array<Record<string, unknown>>;
-    const hasQueueId = columns.some((c) => c['name'] === 'queue_id');
-    if (!hasQueueId) {
+    const dmColumns = this.db.prepare('PRAGMA table_info(dashboard_messages)').all() as Array<Record<string, unknown>>;
+    if (!dmColumns.some((c) => c['name'] === 'queue_id')) {
       this.db.exec('ALTER TABLE dashboard_messages ADD COLUMN queue_id INTEGER REFERENCES pending_messages(id)');
+    }
+
+    // Add permissions and proxy_host to agents if not present
+    const agentColumns = this.db.prepare('PRAGMA table_info(agents)').all() as Array<Record<string, unknown>>;
+    const agentColNames = new Set(agentColumns.map(c => c['name'] as string));
+    if (!agentColNames.has('permissions')) {
+      this.db.exec('ALTER TABLE agents ADD COLUMN permissions TEXT');
+    }
+    if (!agentColNames.has('proxy_host')) {
+      this.db.exec('ALTER TABLE agents ADD COLUMN proxy_host TEXT');
     }
   }
 
@@ -143,11 +139,13 @@ export class Database {
     thinking?: string;
     cwd: string;
     persona?: string;
+    permissions?: string;
+    proxyHost?: string;
     proxyId?: string;
   }): AgentRecord {
     this.db.prepare(`
-      INSERT INTO agents (name, engine, model, thinking, cwd, persona, proxy_id, state)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 'void')
+      INSERT INTO agents (name, engine, model, thinking, cwd, persona, permissions, proxy_host, proxy_id, state)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'void')
     `).run(
       opts.name,
       opts.engine,
@@ -155,7 +153,45 @@ export class Database {
       opts.thinking ?? null,
       opts.cwd,
       opts.persona ?? null,
+      opts.permissions ?? null,
+      opts.proxyHost ?? null,
       opts.proxyId ?? null,
+    );
+    return this.getAgent(opts.name)!;
+  }
+
+  /**
+   * Upsert agent from persona frontmatter. Creates if missing, updates config fields
+   * if existing. Preserves runtime state (active/idle/suspended, session, proxy, etc.).
+   */
+  upsertAgentFromPersona(opts: {
+    name: string;
+    engine: EngineType;
+    model?: string;
+    thinking?: string;
+    cwd: string;
+    persona?: string;
+    permissions?: string;
+    proxyHost?: string;
+  }): AgentRecord {
+    const existing = this.getAgent(opts.name);
+    if (!existing) {
+      return this.createAgent(opts);
+    }
+    // Update config fields only — preserve runtime state
+    this.db.prepare(`
+      UPDATE agents SET engine = ?, model = ?, thinking = ?, cwd = ?,
+        persona = ?, permissions = ?, proxy_host = ?
+      WHERE name = ?
+    `).run(
+      opts.engine,
+      opts.model ?? null,
+      opts.thinking ?? null,
+      opts.cwd,
+      opts.persona ?? null,
+      opts.permissions ?? null,
+      opts.proxyHost ?? null,
+      opts.name,
     );
     return this.getAgent(opts.name)!;
   }
@@ -274,39 +310,6 @@ export class Database {
       threads[msg.agent]!.push(msg);
     }
     return threads;
-  }
-
-  // ── Workstreams ──
-
-  createWorkstream(name: string, goal: string, plan?: string): WorkstreamRecord {
-    this.db.prepare(`
-      INSERT INTO workstreams (name, goal, plan) VALUES (?, ?, ?)
-    `).run(name, goal, plan ?? null);
-    return this.getWorkstream(name)!;
-  }
-
-  getWorkstream(name: string): WorkstreamRecord | undefined {
-    const row = this.db.prepare('SELECT * FROM workstreams WHERE name = ?').get(name) as Record<string, unknown> | undefined;
-    if (!row) return undefined;
-    return mapWorkstreamRow(row);
-  }
-
-  listWorkstreams(): WorkstreamRecord[] {
-    const rows = this.db.prepare('SELECT * FROM workstreams ORDER BY name').all() as Array<Record<string, unknown>>;
-    return rows.map(mapWorkstreamRow);
-  }
-
-  addAgentToWorkstream(workstream: string, agent: string): void {
-    this.db.prepare(`
-      INSERT OR IGNORE INTO workstream_agents (workstream, agent) VALUES (?, ?)
-    `).run(workstream, agent);
-  }
-
-  getWorkstreamAgents(workstream: string): string[] {
-    const rows = this.db.prepare(
-      'SELECT agent FROM workstream_agents WHERE workstream = ? ORDER BY agent'
-    ).all(workstream) as Array<Record<string, unknown>>;
-    return rows.map((r) => r['agent'] as string);
   }
 
   // ── Proxies ──
@@ -467,6 +470,8 @@ function mapAgentRow(row: Record<string, unknown>): AgentRecord {
     thinking: row['thinking'] as string | null,
     cwd: row['cwd'] as string,
     persona: row['persona'] as string | null,
+    permissions: row['permissions'] as string | null,
+    proxyHost: row['proxy_host'] as string | null,
     state: row['state'] as AgentState,
     stateBeforeShutdown: row['state_before_shutdown'] as string | null,
     currentSessionId: row['current_session_id'] as string | null,
@@ -503,16 +508,6 @@ function mapDashboardMessageRow(row: Record<string, unknown>): DashboardMessage 
     topic: row['topic'] as string | null,
     message: row['message'] as string,
     queueId: (row['queue_id'] as number | null) ?? null,
-    createdAt: row['created_at'] as string,
-  };
-}
-
-function mapWorkstreamRow(row: Record<string, unknown>): WorkstreamRecord {
-  return {
-    name: row['name'] as string,
-    goal: row['goal'] as string,
-    plan: row['plan'] as string | null,
-    status: row['status'] as string,
     createdAt: row['created_at'] as string,
   };
 }

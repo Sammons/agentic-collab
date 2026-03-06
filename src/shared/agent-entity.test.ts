@@ -18,6 +18,8 @@ function makeAgent(overrides: Partial<AgentRecord> = {}): AgentRecord {
     model: null,
     thinking: null,
     persona: null,
+    permissions: null,
+    proxyHost: null,
     task: null,
     dangerouslySkipPermissions: 0,
     reloadQueued: 0,
