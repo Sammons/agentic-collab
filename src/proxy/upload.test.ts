@@ -8,8 +8,9 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createWriteStream, existsSync, realpathSync, readFileSync, mkdtempSync, rmSync, symlinkSync, mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, relative, isAbsolute } from 'node:path';
 import { tmpdir } from 'node:os';
+import { pipeline } from 'node:stream/promises';
 import { timingSafeEqual } from 'node:crypto';
 
 describe('Proxy /upload endpoint', () => {
@@ -19,7 +20,7 @@ describe('Proxy /upload endpoint', () => {
   const TOKEN = 'test-upload-token-123';
 
   // Minimal reimplementation of the proxy /upload handler for unit testing
-  function handleUpload(req: IncomingMessage, res: ServerResponse): void {
+  async function handleUpload(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url!, 'http://localhost');
 
     // Token check
@@ -35,7 +36,9 @@ describe('Proxy /upload endpoint', () => {
     const filename = url.searchParams.get('filename');
 
     if (!filename || filename.includes('/') || filename.includes('\\') ||
-        filename === '.' || filename === '..') {
+        filename === '.' || filename === '..' ||
+        filename.includes('\0') || filename.length > 255 ||
+        /^(CON|PRN|AUX|NUL|COM\d|LPT\d)(\..+)?$/i.test(filename)) {
       res.writeHead(400, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ ok: false, error: 'Invalid filename' }));
       return;
@@ -49,7 +52,8 @@ describe('Proxy /upload endpoint', () => {
 
     const resolvedCwd = realpathSync(cwd);
     const targetPath = join(resolvedCwd, filename);
-    if (!targetPath.startsWith(resolvedCwd + '/')) {
+    const rel = relative(resolvedCwd, targetPath);
+    if (rel.startsWith('..') || isAbsolute(rel)) {
       res.writeHead(400, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ ok: false, error: 'Path traversal detected' }));
       return;
@@ -58,16 +62,16 @@ describe('Proxy /upload endpoint', () => {
     const ws = createWriteStream(targetPath);
     let size = 0;
     req.on('data', (chunk: Buffer) => { size += chunk.length; });
-    req.pipe(ws);
 
-    ws.on('finish', () => {
+    try {
+      await pipeline(req, ws);
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ ok: true, data: { path: targetPath, size } }));
-    });
-    ws.on('error', (err) => {
+    } catch (err) {
+      req.destroy();
       res.writeHead(500, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ ok: false, error: err.message }));
-    });
+      res.end(JSON.stringify({ ok: false, error: (err as Error).message }));
+    }
   }
 
   before(async () => {
@@ -209,6 +213,60 @@ describe('Proxy /upload endpoint', () => {
   it('rejects invalid token', async () => {
     const res = await upload('test.txt', tmpDir, 'data', 'wrong-token-value');
     assert.equal(res.status, 401);
+  });
+
+  // ── Hardened Filename Validation ──
+
+  it('rejects filename with null byte', async () => {
+    const res = await upload('file\0.txt', tmpDir, 'data');
+    assert.equal(res.status, 400);
+    assert.equal(res.body.ok, false);
+  });
+
+  it('rejects filename exceeding 255 chars', async () => {
+    const longName = 'a'.repeat(256) + '.txt';
+    const res = await upload(longName, tmpDir, 'data');
+    assert.equal(res.status, 400);
+    assert.equal(res.body.ok, false);
+  });
+
+  it('accepts filename at exactly 255 chars', async () => {
+    const name = 'a'.repeat(251) + '.txt'; // 255 total
+    const res = await upload(name, tmpDir, 'data');
+    assert.equal(res.status, 200);
+    assert.equal(res.body.ok, true);
+    assert.ok(existsSync(join(tmpDir, name)));
+  });
+
+  it('rejects Windows reserved name CON', async () => {
+    const res = await upload('CON', tmpDir, 'data');
+    assert.equal(res.status, 400);
+    assert.equal(res.body.ok, false);
+  });
+
+  it('rejects Windows reserved name NUL.txt', async () => {
+    const res = await upload('NUL.txt', tmpDir, 'data');
+    assert.equal(res.status, 400);
+    assert.equal(res.body.ok, false);
+  });
+
+  it('rejects Windows reserved name com1 (case insensitive)', async () => {
+    const res = await upload('com1', tmpDir, 'data');
+    assert.equal(res.status, 400);
+    assert.equal(res.body.ok, false);
+  });
+
+  it('rejects Windows reserved name LPT1.log', async () => {
+    const res = await upload('LPT1.log', tmpDir, 'data');
+    assert.equal(res.status, 400);
+    assert.equal(res.body.ok, false);
+  });
+
+  it('accepts non-reserved filename that starts with reserved prefix', async () => {
+    // "CONSOLE" is NOT reserved — only "CON" exactly (possibly with extension) is
+    const res = await upload('CONSOLE.txt', tmpDir, 'data');
+    assert.equal(res.status, 200);
+    assert.equal(res.body.ok, true);
   });
 
   // ── Path Traversal via Symlinks ──

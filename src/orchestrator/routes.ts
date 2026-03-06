@@ -5,6 +5,7 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { request as httpRequest } from 'node:http';
+import { pipeline } from 'node:stream/promises';
 import { timingSafeEqual } from 'node:crypto';
 import type { Database } from './database.ts';
 import type { WebSocketServer } from '../shared/websocket-server.ts';
@@ -198,8 +199,10 @@ route('POST', '/api/dashboard/upload', async (req, res, _match, ctx) => {
   }
 
   // Defense-in-depth filename validation (proxy also validates)
-  if (filename.includes('/') || filename.includes('\\') ||
-      filename === '.' || filename === '..') {
+  if (!filename || filename.includes('/') || filename.includes('\\') ||
+      filename === '.' || filename === '..' ||
+      filename.includes('\0') || filename.length > 255 ||
+      /^(CON|PRN|AUX|NUL|COM\d|LPT\d)(\..+)?$/i.test(filename)) {
     return json(res, 400, { error: 'Invalid filename' });
   }
 
@@ -221,6 +224,7 @@ route('POST', '/api/dashboard/upload', async (req, res, _match, ctx) => {
       headers: {
         'content-type': 'application/octet-stream',
         'x-proxy-token': proxy.token,
+        ...(req.headers['content-length'] ? { 'content-length': req.headers['content-length'] } : {}),
       },
     }, (proxyRes) => {
       let body = '';
@@ -231,10 +235,15 @@ route('POST', '/api/dashboard/upload', async (req, res, _match, ctx) => {
       });
     });
 
-    proxyReq.on('error', (err: Error) => resolve({ ok: false, error: err.message }));
+    proxyReq.on('error', (err: Error) => {
+      req.destroy();
+      resolve({ ok: false, error: err.message });
+    });
 
-    // Pipe request body directly to proxy — zero buffering
-    req.pipe(proxyReq);
+    // Stream with backpressure via pipeline — handles flow control and cleanup
+    pipeline(req, proxyReq).catch((err) => {
+      resolve({ ok: false, error: (err as Error).message });
+    });
   });
 
   if (!proxyResult.ok) {

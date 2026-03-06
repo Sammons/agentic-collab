@@ -134,8 +134,7 @@ export type ProxyCommand =
   | { action: 'kill_session'; sessionName: string }
   | { action: 'list_sessions' }
   | { action: 'has_session'; sessionName: string }
-  | { action: 'send_keys'; sessionName: string; keys: string }
-  | { action: 'write_file'; cwd: string; filename: string };
+  | { action: 'send_keys'; sessionName: string; keys: string };
 
 export type ProxyResponse = {
   ok: boolean;

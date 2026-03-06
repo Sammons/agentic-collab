@@ -6,7 +6,8 @@
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createWriteStream, existsSync, realpathSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, relative, isAbsolute } from 'node:path';
+import { pipeline } from 'node:stream/promises';
 import { generateToken } from '../shared/sanitize.ts';
 import * as tmux from './tmux.ts';
 import type { ProxyCommand, ProxyResponse } from '../shared/types.ts';
@@ -170,9 +171,11 @@ const server = createServer(async (req, res) => {
     const cwd = url.searchParams.get('cwd');
     const filename = url.searchParams.get('filename');
 
-    // Validate filename
+    // Validate filename — reject path separators, traversal, null bytes, reserved names, excessive length
     if (!filename || filename.includes('/') || filename.includes('\\') ||
-        filename === '.' || filename === '..') {
+        filename === '.' || filename === '..' ||
+        filename.includes('\0') || filename.length > 255 ||
+        /^(CON|PRN|AUX|NUL|COM\d|LPT\d)(\..+)?$/i.test(filename)) {
       json(res, 400, { ok: false, error: 'Invalid filename' });
       return;
     }
@@ -183,27 +186,27 @@ const server = createServer(async (req, res) => {
       return;
     }
 
-    // Path traversal protection
+    // Path traversal protection — resolve symlinks, verify containment via relative path
     const resolvedCwd = realpathSync(cwd);
     const targetPath = join(resolvedCwd, filename);
-    if (!targetPath.startsWith(resolvedCwd + '/')) {
+    const rel = relative(resolvedCwd, targetPath);
+    if (rel.startsWith('..') || isAbsolute(rel)) {
       json(res, 400, { ok: false, error: 'Path traversal detected' });
       return;
     }
 
-    // Stream to disk — no buffering
+    // Stream to disk with proper backpressure and error cleanup
     const ws = createWriteStream(targetPath);
     let size = 0;
-
     req.on('data', (chunk: Buffer) => { size += chunk.length; });
-    req.pipe(ws);
 
-    ws.on('finish', () => {
+    try {
+      await pipeline(req, ws);
       json(res, 200, { ok: true, data: { path: targetPath, size } });
-    });
-    ws.on('error', (err) => {
-      json(res, 500, { ok: false, error: err.message });
-    });
+    } catch (err) {
+      req.destroy();
+      json(res, 500, { ok: false, error: (err as Error).message });
+    }
     return;
   }
 
