@@ -1,0 +1,68 @@
+min_version = "2024.0.0"
+
+[tools]
+node = "24"
+
+[tasks]
+test = "node --test 'src/**/*.test.ts'"
+"test:watch" = "node --test --watch 'src/**/*.test.ts'"
+typecheck = "npx tsc --noEmit"
+
+[tasks.proxy]
+description = "Start the proxy (auto-discovers orchestrator)"
+run = "node src/proxy/main.ts"
+
+[tasks.orchestrator]
+description = "Start the orchestrator (non-Docker, for development)"
+run = "node src/orchestrator/main.ts"
+
+[tasks.up]
+description = "Start orchestrator via Docker Compose"
+run = "docker compose up -d"
+
+[tasks.down]
+description = "Stop orchestrator"
+run = "docker compose down"
+
+[tasks.logs]
+description = "Tail orchestrator logs"
+run = "docker compose logs -f"
+
+[tasks.doctor]
+description = "Check prerequisites and configuration"
+run = """
+echo "=== Agentic Collab Doctor ==="
+echo ""
+
+echo -n "Node.js: "
+node --version 2>/dev/null || echo "NOT FOUND (need 24+)"
+
+echo -n "Docker: "
+docker --version 2>/dev/null || echo "NOT FOUND (optional)"
+
+echo -n "tmux: "
+tmux -V 2>/dev/null || echo "NOT FOUND (required for proxy)"
+
+echo ""
+echo -n "claude CLI: "
+which claude >/dev/null 2>&1 && echo "found" || echo "not found"
+echo -n "codex CLI: "
+which codex >/dev/null 2>&1 && echo "not found" || echo "found"
+echo -n "opencode CLI: "
+which opencode >/dev/null 2>&1 && echo "not found" || echo "found"
+
+echo ""
+SECRET_PATH="${HOME}/.config/agentic-collab/secret"
+echo -n "Secret file: "
+if [ -f "$SECRET_PATH" ]; then
+  echo "$SECRET_PATH (exists)"
+else
+  echo "$SECRET_PATH (not created yet)"
+fi
+
+echo -n "Orchestrator container: "
+docker ps --filter "label=io.agentic-collab.role=orchestrator" --format "{{.Status}}" 2>/dev/null || echo "docker not available"
+
+echo ""
+echo "=== Done ==="
+"""

@@ -16,15 +16,18 @@ import { shutdownAgents, restoreAllAgents } from './network.ts';
 import type { LifecycleContext } from './lifecycle.ts';
 import { syncPersonasToDb } from './persona.ts';
 import { isRunning } from '../shared/agent-entity.ts';
+import { resolveSecret, getSecretPath } from '../shared/config.ts';
 import type { ProxyCommand, ProxyResponse } from '../shared/types.ts';
 
 const PORT = parseInt(process.env['PORT'] ?? '3000', 10);
 const DB_PATH = process.env['DB_PATH'] ?? join(process.env['HOME'] ?? '/data', '.agentic-collab', 'orchestrator.db');
 const ORCHESTRATOR_HOST = process.env['ORCHESTRATOR_HOST'] ?? `http://localhost:${PORT}`;
-const ORCHESTRATOR_SECRET = process.env['ORCHESTRATOR_SECRET'] || null;
+const ORCHESTRATOR_SECRET = resolveSecret({ create: true });
 
 if (!ORCHESTRATOR_SECRET) {
   console.warn('[orchestrator] WARNING: ORCHESTRATOR_SECRET not set — auth is disabled');
+} else {
+  console.log(`[orchestrator] Auth enabled (secret from ${process.env['ORCHESTRATOR_SECRET'] ? 'env' : getSecretPath()})`);
 }
 
 // Ensure DB directory exists
