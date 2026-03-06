@@ -110,7 +110,7 @@ describe('Lifecycle', () => {
 
   describe('spawnAgent — paste command verification', () => {
     it('claude spawn includes --model, --effort, and -p flags', async () => {
-      db.createAgent({ name: 'cmd-claude', engine: 'claude', cwd: '/tmp', proxyId: 'p1' });
+      db.createAgent({ name: 'cmd-claude', engine: 'claude', cwd: '/tmp', proxyId: 'p1', permissions: 'skip' });
       proxyCommands = [];
 
       await spawnAgent(ctx, {
@@ -133,7 +133,7 @@ describe('Lifecycle', () => {
     });
 
     it('codex spawn includes --model and positional task', async () => {
-      db.createAgent({ name: 'cmd-codex', engine: 'codex', cwd: '/tmp', proxyId: 'p1' });
+      db.createAgent({ name: 'cmd-codex', engine: 'codex', cwd: '/tmp', proxyId: 'p1', permissions: 'skip' });
       proxyCommands = [];
 
       await spawnAgent(ctx, {
@@ -192,7 +192,8 @@ describe('Lifecycle', () => {
       assert.ok(!paste.text.includes('--effort'), 'should not include --effort');
       // System prompt is always present (--append-system-prompt), but task flag (-p 'xxx') should not
       assert.ok(paste.text.includes('--append-system-prompt'), 'should include system prompt');
-      assert.ok(paste.text.startsWith('claude --dangerously-skip-permissions --append-system-prompt'), 'should be claude with skip-permissions and system prompt only');
+      assert.ok(!paste.text.includes('--dangerously-skip-permissions'), 'should not include skip-permissions without permissions=skip');
+      assert.ok(paste.text.startsWith('claude --append-system-prompt'), 'should be claude with system prompt only');
     });
   });
 

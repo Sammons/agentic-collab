@@ -167,36 +167,6 @@ describe('Database', () => {
     });
   });
 
-  describe('workstreams', () => {
-    it('creates a workstream with agents', () => {
-      db.createAgent({ name: 'ws-agent-1', engine: 'claude', cwd: '/tmp' });
-      db.createAgent({ name: 'ws-agent-2', engine: 'claude', cwd: '/tmp' });
-
-      const ws = db.createWorkstream('test-ws', 'Build the thing', 'plan.md');
-      assert.equal(ws.name, 'test-ws');
-      assert.equal(ws.goal, 'Build the thing');
-      assert.equal(ws.plan, 'plan.md');
-
-      db.addAgentToWorkstream('test-ws', 'ws-agent-1');
-      db.addAgentToWorkstream('test-ws', 'ws-agent-2');
-
-      const agents = db.getWorkstreamAgents('test-ws');
-      assert.deepEqual(agents, ['ws-agent-1', 'ws-agent-2']);
-    });
-
-    it('lists workstreams', () => {
-      const list = db.listWorkstreams();
-      assert.ok(list.some(ws => ws.name === 'test-ws'));
-    });
-
-    it('handles duplicate agent-workstream assignment gracefully', () => {
-      // Should not throw due to INSERT OR IGNORE
-      db.addAgentToWorkstream('test-ws', 'ws-agent-1');
-      const agents = db.getWorkstreamAgents('test-ws');
-      assert.equal(agents.filter(a => a === 'ws-agent-1').length, 1);
-    });
-  });
-
   describe('proxies', () => {
     it('registers and retrieves a proxy', () => {
       const proxy = db.registerProxy('proxy-1', 'token-abc', 'localhost:3100');

@@ -14,6 +14,7 @@ import { LockManager } from '../shared/lock.ts';
 import { HealthMonitor } from './health-monitor.ts';
 import { shutdownAgents, restoreAllAgents } from './network.ts';
 import type { LifecycleContext } from './lifecycle.ts';
+import { syncPersonasToDb } from './persona.ts';
 import { isRunning } from '../shared/agent-entity.ts';
 import type { ProxyCommand, ProxyResponse } from '../shared/types.ts';
 
@@ -247,6 +248,16 @@ server.listen(PORT, '0.0.0.0', async () => {
   console.log(`[orchestrator] Listening on port ${PORT}`);
   console.log(`[orchestrator] Dashboard: http://localhost:${PORT}/dashboard`);
   console.log(`[orchestrator] DB: ${DB_PATH}`);
+
+  // Sync persona files → SQLite (idempotent merge)
+  try {
+    const synced = syncPersonasToDb(db);
+    if (synced > 0) {
+      console.log(`[orchestrator] Persona sync: ${synced} agents synced from persistent-agents/`);
+    }
+  } catch (err) {
+    console.error('[orchestrator] Persona sync failed:', err);
+  }
 
   // Start health monitor
   healthMonitor.start();
