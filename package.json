@@ -9,12 +9,8 @@
   "scripts": {
     "orchestrator": "node src/orchestrator/main.ts",
     "proxy": "node src/proxy/main.ts",
-    "cli": "node src/cli/main.ts",
     "test": "node --test 'src/**/*.test.ts'",
     "test:watch": "node --test --watch 'src/**/*.test.ts'",
     "typecheck": "tsc --noEmit"
-  },
-  "bin": {
-    "agentic": "src/cli/main.ts"
   }
 }

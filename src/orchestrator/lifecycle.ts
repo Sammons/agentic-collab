@@ -75,7 +75,9 @@ function startWatchdog(
           }
         }
       });
-    } catch { /* watchdog is best-effort */ }
+    } catch (err) {
+      console.warn(`[watchdog] Failed for ${name}:`, (err as Error).message);
+    }
   }, timeoutMs);
 }
 
@@ -182,6 +184,7 @@ export async function spawnAgent(
       });
     }
 
+    // Let the CLI fully initialize before finalizing state
     await sleep(POST_SPAWN_ACTIVE_DELAY_MS);
 
     // ── Phase 3: finalize (lock) ──

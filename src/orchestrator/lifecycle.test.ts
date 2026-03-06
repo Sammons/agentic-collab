@@ -8,7 +8,7 @@ import { LockManager } from '../shared/lock.ts';
 import type { ProxyCommand, ProxyResponse } from '../shared/types.ts';
 import {
   spawnAgent, resumeAgent, suspendAgent, destroyAgent,
-  reloadAgent, interruptAgent, compactAgent, type LifecycleContext,
+  reloadAgent, interruptAgent, compactAgent, killAgent, type LifecycleContext,
 } from './lifecycle.ts';
 
 describe('Lifecycle', () => {
@@ -222,6 +222,103 @@ describe('Lifecycle', () => {
 
       await compactAgent(ctx, 'compact-test');
       assert.ok(proxyCommands.some(c => c.action === 'paste'));
+    });
+  });
+
+  describe('killAgent', () => {
+    it('kills an active agent', async () => {
+      db.createAgent({ name: 'kill-active', engine: 'claude', cwd: '/tmp', proxyId: 'p1' });
+      const a = db.getAgent('kill-active')!;
+      db.updateAgentState('kill-active', 'active', a.version, {
+        tmuxSession: 'agent-kill-active',
+        proxyId: 'p1',
+      });
+
+      proxyCommands = [];
+      await killAgent(ctx, 'kill-active');
+
+      const agent = db.getAgent('kill-active');
+      assert.equal(agent?.state, 'suspended');
+      assert.ok(proxyCommands.some(c => c.action === 'kill_session'));
+    });
+
+    it('kills an agent in spawning state', async () => {
+      db.createAgent({ name: 'kill-spawning', engine: 'claude', cwd: '/tmp', proxyId: 'p1' });
+      const a = db.getAgent('kill-spawning')!;
+      db.updateAgentState('kill-spawning', 'spawning', a.version, {
+        tmuxSession: 'agent-kill-spawning',
+        proxyId: 'p1',
+      });
+
+      proxyCommands = [];
+      await killAgent(ctx, 'kill-spawning');
+
+      const agent = db.getAgent('kill-spawning');
+      assert.equal(agent?.state, 'suspended');
+    });
+
+    it('kills an agent in suspending state', async () => {
+      db.createAgent({ name: 'kill-suspending', engine: 'claude', cwd: '/tmp', proxyId: 'p1' });
+      const a = db.getAgent('kill-suspending')!;
+      db.updateAgentState('kill-suspending', 'suspending', a.version, {
+        tmuxSession: 'agent-kill-suspending',
+        proxyId: 'p1',
+      });
+
+      proxyCommands = [];
+      await killAgent(ctx, 'kill-suspending');
+
+      const agent = db.getAgent('kill-suspending');
+      assert.equal(agent?.state, 'suspended');
+    });
+
+    it('kills an agent in resuming state', async () => {
+      db.createAgent({ name: 'kill-resuming', engine: 'claude', cwd: '/tmp', proxyId: 'p1' });
+      const a = db.getAgent('kill-resuming')!;
+      db.updateAgentState('kill-resuming', 'resuming', a.version, {
+        tmuxSession: 'agent-kill-resuming',
+        proxyId: 'p1',
+      });
+
+      proxyCommands = [];
+      await killAgent(ctx, 'kill-resuming');
+
+      const agent = db.getAgent('kill-resuming');
+      assert.equal(agent?.state, 'suspended');
+    });
+  });
+
+  describe('spawnAgent — interrupted by kill', () => {
+    it('returns current state if killed during spawn phase 2', async () => {
+      db.createAgent({ name: 'spawn-kill', engine: 'claude', cwd: '/tmp', proxyId: 'p1' });
+      let callCount = 0;
+      const slowCtx: LifecycleContext = {
+        ...ctx,
+        proxyDispatch: async (_proxyId: string, command: ProxyCommand): Promise<ProxyResponse> => {
+          proxyCommands.push(command);
+          callCount++;
+          // After create_session, simulate kill by changing state
+          if (command.action === 'create_session') {
+            const agent = db.getAgent('spawn-kill')!;
+            if (agent.state === 'spawning') {
+              db.updateAgentState('spawn-kill', 'suspended', agent.version, {
+                tmuxSession: null,
+              });
+            }
+          }
+          return { ok: true };
+        },
+      };
+
+      const result = await spawnAgent(slowCtx, {
+        name: 'spawn-kill',
+        engine: 'claude',
+        cwd: '/tmp',
+        proxyId: 'p1',
+      });
+
+      // Phase 3 should detect state changed and return current state
+      assert.equal(result.state, 'suspended');
     });
   });
 });
