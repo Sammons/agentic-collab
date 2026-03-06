@@ -567,7 +567,7 @@
     overlay.innerHTML = `
       <div class="auth-box">
         <h2>Agentic Collab</h2>
-        <p>${message || 'Enter your orchestrator token to connect, or skip for dev mode (no auth).'}</p>
+        <p>${esc(message || 'Enter your orchestrator token to connect, or skip for dev mode (no auth).')}</p>
         <input type="password" id="authTokenInput" placeholder="Orchestrator token" autocomplete="off" />
         <div class="auth-actions">
           <button class="secondary" id="authSkipBtn">Dev Mode</button>

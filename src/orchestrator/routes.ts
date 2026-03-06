@@ -219,6 +219,13 @@ route('POST', '/api/dashboard/upload', async (req, res, _match, ctx) => {
   proxyUrl.searchParams.set('filename', filename);
 
   const proxyResult = await new Promise<{ ok: boolean; data?: Record<string, unknown>; error?: string }>((resolve) => {
+    let settled = false;
+    const settle = (result: { ok: boolean; data?: Record<string, unknown>; error?: string }) => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    };
+
     const proxyReq = httpRequest(proxyUrl, {
       method: 'POST',
       headers: {
@@ -229,20 +236,21 @@ route('POST', '/api/dashboard/upload', async (req, res, _match, ctx) => {
     }, (proxyRes) => {
       let body = '';
       proxyRes.on('data', (chunk: Buffer) => { body += chunk; });
+      proxyRes.on('error', (err: Error) => settle({ ok: false, error: err.message }));
       proxyRes.on('end', () => {
-        try { resolve(JSON.parse(body)); }
-        catch { resolve({ ok: false, error: 'Invalid proxy response' }); }
+        try { settle(JSON.parse(body)); }
+        catch { settle({ ok: false, error: 'Invalid proxy response' }); }
       });
     });
 
     proxyReq.on('error', (err: Error) => {
-      req.destroy();
-      resolve({ ok: false, error: err.message });
+      if (!settled) req.destroy();
+      settle({ ok: false, error: err.message });
     });
 
     // Stream with backpressure via pipeline — handles flow control and cleanup
     pipeline(req, proxyReq).catch((err) => {
-      resolve({ ok: false, error: (err as Error).message });
+      settle({ ok: false, error: (err as Error).message });
     });
   });
 

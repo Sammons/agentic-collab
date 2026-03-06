@@ -7,10 +7,11 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { createWriteStream, existsSync, realpathSync, readFileSync, mkdtempSync, rmSync, symlinkSync, mkdirSync } from 'node:fs';
+import { createWriteStream, existsSync, realpathSync, readFileSync, mkdtempSync, rmSync, symlinkSync, mkdirSync, unlinkSync } from 'node:fs';
 import { join, relative, isAbsolute } from 'node:path';
 import { tmpdir } from 'node:os';
 import { pipeline } from 'node:stream/promises';
+import { Transform } from 'node:stream';
 import { timingSafeEqual } from 'node:crypto';
 
 describe('Proxy /upload endpoint', () => {
@@ -18,6 +19,7 @@ describe('Proxy /upload endpoint', () => {
   let port: number;
   let tmpDir: string;
   const TOKEN = 'test-upload-token-123';
+  const MAX_UPLOAD_BYTES = 512 * 1024 * 1024; // match production default
 
   // Minimal reimplementation of the proxy /upload handler for unit testing
   async function handleUpload(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -61,14 +63,25 @@ describe('Proxy /upload endpoint', () => {
 
     const ws = createWriteStream(targetPath);
     let size = 0;
-    req.on('data', (chunk: Buffer) => { size += chunk.length; });
+
+    const meter = new Transform({
+      transform(chunk: Buffer, _encoding, cb) {
+        size += chunk.length;
+        if (size > MAX_UPLOAD_BYTES) {
+          cb(new Error(`Upload exceeds maximum size of ${MAX_UPLOAD_BYTES} bytes`));
+        } else {
+          cb(null, chunk);
+        }
+      },
+    });
 
     try {
-      await pipeline(req, ws);
+      await pipeline(req, meter, ws);
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ ok: true, data: { path: targetPath, size } }));
     } catch (err) {
       req.destroy();
+      try { unlinkSync(targetPath); } catch { /* may not exist yet */ }
       res.writeHead(500, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ ok: false, error: (err as Error).message }));
     }
@@ -192,6 +205,23 @@ describe('Proxy /upload endpoint', () => {
     const resData = res.body.data as { path: string; size: number };
     assert.equal(resData.path, join(tmpDir, 'sized.txt'));
     assert.equal(resData.size, Buffer.byteLength(content));
+  });
+
+  it('writes zero-byte file correctly', async () => {
+    const res = await upload('empty.txt', tmpDir, '');
+    assert.equal(res.status, 200);
+    assert.equal(res.body.ok, true);
+    const written = readFileSync(join(tmpDir, 'empty.txt'));
+    assert.equal(written.length, 0);
+  });
+
+  it('overwrites existing file', async () => {
+    await upload('overwrite.txt', tmpDir, 'original');
+    const res = await upload('overwrite.txt', tmpDir, 'replaced');
+    assert.equal(res.status, 200);
+    assert.equal(res.body.ok, true);
+    const content = readFileSync(join(tmpDir, 'overwrite.txt'), 'utf-8');
+    assert.equal(content, 'replaced');
   });
 
   // ── cwd Validation ──
