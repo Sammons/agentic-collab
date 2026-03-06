@@ -47,7 +47,7 @@ const INTERRUPT_KEY_DELAY_MS = 300;
  * Start a watchdog timer that marks an agent 'failed' if it's still in
  * the given intermediate state after timeoutMs.
  */
-function startWatchdog(
+export function startWatchdog(
   ctx: LifecycleContext,
   name: string,
   intermediateState: string,
