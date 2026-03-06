@@ -549,10 +549,101 @@
   .auth-box button.secondary { background: transparent; border: 1px solid var(--border); color: var(--text-dim); }
   .auth-box button:hover { opacity: 0.9; }
 
+  /* ── Search Input ── */
+  .agent-search {
+    padding: 0 0 8px;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: transparent;
+  }
+  .agent-search input {
+    width: 100%;
+    padding: 8px 10px 8px 30px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text);
+    font-size: 13px;
+    outline: none;
+  }
+  .agent-search input:focus { border-color: var(--accent); }
+  .agent-search .search-icon {
+    position: absolute;
+    left: 9px;
+    top: 9px;
+    font-size: 13px;
+    color: var(--text-dim);
+    pointer-events: none;
+  }
+
+  /* ── Persona frontmatter table ── */
+  .persona-meta {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 4px 12px;
+    font-size: 12px;
+    margin-bottom: 16px;
+    padding: 12px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+  }
+  .persona-meta dt {
+    color: var(--text-dim);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    font-size: 11px;
+    padding: 2px 0;
+  }
+  .persona-meta dd {
+    color: var(--text);
+    padding: 2px 0;
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    font-size: 12px;
+  }
+  .persona-body {
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    font-family: inherit;
+    margin: 0;
+    line-height: 1.7;
+  }
+
+  /* ── Mobile back button ── */
+  .mobile-back {
+    display: none;
+    padding: 4px 8px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--surface);
+    color: var(--text-dim);
+    font-size: 12px;
+    cursor: pointer;
+    margin-right: 4px;
+  }
+  .mobile-back:hover { border-color: var(--accent); color: var(--accent); }
+
   /* ── Responsive ── */
   @media (max-width: 768px) {
-    .layout { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
-    .agent-list { max-height: 40vh; border-right: none; border-bottom: 1px solid var(--border); }
+    .layout { grid-template-columns: 1fr; grid-template-rows: 1fr; }
+    .agent-list {
+      border-right: none;
+      height: calc(100vh - 49px);
+      max-height: none;
+    }
+    .thread-panel { height: calc(100vh - 49px); }
+    .layout.mobile-thread .agent-list { display: none; }
+    .layout.mobile-thread .thread-panel { display: flex; }
+    .layout:not(.mobile-thread) .thread-panel { display: none; }
+    .layout:not(.mobile-thread) .agent-list { display: flex; }
+    .mobile-back { display: block; }
+    .msg { max-width: 85%; }
+    .thread-input { padding: 8px 12px; }
+    .thread-input input { font-size: 16px; } /* prevent iOS zoom */
+    header h1 { font-size: 14px; }
+    .agent-card { padding: 10px; }
   }
 </style>
 </head>
@@ -565,7 +656,12 @@
   </div>
 </header>
 <div class="layout">
-  <div class="agent-list" id="agentList"></div>
+  <div class="agent-list" id="agentList">
+    <div class="agent-search" style="position:relative">
+      <span class="search-icon">&#128269;</span>
+      <input type="text" id="agentSearch" placeholder="Filter agents..." />
+    </div>
+  </div>
   <div class="thread-panel" id="threadPanel">
     <div class="thread-header" id="threadHeader">Select an agent</div>
     <div class="thread-messages" id="threadMessages">
@@ -656,6 +752,7 @@
     unread: {},  // { agentName: count }
     threadView: 'messages',  // 'messages' | 'persona'
     personaCache: {},  // { agentName: { content, fetched } }
+    searchFilter: '',
   };
 
   let ws = null;
@@ -775,7 +872,8 @@
     const prevCwd = document.getElementById('createCwd')?.value || '/tmp';
     const prevTask = document.getElementById('createTask')?.value || '';
 
-    list.innerHTML = '';
+    // Remove everything except the search box
+    list.querySelectorAll(':scope > :not(.agent-search)').forEach(el => el.remove());
 
     // Collapsible create agent form
     const form = document.createElement('div');
@@ -806,7 +904,12 @@
     };
     list.appendChild(form);
 
-    for (const agent of state.agents) {
+    const filter = state.searchFilter.toLowerCase();
+    const filtered = filter
+      ? state.agents.filter(a => a.name.toLowerCase().includes(filter) || a.engine.toLowerCase().includes(filter) || a.state.toLowerCase().includes(filter))
+      : state.agents;
+
+    for (const agent of filtered) {
       const card = document.createElement('div');
       card.className = `agent-card${state.selected === agent.name ? ' selected' : ''}`;
       card.dataset.agent = agent.name;
@@ -881,7 +984,8 @@
       <button class="${state.threadView === 'messages' ? 'active' : ''}" data-tab="messages">Messages</button>
       <button class="${state.threadView === 'persona' ? 'active' : ''}" data-tab="persona">Persona</button>
     </div>`;
-    header.innerHTML = `<span>${esc(state.selected)}</span>${headerBadge}${tabs}`;
+    header.innerHTML = `<button class="mobile-back" id="mobileBackBtn">\u2190</button><span>${esc(state.selected)}</span>${headerBadge}${tabs}`;
+    document.getElementById('mobileBackBtn').onclick = mobileBack;
     header.querySelectorAll('.thread-tabs button').forEach(btn => {
       btn.onclick = () => { state.threadView = btn.dataset.tab; renderThread(); };
     });
@@ -943,40 +1047,66 @@
     renderAgents();
     renderThread();
     updateSendability();
+    // Mobile: show thread panel
+    document.querySelector('.layout').classList.add('mobile-thread');
     document.getElementById('msgInput').focus();
+  }
+
+  function mobileBack() {
+    document.querySelector('.layout').classList.remove('mobile-thread');
   }
 
   async function fetchPersona(name) {
     const cached = state.personaCache[name];
-    if (cached && Date.now() - cached.fetched < 30000) return cached.content;
+    if (cached && Date.now() - cached.fetched < 30000) return cached.data;
     try {
       const token = getToken();
       const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
       const res = await fetch(`/api/personas/${encodeURIComponent(name)}`, { headers });
       if (res.status === 404) {
-        state.personaCache[name] = { content: null, fetched: Date.now() };
+        state.personaCache[name] = { data: null, fetched: Date.now() };
         return null;
       }
       if (!res.ok) return null;
       const data = await res.json();
-      state.personaCache[name] = { content: data.content, fetched: Date.now() };
-      return data.content;
+      state.personaCache[name] = { data, fetched: Date.now() };
+      return data;
     } catch {
       return null;
     }
   }
 
+  const FM_LABELS = {
+    engine: 'Engine', model: 'Model', thinking: 'Thinking',
+    cwd: 'Working Dir', proxy_host: 'Proxy Host', permissions: 'Permissions',
+  };
+
   async function renderPersona() {
     const panel = document.getElementById('personaPanel');
     if (!state.selected) return;
     panel.innerHTML = '<div class="persona-empty">Loading…</div>';
-    const content = await fetchPersona(state.selected);
+    const data = await fetchPersona(state.selected);
     if (state.threadView !== 'persona' || !state.selected) return;
-    if (!content) {
+    if (!data) {
       panel.innerHTML = '<div class="persona-empty">No persona defined for this agent.<br>Create <code>persistent-agents/' + esc(state.selected) + '.md</code> to add one.</div>';
-    } else {
-      panel.innerHTML = '<pre>' + esc(content) + '</pre>';
+      return;
     }
+    let html = '';
+    const fm = data.frontmatter;
+    if (fm && Object.keys(fm).length > 0) {
+      html += '<dl class="persona-meta">';
+      for (const [key, label] of Object.entries(FM_LABELS)) {
+        if (fm[key]) html += '<dt>' + label + '</dt><dd>' + esc(fm[key]) + '</dd>';
+      }
+      for (const key of Object.keys(fm)) {
+        if (!FM_LABELS[key] && fm[key]) html += '<dt>' + esc(key) + '</dt><dd>' + esc(fm[key]) + '</dd>';
+      }
+      html += '</dl>';
+    }
+    if (data.body) {
+      html += '<div class="persona-body">' + esc(data.body) + '</div>';
+    }
+    panel.innerHTML = html || '<div class="persona-empty">Persona file is empty.</div>';
   }
 
   // ── Toast ──
@@ -1311,6 +1441,12 @@
     } catch (err) {
       showToast('Create failed — network error', 'error');
     }
+  });
+
+  // ── Search Filter ──
+  document.getElementById('agentSearch').addEventListener('input', (e) => {
+    state.searchFilter = e.target.value;
+    renderAgents();
   });
 
   // ── Init ──
