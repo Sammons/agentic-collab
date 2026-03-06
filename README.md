@@ -65,40 +65,52 @@ All lifecycle transitions use three-phase locking with optimistic concurrency (v
 ### 1. Start the orchestrator
 
 ```bash
-# Optional: set a shared secret for auth
-export ORCHESTRATOR_SECRET=your-secret-here
-
 docker compose up -d
 ```
 
-The orchestrator runs at `http://localhost:3000`. The dashboard is at `http://localhost:3000/dashboard`.
+The orchestrator auto-generates a shared secret at `~/.config/agentic-collab/secret` (mounted from the host). Dashboard at `http://localhost:3000/dashboard`.
 
-### 2. Start a proxy on the host
+### 2. Start the proxy
 
 ```bash
-# Set the same secret if you configured one
-export ORCHESTRATOR_SECRET=your-secret-here
-
 node src/proxy/main.ts
 ```
 
-The proxy registers itself with the orchestrator and sends heartbeats every 15 seconds.
+The proxy auto-discovers the orchestrator via Docker and reads the shared secret. No configuration needed. If the orchestrator isn't running yet, the proxy waits and retries.
 
-### 3. Create and spawn an agent
+With [mise](https://mise.jdx.dev):
 
 ```bash
-# Create an agent
-curl -X POST http://localhost:3000/api/agents \
-  -H 'Content-Type: application/json' \
-  -H 'Authorization: Bearer your-secret-here' \
-  -d '{"name": "my-agent", "engine": "claude", "cwd": "/path/to/project"}'
-
-# Spawn it (starts a tmux session via the proxy)
-curl -X POST http://localhost:3000/api/agents/my-agent/spawn \
-  -H 'Authorization: Bearer your-secret-here'
+mise run proxy       # start proxy
+mise run doctor      # check prerequisites
 ```
 
-Or use the dashboard at `http://localhost:3000/dashboard` for a visual interface.
+### 3. Create your team lead
+
+The recommended pattern is to start with a **team lead agent** that coordinates other agents. Copy the example:
+
+```bash
+cp persistent-agents/team-lead.example.md persistent-agents/team-lead.md
+# Edit cwd, proxy_host, and instructions for your project
+```
+
+Then spawn it from the dashboard, or via API:
+
+```bash
+SECRET=$(cat ~/.config/agentic-collab/secret)
+
+curl -X POST http://localhost:3000/api/agents/team-lead/spawn \
+  -H "Authorization: Bearer $SECRET" \
+  -H 'Content-Type: application/json' \
+  -d '{"task": "Review the codebase and create a prioritized task list. Spin up specialist agents as needed."}'
+```
+
+The team lead will:
+- Stack-rank priorities for the project
+- Create persona files for specialist agents (researcher, builder, reviewer, etc.)
+- Assign tasks and encourage agents to coordinate directly via messaging
+
+Or skip the team lead and use the dashboard at `http://localhost:3000/dashboard` to create agents manually.
 
 ## File Upload
 
