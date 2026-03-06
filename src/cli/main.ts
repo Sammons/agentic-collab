@@ -26,6 +26,7 @@
  */
 
 const BASE_URL = process.env['ORCHESTRATOR_URL'] ?? 'http://localhost:3000';
+const ORCHESTRATOR_SECRET = process.env['ORCHESTRATOR_SECRET'] ?? null;
 
 type Args = {
   positional: string[];
@@ -59,9 +60,13 @@ function parseArgs(argv: string[]): Args {
 }
 
 async function api(method: string, path: string, body?: unknown): Promise<unknown> {
+  const headers: Record<string, string> = { 'content-type': 'application/json' };
+  if (ORCHESTRATOR_SECRET) {
+    headers['authorization'] = `Bearer ${ORCHESTRATOR_SECRET}`;
+  }
   const opts: RequestInit = {
     method,
-    headers: { 'content-type': 'application/json' },
+    headers,
   };
   if (body) opts.body = JSON.stringify(body);
 

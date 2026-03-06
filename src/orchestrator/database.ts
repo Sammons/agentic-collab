@@ -11,6 +11,8 @@ import type {
   EngineType,
   EventRecord,
   MessageDirection,
+  PendingMessage,
+  PendingMessageStatus,
   ProxyRegistration,
   WorkstreamRecord,
 } from '../shared/types.ts';
@@ -87,6 +89,22 @@ const SCHEMA = `
     last_heartbeat TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     registered_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
   );
+
+  CREATE TABLE IF NOT EXISTS pending_messages (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_agent    TEXT,
+    target_agent    TEXT NOT NULL,
+    envelope        TEXT NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'pending',
+    retry_count     INTEGER NOT NULL DEFAULT 0,
+    error           TEXT,
+    last_attempt_at TEXT,
+    next_attempt_at TEXT,
+    created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    delivered_at    TEXT
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_pm_agent_status ON pending_messages(target_agent, status);
 `;
 
 export class Database {
@@ -95,6 +113,14 @@ export class Database {
   constructor(dbPath: string) {
     this.db = new DatabaseSync(dbPath);
     this.db.exec(SCHEMA);
+    this.migrate();
+  }
+
+  private migrate(): void {
+    // Add queue_id to dashboard_messages if not present
+    try {
+      this.db.exec('ALTER TABLE dashboard_messages ADD COLUMN queue_id INTEGER REFERENCES pending_messages(id)');
+    } catch { /* column already exists */ }
   }
 
   /** Expose raw handle for LockManager (shares same DB connection). */
@@ -314,6 +340,99 @@ export class Database {
     return result.changes > 0;
   }
 
+  // ── Message Queue ──
+
+  enqueueMessage(opts: { sourceAgent?: string | null; targetAgent: string; envelope: string }): PendingMessage {
+    this.db.prepare(`
+      INSERT INTO pending_messages (source_agent, target_agent, envelope)
+      VALUES (?, ?, ?)
+    `).run(opts.sourceAgent ?? null, opts.targetAgent, opts.envelope);
+    const row = this.db.prepare('SELECT * FROM pending_messages WHERE id = last_insert_rowid()').get() as Record<string, unknown>;
+    return mapPendingMessageRow(row);
+  }
+
+  getDeliverableMessages(agentName: string): PendingMessage[] {
+    const rows = this.db.prepare(`
+      SELECT * FROM pending_messages
+      WHERE target_agent = ? AND status = 'pending'
+        AND (next_attempt_at IS NULL OR next_attempt_at <= strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+      ORDER BY id ASC
+    `).all(agentName) as Array<Record<string, unknown>>;
+    return rows.map(mapPendingMessageRow);
+  }
+
+  markAttemptStarted(id: number): void {
+    this.db.prepare(`
+      UPDATE pending_messages SET last_attempt_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?
+    `).run(id);
+  }
+
+  markMessageDelivered(id: number): void {
+    this.db.prepare(`
+      UPDATE pending_messages SET status = 'delivered', delivered_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?
+    `).run(id);
+  }
+
+  markAttemptFailed(id: number, error: string, maxRetries = 5): void {
+    const row = this.db.prepare('SELECT * FROM pending_messages WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+    if (!row) return;
+    const retryCount = (row['retry_count'] as number) + 1;
+    if (retryCount >= maxRetries) {
+      this.db.prepare(`
+        UPDATE pending_messages SET status = 'failed', retry_count = ?, error = ? WHERE id = ?
+      `).run(retryCount, error, id);
+    } else {
+      // Exponential backoff: 30s, 60s, 120s, 240s, 480s
+      const backoffSeconds = 30 * Math.pow(2, retryCount - 1);
+      this.db.prepare(`
+        UPDATE pending_messages
+        SET retry_count = ?, error = ?,
+            next_attempt_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '+' || ? || ' seconds')
+        WHERE id = ?
+      `).run(retryCount, error, backoffSeconds, id);
+    }
+  }
+
+  resetStaleAttempts(timeoutSeconds = 60): number {
+    const result = this.db.prepare(`
+      UPDATE pending_messages
+      SET retry_count = retry_count + 1,
+          error = 'Delivery attempt timed out',
+          next_attempt_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '+30 seconds')
+      WHERE status = 'pending'
+        AND last_attempt_at IS NOT NULL
+        AND delivered_at IS NULL
+        AND julianday('now') - julianday(last_attempt_at) > ? / 86400.0
+    `).run(timeoutSeconds);
+    return result.changes;
+  }
+
+  linkDashboardMessageToQueue(dashboardMsgId: number, queueId: number): void {
+    this.db.prepare('UPDATE dashboard_messages SET queue_id = ? WHERE id = ?').run(queueId, dashboardMsgId);
+  }
+
+  getPendingMessageById(id: number): PendingMessage | undefined {
+    const row = this.db.prepare('SELECT * FROM pending_messages WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+    if (!row) return undefined;
+    return mapPendingMessageRow(row);
+  }
+
+  listPendingMessages(agent?: string, status?: string): PendingMessage[] {
+    let sql = 'SELECT * FROM pending_messages WHERE 1=1';
+    const params: unknown[] = [];
+    if (agent) {
+      sql += ' AND target_agent = ?';
+      params.push(agent);
+    }
+    if (status) {
+      sql += ' AND status = ?';
+      params.push(status);
+    }
+    sql += ' ORDER BY id DESC LIMIT 100';
+    const rows = this.db.prepare(sql).all(...params) as Array<Record<string, unknown>>;
+    return rows.map(mapPendingMessageRow);
+  }
+
   listStaleProxies(thresholdSeconds: number): ProxyRegistration[] {
     const rows = this.db.prepare(`
       SELECT * FROM proxies
@@ -369,6 +488,7 @@ function mapDashboardMessageRow(row: Record<string, unknown>): DashboardMessage 
     direction: row['direction'] as MessageDirection,
     topic: row['topic'] as string | null,
     message: row['message'] as string,
+    queueId: (row['queue_id'] as number | null) ?? null,
     createdAt: row['created_at'] as string,
   };
 }
@@ -380,6 +500,22 @@ function mapWorkstreamRow(row: Record<string, unknown>): WorkstreamRecord {
     plan: row['plan'] as string | null,
     status: row['status'] as string,
     createdAt: row['created_at'] as string,
+  };
+}
+
+function mapPendingMessageRow(row: Record<string, unknown>): PendingMessage {
+  return {
+    id: row['id'] as number,
+    sourceAgent: row['source_agent'] as string | null,
+    targetAgent: row['target_agent'] as string,
+    envelope: row['envelope'] as string,
+    status: row['status'] as PendingMessageStatus,
+    retryCount: row['retry_count'] as number,
+    error: row['error'] as string | null,
+    lastAttemptAt: row['last_attempt_at'] as string | null,
+    nextAttemptAt: row['next_attempt_at'] as string | null,
+    createdAt: row['created_at'] as string,
+    deliveredAt: row['delivered_at'] as string | null,
   };
 }
 

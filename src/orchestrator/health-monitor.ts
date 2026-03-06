@@ -6,10 +6,10 @@
 
 import type { Database } from './database.ts';
 import type { LockManager } from '../shared/lock.ts';
-import type { ProxyCommand, ProxyResponse, AgentRecord } from '../shared/types.ts';
+import type { ProxyCommand, ProxyResponse, AgentRecord, PendingMessage } from '../shared/types.ts';
 import { sessionName, canSuspend } from '../shared/agent-entity.ts';
 import { getAdapter } from './adapters/index.ts';
-import { reloadAgent, compactAgent, type LifecycleContext } from './lifecycle.ts';
+import { reloadAgent, compactAgent, deliverToAgent, type LifecycleContext } from './lifecycle.ts';
 
 export type HealthMonitorOptions = {
   db: Database;
@@ -17,6 +17,7 @@ export type HealthMonitorOptions = {
   proxyDispatch: (proxyId: string, command: ProxyCommand) => Promise<ProxyResponse>;
   orchestratorHost: string;
   onAgentUpdate?: (agentName: string) => void;
+  onQueueUpdate?: (message: PendingMessage) => void;
   pollIntervalMs?: number;
   autoCompactThreshold?: number; // context % to trigger compact (default 80)
   autoReloadThreshold?: number;  // context % to trigger reload (default 90)
@@ -39,6 +40,7 @@ export class HealthMonitor {
   private readonly autoReloadThreshold: number;
   private readonly idleSuspendMs: number;
   private readonly onAgentUpdate: (agentName: string) => void;
+  private readonly onQueueUpdate: (message: PendingMessage) => void;
 
   constructor(opts: HealthMonitorOptions) {
     this.db = opts.db;
@@ -46,6 +48,7 @@ export class HealthMonitor {
     this.proxyDispatch = opts.proxyDispatch;
     this.orchestratorHost = opts.orchestratorHost;
     this.onAgentUpdate = opts.onAgentUpdate ?? (() => {});
+    this.onQueueUpdate = opts.onQueueUpdate ?? (() => {});
     this.pollIntervalMs = opts.pollIntervalMs ?? DEFAULT_POLL_MS;
     this.autoCompactThreshold = opts.autoCompactThreshold ?? DEFAULT_COMPACT_THRESHOLD;
     this.autoReloadThreshold = opts.autoReloadThreshold ?? DEFAULT_RELOAD_THRESHOLD;
@@ -74,6 +77,12 @@ export class HealthMonitor {
    * Poll all active/idle agents.
    */
   async pollAll(): Promise<void> {
+    // Recover hung delivery attempts (>60s without completion)
+    const staleReset = this.db.resetStaleAttempts(60);
+    if (staleReset > 0) {
+      console.log(`[health] Reset ${staleReset} stale delivery attempts`);
+    }
+
     const agents = this.db.listAgents().filter(
       (a) => canSuspend(a) && a.proxyId,
     );
@@ -178,7 +187,12 @@ export class HealthMonitor {
       }
     }
 
-    // 4. Check idle suspend timeout
+    // 4. Deliver pending messages when agent is waiting for input
+    if (idleState === 'waiting_for_input') {
+      await this.deliverPendingMessages(agent.name);
+    }
+
+    // 5. Check idle suspend timeout
     if (agent.state === 'idle' && agent.lastActivity) {
       const idleDuration = Date.now() - new Date(agent.lastActivity).getTime();
       if (idleDuration > this.idleSuspendMs) {
@@ -190,10 +204,79 @@ export class HealthMonitor {
       }
     }
 
-    // 5. Handle queued reload (even without context data)
+    // 6. Handle queued reload (even without context data)
     const latest = this.db.getAgent(agent.name);
     if (latest && latest.reloadQueued && idleState === 'waiting_for_input') {
       await this.handleReload(latest);
+    }
+  }
+
+  /**
+   * Deliver queued messages to an agent that is waiting for input.
+   * One message per poll cycle to avoid flooding.
+   */
+  private async deliverPendingMessages(agentName: string): Promise<void> {
+    const messages = this.db.getDeliverableMessages(agentName);
+    if (messages.length === 0) return;
+
+    // Deliver one at a time — agent needs time to process
+    const message = messages[0]!;
+    this.db.markAttemptStarted(message.id);
+
+    const agent = this.db.getAgent(agentName);
+    if (!agent || !agent.proxyId) {
+      this.db.markAttemptFailed(message.id, 'Agent not available or has no proxy');
+      const updated = this.db.getPendingMessageById(message.id);
+      if (updated) {
+        this.onQueueUpdate(updated);
+        if (updated.status === 'failed') {
+          this.autoReplyToSender(updated);
+        }
+      }
+      return;
+    }
+
+    const lifecycleCtx = this.makeLifecycleCtx();
+    const error = await deliverToAgent(lifecycleCtx, agent, message.envelope);
+
+    if (error) {
+      this.db.markAttemptFailed(message.id, error);
+      const updated = this.db.getPendingMessageById(message.id);
+      if (updated) {
+        this.onQueueUpdate(updated);
+        if (updated.status === 'failed') {
+          this.autoReplyToSender(updated);
+        }
+      }
+    } else {
+      this.db.markMessageDelivered(message.id);
+      const updated = this.db.getPendingMessageById(message.id);
+      if (updated) {
+        this.onQueueUpdate(updated);
+      }
+    }
+  }
+
+  /**
+   * Auto-reply to sender when delivery permanently fails.
+   */
+  private autoReplyToSender(message: PendingMessage): void {
+    const failureText = `[system] Delivery to ${message.targetAgent} failed after ${message.retryCount} attempts: ${message.error ?? 'unknown error'}`;
+
+    if (message.sourceAgent) {
+      // Agent-to-agent: enqueue a notification back to the sender
+      const reply = this.db.enqueueMessage({
+        sourceAgent: null, // system notification
+        targetAgent: message.sourceAgent,
+        envelope: failureText,
+      });
+      this.onQueueUpdate(reply);
+    } else {
+      // Dashboard-to-agent: insert a from_agent message so operator sees it
+      const msg = this.db.addDashboardMessage(message.targetAgent, 'from_agent', failureText);
+      // Broadcast via WS — the onQueueUpdate callback can't do this, so we log it
+      // The main.ts wiring handles broadcasting dashboard messages
+      console.log(`[health] Delivery failure notification for dashboard → ${message.targetAgent}: ${message.error}`);
     }
   }
 
