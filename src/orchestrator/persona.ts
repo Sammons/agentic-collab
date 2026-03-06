@@ -5,7 +5,7 @@
  */
 
 import { readFileSync, existsSync, realpathSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join, resolve, relative, isAbsolute } from 'node:path';
 
 export const PERSONAS_DIR = process.env['PERSONAS_DIR'] ?? join(process.env['HOME'] ?? '/data', 'persistent-agents');
 
@@ -22,7 +22,8 @@ export function resolvePersonaPath(agentName: string, explicitPath?: string | nu
     try {
       const real = realpathSync(resolve(explicitPath));
       const baseReal = realpathSync(personasDir);
-      if (!real.startsWith(baseReal + '/')) return null;
+      const rel = relative(baseReal, real);
+      if (!rel || rel.startsWith('..') || isAbsolute(rel)) return null;
       return real; // Return the resolved real path, not the original
     } catch {
       return null; // File doesn't exist or path is invalid
@@ -33,7 +34,8 @@ export function resolvePersonaPath(agentName: string, explicitPath?: string | nu
   try {
     const real = realpathSync(conventionPath);
     const baseReal = realpathSync(personasDir);
-    if (real.startsWith(baseReal + '/')) return real;
+    const rel = relative(baseReal, real);
+    if (rel && !rel.startsWith('..') && !isAbsolute(rel)) return real;
     return null; // Convention path escapes personasDir
   } catch {
     // File doesn't exist

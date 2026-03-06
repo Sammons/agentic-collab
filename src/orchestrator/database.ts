@@ -118,12 +118,10 @@ export class Database {
 
   private migrate(): void {
     // Add queue_id to dashboard_messages if not present
-    try {
+    const columns = this.db.prepare('PRAGMA table_info(dashboard_messages)').all() as Array<Record<string, unknown>>;
+    const hasQueueId = columns.some((c) => c['name'] === 'queue_id');
+    if (!hasQueueId) {
       this.db.exec('ALTER TABLE dashboard_messages ADD COLUMN queue_id INTEGER REFERENCES pending_messages(id)');
-    } catch (err) {
-      const msg = (err as Error).message ?? '';
-      // Only swallow "duplicate column" errors — rethrow anything else
-      if (!msg.includes('duplicate column')) throw err;
     }
   }
 

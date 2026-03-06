@@ -31,15 +31,16 @@ export type LifecycleContext = {
   orchestratorHost: string;
 };
 
-const SPAWN_TIMEOUT_MS = 30_000;
-const SUSPEND_TIMEOUT_MS = 60_000;
-const RESUME_TIMEOUT_MS = 60_000;
-const RELOAD_TIMEOUT_MS = 90_000;
-const RENAME_DELAY_MS = 3_000;
-const EXIT_WAIT_MS = 10_000;
-const POST_SPAWN_ACTIVE_DELAY_MS = 2_000;
-const POST_RENAME_TASK_DELAY_MS = 1_000;
-const INTERRUPT_KEY_DELAY_MS = 300;
+// Timeouts and delays — configurable via env vars for tuning in different environments
+const SPAWN_TIMEOUT_MS = parseInt(process.env['SPAWN_TIMEOUT_MS'] ?? '30000', 10);
+const SUSPEND_TIMEOUT_MS = parseInt(process.env['SUSPEND_TIMEOUT_MS'] ?? '60000', 10);
+const RESUME_TIMEOUT_MS = parseInt(process.env['RESUME_TIMEOUT_MS'] ?? '60000', 10);
+const RELOAD_TIMEOUT_MS = parseInt(process.env['RELOAD_TIMEOUT_MS'] ?? '90000', 10);
+const RENAME_DELAY_MS = parseInt(process.env['RENAME_DELAY_MS'] ?? '3000', 10);
+const EXIT_WAIT_MS = parseInt(process.env['EXIT_WAIT_MS'] ?? '10000', 10);
+const POST_SPAWN_ACTIVE_DELAY_MS = parseInt(process.env['POST_SPAWN_ACTIVE_DELAY_MS'] ?? '2000', 10);
+const POST_RENAME_TASK_DELAY_MS = parseInt(process.env['POST_RENAME_TASK_DELAY_MS'] ?? '1000', 10);
+const INTERRUPT_KEY_DELAY_MS = parseInt(process.env['INTERRUPT_KEY_DELAY_MS'] ?? '300', 10);
 
 // ── Watchdog helper ──
 
