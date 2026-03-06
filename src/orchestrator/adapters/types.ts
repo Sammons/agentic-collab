@@ -1,0 +1,61 @@
+/**
+ * Engine adapter interface. Each AI harness (claude, codex, opencode)
+ * gets a concrete implementation.
+ */
+
+export type IdleState = 'waiting_for_input' | 'running_tool' | 'streaming' | 'unknown';
+
+/** Braille spinner characters used by CLI tools to indicate activity. */
+export const SPINNER_REGEX = /^⠋|^⠙|^⠹|^⠸|^⠼|^⠴|^⠦|^⠧|^⠇|^⠏/;
+
+export type ContextResult = {
+  contextPct: number | null;
+  confident: boolean;
+};
+
+export type SpawnOptions = {
+  name: string;
+  cwd: string;
+  model?: string;
+  thinking?: string;
+  task?: string;
+  appendSystemPrompt?: string;
+  dangerouslySkipPermissions?: boolean;
+};
+
+export type ResumeOptions = {
+  name: string;
+  sessionId: string;
+  cwd: string;
+  task?: string;
+  appendSystemPrompt?: string;
+};
+
+export interface EngineAdapter {
+  /** Engine identifier */
+  readonly engine: string;
+
+  /** Build the shell command to spawn a new agent session */
+  buildSpawnCommand(opts: SpawnOptions): string;
+
+  /** Build the shell command to resume an existing session */
+  buildResumeCommand(opts: ResumeOptions): string;
+
+  /** Detect whether the agent is idle from captured pane output */
+  detectIdleState(paneOutput: string): IdleState;
+
+  /** Parse context usage percentage from captured pane output */
+  parseContextPercent(paneOutput: string): ContextResult;
+
+  /** Build the engine-specific exit command */
+  buildExitCommand(): string;
+
+  /** Build the engine-specific compact command */
+  buildCompactCommand(): string;
+
+  /** Build the rename command (if supported) */
+  buildRenameCommand(name: string): string | null;
+
+  /** Keys to send to interrupt/cancel the current operation */
+  interruptKeys(): string[];
+}
