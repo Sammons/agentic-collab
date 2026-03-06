@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agentic Collab — Create Agent</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --text-dim: #8b949e;
+    --accent: #58a6ff;
+    --green: #3fb950;
+    --yellow: #d29922;
+    --red: #f85149;
+    --orange: #d18616;
+    --purple: #bc8cff;
+    --radius: 8px;
+    --shadow: 0 2px 8px rgba(0,0,0,0.3);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+  }
+
+  /* -- Header -- */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 20px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+  }
+  header h1 { font-size: 16px; font-weight: 600; }
+  .conn-status {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+  .conn-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--red);
+  }
+  .conn-dot.connected { background: var(--green); }
+
+  /* -- Layout -- */
+  .layout {
+    display: grid;
+    grid-template-columns: 340px 1fr;
+    height: calc(100vh - 49px);
+  }
+
+  /* -- Agent Grid -- */
+  .agent-list {
+    border-right: 1px solid var(--border);
+    overflow-y: auto;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .agent-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px;
+    cursor: pointer;
+    transition: border-color 0.15s;
+  }
+  .agent-card:hover { border-color: var(--accent); }
+  .agent-card.selected { border-color: var(--accent); background: #1c2333; }
+
+  .agent-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 6px;
+  }
+  .agent-name { font-weight: 600; font-size: 14px; }
+  .state-badge {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .state-active   { background: rgba(63,185,80,0.15); color: var(--green); }
+  .state-idle     { background: rgba(139,148,158,0.15); color: var(--text-dim); }
+
+  .agent-meta {
+    display: flex;
+    gap: 12px;
+    font-size: 12px;
+    color: var(--text-dim);
+    margin-bottom: 8px;
+  }
+  .agent-meta span { display: flex; align-items: center; gap: 4px; }
+
+  .agent-actions {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .agent-actions button {
+    font-size: 11px;
+    padding: 3px 10px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .agent-actions button:hover { border-color: var(--accent); color: var(--accent); }
+  .agent-actions button.danger:hover { border-color: var(--red); color: var(--red); }
+
+  .agent-time {
+    font-size: 11px;
+    color: var(--text-dim);
+    margin-left: auto;
+  }
+
+  /* -- Create Form -- */
+  .create-form {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  .create-form-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    cursor: pointer;
+    user-select: none;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .create-form-toggle:hover { color: var(--accent); }
+  .create-form-toggle .chevron { transition: transform 0.15s; }
+  .create-form.open .chevron { transform: rotate(90deg); }
+  .create-form-body {
+    display: none;
+    padding: 0 14px 14px;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .create-form.open .create-form-body { display: flex; }
+  .create-form input, .create-form select, .create-form textarea {
+    padding: 8px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text);
+    font-size: 13px;
+    font-family: inherit;
+    outline: none;
+    resize: vertical;
+  }
+  .create-form input:focus, .create-form select:focus, .create-form textarea:focus { border-color: var(--accent); }
+  .create-form-actions { display: flex; gap: 6px; }
+  .create-form-actions button {
+    padding: 7px 14px;
+    border-radius: 6px;
+    border: none;
+    background: var(--accent);
+    color: #fff;
+    font-weight: 600;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .create-form-actions button:hover { opacity: 0.9; }
+  .create-form-actions button.secondary {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+  }
+  .create-form-actions button.secondary:hover { border-color: var(--accent); color: var(--accent); }
+
+  /* -- Thread Panel -- */
+  .thread-panel {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+  }
+  .thread-header {
+    padding: 12px 20px;
+    border-bottom: 1px solid var(--border);
+    font-weight: 600;
+    font-size: 14px;
+    background: var(--surface);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .thread-messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .thread-empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: var(--text-dim);
+    font-size: 14px;
+  }
+
+  /* -- Input -- */
+  .thread-input {
+    padding: 12px 20px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    gap: 8px;
+    background: var(--surface);
+  }
+  .thread-input input {
+    flex: 1;
+    padding: 8px 12px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text);
+    font-size: 13px;
+    outline: none;
+  }
+  .thread-input button {
+    padding: 8px 16px;
+    border-radius: 6px;
+    border: none;
+    background: var(--accent);
+    color: #fff;
+    font-weight: 600;
+    font-size: 13px;
+    cursor: pointer;
+  }
+
+  /* -- Upload Button -- */
+  .upload-btn {
+    padding: 8px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text-dim);
+    font-size: 16px;
+    cursor: pointer;
+    transition: all 0.15s;
+    line-height: 1;
+  }
+  .upload-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .upload-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Agentic Collab</h1>
+  <div class="conn-status">
+    <div class="conn-dot connected"></div>
+    <span>Connected</span>
+  </div>
+</header>
+<div class="layout">
+  <div class="agent-list">
+    <!-- Create form (OPEN) -->
+    <div class="create-form open">
+      <div class="create-form-toggle">
+        <span>+ New Agent</span>
+        <span class="chevron">&#9656;</span>
+      </div>
+      <div class="create-form-body">
+        <input type="text" placeholder="Agent name" value="refactor-auth" />
+        <select>
+          <option value="claude" selected>claude</option>
+          <option value="codex">codex</option>
+          <option value="opencode">opencode</option>
+        </select>
+        <input type="text" placeholder="Working directory" value="/home/ben/projects/webapp" />
+        <textarea rows="2" placeholder="Initial task (optional)">Refactor the auth middleware to support JWT rotation and session revocation</textarea>
+        <div class="create-form-actions">
+          <button>Create &amp; Spawn</button>
+          <button class="secondary">Create Only</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Agent: frontend-reviewer (active) -->
+    <div class="agent-card" data-agent="frontend-reviewer">
+      <div class="agent-header">
+        <span class="agent-name">frontend-reviewer</span>
+        <span class="agent-time">2m ago</span>
+        <span class="state-badge state-active">active</span>
+      </div>
+      <div class="agent-meta">
+        <span>claude claude-sonnet-4-20250514</span>
+        <span>ctx: 34%</span>
+      </div>
+      <div class="agent-actions">
+        <button>Interrupt</button>
+        <button>Compact</button>
+        <button>Suspend</button>
+        <button class="danger">Kill</button>
+      </div>
+    </div>
+
+    <!-- Agent: api-builder (idle) -->
+    <div class="agent-card" data-agent="api-builder">
+      <div class="agent-header">
+        <span class="agent-name">api-builder</span>
+        <span class="agent-time">8m ago</span>
+        <span class="state-badge state-idle">idle</span>
+      </div>
+      <div class="agent-meta">
+        <span>claude claude-sonnet-4-20250514</span>
+        <span>ctx: 61%</span>
+      </div>
+      <div class="agent-actions">
+        <button>Interrupt</button>
+        <button>Compact</button>
+        <button>Suspend</button>
+        <button class="danger">Kill</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="thread-panel">
+    <div class="thread-header">Select an agent</div>
+    <div class="thread-messages">
+      <div class="thread-empty">Select an agent to view messages</div>
+    </div>
+    <div class="thread-input" style="display:none">
+      <input type="text" placeholder="Type a message..." disabled />
+      <button class="upload-btn" disabled title="Upload files">&#128206;</button>
+      <button disabled>Send</button>
+    </div>
+  </div>
+</div>
+</body>
+</html>
