@@ -19,6 +19,11 @@ export class ClaudeAdapter implements EngineAdapter {
       parts.push('--model', opts.model);
     }
 
+    // Claude Code uses --effort for reasoning effort (low, medium, high)
+    if (opts.thinking) {
+      parts.push('--effort', opts.thinking);
+    }
+
     if (opts.appendSystemPrompt) {
       parts.push('--append-system-prompt', shellQuote(opts.appendSystemPrompt));
     }

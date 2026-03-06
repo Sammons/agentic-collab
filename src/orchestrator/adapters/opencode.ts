@@ -9,31 +9,38 @@ export class OpenCodeAdapter implements EngineAdapter {
   readonly engine = 'opencode';
 
   buildSpawnCommand(opts: SpawnOptions): string {
-    const parts = ['opencode'];
+    // opencode TUI mode for interactive sessions; 'run' subcommand for headless
+    // We use the default TUI subcommand with flags from 'run' since they share them
+    const parts = ['opencode', 'run'];
 
     if (opts.model) {
-      parts.push('--model', opts.model);
+      parts.push('-m', opts.model);
+    }
+
+    // --variant controls reasoning effort in opencode (e.g., high, max, minimal)
+    if (opts.thinking) {
+      parts.push('--variant', opts.thinking);
     }
 
     if (opts.task) {
-      parts.push('--prompt', shellQuote(opts.task));
+      // Task is a positional argument to 'opencode run'
+      parts.push(shellQuote(opts.task));
     }
 
     return parts.join(' ');
   }
 
   buildResumeCommand(opts: ResumeOptions): string {
-    const parts = ['opencode'];
+    const parts = ['opencode', 'run'];
 
-    // OpenCode supports session resume via --session
     if (opts.sessionId) {
-      parts.push('--session', opts.sessionId);
+      parts.push('-s', opts.sessionId);
     } else {
-      parts.push('--continue');
+      parts.push('-c');
     }
 
     if (opts.task) {
-      parts.push('--prompt', shellQuote(opts.task));
+      parts.push(shellQuote(opts.task));
     }
 
     return parts.join(' ');

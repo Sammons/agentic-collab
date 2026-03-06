@@ -43,6 +43,7 @@ describe('Engine Adapters', () => {
       assert.ok(cmd.includes('claude'));
       assert.ok(cmd.includes('--dangerously-skip-permissions'));
       assert.ok(cmd.includes('--model opus'));
+      assert.ok(cmd.includes('--effort high'));
       assert.ok(cmd.includes('--append-system-prompt'));
       assert.ok(cmd.includes('fix the bug'));
     });
@@ -54,7 +55,9 @@ describe('Engine Adapters', () => {
       });
       assert.ok(cmd.includes('claude'));
       assert.ok(!cmd.includes('--model'));
+      assert.ok(!cmd.includes('--effort'));
       assert.ok(!cmd.includes('--dangerously-skip-permissions'));
+      assert.ok(!cmd.includes('-p'));
     });
 
     it('builds spawn command with skip-permissions when explicitly enabled', () => {
@@ -64,6 +67,18 @@ describe('Engine Adapters', () => {
         dangerouslySkipPermissions: true,
       });
       assert.ok(cmd.includes('--dangerously-skip-permissions'));
+    });
+
+    it('omits optional flags when undefined', () => {
+      const cmd = adapter.buildSpawnCommand({
+        name: 'test-agent',
+        cwd: '/tmp/test',
+        model: undefined,
+        thinking: undefined,
+        task: undefined,
+        appendSystemPrompt: undefined,
+      });
+      assert.equal(cmd, 'claude');
     });
 
     it('builds resume command with session ID', () => {
@@ -123,7 +138,7 @@ describe('Engine Adapters', () => {
   describe('CodexAdapter', () => {
     const adapter = new CodexAdapter();
 
-    it('builds spawn command', () => {
+    it('builds spawn command with model and task', () => {
       const cmd = adapter.buildSpawnCommand({
         name: 'codex-agent',
         cwd: '/tmp',
@@ -131,8 +146,8 @@ describe('Engine Adapters', () => {
         task: 'hello world',
       });
       assert.ok(cmd.includes('codex'));
-      assert.ok(cmd.includes('--model'));
-      assert.ok(cmd.includes('gpt-4'));
+      assert.ok(cmd.includes('--model gpt-4'));
+      assert.ok(cmd.includes('hello world'));
     });
 
     it('builds spawn command with skip-permissions', () => {
@@ -142,6 +157,29 @@ describe('Engine Adapters', () => {
         dangerouslySkipPermissions: true,
       });
       assert.ok(cmd.includes('--dangerously-bypass-approvals-and-sandbox'));
+    });
+
+    it('omits optional flags when undefined', () => {
+      const cmd = adapter.buildSpawnCommand({
+        name: 'codex-agent',
+        cwd: '/tmp',
+        model: undefined,
+        task: undefined,
+        thinking: undefined,
+      });
+      assert.equal(cmd, 'codex');
+    });
+
+    it('ignores thinking (codex has no reasoning effort flag)', () => {
+      const cmd = adapter.buildSpawnCommand({
+        name: 'codex-agent',
+        cwd: '/tmp',
+        thinking: 'high',
+      });
+      assert.ok(!cmd.includes('thinking'));
+      assert.ok(!cmd.includes('effort'));
+      assert.ok(!cmd.includes('variant'));
+      assert.ok(!cmd.includes('high'));
     });
 
     it('builds resume with session ID', () => {
@@ -202,42 +240,64 @@ describe('Engine Adapters', () => {
   describe('OpenCodeAdapter', () => {
     const adapter = new OpenCodeAdapter();
 
-    it('builds spawn command', () => {
+    it('builds spawn command with run subcommand', () => {
       const cmd = adapter.buildSpawnCommand({
         name: 'oc-agent',
         cwd: '/tmp',
         model: 'claude-3.5',
       });
-      assert.ok(cmd.includes('opencode'));
-      assert.ok(cmd.includes('--model'));
+      assert.ok(cmd.startsWith('opencode run'));
+      assert.ok(cmd.includes('-m claude-3.5'));
     });
 
-    it('builds spawn command with task using --prompt', () => {
+    it('builds spawn command with task as positional arg', () => {
       const cmd = adapter.buildSpawnCommand({
         name: 'oc-agent',
         cwd: '/tmp',
         task: 'fix the bug',
       });
-      assert.ok(cmd.includes('--prompt'));
+      assert.ok(cmd.startsWith('opencode run'));
       assert.ok(cmd.includes('fix the bug'));
+      assert.ok(!cmd.includes('--prompt'));
     });
 
-    it('builds resume with session ID', () => {
+    it('builds spawn command with variant for thinking', () => {
+      const cmd = adapter.buildSpawnCommand({
+        name: 'oc-agent',
+        cwd: '/tmp',
+        thinking: 'high',
+      });
+      assert.ok(cmd.includes('--variant high'));
+    });
+
+    it('omits optional flags when undefined', () => {
+      const cmd = adapter.buildSpawnCommand({
+        name: 'oc-agent',
+        cwd: '/tmp',
+        model: undefined,
+        task: undefined,
+        thinking: undefined,
+      });
+      assert.equal(cmd, 'opencode run');
+    });
+
+    it('builds resume with -s for session ID', () => {
       const cmd = adapter.buildResumeCommand({
         name: 'oc-agent',
         sessionId: 'sess-1',
         cwd: '/tmp',
       });
-      assert.ok(cmd.includes('--session'));
-      assert.ok(cmd.includes('sess-1'));
+      assert.ok(cmd.includes('opencode run'));
+      assert.ok(cmd.includes('-s sess-1'));
     });
 
-    it('builds resume with --continue when no session ID', () => {
+    it('builds resume with -c when no session ID', () => {
       const cmd = adapter.buildResumeCommand({
         name: 'oc-agent',
         cwd: '/tmp',
       });
-      assert.ok(cmd.includes('--continue'));
+      assert.ok(cmd.includes('-c'));
+      assert.ok(!cmd.includes('--continue'));
     });
 
     it('returns null for rename', () => {
