@@ -34,32 +34,49 @@ const locks = new LockManager(db.rawDb);
 
 // ── Proxy Dispatch ──
 
+const PROXY_RETRY_COUNT = 2;
+const PROXY_RETRY_BASE_MS = 500;
+
 async function proxyDispatch(proxyId: string, command: ProxyCommand): Promise<ProxyResponse> {
   const proxy = db.getProxy(proxyId);
   if (!proxy) {
     return { ok: false, error: `Proxy "${proxyId}" not registered` };
   }
 
-  try {
-    const resp = await fetch(`http://${proxy.host}/command`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'x-proxy-token': proxy.token,
-      },
-      body: JSON.stringify(command),
-      signal: AbortSignal.timeout(15_000),
-    });
-
-    if (!resp.ok) {
-      const text = await resp.text();
-      return { ok: false, error: `Proxy returned ${resp.status}: ${text}` };
+  let lastError = '';
+  for (let attempt = 0; attempt <= PROXY_RETRY_COUNT; attempt++) {
+    if (attempt > 0) {
+      // Exponential backoff: 500ms, 1000ms
+      const delay = PROXY_RETRY_BASE_MS * Math.pow(2, attempt - 1);
+      await new Promise<void>((r) => setTimeout(r, delay));
     }
 
-    return await resp.json() as ProxyResponse;
-  } catch (err) {
-    return { ok: false, error: `Proxy unreachable: ${(err as Error).message}` };
+    try {
+      const resp = await fetch(`http://${proxy.host}/command`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-proxy-token': proxy.token,
+        },
+        body: JSON.stringify(command),
+        signal: AbortSignal.timeout(15_000),
+      });
+
+      if (!resp.ok) {
+        const text = await resp.text();
+        return { ok: false, error: `Proxy returned ${resp.status}: ${text}` };
+      }
+
+      return await resp.json() as ProxyResponse;
+    } catch (err) {
+      lastError = (err as Error).message;
+      if (attempt < PROXY_RETRY_COUNT) {
+        console.warn(`[proxy-dispatch] Attempt ${attempt + 1} failed for ${proxyId}: ${lastError}, retrying...`);
+      }
+    }
   }
+
+  return { ok: false, error: `Proxy unreachable after ${PROXY_RETRY_COUNT + 1} attempts: ${lastError}` };
 }
 
 // ── Dashboard HTML ──
@@ -91,6 +108,9 @@ const healthMonitor = new HealthMonitor({
   },
   onQueueUpdate: (message) => {
     wss.broadcast(JSON.stringify({ type: 'queue_update', message }));
+  },
+  onDashboardMessage: (msg) => {
+    wss.broadcast(JSON.stringify({ type: 'message', msg }));
   },
 });
 

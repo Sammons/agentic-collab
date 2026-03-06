@@ -6,7 +6,7 @@
 
 import type { Database } from './database.ts';
 import type { LockManager } from '../shared/lock.ts';
-import type { ProxyCommand, ProxyResponse, AgentRecord, PendingMessage } from '../shared/types.ts';
+import type { ProxyCommand, ProxyResponse, AgentRecord, PendingMessage, DashboardMessage } from '../shared/types.ts';
 import { sessionName, canSuspend } from '../shared/agent-entity.ts';
 import { getAdapter } from './adapters/index.ts';
 import { reloadAgent, compactAgent, deliverToAgent, type LifecycleContext } from './lifecycle.ts';
@@ -18,6 +18,7 @@ export type HealthMonitorOptions = {
   orchestratorHost: string;
   onAgentUpdate?: (agentName: string) => void;
   onQueueUpdate?: (message: PendingMessage) => void;
+  onDashboardMessage?: (message: DashboardMessage) => void;
   pollIntervalMs?: number;
   autoCompactThreshold?: number; // context % to trigger compact (default 80)
   autoReloadThreshold?: number;  // context % to trigger reload (default 90)
@@ -41,6 +42,7 @@ export class HealthMonitor {
   private readonly idleSuspendMs: number;
   private readonly onAgentUpdate: (agentName: string) => void;
   private readonly onQueueUpdate: (message: PendingMessage) => void;
+  private readonly onDashboardMessage: (message: DashboardMessage) => void;
 
   constructor(opts: HealthMonitorOptions) {
     this.db = opts.db;
@@ -49,6 +51,7 @@ export class HealthMonitor {
     this.orchestratorHost = opts.orchestratorHost;
     this.onAgentUpdate = opts.onAgentUpdate ?? (() => {});
     this.onQueueUpdate = opts.onQueueUpdate ?? (() => {});
+    this.onDashboardMessage = opts.onDashboardMessage ?? (() => {});
     this.pollIntervalMs = opts.pollIntervalMs ?? DEFAULT_POLL_MS;
     this.autoCompactThreshold = opts.autoCompactThreshold ?? DEFAULT_COMPACT_THRESHOLD;
     this.autoReloadThreshold = opts.autoReloadThreshold ?? DEFAULT_RELOAD_THRESHOLD;
@@ -192,12 +195,13 @@ export class HealthMonitor {
       await this.deliverPendingMessages(agent.name);
     }
 
-    // 5. Check idle suspend timeout
-    if (agent.state === 'idle' && agent.lastActivity) {
-      const idleDuration = Date.now() - new Date(agent.lastActivity).getTime();
+    // 5. Check idle suspend timeout (re-read for fresh state after possible transitions above)
+    const currentForIdle = this.db.getAgent(agentSnapshot.name);
+    if (currentForIdle && currentForIdle.state === 'idle' && currentForIdle.lastActivity) {
+      const idleDuration = Date.now() - new Date(currentForIdle.lastActivity).getTime();
       if (idleDuration > this.idleSuspendMs) {
-        console.log(`[health] ${agent.name} idle for ${Math.round(idleDuration / 1000)}s — suspending`);
-        this.db.logEvent(agent.name, 'idle_suspend_triggered', undefined, {
+        console.log(`[health] ${currentForIdle.name} idle for ${Math.round(idleDuration / 1000)}s — suspending`);
+        this.db.logEvent(currentForIdle.name, 'idle_suspend_triggered', undefined, {
           idleDurationMs: idleDuration,
         });
         // Don't auto-suspend for now — just log. The operator can configure this.
@@ -274,9 +278,7 @@ export class HealthMonitor {
     } else {
       // Dashboard-to-agent: insert a from_agent message so operator sees it
       const msg = this.db.addDashboardMessage(message.targetAgent, 'from_agent', failureText);
-      // Broadcast via WS — the onQueueUpdate callback can't do this, so we log it
-      // The main.ts wiring handles broadcasting dashboard messages
-      console.log(`[health] Delivery failure notification for dashboard → ${message.targetAgent}: ${message.error}`);
+      this.onDashboardMessage(msg);
     }
   }
 

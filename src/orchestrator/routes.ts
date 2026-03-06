@@ -32,6 +32,9 @@ type Route = {
   handler: (req: IncomingMessage, res: ServerResponse, match: URLPatternResult, ctx: RouteContext) => Promise<void>;
 };
 
+// Module-level routes array — populated once at import time, shared by all
+// createRouter calls. This is intentional: routes are stateless handlers
+// and the context is threaded per-request via RouteContext.
 const routes: Route[] = [];
 
 function route(method: string, pathname: string, handler: Route['handler']): void {
@@ -64,6 +67,9 @@ route('POST', '/api/agents', async (req, res, _match, ctx) => {
   if (!body.name || !body.engine || !body.cwd) {
     return json(res, 400, { error: 'name, engine, cwd required' });
   }
+
+  const nameError = validateAgentName(body.name as string);
+  if (nameError) return json(res, 400, { error: nameError });
 
   const VALID_ENGINES = new Set(['claude', 'codex', 'opencode']);
   if (!VALID_ENGINES.has(body.engine as string)) {
@@ -443,9 +449,15 @@ export function createRouter(ctx: RouteContext): (req: IncomingMessage, res: Ser
         try {
           await route.handler(req, res, match, ctx);
         } catch (err) {
-          console.error(`[route error] ${req.method} ${req.url}:`, err);
+          const message = (err as Error).message;
           if (!res.headersSent) {
-            json(res, 500, { error: 'Internal server error' });
+            // Return 400 for client errors (invalid JSON, oversized body)
+            if (message === 'Invalid JSON body' || message === 'Request body too large') {
+              json(res, 400, { error: message });
+            } else {
+              console.error(`[route error] ${req.method} ${req.url}:`, err);
+              json(res, 500, { error: 'Internal server error' });
+            }
           }
         }
         return;
@@ -500,6 +512,14 @@ function broadcastAgentUpdate(ctx: RouteContext, agentName: string): void {
   if (agent) {
     ctx.wss.broadcast(JSON.stringify({ type: 'agent_update', agent }));
   }
+}
+
+const AGENT_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$/;
+
+function validateAgentName(name: string): string | null {
+  if (typeof name !== 'string') return 'name must be a string';
+  if (!AGENT_NAME_RE.test(name)) return 'name must be 1-63 chars, start with alphanumeric, contain only [a-zA-Z0-9_-]';
+  return null;
 }
 
 function broadcastProxyUpdate(ctx: RouteContext): void {

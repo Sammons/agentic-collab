@@ -81,7 +81,9 @@ export function capturePaneLines(sessionName: string, lines: number): string {
  */
 export function sendKeys(sessionName: string, keys: string): void {
   validateSessionName(sessionName);
-  exec(`tmux send-keys -t '${esc(sessionName)}' '${esc(keys)}'`);
+  // Don't quote key names — tmux send-keys interprets bare words as key names
+  // (e.g., "Escape" sends the Escape key, but "'Escape'" types the literal text)
+  exec(`tmux send-keys -t '${esc(sessionName)}' ${keys}`);
 }
 
 /**
