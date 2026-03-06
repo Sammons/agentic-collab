@@ -11,6 +11,10 @@ export class CodexAdapter implements EngineAdapter {
   buildSpawnCommand(opts: SpawnOptions): string {
     const parts = ['codex'];
 
+    if (opts.dangerouslySkipPermissions === true) {
+      parts.push('--dangerously-bypass-approvals-and-sandbox');
+    }
+
     if (opts.model) {
       parts.push('--model', opts.model);
     }
@@ -23,8 +27,13 @@ export class CodexAdapter implements EngineAdapter {
   }
 
   buildResumeCommand(opts: ResumeOptions): string {
-    // Codex doesn't have native resume — start new session in same cwd
-    const parts = ['codex'];
+    const parts = ['codex', 'resume'];
+
+    if (opts.sessionId) {
+      parts.push(opts.sessionId);
+    } else {
+      parts.push('--last');
+    }
 
     if (opts.task) {
       parts.push(shellQuote(opts.task));

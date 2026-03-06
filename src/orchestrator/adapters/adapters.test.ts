@@ -135,15 +135,32 @@ describe('Engine Adapters', () => {
       assert.ok(cmd.includes('gpt-4'));
     });
 
-    it('builds resume as new spawn (no native resume)', () => {
+    it('builds spawn command with skip-permissions', () => {
+      const cmd = adapter.buildSpawnCommand({
+        name: 'codex-agent',
+        cwd: '/tmp',
+        dangerouslySkipPermissions: true,
+      });
+      assert.ok(cmd.includes('--dangerously-bypass-approvals-and-sandbox'));
+    });
+
+    it('builds resume with session ID', () => {
       const cmd = adapter.buildResumeCommand({
         name: 'codex-agent',
-        sessionId: 'xyz',
+        sessionId: 'xyz-123',
         cwd: '/tmp',
         task: 'continue',
       });
-      assert.ok(cmd.includes('codex'));
-      assert.ok(!cmd.includes('xyz')); // no session resume support
+      assert.ok(cmd.includes('codex resume'));
+      assert.ok(cmd.includes('xyz-123'));
+    });
+
+    it('builds resume with --last when no session ID', () => {
+      const cmd = adapter.buildResumeCommand({
+        name: 'codex-agent',
+        cwd: '/tmp',
+      });
+      assert.ok(cmd.includes('--last'));
     });
 
     it('returns null for rename', () => {
@@ -195,6 +212,16 @@ describe('Engine Adapters', () => {
       assert.ok(cmd.includes('--model'));
     });
 
+    it('builds spawn command with task using --prompt', () => {
+      const cmd = adapter.buildSpawnCommand({
+        name: 'oc-agent',
+        cwd: '/tmp',
+        task: 'fix the bug',
+      });
+      assert.ok(cmd.includes('--prompt'));
+      assert.ok(cmd.includes('fix the bug'));
+    });
+
     it('builds resume with session ID', () => {
       const cmd = adapter.buildResumeCommand({
         name: 'oc-agent',
@@ -203,6 +230,14 @@ describe('Engine Adapters', () => {
       });
       assert.ok(cmd.includes('--session'));
       assert.ok(cmd.includes('sess-1'));
+    });
+
+    it('builds resume with --continue when no session ID', () => {
+      const cmd = adapter.buildResumeCommand({
+        name: 'oc-agent',
+        cwd: '/tmp',
+      });
+      assert.ok(cmd.includes('--continue'));
     });
 
     it('returns null for rename', () => {
