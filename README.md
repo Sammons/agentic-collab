@@ -1,6 +1,22 @@
 # agentic-collab
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 Zero-dependency orchestrator for managing AI coding agents (Claude, Codex, OpenCode) via tmux sessions. Built on Node 24 — no build step, no npm install.
+
+## Dashboard
+
+Real-time dashboard for monitoring and controlling agents:
+
+![Dashboard — agent cards, message thread, action buttons](screenshots/dashboard.png)
+
+Create agents with a task and spawn them in one click:
+
+![Create agent form with engine picker and task input](screenshots/create-agent.png)
+
+Token auth modal for production deployments (dev mode skips auth):
+
+![Auth modal](screenshots/auth-modal.png)
 
 ## Architecture
 
