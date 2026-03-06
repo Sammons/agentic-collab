@@ -19,6 +19,11 @@ import type { ProxyCommand, ProxyResponse } from '../shared/types.ts';
 const PORT = parseInt(process.env['PORT'] ?? '3000', 10);
 const DB_PATH = process.env['DB_PATH'] ?? join(process.env['HOME'] ?? '/data', '.agentic-collab', 'orchestrator.db');
 const ORCHESTRATOR_HOST = process.env['ORCHESTRATOR_HOST'] ?? `http://localhost:${PORT}`;
+const ORCHESTRATOR_SECRET = process.env['ORCHESTRATOR_SECRET'] ?? null;
+
+if (!ORCHESTRATOR_SECRET) {
+  console.warn('[orchestrator] WARNING: ORCHESTRATOR_SECRET not set — auth is disabled');
+}
 
 // Ensure DB directory exists
 mkdirSync(dirname(DB_PATH), { recursive: true });
@@ -84,6 +89,9 @@ const healthMonitor = new HealthMonitor({
       wss.broadcast(JSON.stringify({ type: 'agent_update', agent }));
     }
   },
+  onQueueUpdate: (message) => {
+    wss.broadcast(JSON.stringify({ type: 'queue_update', message }));
+  },
 });
 
 const lifecycleCtx: LifecycleContext = {
@@ -100,6 +108,7 @@ const routeCtx: RouteContext = {
   proxyDispatch,
   getDashboardHtml,
   orchestratorHost: ORCHESTRATOR_HOST,
+  orchestratorSecret: ORCHESTRATOR_SECRET,
 };
 
 const router = createRouter(routeCtx);
@@ -108,7 +117,7 @@ const server = createServer(async (req, res) => {
   // CORS for local development
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Proxy-Token');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Proxy-Token, Authorization');
 
   if (req.method === 'OPTIONS') {
     res.writeHead(204);
@@ -123,10 +132,16 @@ const server = createServer(async (req, res) => {
 server.on('upgrade', (req, socket, head) => {
   const url = new URL(req.url!, `http://${req.headers.host}`);
   if (url.pathname === '/ws') {
+    // Validate auth token on WS upgrade when secret is set
+    if (ORCHESTRATOR_SECRET) {
+      const token = url.searchParams.get('token');
+      if (token !== ORCHESTRATOR_SECRET) {
+        socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+        socket.destroy();
+        return;
+      }
+    }
     wss.handleUpgrade(req, socket, head);
-
-    // Send init event to newly connected client
-    // The WebSocket server handles the connection event
   } else {
     socket.destroy();
   }

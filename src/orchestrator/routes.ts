@@ -12,7 +12,7 @@ import type { LockManager } from '../shared/lock.ts';
 import {
   spawnAgent, resumeAgent, suspendAgent, destroyAgent,
   reloadAgent, interruptAgent, compactAgent, killAgent,
-  deliverToAgent, type LifecycleContext,
+  type LifecycleContext,
 } from './lifecycle.ts';
 import { shutdownAgents, restoreAllAgents } from './network.ts';
 
@@ -23,6 +23,7 @@ export type RouteContext = {
   proxyDispatch: (proxyId: string, command: ProxyCommand) => Promise<ProxyResponse>;
   getDashboardHtml: () => string;
   orchestratorHost: string;
+  orchestratorSecret: string | null;
 };
 
 type Route = {
@@ -105,7 +106,6 @@ route('POST', '/api/agents/send', async (req, res, _match, ctx) => {
 
   const target = ctx.db.getAgent(body.to);
   if (!target) return json(res, 404, { error: `Target agent "${body.to}" not found` });
-  if (!target.proxyId) return json(res, 400, { error: `Target agent "${body.to}" has no proxy` });
 
   const messageId = generateMessageId();
   const sanitized = sanitizeMessage(body.message);
@@ -114,18 +114,21 @@ route('POST', '/api/agents/send', async (req, res, _match, ctx) => {
   const topic = body.re ? ` (re: ${body.re})` : '';
   const envelope = `[from: ${body.from}, reply with /collaboration reply]:${topic} '${sanitized}'`;
 
-  // Deliver via proxy with lock
-  const lifecycleCtx = makeLifecycleCtx(ctx);
-  const deliveryError = await deliverToAgent(lifecycleCtx, target, envelope);
-  if (deliveryError) {
-    return json(res, 502, { error: `Delivery failed: ${deliveryError}` });
-  }
+  // Enqueue for async delivery
+  const pending = ctx.db.enqueueMessage({
+    sourceAgent: body.from as string,
+    targetAgent: body.to as string,
+    envelope,
+  });
 
-  // Log routing events only on success
-  ctx.db.logEvent(body.from as string, 'message_sent', messageId, { to: body.to });
-  ctx.db.logEvent(body.to as string, 'message_received', messageId, { from: body.from });
+  // Log routing events
+  ctx.db.logEvent(body.from as string, 'message_queued', messageId, { to: body.to, queueId: pending.id });
+  ctx.db.logEvent(body.to as string, 'message_queued', messageId, { from: body.from, queueId: pending.id });
 
-  json(res, 200, { ok: true, messageId });
+  // Broadcast queue update
+  ctx.wss.broadcast(JSON.stringify({ type: 'queue_update', message: pending }));
+
+  json(res, 202, { ok: true, messageId, queueId: pending.id, status: 'pending' });
 });
 
 // ── Dashboard Messages ──
@@ -138,27 +141,31 @@ route('POST', '/api/dashboard/send', async (req, res, _match, ctx) => {
 
   const agent = ctx.db.getAgent(body.agent);
   if (!agent) return json(res, 404, { error: `Agent "${body.agent}" not found` });
-  if (!agent.proxyId) return json(res, 400, { error: `Agent "${body.agent}" has no proxy` });
 
   const sanitized = sanitizeMessage(body.message);
 
-  // Store in dashboard messages
-  const msg = ctx.db.addDashboardMessage(body.agent, 'to_agent', sanitized, body.topic);
-
-  // Format and paste via proxy
+  // Format envelope
   const topic = body.topic ? ` (re: ${body.topic})` : '';
   const envelope = `[from: dashboard, reply with /collaboration reply]:${topic} '${sanitized}'`;
 
-  const lifecycleCtx = makeLifecycleCtx(ctx);
-  const deliveryError = await deliverToAgent(lifecycleCtx, agent, envelope);
-  if (deliveryError) {
-    return json(res, 502, { error: `Delivery failed: ${deliveryError}`, msg });
-  }
+  // Store in dashboard messages
+  const msg = ctx.db.addDashboardMessage(body.agent as string, 'to_agent', sanitized, body.topic as string | undefined);
 
-  // Broadcast to dashboard WebSocket
+  // Enqueue for async delivery
+  const pending = ctx.db.enqueueMessage({
+    sourceAgent: null, // dashboard
+    targetAgent: body.agent as string,
+    envelope,
+  });
+
+  // Link dashboard message to queue entry
+  ctx.db.linkDashboardMessageToQueue(msg.id, pending.id);
+
+  // Broadcast both events
   ctx.wss.broadcast(JSON.stringify({ type: 'message', msg }));
+  ctx.wss.broadcast(JSON.stringify({ type: 'queue_update', message: pending }));
 
-  json(res, 200, { ok: true, msg });
+  json(res, 202, { ok: true, msg, queueId: pending.id, status: 'pending' });
 });
 
 route('POST', '/api/dashboard/reply', async (req, res, _match, ctx) => {
@@ -227,6 +234,16 @@ route('GET', '/api/events/:agentName', async (req, res, match, ctx) => {
   const limit = parseInt(url.searchParams.get('limit') ?? '50', 10);
   const events = ctx.db.getEvents(agentName, limit);
   json(res, 200, events);
+});
+
+// ── Message Queue ──
+
+route('GET', '/api/queue', async (req, res, _match, ctx) => {
+  const url = new URL(req.url!, `http://${req.headers.host}`);
+  const agent = url.searchParams.get('agent') ?? undefined;
+  const status = url.searchParams.get('status') ?? undefined;
+  const messages = ctx.db.listPendingMessages(agent, status);
+  json(res, 200, messages);
 });
 
 // ── Workstreams ──
@@ -411,6 +428,14 @@ export function createRouter(ctx: RouteContext): (req: IncomingMessage, res: Ser
   return async (req, res) => {
     const url = new URL(req.url!, `http://${req.headers.host}`);
 
+    // Auth: state-mutating methods require Bearer token (GET and OPTIONS are exempt)
+    if (req.method !== 'GET' && req.method !== 'OPTIONS') {
+      if (!authorize(ctx.orchestratorSecret, req)) {
+        json(res, 401, { error: 'Unauthorized' });
+        return;
+      }
+    }
+
     for (const route of routes) {
       if (req.method !== route.method) continue;
       const match = route.pattern.exec(url);
@@ -429,6 +454,17 @@ export function createRouter(ctx: RouteContext): (req: IncomingMessage, res: Ser
 
     json(res, 404, { error: 'Not found' });
   };
+}
+
+function authorize(secret: string | null, req: IncomingMessage): boolean {
+  if (!secret) return true; // dev mode — no auth
+  const header = req.headers['authorization'];
+  if (typeof header !== 'string') return false;
+  const spaceIdx = header.indexOf(' ');
+  if (spaceIdx === -1) return false;
+  const scheme = header.slice(0, spaceIdx);
+  const token = header.slice(spaceIdx + 1);
+  return scheme === 'Bearer' && token === secret;
 }
 
 // ── Helpers ──

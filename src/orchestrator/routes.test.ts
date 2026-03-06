@@ -36,6 +36,7 @@ describe('API Routes', () => {
       proxyDispatch: mockProxyDispatch,
       getDashboardHtml: () => '<html><body>Dashboard</body></html>',
       orchestratorHost: 'http://localhost:3000',
+      orchestratorSecret: null, // no auth for base tests
     };
 
     const router = createRouter(ctx);
@@ -150,22 +151,19 @@ describe('API Routes', () => {
 
   // ── Dashboard Messages ──
 
-  it('POST /api/dashboard/send sends message to agent via proxy', async () => {
+  it('POST /api/dashboard/send enqueues message', async () => {
     // Register a proxy first
     db.registerProxy('proxy-test', 'tok', 'localhost:3100');
 
-    proxyCommands = [];
     const { status, data } = await api('POST', '/api/dashboard/send', {
       agent: 'api-agent-1',
       message: 'Hello from dashboard',
       topic: 'testing',
     });
-    assert.equal(status, 200);
+    assert.equal(status, 202);
     assert.ok((data as Record<string, unknown>).ok);
-
-    // Verify proxy received paste command
-    assert.equal(proxyCommands.length, 1);
-    assert.equal(proxyCommands[0]!.action, 'paste');
+    assert.ok((data as Record<string, unknown>).queueId);
+    assert.equal((data as Record<string, unknown>).status, 'pending');
   });
 
   it('POST /api/dashboard/reply stores reply', async () => {
@@ -291,9 +289,7 @@ describe('API Routes', () => {
 
   // ── Inter-agent messaging ──
 
-  it('POST /api/agents/send delivers message via proxy', async () => {
-    proxyCommands = [];
-
+  it('POST /api/agents/send enqueues message', async () => {
     // Need agent with proxy and tmux session
     db.updateAgentState('api-agent-1', 'active', db.getAgent('api-agent-1')!.version, {
       proxyId: 'proxy-test',
@@ -307,9 +303,10 @@ describe('API Routes', () => {
       re: 'test-topic',
     });
 
-    assert.equal(status, 200);
+    assert.equal(status, 202);
     assert.ok((data as Record<string, unknown>).messageId);
-    assert.ok(proxyCommands.some(c => c.action === 'paste'));
+    assert.ok((data as Record<string, unknown>).queueId);
+    assert.equal((data as Record<string, unknown>).status, 'pending');
   });
 
   it('POST /api/agents/send rejects unknown target', async () => {
@@ -319,6 +316,13 @@ describe('API Routes', () => {
       message: 'hello',
     });
     assert.equal(status, 404);
+  });
+
+  it('GET /api/queue returns queued messages', async () => {
+    const { status, data } = await api('GET', '/api/queue?agent=api-agent-1');
+    assert.equal(status, 200);
+    assert.ok(Array.isArray(data));
+    assert.ok((data as Array<Record<string, unknown>>).length > 0);
   });
 
   // ── Lifecycle Routes ──
@@ -381,5 +385,100 @@ describe('API Routes', () => {
     const { status, data } = await api('POST', '/api/orchestrator/restore');
     assert.equal(status, 200);
     assert.ok(typeof (data as Record<string, unknown>).restored === 'number');
+  });
+});
+
+describe('API Routes — Auth', () => {
+  let server: Server;
+  let db: Database;
+  let wss: WebSocketServer;
+  let port: number;
+  let tmpDir: string;
+  const SECRET = 'test-secret-xyz';
+
+  before(async () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'agentic-auth-test-'));
+    db = new Database(join(tmpDir, 'test.db'));
+    wss = new WebSocketServer();
+
+    const ctx: RouteContext = {
+      db,
+      wss,
+      locks: new LockManager(db.rawDb),
+      proxyDispatch: async () => ({ ok: true }),
+      getDashboardHtml: () => '<html>Dashboard</html>',
+      orchestratorHost: 'http://localhost:3000',
+      orchestratorSecret: SECRET,
+    };
+
+    const router = createRouter(ctx);
+    server = createServer(async (req, res) => {
+      await router(req, res);
+    });
+
+    await new Promise<void>((resolve) => {
+      server.listen(0, () => {
+        const addr = server.address();
+        port = typeof addr === 'object' && addr ? addr.port : 0;
+        resolve();
+      });
+    });
+  });
+
+  after(() => {
+    wss.close();
+    server.close();
+    db.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  async function apiAuth(method: string, path: string, body?: unknown, token?: string): Promise<{ status: number; data: unknown }> {
+    const headers: Record<string, string> = {};
+    if (body) headers['content-type'] = 'application/json';
+    if (token) headers['authorization'] = `Bearer ${token}`;
+
+    const resp = await fetch(`http://localhost:${port}${path}`, {
+      method,
+      headers,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const data = await resp.json();
+    return { status: resp.status, data };
+  }
+
+  it('GET requests bypass auth', async () => {
+    const { status } = await apiAuth('GET', '/api/agents');
+    assert.equal(status, 200);
+  });
+
+  it('POST without token returns 401', async () => {
+    const { status } = await apiAuth('POST', '/api/agents', {
+      name: 'auth-test', engine: 'claude', cwd: '/tmp',
+    });
+    assert.equal(status, 401);
+  });
+
+  it('POST with wrong token returns 401', async () => {
+    const { status } = await apiAuth('POST', '/api/agents', {
+      name: 'auth-test', engine: 'claude', cwd: '/tmp',
+    }, 'wrong-secret');
+    assert.equal(status, 401);
+  });
+
+  it('POST with correct token succeeds', async () => {
+    const { status } = await apiAuth('POST', '/api/agents', {
+      name: 'auth-test', engine: 'claude', cwd: '/tmp',
+    }, SECRET);
+    assert.equal(status, 201);
+  });
+
+  it('DELETE with correct token succeeds', async () => {
+    const { status } = await apiAuth('DELETE', '/api/agents/auth-test', undefined, SECRET);
+    assert.equal(status, 200);
+  });
+
+  it('DELETE without token returns 401', async () => {
+    const { status } = await apiAuth('DELETE', '/api/agents/auth-test');
+    assert.equal(status, 401);
   });
 });

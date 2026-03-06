@@ -246,6 +246,7 @@
   }
   .toast.error   { background: var(--red); }
   .toast.warning { background: var(--orange); }
+  .toast.success { background: var(--green); }
 
   @keyframes toast-in {
     from { opacity: 0; transform: translateX(-50%) translateY(-8px); }
@@ -283,6 +284,28 @@
 
 <script>
 (function() {
+  // ── Auth ──
+  function getToken() {
+    let token = localStorage.getItem('orchestrator_token');
+    if (!token) {
+      token = prompt('Enter orchestrator token (leave empty for dev mode):');
+      if (token) localStorage.setItem('orchestrator_token', token);
+    }
+    return token || '';
+  }
+
+  function authHeaders() {
+    const token = getToken();
+    const headers = { 'content-type': 'application/json' };
+    if (token) headers['authorization'] = `Bearer ${token}`;
+    return headers;
+  }
+
+  function handleAuthError() {
+    localStorage.removeItem('orchestrator_token');
+    showToast('Authentication failed — token cleared. Reload to re-enter.', 'error');
+  }
+
   // ── State ──
   const state = {
     agents: [],
@@ -298,7 +321,9 @@
   // ── WebSocket ──
   function connect() {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    ws = new WebSocket(`${proto}://${location.host}/ws`);
+    const token = getToken();
+    const tokenParam = token ? `?token=${encodeURIComponent(token)}` : '';
+    ws = new WebSocket(`${proto}://${location.host}/ws${tokenParam}`);
 
     ws.onopen = () => {
       state.connected = true;
@@ -337,6 +362,9 @@
           break;
         case 'message':
           addMessage(data.msg);
+          break;
+        case 'queue_update':
+          handleQueueUpdate(data.message);
           break;
       }
     };
@@ -484,10 +512,23 @@
       : 'Type a message...';
   }
 
+  // ── Queue Updates ──
+  function handleQueueUpdate(message) {
+    if (message.status === 'delivered') {
+      showToast(`Message delivered to ${message.targetAgent}`, 'success');
+    } else if (message.status === 'failed') {
+      showToast(`Delivery to ${message.targetAgent} failed: ${message.error || 'unknown'}`, 'error');
+    }
+  }
+
   // ── Actions ──
   async function agentAction(name, act) {
     try {
-      const res = await fetch(`/api/agents/${encodeURIComponent(name)}/${act}`, { method: 'POST' });
+      const res = await fetch(`/api/agents/${encodeURIComponent(name)}/${act}`, {
+        method: 'POST',
+        headers: authHeaders(),
+      });
+      if (res.status === 401) { handleAuthError(); return; }
       if (!res.ok) {
         let msg = `Action "${act}" failed (HTTP ${res.status})`;
         try {
@@ -532,9 +573,10 @@
     try {
       const res = await fetch('/api/dashboard/send', {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: authHeaders(),
         body: JSON.stringify({ agent: state.selected, message: text }),
       });
+      if (res.status === 401) { handleAuthError(); return; }
       if (!res.ok) {
         let body = null;
         try { body = await res.json(); } catch (_) {}

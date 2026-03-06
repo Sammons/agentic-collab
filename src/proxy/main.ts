@@ -13,10 +13,19 @@ const PROXY_PORT = parseInt(process.env['PROXY_PORT'] ?? '3100', 10);
 const ORCHESTRATOR_URL = process.env['ORCHESTRATOR_URL'] ?? 'http://localhost:3000';
 const PROXY_HOST = process.env['PROXY_HOST'] ?? `host.docker.internal:${PROXY_PORT}`;
 const PROXY_ID = process.env['PROXY_ID'] ?? `proxy-${Math.random().toString(36).slice(2, 8)}`;
+const ORCHESTRATOR_SECRET = process.env['ORCHESTRATOR_SECRET'] ?? null;
 
 let token = generateToken();
 let registered = false;
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+
+function authHeaders(): Record<string, string> {
+  const headers: Record<string, string> = { 'content-type': 'application/json' };
+  if (ORCHESTRATOR_SECRET) {
+    headers['authorization'] = `Bearer ${ORCHESTRATOR_SECRET}`;
+  }
+  return headers;
+}
 
 // ── Registration ──
 
@@ -24,7 +33,7 @@ async function register(): Promise<void> {
   try {
     const resp = await fetch(`${ORCHESTRATOR_URL}/api/proxy/register`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify({ proxyId: PROXY_ID, token, host: PROXY_HOST }),
     });
 
@@ -45,7 +54,7 @@ async function heartbeat(): Promise<void> {
   try {
     const resp = await fetch(`${ORCHESTRATOR_URL}/api/proxy/heartbeat`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify({ proxyId: PROXY_ID }),
     });
 
@@ -69,6 +78,7 @@ async function deregister(): Promise<void> {
   try {
     await fetch(`${ORCHESTRATOR_URL}/api/proxy/${PROXY_ID}`, {
       method: 'DELETE',
+      headers: authHeaders(),
     });
     console.log('[proxy] Deregistered from orchestrator');
   } catch {

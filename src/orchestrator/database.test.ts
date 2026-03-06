@@ -236,4 +236,129 @@ describe('Database', () => {
       assert.equal(proxy.host, 'new-host:5678');
     });
   });
+
+  describe('pending_messages (queue)', () => {
+    it('enqueues a message', () => {
+      const msg = db.enqueueMessage({
+        sourceAgent: 'agent-a',
+        targetAgent: 'agent-b',
+        envelope: '[from: agent-a]: hello',
+      });
+      assert.equal(msg.sourceAgent, 'agent-a');
+      assert.equal(msg.targetAgent, 'agent-b');
+      assert.equal(msg.status, 'pending');
+      assert.equal(msg.retryCount, 0);
+      assert.ok(msg.id > 0);
+    });
+
+    it('enqueues a dashboard message (null source)', () => {
+      const msg = db.enqueueMessage({
+        sourceAgent: null,
+        targetAgent: 'agent-b',
+        envelope: '[from: dashboard]: hi',
+      });
+      assert.equal(msg.sourceAgent, null);
+    });
+
+    it('retrieves deliverable messages', () => {
+      const messages = db.getDeliverableMessages('agent-b');
+      assert.ok(messages.length >= 2);
+      assert.ok(messages.every(m => m.status === 'pending'));
+    });
+
+    it('marks attempt started', () => {
+      const messages = db.getDeliverableMessages('agent-b');
+      const msg = messages[0]!;
+      db.markAttemptStarted(msg.id);
+      const updated = db.getPendingMessageById(msg.id)!;
+      assert.ok(updated.lastAttemptAt !== null);
+    });
+
+    it('marks message delivered', () => {
+      const messages = db.getDeliverableMessages('agent-b');
+      const msg = messages[0]!;
+      db.markMessageDelivered(msg.id);
+      const updated = db.getPendingMessageById(msg.id)!;
+      assert.equal(updated.status, 'delivered');
+      assert.ok(updated.deliveredAt !== null);
+    });
+
+    it('marks attempt failed with backoff', () => {
+      const msg = db.enqueueMessage({
+        sourceAgent: 'agent-c',
+        targetAgent: 'agent-d',
+        envelope: 'will fail',
+      });
+      db.markAttemptStarted(msg.id);
+      db.markAttemptFailed(msg.id, 'proxy unreachable');
+      const updated = db.getPendingMessageById(msg.id)!;
+      assert.equal(updated.retryCount, 1);
+      assert.equal(updated.error, 'proxy unreachable');
+      assert.ok(updated.nextAttemptAt !== null);
+      assert.equal(updated.status, 'pending'); // not failed yet
+    });
+
+    it('marks as failed after max retries', () => {
+      const msg = db.enqueueMessage({
+        sourceAgent: 'agent-c',
+        targetAgent: 'agent-d',
+        envelope: 'will fail permanently',
+      });
+      // Exhaust all retries
+      for (let i = 0; i < 5; i++) {
+        db.markAttemptStarted(msg.id);
+        db.markAttemptFailed(msg.id, `attempt ${i + 1} failed`);
+      }
+      const updated = db.getPendingMessageById(msg.id)!;
+      assert.equal(updated.status, 'failed');
+      assert.equal(updated.retryCount, 5);
+    });
+
+    it('lists pending messages with filters', () => {
+      const all = db.listPendingMessages();
+      assert.ok(all.length > 0);
+
+      const pending = db.listPendingMessages(undefined, 'pending');
+      assert.ok(pending.every(m => m.status === 'pending'));
+
+      const forAgent = db.listPendingMessages('agent-b');
+      assert.ok(forAgent.every(m => m.targetAgent === 'agent-b'));
+    });
+
+    it('links dashboard message to queue', () => {
+      const dashMsg = db.addDashboardMessage('queue-link-agent', 'to_agent', 'linked msg');
+      const queueMsg = db.enqueueMessage({
+        sourceAgent: null,
+        targetAgent: 'queue-link-agent',
+        envelope: 'linked',
+      });
+      db.linkDashboardMessageToQueue(dashMsg.id, queueMsg.id);
+
+      // Verify via threads
+      const threads = db.getDashboardThreads('queue-link-agent');
+      const msgs = threads['queue-link-agent']!;
+      const linked = msgs.find(m => m.id === dashMsg.id);
+      assert.equal(linked?.queueId, queueMsg.id);
+    });
+
+    it('resetStaleAttempts recovers hung deliveries', () => {
+      const msg = db.enqueueMessage({
+        sourceAgent: null,
+        targetAgent: 'agent-stale',
+        envelope: 'stale test',
+      });
+      db.markAttemptStarted(msg.id);
+      // Manually backdate the last_attempt_at to make it stale
+      db.rawDb.prepare(
+        `UPDATE pending_messages SET last_attempt_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-120 seconds') WHERE id = ?`
+      ).run(msg.id);
+
+      const reset = db.resetStaleAttempts(60);
+      assert.ok(reset >= 1);
+
+      const updated = db.getPendingMessageById(msg.id)!;
+      assert.equal(updated.retryCount, 1);
+      assert.ok(updated.nextAttemptAt !== null);
+    });
+  });
 });

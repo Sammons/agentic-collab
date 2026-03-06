@@ -62,7 +62,26 @@ export type DashboardMessage = {
   direction: MessageDirection;
   topic: string | null;
   message: string;
+  queueId: number | null;
   createdAt: string;
+};
+
+// ── Message Queue ──
+
+export type PendingMessageStatus = 'pending' | 'delivered' | 'failed';
+
+export type PendingMessage = {
+  id: number;
+  sourceAgent: string | null; // who sent it (null = dashboard)
+  targetAgent: string;
+  envelope: string;
+  status: PendingMessageStatus;
+  retryCount: number;
+  error: string | null;
+  lastAttemptAt: string | null;
+  nextAttemptAt: string | null;
+  createdAt: string;
+  deliveredAt: string | null;
 };
 
 // ── Proxy Registration ──
@@ -99,7 +118,12 @@ export type WsProxyEvent = {
   proxies: ProxyRegistration[];
 };
 
-export type WsEvent = WsInitEvent | WsAgentUpdateEvent | WsMessageEvent | WsProxyEvent;
+export type WsQueueUpdateEvent = {
+  type: 'queue_update';
+  message: PendingMessage;
+};
+
+export type WsEvent = WsInitEvent | WsAgentUpdateEvent | WsMessageEvent | WsProxyEvent | WsQueueUpdateEvent;
 
 // ── Proxy API ──
 
