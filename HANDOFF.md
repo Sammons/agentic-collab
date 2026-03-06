@@ -1,6 +1,6 @@
 # Agentic-Collab Handoff Brief
 
-> Last updated: 2026-03-06 — 319 tests, all passing, commit `7855cc3` on `origin/main`
+> Last updated: 2026-03-06 — 286 tests, all passing, branch `feat/persona-frontmatter`
 
 ---
 
@@ -48,7 +48,7 @@ src/
 │   ├── lifecycle.ts         # State machine: spawn/resume/suspend/destroy/reload/compact
 │   ├── health-monitor.ts    # 30s poll: idle detection, context thresholds, message delivery
 │   ├── network.ts           # Graceful shutdown + crash recovery (stuck suspending/resuming)
-│   ├── persona.ts           # Loads persistent-agents/<name>.md, composes system prompts
+│   ├── persona.ts           # Persona loading, frontmatter parsing, startup sync to SQLite
 │   ├── adapters/
 │   │   ├── index.ts         # Adapter registry
 │   │   ├── claude.ts        # Claude CLI adapter
@@ -93,7 +93,7 @@ node src/proxy/main.ts
 
 # 3. Run tests
 node --test 'src/**/*.test.ts'
-# 319 tests, ~3s
+# 286 tests, ~3s
 ```
 
 **Prereqs**: Node 24+, Docker, tmux, at least one of: `claude`, `codex`, `opencode`
@@ -126,7 +126,7 @@ Chronological feature progression across ~15 commits:
 
 ## Where We Are Now
 
-**Everything works. 319 tests pass. Ready for production use.**
+**Everything works. 286 tests pass. Ready for production use.**
 
 ### What's Solid
 
@@ -178,7 +178,7 @@ Chronological feature progression across ~15 commits:
 | `PROXY_PORT` | `3100` | HTTP port |
 | `ORCHESTRATOR_URL` | `http://localhost:3000` | Orchestrator address |
 | `PROXY_HOST` | `host.docker.internal:{PROXY_PORT}` | How orchestrator reaches proxy |
-| `PROXY_ID` | `proxy-{random}` | Unique proxy ID |
+| `PROXY_ID` | `os.hostname()` | Unique proxy ID (defaults to machine hostname) |
 | `ORCHESTRATOR_SECRET` | _(none)_ | Must match orchestrator |
 | `MAX_UPLOAD_BYTES` | `536870912` | Max upload size (512MB) |
 
@@ -222,12 +222,19 @@ Each adapter implements: `buildCommand()`, `parseIdleState()`, `parseContextUsag
 
 ---
 
+## What Was Built This Session
+
+1. **Persona frontmatter system** — `persistent-agents/*.md` files with YAML-like frontmatter (engine, model, thinking, cwd, proxy_host, permissions). Idempotent startup sync to SQLite. Persona API (GET list, GET detail, PUT write).
+2. **Workstream removal** — Removed workstream feature (use Notion instead). Cleaned up database, routes, types, tests.
+3. **Proxy hostname identification** — Proxies self-identify via `os.hostname()` instead of random IDs. Persona `proxy_host` field pins agents to specific machines.
+4. **Permission skip from frontmatter** — `permissions: skip` in frontmatter instead of hardcoded `dangerouslySkipPermissions: true`.
+5. **Dashboard improvements** — Search/filter agents, mobile responsive layout with back navigation, persona tab shows structured frontmatter table, 6 screenshots (desktop + mobile).
+6. **README update** — Persona docs, desktop/mobile screenshot table, updated env vars.
+
 ## What Could Be Built Next
 
-These are areas the prior sessions identified but didn't build:
-
-1. **Persistent agent personas** — The `persistent-agents/` directory convention exists but needs more fleshing out
-2. **Dashboard improvements** — Mobile responsive, dark mode, search/filter agents
+1. **MCP config support** — `mcp` field in frontmatter → `--mcp-config <path>` for Claude adapter
+2. **Dashboard dark/light toggle** — Currently dark-only; light mode for accessibility
 
 ---
 
