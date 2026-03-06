@@ -120,7 +120,11 @@ export class Database {
     // Add queue_id to dashboard_messages if not present
     try {
       this.db.exec('ALTER TABLE dashboard_messages ADD COLUMN queue_id INTEGER REFERENCES pending_messages(id)');
-    } catch { /* column already exists */ }
+    } catch (err) {
+      const msg = (err as Error).message ?? '';
+      // Only swallow "duplicate column" errors — rethrow anything else
+      if (!msg.includes('duplicate column')) throw err;
+    }
   }
 
   /** Expose raw handle for LockManager (shares same DB connection). */
@@ -310,10 +314,20 @@ export class Database {
   // ── Proxies ──
 
   registerProxy(proxyId: string, token: string, host: string): ProxyRegistration {
-    this.db.prepare(`
-      INSERT OR REPLACE INTO proxies (proxy_id, token, host, last_heartbeat, registered_at)
-      VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
-    `).run(proxyId, token, host);
+    const existing = this.getProxy(proxyId);
+    if (existing) {
+      // Update existing registration — preserves registered_at
+      this.db.prepare(`
+        UPDATE proxies SET token = ?, host = ?, last_heartbeat = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+        WHERE proxy_id = ?
+      `).run(token, host, proxyId);
+    } else {
+      // New registration
+      this.db.prepare(`
+        INSERT INTO proxies (proxy_id, token, host, last_heartbeat, registered_at)
+        VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+      `).run(proxyId, token, host);
+    }
     return this.getProxy(proxyId)!;
   }
 
@@ -339,6 +353,8 @@ export class Database {
     const result = this.db.prepare('DELETE FROM proxies WHERE proxy_id = ?').run(proxyId);
     return result.changes > 0;
   }
+
+  static readonly MAX_DELIVERY_RETRIES = 5;
 
   // ── Message Queue ──
 
@@ -373,7 +389,7 @@ export class Database {
     `).run(id);
   }
 
-  markAttemptFailed(id: number, error: string, maxRetries = 5): void {
+  markAttemptFailed(id: number, error: string, maxRetries = Database.MAX_DELIVERY_RETRIES): void {
     const row = this.db.prepare('SELECT * FROM pending_messages WHERE id = ?').get(id) as Record<string, unknown> | undefined;
     if (!row) return;
     const retryCount = (row['retry_count'] as number) + 1;

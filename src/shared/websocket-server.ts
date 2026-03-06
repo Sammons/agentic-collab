@@ -8,6 +8,7 @@ import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
 
 const MAGIC_STRING = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
+const MAX_FRAME_BYTES = 1_048_576; // 1 MB — reject frames larger than this
 
 // Opcodes
 const OPCODE_CONTINUATION = 0x0;
@@ -32,17 +33,7 @@ export class WebSocketServer {
   private onDisconnectCb: ((client: WsClient) => void) | null = null;
 
   constructor() {
-    // Ping every 30s to detect dead connections
-    this.pingInterval = setInterval(() => {
-      for (const client of this.clients.values()) {
-        if (!client.alive) {
-          this.removeClient(client);
-          continue;
-        }
-        client.alive = false;
-        this.sendPing(client);
-      }
-    }, 30_000);
+    // Ping interval deferred to first connection (avoid resource leak if unused)
   }
 
   onMessage(cb: (client: WsClient, data: string) => void): void {
@@ -92,6 +83,12 @@ export class WebSocketServer {
     socket.on('data', (chunk: Buffer) => {
       buffer = Buffer.concat([buffer, chunk]);
 
+      // Guard against unbounded buffer accumulation (C-2)
+      if (buffer.length > MAX_FRAME_BYTES) {
+        this.removeClient(client);
+        return;
+      }
+
       while (buffer.length >= 2) {
         const result = this.parseFrame(buffer);
         if (!result) break; // Need more data
@@ -103,6 +100,20 @@ export class WebSocketServer {
 
     socket.on('close', () => this.removeClient(client));
     socket.on('error', () => this.removeClient(client));
+
+    // Start ping interval on first connection
+    if (!this.pingInterval) {
+      this.pingInterval = setInterval(() => {
+        for (const c of this.clients.values()) {
+          if (!c.alive) {
+            this.removeClient(c);
+            continue;
+          }
+          c.alive = false;
+          this.sendPing(c);
+        }
+      }, 30_000);
+    }
 
     this.onConnectCb?.(client);
 

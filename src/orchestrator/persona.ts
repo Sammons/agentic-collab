@@ -17,17 +17,16 @@ export const PERSONAS_DIR = process.env['PERSONAS_DIR'] ?? join(process.env['HOM
  */
 export function resolvePersonaPath(agentName: string, explicitPath?: string | null, personasDir: string = PERSONAS_DIR): string | null {
   if (explicitPath) {
-    const resolved = resolve(explicitPath);
-    if (!existsSync(resolved)) return null;
-    // Restrict to personasDir to prevent path traversal
+    // Use realpathSync as the primary check — resolves symlinks and validates existence
+    // in a single atomic call, eliminating the TOCTOU between existsSync and realpathSync
     try {
-      const real = realpathSync(resolved);
+      const real = realpathSync(resolve(explicitPath));
       const baseReal = realpathSync(personasDir);
       if (!real.startsWith(baseReal + '/')) return null;
+      return real; // Return the resolved real path, not the original
     } catch {
-      return null;
+      return null; // File doesn't exist or path is invalid
     }
-    return resolved;
   }
 
   const conventionPath = join(personasDir, `${agentName}.md`);

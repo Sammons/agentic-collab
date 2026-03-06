@@ -14,6 +14,12 @@ const RESTORE_STAGGER_MS = 3_000;
 /**
  * Graceful shutdown: save current state for all running agents, then exit.
  * Marks agents as suspended with stateBeforeShutdown set.
+ *
+ * NOTE: This is a synchronous DB-only operation — it does NOT send exit
+ * commands to agents via the proxy. Agent processes continue running in their
+ * tmux sessions until the proxy shuts down or they exit on their own.
+ * On restore, the orchestrator will reconnect to existing sessions or create
+ * new ones via resumeAgent().
  */
 export function shutdownAgents(ctx: LifecycleContext): number {
   const agents = ctx.db.listAgents().filter(isRunning);

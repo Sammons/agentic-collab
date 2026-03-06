@@ -14,9 +14,10 @@ export function sanitizeMessage(text: string): string {
   // Strip C1 control chars (0x7F-0x9F)
   // Strip ANSI/tmux escape sequences (\x1B[...)
   let cleaned = text
-    .replace(/\x1B\[[0-9;]*[A-Za-z]/g, '') // ANSI CSI sequences
+    .replace(/\x1B\[[0-9;]*[A-Za-z]/g, '')     // ANSI CSI sequences
     .replace(/\x1B\].*?(?:\x07|\x1B\\)/gs, '') // OSC sequences (BEL or ST terminator)
-    .replace(/\x1B[^[\]]/g, '')              // Other ESC sequences
+    .replace(/\x1B\][^\x07]*$/g, '')            // Truncated OSC (no terminator before end)
+    .replace(/\x1B[^[\]]/g, '')                 // Other ESC sequences
     .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, '');
 
   if (cleaned.length > MAX_MESSAGE_LENGTH) {
@@ -31,11 +32,20 @@ export function sanitizeMessage(text: string): string {
  */
 export function generateMessageId(): string {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-  const bytes = new Uint8Array(12);
-  crypto.getRandomValues(bytes);
+  // Rejection sampling: largest multiple of 62 that fits in a byte
+  const limit = 256 - (256 % chars.length); // 248
   let id = 'msg-';
-  for (const b of bytes) {
-    id += chars[b % chars.length];
+  let filled = 0;
+  while (filled < 12) {
+    const bytes = new Uint8Array(16); // over-allocate to reduce rounds
+    crypto.getRandomValues(bytes);
+    for (const b of bytes) {
+      if (b < limit) {
+        id += chars[b % chars.length];
+        filled++;
+        if (filled >= 12) break;
+      }
+    }
   }
   return id;
 }

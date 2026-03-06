@@ -286,10 +286,12 @@
 (function() {
   // ── Auth ──
   function getToken() {
-    let token = localStorage.getItem('orchestrator_token');
+    // Use sessionStorage instead of localStorage — token is cleared when tab closes,
+    // reducing exposure window for stolen credentials
+    let token = sessionStorage.getItem('orchestrator_token');
     if (!token) {
       token = prompt('Enter orchestrator token (leave empty for dev mode):');
-      if (token) localStorage.setItem('orchestrator_token', token);
+      if (token) sessionStorage.setItem('orchestrator_token', token);
     }
     return token || '';
   }
@@ -302,7 +304,7 @@
   }
 
   function handleAuthError() {
-    localStorage.removeItem('orchestrator_token');
+    sessionStorage.removeItem('orchestrator_token');
     showToast('Authentication failed — token cleared. Reload to re-enter.', 'error');
   }
 

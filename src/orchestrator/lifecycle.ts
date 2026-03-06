@@ -45,6 +45,9 @@ export async function spawnAgent(
 ): Promise<AgentRecord> {
   if (!opts.proxyId) throw new Error(`Agent "${opts.name}" has no proxy assigned`);
 
+  // Compute peers before lock to avoid DB query under lock
+  const peers = computePeers(ctx, opts.name);
+
   return ctx.locks.withLock(opts.name, async () => {
     // Re-read inside lock to prevent TOCTOU races
     const agent = ctx.db.getAgent(opts.name);
@@ -79,7 +82,7 @@ export async function spawnAgent(
     }
 
     // 2. Compose system prompt with persona
-    const systemPrompt = buildSystemPrompt(ctx, opts.name, opts.persona);
+    const systemPrompt = buildSystemPrompt(ctx, opts.name, peers, opts.persona);
 
     // 3. Build and paste spawn command
     const spawnCmd = adapter.buildSpawnCommand({
@@ -133,9 +136,9 @@ export async function spawnAgent(
       } catch { /* watchdog is best-effort */ }
     }, SPAWN_TIMEOUT_MS);
 
-    // 6. Transition to active (cancel watchdog first to prevent race)
-    await sleep(POST_SPAWN_ACTIVE_DELAY_MS);
+    // 6. Transition to active (cancel watchdog before sleep to prevent race)
     clearTimeout(watchdogTimer);
+    await sleep(POST_SPAWN_ACTIVE_DELAY_MS);
     current = ctx.db.updateAgentState(opts.name, 'active', current.version, {
       lastActivity: new Date().toISOString(),
       spawnCount: current.spawnCount + 1,
@@ -155,6 +158,8 @@ export async function resumeAgent(
   name: string,
   opts?: { task?: string },
 ): Promise<AgentRecord> {
+  const peers = computePeers(ctx, name);
+
   return ctx.locks.withLock(name, async () => {
     // Re-read inside lock
     const agent = ctx.db.getAgent(name);
@@ -175,7 +180,7 @@ export async function resumeAgent(
     });
 
     // 2. Compose system prompt
-    const systemPrompt = buildSystemPrompt(ctx, name, agent.persona);
+    const systemPrompt = buildSystemPrompt(ctx, name, peers, agent.persona);
 
     // 3. Build and paste resume command (or spawn if no session ID)
     let cmd: string;
@@ -266,8 +271,21 @@ export async function suspendAgent(
       pressEnter: true,
     });
 
-    // Wait for process to exit
+    // Wait for process to exit, then verify
     await sleep(EXIT_WAIT_MS);
+
+    const sessionGone = await ctx.proxyDispatch(proxyId, {
+      action: 'has_session',
+      sessionName: sessionName(agent),
+    });
+    const exited = !sessionGone.ok || sessionGone.data !== true;
+    if (!exited) {
+      console.warn(`[lifecycle] ${name}: session still alive after exit command, killing`);
+      await ctx.proxyDispatch(proxyId, {
+        action: 'kill_session',
+        sessionName: sessionName(agent),
+      });
+    }
 
     const updated = ctx.db.updateAgentState(name, 'suspended', agent.version, {
       lastActivity: new Date().toISOString(),
@@ -327,6 +345,7 @@ export async function reloadAgent(
   }
 
   // Immediate mode: execute now
+  const peers = computePeers(ctx, name);
   return ctx.locks.withLock(name, async () => {
     // Re-read inside lock
     const agent = ctx.db.getAgent(name);
@@ -365,7 +384,7 @@ export async function reloadAgent(
     });
 
     // 5. Build resume command
-    const systemPrompt = buildSystemPrompt(ctx, name, agent.persona);
+    const systemPrompt = buildSystemPrompt(ctx, name, peers, agent.persona);
 
     const resumeCmd = agent.currentSessionId
       ? adapter.buildResumeCommand({
@@ -412,8 +431,10 @@ export async function reloadAgent(
       });
     }
 
-    // 8. Update registry
-    const updated = ctx.db.updateAgentState(name, 'active', agent.version, {
+    // 8. Update registry (re-read for fresh version after sleeps)
+    const freshAgent = ctx.db.getAgent(name);
+    if (!freshAgent) throw new Error(`Agent "${name}" disappeared during reload`);
+    const updated = ctx.db.updateAgentState(name, 'active', freshAgent.version, {
       tmuxSession,
       reloadQueued: 0,
       reloadTask: null,
@@ -454,9 +475,9 @@ export async function interruptAgent(
       });
       await sleep(INTERRUPT_KEY_DELAY_MS);
     }
-  });
 
-  ctx.db.logEvent(name, 'interrupted');
+    ctx.db.logEvent(name, 'interrupted');
+  });
 }
 
 /**
@@ -479,9 +500,9 @@ export async function compactAgent(
       text: adapter.buildCompactCommand(),
       pressEnter: true,
     });
-  });
 
-  ctx.db.logEvent(name, 'compact_requested');
+    ctx.db.logEvent(name, 'compact_requested');
+  });
 }
 
 /**
@@ -540,16 +561,24 @@ export async function deliverToAgent(
 
 // ── Helpers ──
 
+/**
+ * Compute peers list. Call BEFORE acquiring a lock to avoid holding
+ * the lock while querying all agents.
+ */
+function computePeers(ctx: LifecycleContext, agentName: string): string[] {
+  return ctx.db.listAgents()
+    .filter((a) => a.name !== agentName && a.state !== 'void' && a.state !== 'failed')
+    .map((a) => a.name);
+}
+
 function buildSystemPrompt(
   ctx: LifecycleContext,
   agentName: string,
+  peers: string[],
   persona?: string | null,
 ): string {
   const personaPath = resolvePersonaPath(agentName, persona);
   const personaContent = personaPath ? loadPersona(personaPath) : null;
-  const peers = ctx.db.listAgents()
-    .filter((a) => a.name !== agentName && a.state !== 'void' && a.state !== 'failed')
-    .map((a) => a.name);
 
   return composeSystemPrompt({
     agentName,
