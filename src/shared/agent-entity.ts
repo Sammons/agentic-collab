@@ -20,7 +20,12 @@ export function requireProxy(agent: AgentRecord): string {
 
 /** Agent is in a running state (has or should have a tmux session). */
 export function isRunning(agent: AgentRecord): boolean {
-  return agent.state === 'active' || agent.state === 'idle' || agent.state === 'spawning';
+  return agent.state === 'active' || agent.state === 'idle' || agent.state === 'spawning' || agent.state === 'resuming';
+}
+
+/** Agent is in a transitional state (operation in progress). */
+export function isTransitioning(agent: AgentRecord): boolean {
+  return agent.state === 'spawning' || agent.state === 'resuming' || agent.state === 'suspending';
 }
 
 /** Agent can be suspended (active or idle). */

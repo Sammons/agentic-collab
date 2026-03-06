@@ -63,8 +63,9 @@ export async function restoreAllAgents(ctx: LifecycleContext): Promise<number> {
       continue;
     }
 
-    // Mode 2: Crash recovery — agent claims active/idle but no tmux session
-    if (agent.proxyId && (agent.state === 'active' || agent.state === 'idle')) {
+    // Mode 2: Crash recovery — agent in active/idle/transitional state but no tmux session
+    if (agent.proxyId && (agent.state === 'active' || agent.state === 'idle'
+        || agent.state === 'suspending' || agent.state === 'resuming')) {
       const hasSession = await checkTmuxSession(ctx, agent);
       if (!hasSession) {
         // Mark as failed first, then queue for restore
