@@ -154,6 +154,32 @@ describe('Engine Adapters', () => {
       const result = adapter.parseContextPercent('anything');
       assert.equal(result.contextPct, null);
     });
+
+    it('builds exit command', () => {
+      assert.equal(adapter.buildExitCommand(), '/exit');
+    });
+
+    it('builds compact command', () => {
+      assert.equal(adapter.buildCompactCommand(), '/compact');
+    });
+
+    it('returns interrupt keys', () => {
+      const keys = adapter.interruptKeys();
+      assert.ok(keys.length > 0);
+      assert.ok(keys.every(k => k === 'Escape'));
+    });
+
+    it('detects idle state from prompt', () => {
+      assert.equal(adapter.detectIdleState('output\n> '), 'waiting_for_input');
+    });
+
+    it('detects running state from spinner', () => {
+      assert.equal(adapter.detectIdleState('output\n⠋ Running...'), 'running_tool');
+    });
+
+    it('returns unknown for ambiguous output', () => {
+      assert.equal(adapter.detectIdleState('random text'), 'unknown');
+    });
   });
 
   describe('OpenCodeAdapter', () => {
@@ -181,6 +207,37 @@ describe('Engine Adapters', () => {
 
     it('returns null for rename', () => {
       assert.equal(adapter.buildRenameCommand('test'), null);
+    });
+
+    it('builds exit command', () => {
+      assert.equal(adapter.buildExitCommand(), '/exit');
+    });
+
+    it('builds compact command', () => {
+      assert.equal(adapter.buildCompactCommand(), '/compact');
+    });
+
+    it('returns interrupt keys', () => {
+      const keys = adapter.interruptKeys();
+      assert.ok(keys.length > 0);
+      assert.ok(keys.every(k => k === 'Escape'));
+    });
+
+    it('detects idle state from prompt', () => {
+      assert.equal(adapter.detectIdleState('output\n> '), 'waiting_for_input');
+    });
+
+    it('detects running state from spinner', () => {
+      assert.equal(adapter.detectIdleState('output\n⠋ Running...'), 'running_tool');
+    });
+
+    it('returns unknown for ambiguous output', () => {
+      assert.equal(adapter.detectIdleState('random text'), 'unknown');
+    });
+
+    it('returns null context percent', () => {
+      const result = adapter.parseContextPercent('anything');
+      assert.equal(result.contextPct, null);
     });
   });
 });

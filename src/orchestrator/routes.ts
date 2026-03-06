@@ -250,7 +250,8 @@ route('GET', '/api/proxies', async (_req, res, _match, ctx) => {
 route('GET', '/api/events/:agentName', async (req, res, match, ctx) => {
   const agentName = match.pathname.groups['agentName']!;
   const url = new URL(req.url!, `http://${req.headers.host}`);
-  const limit = parseInt(url.searchParams.get('limit') ?? '50', 10);
+  const rawLimit = parseInt(url.searchParams.get('limit') ?? '50', 10);
+  const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 10000) : 50;
   const events = ctx.db.getEvents(agentName, limit);
   json(res, 200, events);
 });
