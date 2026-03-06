@@ -280,34 +280,100 @@
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    padding: 16px;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
+    overflow: hidden;
   }
-  .create-form h3 { font-size: 13px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; }
-  .create-form input, .create-form select {
+  .create-form-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    cursor: pointer;
+    user-select: none;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .create-form-toggle:hover { color: var(--accent); }
+  .create-form-toggle .chevron { transition: transform 0.15s; }
+  .create-form.open .chevron { transform: rotate(90deg); }
+  .create-form-body {
+    display: none;
+    padding: 0 14px 14px;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .create-form.open .create-form-body { display: flex; }
+  .create-form input, .create-form select, .create-form textarea {
     padding: 8px 10px;
     border-radius: 6px;
     border: 1px solid var(--border);
     background: var(--bg);
     color: var(--text);
     font-size: 13px;
+    font-family: inherit;
     outline: none;
+    resize: vertical;
   }
-  .create-form input:focus, .create-form select:focus { border-color: var(--accent); }
-  .create-form button {
-    padding: 8px 16px;
+  .create-form input:focus, .create-form select:focus, .create-form textarea:focus { border-color: var(--accent); }
+  .create-form-actions { display: flex; gap: 6px; }
+  .create-form-actions button {
+    padding: 7px 14px;
     border-radius: 6px;
     border: none;
     background: var(--accent);
     color: #fff;
     font-weight: 600;
-    font-size: 13px;
+    font-size: 12px;
     cursor: pointer;
-    align-self: flex-start;
   }
-  .create-form button:hover { opacity: 0.9; }
+  .create-form-actions button:hover { opacity: 0.9; }
+  .create-form-actions button.secondary {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+  }
+  .create-form-actions button.secondary:hover { border-color: var(--accent); color: var(--accent); }
+
+  /* ── System message ── */
+  .msg.system-msg {
+    align-self: center;
+    max-width: 90%;
+    background: rgba(139,148,158,0.08);
+    border: 1px dashed var(--border);
+    color: var(--text-dim);
+    font-size: 12px;
+    font-style: italic;
+  }
+
+  /* ── Button loading state ── */
+  .agent-actions button.loading {
+    opacity: 0.5;
+    pointer-events: none;
+    position: relative;
+  }
+  .agent-actions button.loading::after {
+    content: '';
+    width: 10px; height: 10px;
+    border: 2px solid var(--text-dim);
+    border-top-color: transparent;
+    border-radius: 50%;
+    animation: btn-spin 0.6s linear infinite;
+    display: inline-block;
+    margin-left: 4px;
+    vertical-align: middle;
+  }
+  @keyframes btn-spin {
+    to { transform: rotate(360deg); }
+  }
+
+  /* ── Agent time ── */
+  .agent-time {
+    font-size: 11px;
+    color: var(--text-dim);
+    margin-left: auto;
+  }
 
   /* ── Agent failure reason ── */
   .agent-failure {
@@ -489,7 +555,13 @@
     if (idx >= 0) state.agents[idx] = agent;
     else state.agents.push(agent);
     renderAgents();
-    if (agent.name === state.selected) updateSendability();
+    if (agent.name === state.selected) {
+      updateSendability();
+      // Re-render thread header to reflect state change
+      const header = document.getElementById('threadHeader');
+      const headerBadge = `<span class="state-badge state-${agent.state}">${agent.state}</span>`;
+      header.innerHTML = `<span>${esc(agent.name)}</span>${headerBadge}`;
+    }
   }
 
   function addMessage(msg) {
@@ -512,24 +584,46 @@
   }
 
   // ── Render ──
+  let createFormOpen = false;
+
   function renderAgents() {
     const list = document.getElementById('agentList');
+
+    // Preserve create form input values before clearing
+    const prevName = document.getElementById('createName')?.value || '';
+    const prevEngine = document.getElementById('createEngine')?.value || 'claude';
+    const prevCwd = document.getElementById('createCwd')?.value || '/tmp';
+    const prevTask = document.getElementById('createTask')?.value || '';
+
     list.innerHTML = '';
 
-    // Create agent form (always at top)
+    // Collapsible create agent form
     const form = document.createElement('div');
-    form.className = 'create-form';
+    form.className = `create-form${createFormOpen ? ' open' : ''}`;
     form.innerHTML = `
-      <h3>Create Agent</h3>
-      <input type="text" id="createName" placeholder="Agent name" />
-      <select id="createEngine">
-        <option value="claude">claude</option>
-        <option value="codex">codex</option>
-        <option value="opencode">opencode</option>
-      </select>
-      <input type="text" id="createCwd" placeholder="Working directory" value="/tmp" />
-      <button onclick="document.dispatchEvent(new Event('create-agent'))">Create</button>
+      <div class="create-form-toggle">
+        <span>+ New Agent</span>
+        <span class="chevron">\u25B8</span>
+      </div>
+      <div class="create-form-body">
+        <input type="text" id="createName" placeholder="Agent name" value="${esc(prevName)}" />
+        <select id="createEngine">
+          <option value="claude"${prevEngine === 'claude' ? ' selected' : ''}>claude</option>
+          <option value="codex"${prevEngine === 'codex' ? ' selected' : ''}>codex</option>
+          <option value="opencode"${prevEngine === 'opencode' ? ' selected' : ''}>opencode</option>
+        </select>
+        <input type="text" id="createCwd" placeholder="Working directory" value="${esc(prevCwd)}" />
+        <textarea id="createTask" rows="2" placeholder="Initial task (optional)">${esc(prevTask)}</textarea>
+        <div class="create-form-actions">
+          <button onclick="document.dispatchEvent(new CustomEvent('create-agent', {detail:{spawn:true}}))">Create & Spawn</button>
+          <button class="secondary" onclick="document.dispatchEvent(new CustomEvent('create-agent', {detail:{spawn:false}}))">Create Only</button>
+        </div>
+      </div>
     `;
+    form.querySelector('.create-form-toggle').onclick = () => {
+      createFormOpen = !createFormOpen;
+      form.classList.toggle('open', createFormOpen);
+    };
     list.appendChild(form);
 
     for (const agent of state.agents) {
@@ -542,6 +636,8 @@
       const ctxStr = agent.lastContextPct != null ? `${agent.lastContextPct}%` : '--';
       const unreadCount = state.unread[agent.name] || 0;
       const unreadBadge = unreadCount > 0 ? `<span class="unread-badge">${unreadCount}</span>` : '';
+      const activityTime = agent.lastActivity || agent.createdAt;
+      const timeStr = timeAgo(activityTime);
 
       const activeIdle = agent.state === 'active' || agent.state === 'idle';
       const suspendedFailed = agent.state === 'suspended' || agent.state === 'failed';
@@ -553,6 +649,7 @@
       card.innerHTML = `
         <div class="agent-header">
           <span class="agent-name">${esc(agent.name)}${unreadBadge}</span>
+          <span class="agent-time">${timeStr}</span>
           <span class="state-badge ${stateClass}">${agent.state}</span>
         </div>
         <div class="agent-meta">
@@ -610,13 +707,19 @@
     messages.innerHTML = '';
     for (const msg of thread) {
       const div = document.createElement('div');
-      div.className = `msg ${msg.direction === 'to_agent' ? 'to-agent' : 'from-agent'}`;
-      const sender = msg.direction === 'to_agent' ? 'you' : state.selected;
+      const isSystem = msg.message && msg.message.startsWith('[system]');
+      if (isSystem) {
+        div.className = 'msg system-msg';
+      } else {
+        div.className = `msg ${msg.direction === 'to_agent' ? 'to-agent' : 'from-agent'}`;
+      }
+      const sender = isSystem ? 'system' : (msg.direction === 'to_agent' ? 'you' : state.selected);
       const time = new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       const topicStr = msg.topic ? ` (re: ${esc(msg.topic)})` : '';
+      const displayMsg = isSystem ? msg.message.replace(/^\[system\]\s*/, '') : msg.message;
       div.innerHTML = `
         <div class="msg-sender">${esc(sender)}${topicStr}</div>
-        <div>${esc(msg.message)}</div>
+        <div>${esc(displayMsg)}</div>
         <div class="msg-time">${time}</div>
       `;
       messages.appendChild(div);
@@ -730,8 +833,13 @@
     const btn = e.target.closest('button[data-action]');
     if (btn) {
       e.stopPropagation();
+      if (btn.classList.contains('loading')) return;
       const card = btn.closest('[data-agent]');
-      if (card) agentAction(card.dataset.agent, btn.dataset.action);
+      if (card) {
+        btn.classList.add('loading');
+        agentAction(card.dataset.agent, btn.dataset.action)
+          .finally(() => btn.classList.remove('loading'));
+      }
       return;
     }
     const card = e.target.closest('[data-agent]');
@@ -810,29 +918,65 @@
     return div.innerHTML;
   }
 
+  function timeAgo(isoStr) {
+    if (!isoStr) return '';
+    const diff = Math.max(0, Date.now() - new Date(isoStr).getTime());
+    const secs = Math.floor(diff / 1000);
+    if (secs < 60) return `${secs}s ago`;
+    const mins = Math.floor(secs / 60);
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    const days = Math.floor(hrs / 24);
+    return `${days}d ago`;
+  }
+
   // ── Create Agent ──
-  document.addEventListener('create-agent', async () => {
-    const name = document.getElementById('createName').value.trim();
-    const engine = document.getElementById('createEngine').value;
-    const cwd = document.getElementById('createCwd').value.trim();
+  document.addEventListener('create-agent', async (e) => {
+    const shouldSpawn = e.detail?.spawn ?? false;
+    const name = document.getElementById('createName')?.value.trim();
+    const engine = document.getElementById('createEngine')?.value;
+    const cwd = document.getElementById('createCwd')?.value.trim();
+    const task = document.getElementById('createTask')?.value.trim();
     if (!name) { showToast('Agent name is required', 'error'); return; }
     if (!cwd) { showToast('Working directory is required', 'error'); return; }
 
     try {
-      const res = await fetch('/api/agents', {
+      // Step 1: Create the agent
+      const createRes = await fetch('/api/agents', {
         method: 'POST',
         headers: authHeaders(),
         body: JSON.stringify({ name, engine, cwd }),
       });
-      if (res.status === 401) { handleAuthError(); return; }
-      const body = await res.json();
-      if (!res.ok) {
-        showToast(body.error || 'Create failed', 'error');
+      if (createRes.status === 401) { handleAuthError(); return; }
+      const createBody = await createRes.json();
+      if (!createRes.ok) {
+        showToast(createBody.error || 'Create failed', 'error');
+        return;
+      }
+
+      document.getElementById('createName').value = '';
+      document.getElementById('createTask').value = '';
+      createFormOpen = false;
+
+      if (shouldSpawn) {
+        // Step 2: Spawn with optional task
+        const spawnBody = {};
+        if (task) spawnBody.task = task;
+        const spawnRes = await fetch(`/api/agents/${encodeURIComponent(name)}/spawn`, {
+          method: 'POST',
+          headers: authHeaders(),
+          body: JSON.stringify(spawnBody),
+        });
+        if (spawnRes.ok) {
+          showToast(`Agent "${name}" created and spawning`, 'success');
+        } else {
+          showToast(`Agent created but spawn failed`, 'warning');
+        }
       } else {
         showToast(`Agent "${name}" created`, 'success');
-        document.getElementById('createName').value = '';
-        selectAgent(name);
       }
+      selectAgent(name);
     } catch (err) {
       showToast('Create failed — network error', 'error');
     }
@@ -840,6 +984,8 @@
 
   // ── Init ──
   connect();
+  // Refresh relative timestamps every 30s
+  setInterval(() => { if (state.agents.length > 0) renderAgents(); }, 30000);
 })();
 </script>
 </body>
