@@ -5,6 +5,8 @@
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { createWriteStream, existsSync, realpathSync } from 'node:fs';
+import { join } from 'node:path';
 import { generateToken } from '../shared/sanitize.ts';
 import * as tmux from './tmux.ts';
 import type { ProxyCommand, ProxyResponse } from '../shared/types.ts';
@@ -152,6 +154,56 @@ const server = createServer(async (req, res) => {
   // Health check
   if (req.method === 'GET' && req.url === '/health') {
     json(res, 200, { ok: true, proxyId: PROXY_ID, registered });
+    return;
+  }
+
+  // File upload endpoint — streams binary to disk
+  if (req.method === 'POST' && req.url?.startsWith('/upload')) {
+    const incomingToken = req.headers['x-proxy-token'];
+    if (typeof incomingToken !== 'string' || incomingToken.length !== token.length ||
+        !timingSafeEqual(Buffer.from(incomingToken), Buffer.from(token))) {
+      json(res, 401, { ok: false, error: 'Invalid token' });
+      return;
+    }
+
+    const url = new URL(req.url, `http://localhost`);
+    const cwd = url.searchParams.get('cwd');
+    const filename = url.searchParams.get('filename');
+
+    // Validate filename
+    if (!filename || filename.includes('/') || filename.includes('\\') ||
+        filename === '.' || filename === '..') {
+      json(res, 400, { ok: false, error: 'Invalid filename' });
+      return;
+    }
+
+    // Validate cwd
+    if (!cwd || !cwd.startsWith('/') || !existsSync(cwd)) {
+      json(res, 400, { ok: false, error: 'Invalid or missing cwd' });
+      return;
+    }
+
+    // Path traversal protection
+    const resolvedCwd = realpathSync(cwd);
+    const targetPath = join(resolvedCwd, filename);
+    if (!targetPath.startsWith(resolvedCwd + '/')) {
+      json(res, 400, { ok: false, error: 'Path traversal detected' });
+      return;
+    }
+
+    // Stream to disk — no buffering
+    const ws = createWriteStream(targetPath);
+    let size = 0;
+
+    req.on('data', (chunk: Buffer) => { size += chunk.length; });
+    req.pipe(ws);
+
+    ws.on('finish', () => {
+      json(res, 200, { ok: true, data: { path: targetPath, size } });
+    });
+    ws.on('error', (err) => {
+      json(res, 500, { ok: false, error: err.message });
+    });
     return;
   }
 

@@ -4,6 +4,7 @@
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { request as httpRequest } from 'node:http';
 import { timingSafeEqual } from 'node:crypto';
 import type { Database } from './database.ts';
 import type { WebSocketServer } from '../shared/websocket-server.ts';
@@ -185,6 +186,81 @@ route('POST', '/api/dashboard/send', async (req, res, _match, ctx) => {
   ctx.wss.broadcast(JSON.stringify({ type: 'queue_update', message: pending }));
 
   json(res, 202, { ok: true, msg, queueId: pending.id, status: 'pending' });
+});
+
+route('POST', '/api/dashboard/upload', async (req, res, _match, ctx) => {
+  const url = new URL(req.url!, `http://${req.headers.host}`);
+  const agentName = url.searchParams.get('agent');
+  const filename = url.searchParams.get('filename');
+
+  if (!agentName || !filename) {
+    return json(res, 400, { error: 'agent and filename query params required' });
+  }
+
+  // Defense-in-depth filename validation (proxy also validates)
+  if (filename.includes('/') || filename.includes('\\') ||
+      filename === '.' || filename === '..') {
+    return json(res, 400, { error: 'Invalid filename' });
+  }
+
+  const agent = ctx.db.getAgent(agentName);
+  if (!agent) return json(res, 404, { error: 'Agent not found' });
+  if (!agent.proxyId) return json(res, 400, { error: 'Agent has no proxy' });
+
+  const proxy = ctx.db.getProxy(agent.proxyId);
+  if (!proxy) return json(res, 500, { error: 'Proxy not found' });
+
+  // Stream file to proxy's /upload endpoint — no buffering
+  const proxyUrl = new URL('/upload', `http://${proxy.host}`);
+  proxyUrl.searchParams.set('cwd', agent.cwd);
+  proxyUrl.searchParams.set('filename', filename);
+
+  const proxyResult = await new Promise<{ ok: boolean; data?: Record<string, unknown>; error?: string }>((resolve) => {
+    const proxyReq = httpRequest(proxyUrl, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/octet-stream',
+        'x-proxy-token': proxy.token,
+      },
+    }, (proxyRes) => {
+      let body = '';
+      proxyRes.on('data', (chunk: Buffer) => { body += chunk; });
+      proxyRes.on('end', () => {
+        try { resolve(JSON.parse(body)); }
+        catch { resolve({ ok: false, error: 'Invalid proxy response' }); }
+      });
+    });
+
+    proxyReq.on('error', (err: Error) => resolve({ ok: false, error: err.message }));
+
+    // Pipe request body directly to proxy — zero buffering
+    req.pipe(proxyReq);
+  });
+
+  if (!proxyResult.ok) {
+    return json(res, 500, { error: proxyResult.error ?? 'File write failed' });
+  }
+
+  const writtenPath = (proxyResult.data?.path as string) ?? `${agent.cwd}/${filename}`;
+  const fileSize = (proxyResult.data?.size as number) ?? 0;
+
+  // Enqueue agent notification through existing pipeline
+  const agentMessage = `I uploaded ${writtenPath}`;
+  const envelope = `[from: dashboard, reply with /collaboration reply]: '${sanitizeMessage(agentMessage)}'`;
+  const displayMessage = `Uploaded ${filename} (${formatBytes(fileSize)})`;
+
+  const msg = ctx.db.addDashboardMessage(agentName, 'to_agent', displayMessage, 'file-upload');
+  const pending = ctx.db.enqueueMessage({
+    sourceAgent: null,
+    targetAgent: agentName,
+    envelope,
+  });
+  ctx.db.linkDashboardMessageToQueue(msg.id, pending.id);
+
+  ctx.wss.broadcast(JSON.stringify({ type: 'message', msg }));
+  ctx.wss.broadcast(JSON.stringify({ type: 'queue_update', message: pending }));
+
+  json(res, 202, { ok: true, msg, queueId: pending.id, path: writtenPath, size: fileSize });
 });
 
 route('POST', '/api/dashboard/reply', async (req, res, _match, ctx) => {
@@ -527,6 +603,12 @@ async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> 
   } catch {
     throw new Error('Invalid JSON body');
   }
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes}B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
 }
 
 function broadcastAgentUpdate(ctx: RouteContext, agentName: string): void {

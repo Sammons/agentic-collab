@@ -223,6 +223,39 @@
   .thread-input button:disabled { opacity: 0.5; cursor: not-allowed; }
   .thread-input input:disabled { opacity: 0.5; cursor: not-allowed; }
 
+  /* ── Upload Button ── */
+  .upload-btn {
+    padding: 8px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text-dim);
+    font-size: 16px;
+    cursor: pointer;
+    transition: all 0.15s;
+    line-height: 1;
+  }
+  .upload-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .upload-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .upload-btn.uploading {
+    opacity: 0.5;
+    pointer-events: none;
+  }
+
+  .msg.file-upload .file-info {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+  }
+  .msg.file-upload .file-icon { font-size: 16px; }
+
+  .thread-messages.drag-over {
+    outline: 2px dashed var(--accent);
+    outline-offset: -4px;
+    background: rgba(88,166,255,0.05);
+  }
+
   /* ── Confirm Dialog ── */
   .confirm-overlay {
     position: fixed;
@@ -491,7 +524,9 @@
       <div class="thread-empty">Select an agent to view messages</div>
     </div>
     <div class="thread-input" id="threadInput" style="display:none">
+      <input type="file" id="fileInput" style="display:none" multiple />
       <input type="text" id="msgInput" placeholder="Type a message..." />
+      <button class="upload-btn" id="uploadBtn" disabled title="Upload files">&#128206;</button>
       <button id="sendBtn" disabled>Send</button>
     </div>
   </div>
@@ -802,20 +837,31 @@
     for (const msg of thread) {
       const div = document.createElement('div');
       const isSystem = msg.message && msg.message.startsWith('[system]');
+      const isUpload = msg.topic === 'file-upload' && msg.direction === 'to_agent';
       if (isSystem) {
         div.className = 'msg system-msg';
+      } else if (isUpload) {
+        div.className = 'msg to-agent file-upload';
       } else {
         div.className = `msg ${msg.direction === 'to_agent' ? 'to-agent' : 'from-agent'}`;
       }
       const sender = isSystem ? 'system' : (msg.direction === 'to_agent' ? 'you' : state.selected);
       const time = new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      const topicStr = msg.topic ? ` (re: ${esc(msg.topic)})` : '';
+      const topicStr = (!isUpload && msg.topic) ? ` (re: ${esc(msg.topic)})` : '';
       const displayMsg = isSystem ? msg.message.replace(/^\[system\]\s*/, '') : msg.message;
-      div.innerHTML = `
-        <div class="msg-sender">${esc(sender)}${topicStr}</div>
-        <div>${esc(displayMsg)}</div>
-        <div class="msg-time">${time}</div>
-      `;
+      if (isUpload) {
+        div.innerHTML = `
+          <div class="msg-sender">${esc(sender)}</div>
+          <div class="file-info"><span class="file-icon">&#128206;</span> ${esc(displayMsg)}</div>
+          <div class="msg-time">${time}</div>
+        `;
+      } else {
+        div.innerHTML = `
+          <div class="msg-sender">${esc(sender)}${topicStr}</div>
+          <div>${esc(displayMsg)}</div>
+          <div class="msg-time">${time}</div>
+        `;
+      }
       messages.appendChild(div);
     }
     messages.scrollTop = messages.scrollHeight;
@@ -847,10 +893,12 @@
   function updateSendability() {
     const msgInput = document.getElementById('msgInput');
     const sendBtn = document.getElementById('sendBtn');
+    const uploadBtn = document.getElementById('uploadBtn');
     if (!state.selected) return;
     const agent = state.agents.find(a => a.name === state.selected);
     const blocked = agent && CANT_RECEIVE.has(agent.state);
     sendBtn.disabled = blocked;
+    uploadBtn.disabled = blocked;
     msgInput.disabled = blocked;
     msgInput.placeholder = blocked
       ? `Agent is ${agent ? agent.state : 'unavailable'} — cannot receive messages`
@@ -1003,6 +1051,68 @@
   document.getElementById('msgInput').onkeydown = (e) => {
     if (e.key === 'Enter') sendMessage();
   };
+
+  // ── File Upload ──
+
+  async function uploadFile(file) {
+    const url = `/api/dashboard/upload?agent=${encodeURIComponent(state.selected)}&filename=${encodeURIComponent(file.name)}`;
+    const headers = { 'content-type': 'application/octet-stream' };
+    const t = getToken();
+    if (t) headers['authorization'] = `Bearer ${t}`;
+
+    const res = await fetch(url, { method: 'POST', headers, body: file });
+    if (res.status === 401) { handleAuthError(); throw new Error('auth'); }
+    const body = await res.json();
+    return { file: file.name, ok: res.ok, ...body };
+  }
+
+  document.getElementById('uploadBtn').onclick = () => {
+    document.getElementById('fileInput').click();
+  };
+
+  document.getElementById('fileInput').onchange = async (e) => {
+    const files = Array.from(e.target.files);
+    if (!files.length || !state.selected) return;
+
+    const uploadBtn = document.getElementById('uploadBtn');
+    uploadBtn.classList.add('uploading');
+
+    try {
+      const results = await Promise.allSettled(files.map(uploadFile));
+      const succeeded = results.filter(r => r.status === 'fulfilled' && r.value.ok).length;
+      const failed = results.length - succeeded;
+
+      if (failed === 0) {
+        showToast(`Uploaded ${succeeded} file${succeeded > 1 ? 's' : ''}`, 'success');
+      } else {
+        showToast(`${succeeded} uploaded, ${failed} failed`, failed === results.length ? 'error' : 'warning');
+      }
+    } catch (err) {
+      if (err.message !== 'auth') showToast('Upload failed', 'error');
+    } finally {
+      uploadBtn.classList.remove('uploading');
+      e.target.value = '';
+    }
+  };
+
+  // Drag-and-drop on thread messages
+  const threadMsgs = document.getElementById('threadMessages');
+  threadMsgs.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    threadMsgs.classList.add('drag-over');
+  });
+  threadMsgs.addEventListener('dragleave', () => {
+    threadMsgs.classList.remove('drag-over');
+  });
+  threadMsgs.addEventListener('drop', (e) => {
+    e.preventDefault();
+    threadMsgs.classList.remove('drag-over');
+    if (e.dataTransfer.files.length > 0 && state.selected) {
+      const fileInput = document.getElementById('fileInput');
+      fileInput.files = e.dataTransfer.files;
+      fileInput.dispatchEvent(new Event('change'));
+    }
+  });
 
   // ── Helpers ──
   function esc(s) {

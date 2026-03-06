@@ -5,8 +5,8 @@
 
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { createServer, type Server } from 'node:http';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http';
+import { mkdtempSync, rmSync, readFileSync, existsSync, createWriteStream, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { Database } from './database.ts';
@@ -307,5 +307,211 @@ describe('Integration: full lifecycle via HTTP', () => {
     const listAfter = await api('GET', '/api/proxies');
     const proxiesAfter = listAfter.data as Record<string, unknown>[];
     assert.ok(!proxiesAfter.some(p => p.proxyId === 'int-proxy-2'));
+  });
+});
+
+describe('Integration: file upload via streaming', () => {
+  let orchestrator: Server;
+  let mockProxy: Server;
+  let db: Database;
+  let wss: WebSocketServer;
+  let orchPort: number;
+  let proxyPort: number;
+  let tmpDir: string;
+  const PROXY_TOKEN = 'upload-proxy-tok';
+  const SECRET = 'upload-test-secret';
+
+  before(async () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'upload-int-test-'));
+    db = new Database(join(tmpDir, 'test.db'));
+    wss = new WebSocketServer();
+
+    // ── Mock proxy that handles /upload ──
+    mockProxy = createServer((req: IncomingMessage, res: ServerResponse) => {
+      if (req.method === 'POST' && req.url?.startsWith('/upload')) {
+        const url = new URL(req.url, 'http://localhost');
+        const cwd = url.searchParams.get('cwd');
+        const filename = url.searchParams.get('filename');
+
+        if (!filename || filename.includes('/') || filename.includes('\\') ||
+            filename === '.' || filename === '..') {
+          res.writeHead(400, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, error: 'Invalid filename' }));
+          return;
+        }
+
+        if (!cwd || !existsSync(cwd)) {
+          res.writeHead(400, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, error: 'Invalid cwd' }));
+          return;
+        }
+
+        const resolvedCwd = realpathSync(cwd);
+        const targetPath = join(resolvedCwd, filename);
+        const ws = createWriteStream(targetPath);
+        let size = 0;
+        req.on('data', (chunk: Buffer) => { size += chunk.length; });
+        req.pipe(ws);
+        ws.on('finish', () => {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ ok: true, data: { path: targetPath, size } }));
+        });
+        ws.on('error', (err) => {
+          res.writeHead(500, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, error: err.message }));
+        });
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+
+    await new Promise<void>((resolve) => {
+      mockProxy.listen(0, () => {
+        const addr = mockProxy.address();
+        proxyPort = typeof addr === 'object' && addr ? addr.port : 0;
+        resolve();
+      });
+    });
+
+    // Register proxy with the DB using the actual mock proxy port
+    db.registerProxy('upload-proxy', PROXY_TOKEN, `localhost:${proxyPort}`);
+
+    const ctx: RouteContext = {
+      db,
+      wss,
+      locks: new LockManager(db.rawDb),
+      proxyDispatch: async () => ({ ok: true }), // Not used for upload
+      getDashboardHtml: () => '<html></html>',
+      orchestratorHost: 'http://localhost:3000',
+      orchestratorSecret: SECRET,
+    };
+
+    const router = createRouter(ctx);
+    orchestrator = createServer(async (req, res) => {
+      await router(req, res);
+    });
+
+    await new Promise<void>((resolve) => {
+      orchestrator.listen(0, () => {
+        const addr = orchestrator.address();
+        orchPort = typeof addr === 'object' && addr ? addr.port : 0;
+        resolve();
+      });
+    });
+
+    // Create an agent with cwd = tmpDir and assign the mock proxy
+    db.createAgent({ name: 'upload-agent', engine: 'claude', cwd: tmpDir });
+    const agent = db.getAgent('upload-agent')!;
+    db.updateAgentState('upload-agent', 'active', agent.version, { proxyId: 'upload-proxy' });
+  });
+
+  after(() => {
+    wss.close();
+    orchestrator.close();
+    mockProxy.close();
+    db.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  function uploadFile(agent: string, filename: string, data: string | Buffer): Promise<{ status: number; data: Record<string, unknown> }> {
+    return fetch(
+      `http://localhost:${orchPort}/api/dashboard/upload?agent=${encodeURIComponent(agent)}&filename=${encodeURIComponent(filename)}`,
+      {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/octet-stream',
+          'authorization': `Bearer ${SECRET}`,
+        },
+        body: data,
+      },
+    ).then(async (resp) => ({
+      status: resp.status,
+      data: await resp.json() as Record<string, unknown>,
+    }));
+  }
+
+  it('uploads a file to agent cwd and enqueues message', async () => {
+    const content = 'Hello from upload test!';
+    const res = await uploadFile('upload-agent', 'hello.txt', content);
+
+    assert.equal(res.status, 202);
+    assert.equal(res.data.ok, true);
+    assert.ok((res.data.path as string).endsWith('/hello.txt'));
+    assert.equal(res.data.size, Buffer.byteLength(content));
+    assert.ok(res.data.queueId, 'should have a queueId');
+
+    // Verify file was written to disk
+    const filePath = join(tmpDir, 'hello.txt');
+    assert.ok(existsSync(filePath), 'File should exist on disk');
+    assert.equal(readFileSync(filePath, 'utf-8'), content);
+
+    // Verify message was enqueued
+    const msg = res.data.msg as Record<string, unknown>;
+    assert.equal(msg.direction, 'to_agent');
+    assert.ok((msg.message as string).includes('hello.txt'));
+    assert.equal(msg.topic, 'file-upload');
+  });
+
+  it('uploads binary data correctly', async () => {
+    const data = Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]); // PNG header
+    const res = await uploadFile('upload-agent', 'image.png', data);
+
+    assert.equal(res.status, 202);
+    const written = readFileSync(join(tmpDir, 'image.png'));
+    assert.deepEqual(written, data);
+  });
+
+  it('rejects missing agent param', async () => {
+    const res = await fetch(
+      `http://localhost:${orchPort}/api/dashboard/upload?filename=test.txt`,
+      {
+        method: 'POST',
+        headers: { 'authorization': `Bearer ${SECRET}`, 'content-type': 'application/octet-stream' },
+        body: 'data',
+      },
+    );
+    assert.equal(res.status, 400);
+  });
+
+  it('rejects missing filename param', async () => {
+    const res = await fetch(
+      `http://localhost:${orchPort}/api/dashboard/upload?agent=upload-agent`,
+      {
+        method: 'POST',
+        headers: { 'authorization': `Bearer ${SECRET}`, 'content-type': 'application/octet-stream' },
+        body: 'data',
+      },
+    );
+    assert.equal(res.status, 400);
+  });
+
+  it('rejects nonexistent agent', async () => {
+    const res = await uploadFile('ghost-agent', 'test.txt', 'data');
+    assert.equal(res.status, 404);
+  });
+
+  it('rejects invalid filename', async () => {
+    const res = await uploadFile('upload-agent', '../etc/passwd', 'evil');
+    assert.equal(res.status, 400);
+  });
+
+  it('rejects agent with no proxy', async () => {
+    db.createAgent({ name: 'no-proxy-agent', engine: 'codex', cwd: '/tmp' });
+    const res = await uploadFile('no-proxy-agent', 'test.txt', 'data');
+    assert.equal(res.status, 400);
+    assert.ok((res.data.error as string).includes('no proxy'));
+  });
+
+  it('rejects unauthenticated request', async () => {
+    const res = await fetch(
+      `http://localhost:${orchPort}/api/dashboard/upload?agent=upload-agent&filename=test.txt`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/octet-stream' },
+        body: 'data',
+      },
+    );
+    assert.equal(res.status, 401);
   });
 });

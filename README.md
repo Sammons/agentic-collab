@@ -6,9 +6,9 @@ Zero-dependency orchestrator for managing AI coding agents (Claude, Codex, OpenC
 
 ## Dashboard
 
-Real-time dashboard for monitoring and controlling agents:
+Real-time dashboard for monitoring and controlling agents. Upload files, send messages, and manage lifecycle — all from the browser.
 
-![Dashboard — agent cards, message thread, action buttons](screenshots/dashboard.png)
+![Dashboard — agent cards, file uploads, message thread](screenshots/dashboard.png)
 
 Create agents with a task and spawn them in one click:
 
@@ -104,6 +104,22 @@ curl -X POST http://localhost:3000/api/agents/my-agent/spawn \
 
 Or use the dashboard at `http://localhost:3000/dashboard` for a visual interface.
 
+## File Upload
+
+Upload files to an agent's working directory from the dashboard or API. Files are streamed end-to-end — no buffering, no size limit in practice (LAN-speed transfers of 500MB+ work fine).
+
+**Dashboard**: Click the 📎 button or drag-and-drop files onto the message thread. Multiple files upload in parallel.
+
+**API**:
+```bash
+curl -X POST "http://localhost:3000/api/dashboard/upload?agent=my-agent&filename=config.json" \
+  -H 'Authorization: Bearer your-secret-here' \
+  -H 'Content-Type: application/octet-stream' \
+  --data-binary @config.json
+```
+
+After upload, the agent receives: `I uploaded /path/to/cwd/config.json` via the message delivery pipeline.
+
 ## Environment variables
 
 ### Orchestrator
@@ -157,6 +173,7 @@ All `POST`/`DELETE` endpoints require `Authorization: Bearer <secret>` when `ORC
 |--------|------|-------------|
 | `POST` | `/api/agents/send` | Agent-to-agent message (queued) |
 | `POST` | `/api/dashboard/send` | Dashboard-to-agent message (queued) |
+| `POST` | `/api/dashboard/upload?agent=&filename=` | Stream file to agent's cwd (binary body) |
 | `POST` | `/api/dashboard/reply` | Record agent reply to dashboard |
 | `GET` | `/api/dashboard/threads` | List conversation threads |
 | `GET` | `/api/queue` | List pending messages |
@@ -201,7 +218,7 @@ Supported engines: `claude`, `codex`, `opencode`.
 node --test 'src/**/*.test.ts'
 ```
 
-220 tests across 44 suites covering lifecycle operations, database persistence, networking, locking, health monitoring, adapters, message delivery, crash recovery, integration tests, and input validation.
+244 tests across 46 suites covering lifecycle operations, database persistence, networking, locking, health monitoring, adapters, message delivery, crash recovery, file upload, integration tests, and input validation.
 
 ## Project structure
 
