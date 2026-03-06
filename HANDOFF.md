@@ -231,10 +231,23 @@ Each adapter implements: `buildCommand()`, `parseIdleState()`, `parseContextUsag
 5. **Dashboard improvements** — Search/filter agents, mobile responsive layout with back navigation, persona tab shows structured frontmatter table, 6 screenshots (desktop + mobile).
 6. **README update** — Persona docs, desktop/mobile screenshot table, updated env vars.
 
+## Onboarding Pattern
+
+The recommended way to use agentic-collab is to start with a **team lead agent** that bootstraps the rest:
+
+1. `docker compose up -d` — starts orchestrator, creates shared secret
+2. `node src/proxy/main.ts` — auto-discovers orchestrator, no config needed
+3. Copy `persistent-agents/team-lead.example.md` → `persistent-agents/team-lead.md`, edit for your project
+4. Spawn the team lead with a high-level objective
+5. The team lead creates specialist agents, assigns tasks, coordinates
+
+See `persistent-agents/team-lead.example.md` for the full template.
+
 ## What Could Be Built Next
 
 1. **MCP config support** — `mcp` field in frontmatter → `--mcp-config <path>` for Claude adapter
-2. **Dashboard dark/light toggle** — Currently dark-only; light mode for accessibility
+2. **Dashboard empty state** — Getting-started guide when no agents/proxies exist
+3. **Dashboard dark/light toggle** — Currently dark-only; light mode for accessibility
 
 ---
 
