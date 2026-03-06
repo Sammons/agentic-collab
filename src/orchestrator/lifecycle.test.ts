@@ -108,6 +108,94 @@ describe('Lifecycle', () => {
     });
   });
 
+  describe('spawnAgent — paste command verification', () => {
+    it('claude spawn includes --model, --effort, and -p flags', async () => {
+      db.createAgent({ name: 'cmd-claude', engine: 'claude', cwd: '/tmp', proxyId: 'p1' });
+      proxyCommands = [];
+
+      await spawnAgent(ctx, {
+        name: 'cmd-claude',
+        engine: 'claude',
+        model: 'opus',
+        thinking: 'high',
+        task: 'fix the bug',
+        cwd: '/tmp',
+        proxyId: 'p1',
+      });
+
+      const paste = proxyCommands.find(c => c.action === 'paste') as Extract<ProxyCommand, { action: 'paste' }>;
+      assert.ok(paste, 'should have paste command');
+      assert.ok(paste.text.includes('claude'), 'should start with claude');
+      assert.ok(paste.text.includes('--model opus'), 'should include --model');
+      assert.ok(paste.text.includes('--effort high'), 'should include --effort');
+      assert.ok(paste.text.includes('fix the bug'), 'should include task');
+      assert.ok(paste.text.includes('--dangerously-skip-permissions'), 'should include skip-permissions');
+    });
+
+    it('codex spawn includes --model and positional task', async () => {
+      db.createAgent({ name: 'cmd-codex', engine: 'codex', cwd: '/tmp', proxyId: 'p1' });
+      proxyCommands = [];
+
+      await spawnAgent(ctx, {
+        name: 'cmd-codex',
+        engine: 'codex',
+        model: 'o3',
+        task: 'refactor auth',
+        cwd: '/tmp',
+        proxyId: 'p1',
+      });
+
+      const paste = proxyCommands.find(c => c.action === 'paste') as Extract<ProxyCommand, { action: 'paste' }>;
+      assert.ok(paste, 'should have paste command');
+      assert.ok(paste.text.includes('codex'), 'should start with codex');
+      assert.ok(paste.text.includes('--model o3'), 'should include --model');
+      assert.ok(paste.text.includes('refactor auth'), 'should include task');
+      assert.ok(paste.text.includes('--dangerously-bypass-approvals-and-sandbox'), 'should include codex permissions flag');
+    });
+
+    it('opencode spawn includes -m and run subcommand', async () => {
+      db.createAgent({ name: 'cmd-opencode', engine: 'opencode', cwd: '/tmp', proxyId: 'p1' });
+      proxyCommands = [];
+
+      await spawnAgent(ctx, {
+        name: 'cmd-opencode',
+        engine: 'opencode',
+        model: 'claude-3.5',
+        thinking: 'high',
+        task: 'write tests',
+        cwd: '/tmp',
+        proxyId: 'p1',
+      });
+
+      const paste = proxyCommands.find(c => c.action === 'paste') as Extract<ProxyCommand, { action: 'paste' }>;
+      assert.ok(paste, 'should have paste command');
+      assert.ok(paste.text.includes('opencode run'), 'should use run subcommand');
+      assert.ok(paste.text.includes('-m claude-3.5'), 'should include -m flag');
+      assert.ok(paste.text.includes('--variant high'), 'should include --variant for thinking');
+      assert.ok(paste.text.includes('write tests'), 'should include task');
+    });
+
+    it('claude spawn omits optional flags when not provided', async () => {
+      db.createAgent({ name: 'cmd-minimal', engine: 'claude', cwd: '/tmp', proxyId: 'p1' });
+      proxyCommands = [];
+
+      await spawnAgent(ctx, {
+        name: 'cmd-minimal',
+        engine: 'claude',
+        cwd: '/tmp',
+        proxyId: 'p1',
+      });
+
+      const paste = proxyCommands.find(c => c.action === 'paste') as Extract<ProxyCommand, { action: 'paste' }>;
+      assert.ok(paste, 'should have paste command');
+      assert.ok(!paste.text.includes('--model'), 'should not include --model');
+      assert.ok(!paste.text.includes('--effort'), 'should not include --effort');
+      // System prompt is always present (--append-system-prompt), but task flag (-p 'xxx') should not
+      assert.ok(paste.text.includes('--append-system-prompt'), 'should include system prompt');
+      assert.ok(paste.text.startsWith('claude --dangerously-skip-permissions --append-system-prompt'), 'should be claude with skip-permissions and system prompt only');
+    });
+  });
+
   describe('suspendAgent', () => {
     it('suspends an active agent', async () => {
       db.createAgent({ name: 'suspend-test', engine: 'claude', cwd: '/tmp', proxyId: 'p1' });
