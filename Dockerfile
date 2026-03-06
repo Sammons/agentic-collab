@@ -9,8 +9,8 @@ WORKDIR /app
 COPY src/ src/
 COPY package.json .
 
-# Data directory for SQLite
-RUN mkdir -p /data/.agentic-collab
+# Data directory for SQLite — writable by any UID (container runs as host user via docker-compose user:)
+RUN mkdir -p /data/.agentic-collab && chmod 777 /data/.agentic-collab
 
 ENV PORT=3000
 ENV DB_PATH=/data/.agentic-collab/orchestrator.db

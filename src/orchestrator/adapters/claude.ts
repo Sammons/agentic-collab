@@ -29,8 +29,9 @@ export class ClaudeAdapter implements EngineAdapter {
     }
 
     if (opts.task) {
-      // -p for initial prompt in interactive mode (NOT --print which exits after)
-      parts.push('-p', shellQuote(opts.task));
+      // Positional argument for initial prompt in interactive mode.
+      // Do NOT use -p/--print — that exits after the first response.
+      parts.push(shellQuote(opts.task));
     }
 
     return parts.join(' ');
@@ -49,13 +50,23 @@ export class ClaudeAdapter implements EngineAdapter {
   detectIdleState(paneOutput: string): IdleState {
     const lines = paneOutput.split('\n');
 
-    // Search bottom-up through captured lines
+    // Search bottom-up through captured lines, skipping the status bar
     for (let i = lines.length - 1; i >= 0; i--) {
       const line = lines[i]!.trim();
       if (!line) continue;
 
-      // Claude Code shows ">" prompt when waiting for input
-      if (/^>\s*$/.test(line)) return 'waiting_for_input';
+      // Skip status bar lines (token counts, version info, permission mode, /ide hints)
+      if (/\d+\s*tokens/.test(line)) continue;
+      if (/current:.*latest:/.test(line)) continue;
+      if (/bypass permissions/.test(line)) continue;
+      if (/\/ide\s/.test(line)) continue;
+
+      // Claude Code shows "❯" (U+276F) or ">" prompt when waiting for input.
+      // The prompt line may contain only the prompt character and whitespace.
+      if (/^[\u276f>]\s*$/.test(line)) return 'waiting_for_input';
+
+      // Horizontal rule separators (─ U+2500) around the input area
+      if (/^[\u2500\u25aa\s]+$/.test(line)) continue;
 
       // Claude shows tool execution indicators
       if (/^\s*(Read|Write|Edit|Bash|Glob|Grep|Agent|WebFetch|WebSearch)\s/.test(line)) return 'running_tool';
@@ -65,14 +76,11 @@ export class ClaudeAdapter implements EngineAdapter {
       if (/^\.{2,}$/.test(line)) return 'streaming';
       if (/thinking/i.test(line) && /\.\.\./i.test(line)) return 'streaming';
 
-      // If we see a prompt-like pattern, it's waiting
-      if (/claude.*>\s*$/.test(line)) return 'waiting_for_input';
+      // If we see a prompt-like pattern (e.g. "claude>"), it's waiting
+      if (/claude.*[>\u276f]\s*$/.test(line)) return 'waiting_for_input';
 
-      // If we see content that looks like generated text, streaming
-      if (i === lines.length - 1 && line.length > 0) {
-        // Last non-empty line without a prompt — could be streaming or unknown
-        break;
-      }
+      // If we hit actual content, it's not idle
+      break;
     }
 
     return 'unknown';
@@ -81,13 +89,25 @@ export class ClaudeAdapter implements EngineAdapter {
   parseContextPercent(paneOutput: string): ContextResult {
     const lines = paneOutput.split('\n');
 
-    // Search bottom-up for status bar with context percentage
-    // Claude Code shows "XX% context used" in status bar
+    // Search bottom-up for status bar indicators.
+    // Claude Code v2.x shows token count ("NNNNN tokens") in the status bar.
+    // Older versions may show "XX% context used".
     for (let i = lines.length - 1; i >= Math.max(0, lines.length - 20); i--) {
       const line = lines[i] ?? '';
-      const match = line.match(/(\d+)%\s*context/i);
-      if (match) {
-        return { contextPct: parseInt(match[1]!, 10), confident: true };
+
+      // Percentage format: "XX% context"
+      const pctMatch = line.match(/(\d+)%\s*context/i);
+      if (pctMatch) {
+        return { contextPct: parseInt(pctMatch[1]!, 10), confident: true };
+      }
+
+      // Token count format: "NNNNN tokens" — estimate percentage from 200k context window
+      const tokenMatch = line.match(/(\d[\d,]*)\s*tokens/);
+      if (tokenMatch) {
+        const tokens = parseInt(tokenMatch[1]!.replace(/,/g, ''), 10);
+        const maxTokens = 200_000; // Claude's context window
+        const pct = Math.min(100, Math.round((tokens / maxTokens) * 100));
+        return { contextPct: pct, confident: true };
       }
     }
 
