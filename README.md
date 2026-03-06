@@ -185,7 +185,7 @@ Supported engines: `claude`, `codex`, `opencode`.
 node --test 'src/**/*.test.ts'
 ```
 
-180 tests across 37 suites covering lifecycle operations, database persistence, networking, locking, health monitoring, adapters, message delivery, and crash recovery.
+220 tests across 44 suites covering lifecycle operations, database persistence, networking, locking, health monitoring, adapters, message delivery, crash recovery, integration tests, and input validation.
 
 ## Project structure
 

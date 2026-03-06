@@ -25,7 +25,7 @@ export type SpawnOptions = {
 
 export type ResumeOptions = {
   name: string;
-  sessionId: string;
+  sessionId?: string;
   cwd: string;
   task?: string;
   appendSystemPrompt?: string;
