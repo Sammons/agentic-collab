@@ -71,7 +71,9 @@ export function startWatchdog(
             await ctx.proxyDispatch(proxyId, {
               action: 'kill_session',
               sessionName: tmuxSession,
-            }).catch(() => {});
+            }).catch((err) => {
+              console.warn(`[watchdog] Best-effort kill_session failed for ${name}:`, (err as Error).message);
+            });
           }
         }
       });
