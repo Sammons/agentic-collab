@@ -15,6 +15,8 @@ export type AgentRecord = {
   thinking: string | null; // 'low' | 'medium' | 'high' | null
   cwd: string;
   persona: string | null;
+  permissions: string | null; // 'skip' | null
+  proxyHost: string | null; // hostname for proxy pinning
   state: AgentState;
   stateBeforeShutdown: string | null;
   currentSessionId: string | null;
@@ -28,16 +30,6 @@ export type AgentRecord = {
   failureReason: string | null;
   version: number;
   spawnCount: number;
-  createdAt: string;
-};
-
-// ── Workstream ──
-
-export type WorkstreamRecord = {
-  name: string;
-  goal: string;
-  plan: string | null;
-  status: string;
   createdAt: string;
 };
 

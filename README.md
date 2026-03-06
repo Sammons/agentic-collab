@@ -6,17 +6,13 @@ Zero-dependency orchestrator for managing AI coding agents (Claude, Codex, OpenC
 
 ## Dashboard
 
-Real-time dashboard for monitoring and controlling agents. Upload files, send messages, and manage lifecycle — all from the browser.
+Real-time dashboard for monitoring and controlling agents. Search/filter, send messages, upload files, view persona config — all from the browser. Mobile responsive.
 
-![Dashboard — agent cards, file uploads, message thread](screenshots/dashboard.png)
-
-Create agents with a task and spawn them in one click:
-
-![Create agent form with engine picker and task input](screenshots/create-agent.png)
-
-Token auth modal for production deployments (dev mode skips auth):
-
-![Auth modal](screenshots/auth-modal.png)
+| Desktop | Mobile |
+|---------|--------|
+| ![Desktop — agent list, persona view](docs/screenshots/desktop-persona.png) | ![Mobile — agent list](docs/screenshots/mobile-agents.png) |
+| ![Desktop — message thread](docs/screenshots/desktop-messages.png) | ![Mobile — persona view](docs/screenshots/mobile-persona.png) |
+| ![Desktop — search filter](docs/screenshots/desktop-filter.png) | ![Mobile — messages](docs/screenshots/mobile-messages.png) |
 
 ## Architecture
 
@@ -120,6 +116,52 @@ curl -X POST "http://localhost:3000/api/dashboard/upload?agent=my-agent&filename
 
 After upload, the agent receives: `I uploaded /path/to/cwd/config.json` via the message delivery pipeline.
 
+## Personas
+
+Persona files in `persistent-agents/` are the single source of truth for agent configuration. Each `.md` file defines an agent with YAML-like frontmatter:
+
+```markdown
+---
+engine: claude
+model: sonnet
+thinking: high
+cwd: /home/user/project
+proxy_host: crankshaft
+permissions: skip
+---
+# Research Agent
+
+You are a research specialist focused on codebase exploration.
+```
+
+### Frontmatter fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `engine` | yes | `claude`, `codex`, or `opencode` |
+| `cwd` | yes | Working directory for the agent |
+| `model` | no | Model override (e.g., `sonnet`, `opus`) |
+| `thinking` | no | Thinking mode (`high`, `low`) |
+| `proxy_host` | no | Pin agent to a specific machine hostname |
+| `permissions` | no | `skip` to bypass permission prompts |
+
+### How it works
+
+On startup, the orchestrator scans `persistent-agents/*.md` and merges them into SQLite:
+- **New personas** create agents in `void` state
+- **Existing personas** update config fields (engine, model, cwd, etc.) but preserve runtime state (active sessions, proxy assignments)
+- **Body content** (after frontmatter) is injected as the agent's system prompt via `--append-system-prompt`
+
+Persona files are readonly in the dashboard UI. Agents can edit their own persona files and handle git workflows.
+
+### API
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/personas` | List all persona files |
+| `GET` | `/api/personas/:name` | Read persona with parsed frontmatter |
+| `PUT` | `/api/personas/:name` | Write persona file (for agent use) |
+
 ## Environment variables
 
 ### Orchestrator
@@ -133,6 +175,7 @@ After upload, the agent receives: `I uploaded /path/to/cwd/config.json` via the 
 | `RATE_LIMIT_MAX` | `120` | Max POST requests per IP per minute |
 | `RATE_LIMIT_UPLOAD_MAX` | `30` | Max file uploads per IP per minute |
 | `RATE_LIMIT_WINDOW_MS` | `60000` | Rate limit sliding window (ms) |
+| `PERSONAS_DIR` | `persistent-agents/` | Directory for persona .md files |
 | `SPAWN_TIMEOUT_MS` | `30000` | Watchdog timeout for spawn operations |
 | `SUSPEND_TIMEOUT_MS` | `60000` | Watchdog timeout for suspend operations |
 | `RESUME_TIMEOUT_MS` | `60000` | Watchdog timeout for resume operations |
@@ -145,7 +188,7 @@ After upload, the agent receives: `I uploaded /path/to/cwd/config.json` via the 
 | `PROXY_PORT` | `3100` | HTTP port |
 | `ORCHESTRATOR_URL` | `http://localhost:3000` | Orchestrator address |
 | `PROXY_HOST` | `host.docker.internal:{PROXY_PORT}` | How the orchestrator reaches this proxy |
-| `PROXY_ID` | `proxy-{random}` | Unique proxy identifier |
+| `PROXY_ID` | `os.hostname()` | Unique proxy identifier (defaults to machine hostname) |
 | `ORCHESTRATOR_SECRET` | _(none)_ | Must match orchestrator's secret |
 | `MAX_UPLOAD_BYTES` | `536870912` | Max upload size in bytes (512MB) |
 
@@ -226,11 +269,12 @@ Supported engines: `claude`, `codex`, `opencode`.
 node --test 'src/**/*.test.ts'
 ```
 
-319 tests across 53 suites covering lifecycle operations, database persistence, networking, locking, health monitoring, adapters, message delivery, crash recovery, file upload, streaming upload, rate limiting, path traversal, integration tests, and input validation.
+286 tests across 52 suites covering lifecycle operations, database persistence, networking, locking, health monitoring, adapters, message delivery, crash recovery, file upload, streaming upload, rate limiting, path traversal, persona frontmatter, integration tests, and input validation.
 
 ## Project structure
 
 ```
+persistent-agents/         # Persona .md files (frontmatter config)
 src/
 ├── orchestrator/           # Runs in Docker
 │   ├── main.ts             # Server entry point
@@ -239,7 +283,7 @@ src/
 │   ├── lifecycle.ts        # Agent state machine + 3-phase locking
 │   ├── network.ts          # Graceful shutdown + crash recovery
 │   ├── health-monitor.ts   # Polling, thresholds, message delivery
-│   ├── persona.ts          # Agent system prompts
+│   ├── persona.ts          # Persona loading, frontmatter, startup sync
 │   └── adapters/           # Engine-specific behavior
 │       ├── claude.ts
 │       ├── codex.ts

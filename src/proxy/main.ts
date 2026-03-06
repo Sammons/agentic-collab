@@ -17,7 +17,8 @@ const PROXY_PORT = parseInt(process.env['PROXY_PORT'] ?? '3100', 10);
 const ORCHESTRATOR_URL = process.env['ORCHESTRATOR_URL'] ?? 'http://localhost:3000';
 const PROXY_HOST = process.env['PROXY_HOST'] ?? `host.docker.internal:${PROXY_PORT}`;
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-const PROXY_ID = process.env['PROXY_ID'] ?? `proxy-${randomBytes(4).toString('hex')}`;
+import { hostname } from 'node:os';
+const PROXY_ID = process.env['PROXY_ID'] ?? hostname();
 const ORCHESTRATOR_SECRET = process.env['ORCHESTRATOR_SECRET'] ?? null;
 
 let token = generateToken();
