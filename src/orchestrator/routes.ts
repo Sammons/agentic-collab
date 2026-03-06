@@ -16,6 +16,19 @@ import {
 } from './lifecycle.ts';
 import { shutdownAgents, restoreAllAgents } from './network.ts';
 
+/**
+ * Shared context injected into all route handlers.
+ *
+ * - db: SQLite persistence (agents, events, messages, proxies, workstreams)
+ * - wss: WebSocket server for real-time dashboard updates
+ * - locks: Per-agent SQLite locks for lifecycle serialization
+ * - proxyDispatch: Sends commands to tmux proxies (with retry)
+ * - getDashboardHtml: Lazy-loaded dashboard HTML (cached after first read)
+ * - orchestratorHost: Public URL for system prompts and inter-agent messaging
+ * - orchestratorSecret: Shared secret for POST/DELETE auth (null = no auth)
+ *
+ * Lifecycle operations use makeLifecycleCtx() to extract the subset they need.
+ */
 export type RouteContext = {
   db: Database;
   wss: WebSocketServer;

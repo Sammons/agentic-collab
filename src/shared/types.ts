@@ -4,7 +4,7 @@
 
 // ── Agent ──
 
-export type AgentState = 'void' | 'spawning' | 'active' | 'idle' | 'suspended' | 'failed';
+export type AgentState = 'void' | 'spawning' | 'resuming' | 'suspending' | 'active' | 'idle' | 'suspended' | 'failed';
 
 export type EngineType = 'claude' | 'codex' | 'opencode';
 

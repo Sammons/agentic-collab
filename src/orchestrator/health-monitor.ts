@@ -100,25 +100,44 @@ export class HealthMonitor {
   }
 
   /**
-   * Poll a single agent. Priority: reload > compact > idle detection.
+   * Poll a single agent. Priority: reload > compact > idle detection > delivery > suspend timeout.
    */
   async pollAgent(agentSnapshot: AgentRecord): Promise<void> {
-    // Re-read fresh state to avoid acting on stale data from pollAll()
     const agent = this.db.getAgent(agentSnapshot.name);
     if (!agent || !agent.proxyId || !canSuspend(agent)) return;
 
-    const adapter = getAdapter(agent.engine);
-    const session = sessionName(agent);
+    const paneOutput = await this.capturePaneOutput(agent);
+    if (paneOutput === null) return;
 
-    // 1. Capture pane output
-    const captureResult = await this.proxyDispatch(agent.proxyId, {
+    const adapter = getAdapter(agent.engine);
+    if (await this.handleContextThresholds(agent, adapter, paneOutput)) return;
+
+    const idleState = adapter.detectIdleState(paneOutput);
+    this.handleIdleTransitions(agent, idleState);
+
+    if (idleState === 'waiting_for_input') {
+      await this.deliverPendingMessages(agent.name);
+    }
+
+    this.checkIdleSuspendTimeout(agent.name);
+
+    if (idleState === 'waiting_for_input') {
+      await this.handleQueuedReload(agent.name);
+    }
+  }
+
+  /**
+   * Capture pane output for an agent. Returns null if capture failed
+   * (agent marked as failed as a side-effect).
+   */
+  private async capturePaneOutput(agent: AgentRecord): Promise<string | null> {
+    const captureResult = await this.proxyDispatch(agent.proxyId!, {
       action: 'capture',
-      sessionName: session,
+      sessionName: sessionName(agent),
       lines: 50,
     });
 
     if (!captureResult.ok) {
-      // Session might be gone — mark failed
       console.warn(`[health] Cannot capture ${agent.name}: ${captureResult.error}`);
       this.db.updateAgentState(agent.name, 'failed', agent.version, {
         failedAt: new Date().toISOString(),
@@ -126,50 +145,59 @@ export class HealthMonitor {
       });
       this.db.logEvent(agent.name, 'health_check_failed', undefined, { reason: captureResult.error });
       this.onAgentUpdate(agent.name);
-      return;
+      return null;
     }
 
-    const paneOutput = (captureResult.data as string) ?? '';
+    return (captureResult.data as string) ?? '';
+  }
 
-    // 2. Parse context percentage
+  /**
+   * Check context thresholds and trigger reload/compact if needed.
+   * Returns true if a threshold action was taken (caller should short-circuit).
+   */
+  private async handleContextThresholds(
+    agent: AgentRecord,
+    adapter: ReturnType<typeof getAdapter>,
+    paneOutput: string,
+  ): Promise<boolean> {
     const contextResult = adapter.parseContextPercent(paneOutput);
-    if (contextResult.contextPct !== null) {
-      this.db.updateAgentState(agent.name, agent.state, agent.version, {
-        lastContextPct: contextResult.contextPct,
-        lastActivity: new Date().toISOString(),
-      });
-      this.onAgentUpdate(agent.name);
-      // Re-read after update for fresh version
-      const fresh = this.db.getAgent(agent.name);
-      if (!fresh) return;
+    if (contextResult.contextPct === null) return false;
 
-      // Priority 1: Reload if queued or context critically high
-      if (fresh.reloadQueued) {
-        await this.handleReload(fresh);
-        return;
-      }
+    this.db.updateAgentState(agent.name, agent.state, agent.version, {
+      lastContextPct: contextResult.contextPct,
+      lastActivity: new Date().toISOString(),
+    });
+    this.onAgentUpdate(agent.name);
 
-      // Priority 2: Reload if context >= reload threshold
-      if (contextResult.contextPct >= this.autoReloadThreshold) {
-        console.log(`[health] ${agent.name} context at ${contextResult.contextPct}% — triggering reload`);
-        await this.handleReload(fresh);
-        return;
-      }
+    const fresh = this.db.getAgent(agent.name);
+    if (!fresh) return true;
 
-      // Priority 3: Compact if context >= compact threshold
-      if (contextResult.contextPct >= this.autoCompactThreshold) {
-        console.log(`[health] ${agent.name} context at ${contextResult.contextPct}% — sending compact`);
-        const lifecycleCtx = this.makeLifecycleCtx();
-        await compactAgent(lifecycleCtx, agent.name);
-        return;
-      }
+    if (fresh.reloadQueued) {
+      await this.handleReload(fresh);
+      return true;
     }
 
-    // 3. Detect idle state
-    const idleState = adapter.detectIdleState(paneOutput);
+    if (contextResult.contextPct >= this.autoReloadThreshold) {
+      console.log(`[health] ${agent.name} context at ${contextResult.contextPct}% — triggering reload`);
+      await this.handleReload(fresh);
+      return true;
+    }
 
+    if (contextResult.contextPct >= this.autoCompactThreshold) {
+      console.log(`[health] ${agent.name} context at ${contextResult.contextPct}% — sending compact`);
+      const lifecycleCtx = this.makeLifecycleCtx();
+      await compactAgent(lifecycleCtx, agent.name);
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * Detect and apply idle state transitions (active ↔ idle).
+   */
+  private handleIdleTransitions(agent: AgentRecord, idleState: string): void {
     if (idleState === 'waiting_for_input' && agent.state === 'active') {
-      // Transition to idle
       const current = this.db.getAgent(agent.name);
       if (current && current.state === 'active') {
         this.db.updateAgentState(agent.name, 'idle', current.version, {
@@ -179,7 +207,6 @@ export class HealthMonitor {
         this.onAgentUpdate(agent.name);
       }
     } else if (idleState !== 'waiting_for_input' && agent.state === 'idle') {
-      // Agent is active again
       const current = this.db.getAgent(agent.name);
       if (current && current.state === 'idle') {
         this.db.updateAgentState(agent.name, 'active', current.version, {
@@ -189,28 +216,30 @@ export class HealthMonitor {
         this.onAgentUpdate(agent.name);
       }
     }
+  }
 
-    // 4. Deliver pending messages when agent is waiting for input
-    if (idleState === 'waiting_for_input') {
-      await this.deliverPendingMessages(agent.name);
+  /**
+   * Check if an idle agent has exceeded the suspend timeout. Logs but does not auto-suspend.
+   */
+  private checkIdleSuspendTimeout(agentName: string): void {
+    const agent = this.db.getAgent(agentName);
+    if (!agent || agent.state !== 'idle' || !agent.lastActivity) return;
+
+    const idleDuration = Date.now() - new Date(agent.lastActivity).getTime();
+    if (idleDuration > this.idleSuspendMs) {
+      console.log(`[health] ${agent.name} idle for ${Math.round(idleDuration / 1000)}s — suspending`);
+      this.db.logEvent(agent.name, 'idle_suspend_triggered', undefined, {
+        idleDurationMs: idleDuration,
+      });
     }
+  }
 
-    // 5. Check idle suspend timeout (re-read for fresh state after possible transitions above)
-    const currentForIdle = this.db.getAgent(agentSnapshot.name);
-    if (currentForIdle && currentForIdle.state === 'idle' && currentForIdle.lastActivity) {
-      const idleDuration = Date.now() - new Date(currentForIdle.lastActivity).getTime();
-      if (idleDuration > this.idleSuspendMs) {
-        console.log(`[health] ${currentForIdle.name} idle for ${Math.round(idleDuration / 1000)}s — suspending`);
-        this.db.logEvent(currentForIdle.name, 'idle_suspend_triggered', undefined, {
-          idleDurationMs: idleDuration,
-        });
-        // Don't auto-suspend for now — just log. The operator can configure this.
-      }
-    }
-
-    // 6. Handle queued reload (even without context data)
-    const latest = this.db.getAgent(agent.name);
-    if (latest && latest.reloadQueued && idleState === 'waiting_for_input') {
+  /**
+   * Handle a queued reload when the agent is waiting for input.
+   */
+  private async handleQueuedReload(agentName: string): Promise<void> {
+    const latest = this.db.getAgent(agentName);
+    if (latest && latest.reloadQueued) {
       await this.handleReload(latest);
     }
   }

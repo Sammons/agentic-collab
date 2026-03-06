@@ -2,7 +2,18 @@
  * Agent lifecycle operations: spawn, resume, suspend, destroy, reload.
  * Integrates with engine adapters, tmux proxy, and persistence.
  *
- * All state mutations happen inside per-agent locks to prevent races.
+ * Long-running operations (spawn, suspend, resume, reload) use a three-phase
+ * locking pattern to avoid holding locks across slow proxy calls and sleeps:
+ *
+ *   Phase 1 (lock): validate → transition to intermediate state → release
+ *   Phase 2 (no lock): slow work (proxy calls, sleeps)
+ *   Phase 3 (lock): re-read → validate intermediate state → finalize
+ *
+ * Intermediate states ('spawning', 'suspending', 'resuming') act as claims —
+ * concurrent callers see the agent is in transition and back off.
+ * Watchdog timers mark agents 'failed' if operations hang.
+ *
+ * Short operations (interrupt, compact, kill, deliver) use single-phase locks.
  */
 
 import type { Database } from './database.ts';
@@ -21,14 +32,59 @@ export type LifecycleContext = {
 };
 
 const SPAWN_TIMEOUT_MS = 30_000;
+const SUSPEND_TIMEOUT_MS = 60_000;
+const RESUME_TIMEOUT_MS = 60_000;
+const RELOAD_TIMEOUT_MS = 90_000;
 const RENAME_DELAY_MS = 3_000;
 const EXIT_WAIT_MS = 10_000;
 const POST_SPAWN_ACTIVE_DELAY_MS = 2_000;
 const POST_RENAME_TASK_DELAY_MS = 1_000;
 const INTERRUPT_KEY_DELAY_MS = 300;
 
+// ── Watchdog helper ──
+
 /**
- * Spawn a new agent: create tmux session, paste spawn command, set up watchdog.
+ * Start a watchdog timer that marks an agent 'failed' if it's still in
+ * the given intermediate state after timeoutMs.
+ */
+function startWatchdog(
+  ctx: LifecycleContext,
+  name: string,
+  intermediateState: string,
+  timeoutMs: number,
+  proxyId?: string,
+  tmuxSession?: string,
+): ReturnType<typeof setTimeout> {
+  return setTimeout(async () => {
+    try {
+      await ctx.locks.withLock(name, async () => {
+        const latest = ctx.db.getAgent(name);
+        if (latest && latest.state === intermediateState) {
+          ctx.db.updateAgentState(name, 'failed', latest.version, {
+            failedAt: new Date().toISOString(),
+            failureReason: `${intermediateState} timeout (${timeoutMs / 1000}s)`,
+          });
+          ctx.db.logEvent(name, `${intermediateState}_timeout`, undefined, { timeoutMs });
+
+          // Best-effort kill tmux session
+          if (proxyId && tmuxSession) {
+            await ctx.proxyDispatch(proxyId, {
+              action: 'kill_session',
+              sessionName: tmuxSession,
+            }).catch(() => {});
+          }
+        }
+      });
+    } catch { /* watchdog is best-effort */ }
+  }, timeoutMs);
+}
+
+/**
+ * Spawn a new agent: create tmux session, paste spawn command.
+ *
+ * Phase 1: validate + transition to 'spawning'
+ * Phase 2: create tmux session, paste spawn command, rename, wait
+ * Phase 3: validate still 'spawning' + transition to 'active'
  */
 export async function spawnAgent(
   ctx: LifecycleContext,
@@ -45,26 +101,32 @@ export async function spawnAgent(
 ): Promise<AgentRecord> {
   if (!opts.proxyId) throw new Error(`Agent "${opts.name}" has no proxy assigned`);
 
-  // Compute peers before lock to avoid DB query under lock
   const peers = computePeers(ctx, opts.name);
 
-  return ctx.locks.withLock(opts.name, async () => {
-    // Re-read inside lock to prevent TOCTOU races
+  // ── Phase 1: validate + transition to 'spawning' ──
+  const phase1 = await ctx.locks.withLock(opts.name, async () => {
     const agent = ctx.db.getAgent(opts.name);
     if (!agent) throw new Error(`Agent "${opts.name}" not found in registry`);
     if (agent.state !== 'void' && agent.state !== 'failed') {
       throw new Error(`Agent "${opts.name}" is in state "${agent.state}", expected void or failed`);
     }
 
-    const adapter = getAdapter(agent.engine);
     const tmuxSession = `agent-${opts.name}`;
-
-    // Transition to spawning
-    let current = ctx.db.updateAgentState(opts.name, 'spawning', agent.version, {
+    const current = ctx.db.updateAgentState(opts.name, 'spawning', agent.version, {
       tmuxSession,
       proxyId: opts.proxyId,
       lastActivity: new Date().toISOString(),
     });
+
+    return { current, tmuxSession, engine: agent.engine, spawnCount: agent.spawnCount };
+  });
+
+  const { tmuxSession, engine, spawnCount } = phase1;
+  const watchdog = startWatchdog(ctx, opts.name, 'spawning', SPAWN_TIMEOUT_MS, opts.proxyId, tmuxSession);
+
+  try {
+    // ── Phase 2: slow proxy work (no lock) ──
+    const adapter = getAdapter(engine);
 
     // 1. Create tmux session
     const createResult = await ctx.proxyDispatch(opts.proxyId, {
@@ -73,11 +135,17 @@ export async function spawnAgent(
       cwd: opts.cwd,
     });
     if (!createResult.ok) {
-      ctx.db.updateAgentState(opts.name, 'failed', current.version, {
-        failedAt: new Date().toISOString(),
-        failureReason: `Failed to create tmux session: ${createResult.error}`,
+      // Re-acquire lock to mark failed
+      await ctx.locks.withLock(opts.name, async () => {
+        const latest = ctx.db.getAgent(opts.name);
+        if (latest && latest.state === 'spawning') {
+          ctx.db.updateAgentState(opts.name, 'failed', latest.version, {
+            failedAt: new Date().toISOString(),
+            failureReason: `Failed to create tmux session: ${createResult.error}`,
+          });
+          ctx.db.logEvent(opts.name, 'spawn_failed', undefined, { reason: createResult.error });
+        }
       });
-      ctx.db.logEvent(opts.name, 'spawn_failed', undefined, { reason: createResult.error });
       throw new Error(`Spawn failed: ${createResult.error}`);
     }
 
@@ -114,44 +182,38 @@ export async function spawnAgent(
       });
     }
 
-    // 5. Set up spawn watchdog (30s timeout → failed)
-    const watchdogTimer = setTimeout(async () => {
-      try {
-        await ctx.locks.withLock(opts.name, async () => {
-          const latest = ctx.db.getAgent(opts.name);
-          if (latest && latest.state === 'spawning') {
-            ctx.db.updateAgentState(opts.name, 'failed', latest.version, {
-              failedAt: new Date().toISOString(),
-              failureReason: 'Spawn timeout (30s)',
-            });
-
-            await ctx.proxyDispatch(opts.proxyId, {
-              action: 'kill_session',
-              sessionName: tmuxSession,
-            }).catch(() => { /* best effort */ });
-
-            ctx.db.logEvent(opts.name, 'spawn_failed', undefined, { reason: 'timeout' });
-          }
-        });
-      } catch { /* watchdog is best-effort */ }
-    }, SPAWN_TIMEOUT_MS);
-
-    // 6. Transition to active (cancel watchdog before sleep to prevent race)
-    clearTimeout(watchdogTimer);
     await sleep(POST_SPAWN_ACTIVE_DELAY_MS);
-    current = ctx.db.updateAgentState(opts.name, 'active', current.version, {
-      lastActivity: new Date().toISOString(),
-      spawnCount: current.spawnCount + 1,
-      lastContextPct: 0,
-    });
-    ctx.db.logEvent(opts.name, 'spawned', undefined, { engine: agent.engine, model: opts.model });
 
-    return current;
-  });
+    // ── Phase 3: finalize (lock) ──
+    return await ctx.locks.withLock(opts.name, async () => {
+      const latest = ctx.db.getAgent(opts.name);
+      if (!latest) throw new Error(`Agent "${opts.name}" disappeared during spawn`);
+
+      // If state changed (e.g. killed during spawn), return current state
+      if (latest.state !== 'spawning') {
+        ctx.db.logEvent(opts.name, 'spawn_interrupted', undefined, { finalState: latest.state });
+        return latest;
+      }
+
+      const updated = ctx.db.updateAgentState(opts.name, 'active', latest.version, {
+        lastActivity: new Date().toISOString(),
+        spawnCount: spawnCount + 1,
+        lastContextPct: 0,
+      });
+      ctx.db.logEvent(opts.name, 'spawned', undefined, { engine, model: opts.model });
+      return updated;
+    });
+  } finally {
+    clearTimeout(watchdog);
+  }
 }
 
 /**
  * Resume a suspended agent.
+ *
+ * Phase 1: validate + transition to 'resuming'
+ * Phase 2: create tmux session, paste resume command, rename, optional task
+ * Phase 3: validate still 'resuming' + transition to 'active'
  */
 export async function resumeAgent(
   ctx: LifecycleContext,
@@ -160,42 +222,62 @@ export async function resumeAgent(
 ): Promise<AgentRecord> {
   const peers = computePeers(ctx, name);
 
-  return ctx.locks.withLock(name, async () => {
-    // Re-read inside lock
+  // ── Phase 1: validate + transition to 'resuming' ──
+  const phase1 = await ctx.locks.withLock(name, async () => {
     const agent = ctx.db.getAgent(name);
     if (!agent) throw new Error(`Agent "${name}" not found`);
     if (!canResume(agent)) {
       throw new Error(`Agent "${name}" is in state "${agent.state}", expected suspended or failed`);
     }
     const proxyId = requireProxy(agent);
-
-    const adapter = getAdapter(agent.engine);
     const tmuxSession = sessionName(agent);
+
+    const current = ctx.db.updateAgentState(name, 'resuming', agent.version, {
+      lastActivity: new Date().toISOString(),
+    });
+
+    return {
+      current,
+      proxyId,
+      tmuxSession,
+      engine: agent.engine,
+      cwd: agent.cwd,
+      persona: agent.persona,
+      currentSessionId: agent.currentSessionId,
+    };
+  });
+
+  const { proxyId, tmuxSession, engine, cwd, persona, currentSessionId } = phase1;
+  const watchdog = startWatchdog(ctx, name, 'resuming', RESUME_TIMEOUT_MS, proxyId, tmuxSession);
+
+  try {
+    // ── Phase 2: slow proxy work (no lock) ──
+    const adapter = getAdapter(engine);
 
     // 1. Create new tmux session
     await ctx.proxyDispatch(proxyId, {
       action: 'create_session',
       sessionName: tmuxSession,
-      cwd: agent.cwd,
+      cwd,
     });
 
     // 2. Compose system prompt
-    const systemPrompt = buildSystemPrompt(ctx, name, peers, agent.persona);
+    const systemPrompt = buildSystemPrompt(ctx, name, peers, persona);
 
     // 3. Build and paste resume command (or spawn if no session ID)
     let cmd: string;
-    if (agent.currentSessionId) {
+    if (currentSessionId) {
       cmd = adapter.buildResumeCommand({
         name,
-        sessionId: agent.currentSessionId,
-        cwd: agent.cwd,
+        sessionId: currentSessionId,
+        cwd,
         task: opts?.task,
         appendSystemPrompt: systemPrompt,
       });
     } else {
       cmd = adapter.buildSpawnCommand({
         name,
-        cwd: agent.cwd,
+        cwd,
         task: opts?.task,
         appendSystemPrompt: systemPrompt,
         dangerouslySkipPermissions: true,
@@ -222,7 +304,7 @@ export async function resumeAgent(
     }
 
     // 5. Paste task if provided (and resuming existing session)
-    if (opts?.task && agent.currentSessionId) {
+    if (opts?.task && currentSessionId) {
       await sleep(POST_RENAME_TASK_DELAY_MS);
       await ctx.proxyDispatch(proxyId, {
         action: 'paste',
@@ -232,28 +314,43 @@ export async function resumeAgent(
       });
     }
 
-    // 6. Update state
-    const updated = ctx.db.updateAgentState(name, 'active', agent.version, {
-      tmuxSession,
-      lastActivity: new Date().toISOString(),
-      stateBeforeShutdown: null,
-      lastContextPct: 0,
-    });
+    // ── Phase 3: finalize (lock) ──
+    return await ctx.locks.withLock(name, async () => {
+      const latest = ctx.db.getAgent(name);
+      if (!latest) throw new Error(`Agent "${name}" disappeared during resume`);
 
-    ctx.db.logEvent(name, 'resumed', undefined, { sessionId: agent.currentSessionId });
-    return updated;
-  });
+      if (latest.state !== 'resuming') {
+        ctx.db.logEvent(name, 'resume_interrupted', undefined, { finalState: latest.state });
+        return latest;
+      }
+
+      const updated = ctx.db.updateAgentState(name, 'active', latest.version, {
+        tmuxSession,
+        lastActivity: new Date().toISOString(),
+        stateBeforeShutdown: null,
+        lastContextPct: 0,
+      });
+      ctx.db.logEvent(name, 'resumed', undefined, { sessionId: currentSessionId });
+      return updated;
+    });
+  } finally {
+    clearTimeout(watchdog);
+  }
 }
 
 /**
  * Suspend an agent: send exit command, wait, mark as suspended.
+ *
+ * Phase 1: validate + transition to 'suspending'
+ * Phase 2: paste exit, wait, verify session gone, optional kill
+ * Phase 3: validate still 'suspending' + transition to 'suspended'
  */
 export async function suspendAgent(
   ctx: LifecycleContext,
   name: string,
 ): Promise<AgentRecord> {
-  return ctx.locks.withLock(name, async () => {
-    // Re-read inside lock
+  // ── Phase 1: validate + transition to 'suspending' ──
+  const phase1 = await ctx.locks.withLock(name, async () => {
     const agent = ctx.db.getAgent(name);
     if (!agent) throw new Error(`Agent "${name}" not found`);
     if (!canSuspend(agent)) {
@@ -261,12 +358,24 @@ export async function suspendAgent(
     }
     const proxyId = requireProxy(agent);
 
-    const adapter = getAdapter(agent.engine);
+    const current = ctx.db.updateAgentState(name, 'suspending', agent.version, {
+      lastActivity: new Date().toISOString(),
+    });
+
+    return { current, proxyId, engine: agent.engine, tmuxSession: sessionName(agent) };
+  });
+
+  const { proxyId, engine, tmuxSession } = phase1;
+  const watchdog = startWatchdog(ctx, name, 'suspending', SUSPEND_TIMEOUT_MS, proxyId, tmuxSession);
+
+  try {
+    // ── Phase 2: slow proxy work (no lock) ──
+    const adapter = getAdapter(engine);
 
     // Send exit command
     await ctx.proxyDispatch(proxyId, {
       action: 'paste',
-      sessionName: sessionName(agent),
+      sessionName: tmuxSession,
       text: adapter.buildExitCommand(),
       pressEnter: true,
     });
@@ -276,28 +385,41 @@ export async function suspendAgent(
 
     const sessionGone = await ctx.proxyDispatch(proxyId, {
       action: 'has_session',
-      sessionName: sessionName(agent),
+      sessionName: tmuxSession,
     });
     const exited = !sessionGone.ok || sessionGone.data !== true;
     if (!exited) {
       console.warn(`[lifecycle] ${name}: session still alive after exit command, killing`);
       await ctx.proxyDispatch(proxyId, {
         action: 'kill_session',
-        sessionName: sessionName(agent),
+        sessionName: tmuxSession,
       });
     }
 
-    const updated = ctx.db.updateAgentState(name, 'suspended', agent.version, {
-      lastActivity: new Date().toISOString(),
-    });
+    // ── Phase 3: finalize (lock) ──
+    return await ctx.locks.withLock(name, async () => {
+      const latest = ctx.db.getAgent(name);
+      if (!latest) throw new Error(`Agent "${name}" disappeared during suspend`);
 
-    ctx.db.logEvent(name, 'suspended');
-    return updated;
-  });
+      if (latest.state !== 'suspending') {
+        ctx.db.logEvent(name, 'suspend_interrupted', undefined, { finalState: latest.state });
+        return latest;
+      }
+
+      const updated = ctx.db.updateAgentState(name, 'suspended', latest.version, {
+        lastActivity: new Date().toISOString(),
+      });
+      ctx.db.logEvent(name, 'suspended');
+      return updated;
+    });
+  } finally {
+    clearTimeout(watchdog);
+  }
 }
 
 /**
  * Destroy an agent: kill tmux session, remove from registry.
+ * Single-phase lock — fast operation.
  */
 export async function destroyAgent(
   ctx: LifecycleContext,
@@ -321,6 +443,12 @@ export async function destroyAgent(
 
 /**
  * Execute a reload: exit current session, resume with fresh context.
+ *
+ * Queue mode: single-phase lock, sets reloadQueued flag.
+ * Immediate mode:
+ *   Phase 1: validate + transition to 'suspending'
+ *   Phase 2: exit, wait, kill, create fresh session, paste resume, rename, optional task
+ *   Phase 3: validate still 'suspending' + transition to 'active'
  */
 export async function reloadAgent(
   ctx: LifecycleContext,
@@ -344,10 +472,11 @@ export async function reloadAgent(
     });
   }
 
-  // Immediate mode: execute now
+  // Immediate mode: three-phase
   const peers = computePeers(ctx, name);
-  return ctx.locks.withLock(name, async () => {
-    // Re-read inside lock
+
+  // ── Phase 1: validate + transition to 'suspending' ──
+  const phase1 = await ctx.locks.withLock(name, async () => {
     const agent = ctx.db.getAgent(name);
     if (!agent) throw new Error(`Agent "${name}" not found`);
     if (!canSuspend(agent)) {
@@ -355,13 +484,38 @@ export async function reloadAgent(
     }
     const proxyId = requireProxy(agent);
 
-    const adapter = getAdapter(agent.engine);
-    const previousContextPct = agent.lastContextPct;
+    const current = ctx.db.updateAgentState(name, 'suspending', agent.version, {
+      lastActivity: new Date().toISOString(),
+    });
+
+    return {
+      current,
+      proxyId,
+      engine: agent.engine,
+      cwd: agent.cwd,
+      persona: agent.persona,
+      previousContextPct: agent.lastContextPct,
+      currentSessionId: agent.currentSessionId,
+      spawnCount: agent.spawnCount,
+      reloadTask: agent.reloadTask,
+      oldTmuxSession: sessionName(agent),
+    };
+  });
+
+  const {
+    proxyId, engine, cwd, persona, previousContextPct,
+    currentSessionId, spawnCount, reloadTask, oldTmuxSession,
+  } = phase1;
+  const watchdog = startWatchdog(ctx, name, 'suspending', RELOAD_TIMEOUT_MS, proxyId, oldTmuxSession);
+
+  try {
+    // ── Phase 2: slow proxy work (no lock) ──
+    const adapter = getAdapter(engine);
 
     // 1. Send exit command
     await ctx.proxyDispatch(proxyId, {
       action: 'paste',
-      sessionName: sessionName(agent),
+      sessionName: oldTmuxSession,
       text: adapter.buildExitCommand(),
       pressEnter: true,
     });
@@ -372,7 +526,7 @@ export async function reloadAgent(
     // 3. Kill tmux session
     await ctx.proxyDispatch(proxyId, {
       action: 'kill_session',
-      sessionName: sessionName(agent),
+      sessionName: oldTmuxSession,
     });
 
     // 4. Create fresh tmux session
@@ -380,22 +534,22 @@ export async function reloadAgent(
     await ctx.proxyDispatch(proxyId, {
       action: 'create_session',
       sessionName: tmuxSession,
-      cwd: agent.cwd,
+      cwd,
     });
 
     // 5. Build resume command
-    const systemPrompt = buildSystemPrompt(ctx, name, peers, agent.persona);
+    const systemPrompt = buildSystemPrompt(ctx, name, peers, persona);
 
-    const resumeCmd = agent.currentSessionId
+    const resumeCmd = currentSessionId
       ? adapter.buildResumeCommand({
           name,
-          sessionId: agent.currentSessionId,
-          cwd: agent.cwd,
+          sessionId: currentSessionId,
+          cwd,
           appendSystemPrompt: systemPrompt,
         })
       : adapter.buildSpawnCommand({
           name,
-          cwd: agent.cwd,
+          cwd,
           appendSystemPrompt: systemPrompt,
           dangerouslySkipPermissions: true,
         });
@@ -420,7 +574,7 @@ export async function reloadAgent(
     }
 
     // 7. Paste reload task if provided
-    const taskText = opts?.task ?? agent.reloadTask;
+    const taskText = opts?.task ?? reloadTask;
     if (taskText) {
       await sleep(POST_RENAME_TASK_DELAY_MS);
       await ctx.proxyDispatch(proxyId, {
@@ -431,29 +585,40 @@ export async function reloadAgent(
       });
     }
 
-    // 8. Update registry (re-read for fresh version after sleeps)
-    const freshAgent = ctx.db.getAgent(name);
-    if (!freshAgent) throw new Error(`Agent "${name}" disappeared during reload`);
-    const updated = ctx.db.updateAgentState(name, 'active', freshAgent.version, {
-      tmuxSession,
-      reloadQueued: 0,
-      reloadTask: null,
-      spawnCount: agent.spawnCount + 1,
-      lastContextPct: 0,
-      lastActivity: new Date().toISOString(),
-    });
+    // ── Phase 3: finalize (lock) ──
+    return await ctx.locks.withLock(name, async () => {
+      const latest = ctx.db.getAgent(name);
+      if (!latest) throw new Error(`Agent "${name}" disappeared during reload`);
 
-    ctx.db.logEvent(name, 'reloaded', undefined, {
-      previousContextPct,
-      sessionId: agent.currentSessionId,
-    });
+      if (latest.state !== 'suspending') {
+        ctx.db.logEvent(name, 'reload_interrupted', undefined, { finalState: latest.state });
+        return latest;
+      }
 
-    return updated;
-  });
+      const updated = ctx.db.updateAgentState(name, 'active', latest.version, {
+        tmuxSession: `agent-${name}`,
+        reloadQueued: 0,
+        reloadTask: null,
+        spawnCount: spawnCount + 1,
+        lastContextPct: 0,
+        lastActivity: new Date().toISOString(),
+      });
+
+      ctx.db.logEvent(name, 'reloaded', undefined, {
+        previousContextPct,
+        sessionId: currentSessionId,
+      });
+
+      return updated;
+    });
+  } finally {
+    clearTimeout(watchdog);
+  }
 }
 
 /**
  * Interrupt an active agent: send escape keys to cancel current operation.
+ * Single-phase lock — fast operation.
  */
 export async function interruptAgent(
   ctx: LifecycleContext,
@@ -482,6 +647,7 @@ export async function interruptAgent(
 
 /**
  * Send compact command to an agent.
+ * Single-phase lock — fast operation.
  */
 export async function compactAgent(
   ctx: LifecycleContext,
@@ -507,6 +673,7 @@ export async function compactAgent(
 
 /**
  * Kill an agent: force-stop tmux session, mark as suspended.
+ * Single-phase lock — fast operation. Works on any state (including transitional).
  */
 export async function killAgent(
   ctx: LifecycleContext,
@@ -534,6 +701,7 @@ export async function killAgent(
 /**
  * Deliver a message to an agent via proxy paste, under lock.
  * Returns null on success, or an error string on failure.
+ * Single-phase lock — fast operation.
  */
 export async function deliverToAgent(
   ctx: LifecycleContext,
@@ -587,5 +755,3 @@ function buildSystemPrompt(
     peers,
   });
 }
-
-
