@@ -298,18 +298,22 @@ export class HealthMonitor {
   private autoReplyToSender(message: PendingMessage): void {
     const failureText = `[system] Delivery to ${message.targetAgent} failed after ${message.retryCount} attempts: ${message.error ?? 'unknown error'}`;
 
-    if (message.sourceAgent) {
-      // Agent-to-agent: enqueue a notification back to the sender
-      const reply = this.db.enqueueMessage({
-        sourceAgent: null, // system notification
-        targetAgent: message.sourceAgent,
-        envelope: failureText,
-      });
-      this.onQueueUpdate(reply);
-    } else {
-      // Dashboard-to-agent: insert a from_agent message so operator sees it
-      const msg = this.db.addDashboardMessage(message.targetAgent, 'from_agent', failureText);
-      this.onDashboardMessage(msg);
+    try {
+      if (message.sourceAgent) {
+        // Agent-to-agent: enqueue a notification back to the sender
+        const reply = this.db.enqueueMessage({
+          sourceAgent: null, // system notification
+          targetAgent: message.sourceAgent,
+          envelope: failureText,
+        });
+        this.onQueueUpdate(reply);
+      } else {
+        // Dashboard-to-agent: insert a from_agent message so operator sees it
+        const msg = this.db.addDashboardMessage(message.targetAgent, 'from_agent', failureText);
+        this.onDashboardMessage(msg);
+      }
+    } catch (err) {
+      console.error(`[health] Failed to enqueue auto-reply for ${message.targetAgent}:`, (err as Error).message);
     }
   }
 

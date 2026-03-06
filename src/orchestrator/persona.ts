@@ -30,8 +30,13 @@ export function resolvePersonaPath(agentName: string, explicitPath?: string | nu
   }
 
   const conventionPath = join(personasDir, `${agentName}.md`);
-  if (existsSync(conventionPath)) {
-    return conventionPath;
+  try {
+    const real = realpathSync(conventionPath);
+    const baseReal = realpathSync(personasDir);
+    if (real.startsWith(baseReal + '/')) return real;
+    return null; // Convention path escapes personasDir
+  } catch {
+    // File doesn't exist
   }
 
   return null;

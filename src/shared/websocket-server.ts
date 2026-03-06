@@ -105,12 +105,17 @@ export class WebSocketServer {
     if (!this.pingInterval) {
       this.pingInterval = setInterval(() => {
         for (const c of this.clients.values()) {
-          if (!c.alive) {
+          try {
+            if (!c.alive) {
+              this.removeClient(c);
+              continue;
+            }
+            c.alive = false;
+            this.sendPing(c);
+          } catch (err) {
+            console.warn('[ws] Ping failed, removing client:', (err as Error).message);
             this.removeClient(c);
-            continue;
           }
-          c.alive = false;
-          this.sendPing(c);
         }
       }, 30_000);
     }
