@@ -16,7 +16,7 @@ export class OpenCodeAdapter implements EngineAdapter {
     }
 
     if (opts.task) {
-      parts.push(shellQuote(opts.task));
+      parts.push('--prompt', shellQuote(opts.task));
     }
 
     return parts.join(' ');
@@ -28,10 +28,12 @@ export class OpenCodeAdapter implements EngineAdapter {
     // OpenCode supports session resume via --session
     if (opts.sessionId) {
       parts.push('--session', opts.sessionId);
+    } else {
+      parts.push('--continue');
     }
 
     if (opts.task) {
-      parts.push(shellQuote(opts.task));
+      parts.push('--prompt', shellQuote(opts.task));
     }
 
     return parts.join(' ');

@@ -33,6 +33,14 @@ describe('Persona', () => {
       assert.equal(resolvePersonaPath('agent-1', '/nonexistent/path.md'), null);
     });
 
+    it('returns convention path when <name>.md exists in personasDir', () => {
+      const path = join(tmpDir, 'conv-agent.md');
+      writeFileSync(path, '# Convention persona');
+      const result = resolvePersonaPath('conv-agent', null, tmpDir);
+      assert.ok(result);
+      assert.ok(result.endsWith('conv-agent.md'));
+    });
+
     it('returns null when no persona found', () => {
       assert.equal(resolvePersonaPath('nonexistent-agent'), null);
     });

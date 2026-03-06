@@ -4,6 +4,7 @@
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { timingSafeEqual } from 'node:crypto';
 import type { Database } from './database.ts';
 import type { WebSocketServer } from '../shared/websocket-server.ts';
 import type { AgentState, EngineType, ProxyCommand, ProxyResponse } from '../shared/types.ts';
@@ -39,20 +40,19 @@ export type RouteContext = {
   orchestratorSecret: string | null;
 };
 
+type RouteHandler = (req: IncomingMessage, res: ServerResponse, match: URLPatternResult, ctx: RouteContext) => Promise<void>;
+
 type Route = {
   method: string;
   pattern: URLPattern;
-  handler: (req: IncomingMessage, res: ServerResponse, match: URLPatternResult, ctx: RouteContext) => Promise<void>;
+  handler: RouteHandler;
 };
 
-// Module-level routes array — populated once at import time, shared by all
-// createRouter calls. This is intentional: routes are stateless handlers
-// and the context is threaded per-request via RouteContext.
-const routes: Route[] = [];
-
-function route(method: string, pathname: string, handler: Route['handler']): void {
-  routes.push({ method, pattern: new URLPattern({ pathname }), handler });
-}
+function buildRoutes(): Route[] {
+  const routes: Route[] = [];
+  const route = (method: string, pathname: string, handler: RouteHandler) => {
+    routes.push({ method, pattern: new URLPattern({ pathname }), handler });
+  };
 
 // ── Dashboard ──
 
@@ -250,7 +250,8 @@ route('GET', '/api/proxies', async (_req, res, _match, ctx) => {
 route('GET', '/api/events/:agentName', async (req, res, match, ctx) => {
   const agentName = match.pathname.groups['agentName']!;
   const url = new URL(req.url!, `http://${req.headers.host}`);
-  const limit = parseInt(url.searchParams.get('limit') ?? '50', 10);
+  const rawLimit = parseInt(url.searchParams.get('limit') ?? '50', 10);
+  const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 10000) : 50;
   const events = ctx.db.getEvents(agentName, limit);
   json(res, 200, events);
 });
@@ -441,9 +442,14 @@ route('GET', '/api/orchestrator/status', async (_req, res, _match, ctx) => {
   json(res, 200, stats);
 });
 
+  return routes;
+}
+
 // ── Route Matcher ──
 
 export function createRouter(ctx: RouteContext): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
+  const routes = buildRoutes();
+
   return async (req, res) => {
     const url = new URL(req.url!, `http://${req.headers.host}`);
 
@@ -488,8 +494,11 @@ function authorize(secret: string | null, req: IncomingMessage): boolean {
   const spaceIdx = header.indexOf(' ');
   if (spaceIdx === -1) return false;
   const scheme = header.slice(0, spaceIdx);
+  if (scheme !== 'Bearer') return false;
   const token = header.slice(spaceIdx + 1);
-  return scheme === 'Bearer' && token === secret;
+  // Timing-safe comparison to prevent token extraction via timing attacks
+  if (token.length !== secret.length) return false;
+  return timingSafeEqual(Buffer.from(token), Buffer.from(secret));
 }
 
 // ── Helpers ──

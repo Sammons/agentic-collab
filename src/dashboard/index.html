@@ -143,13 +143,6 @@
     flex-direction: column;
     height: 100%;
   }
-  .thread-header {
-    padding: 12px 20px;
-    border-bottom: 1px solid var(--border);
-    font-weight: 600;
-    font-size: 14px;
-    background: var(--surface);
-  }
   .thread-messages {
     flex: 1;
     overflow-y: auto;
@@ -230,6 +223,180 @@
   .thread-input button:disabled { opacity: 0.5; cursor: not-allowed; }
   .thread-input input:disabled { opacity: 0.5; cursor: not-allowed; }
 
+  /* ── Confirm Dialog ── */
+  .confirm-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10000;
+  }
+  .confirm-box {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px 24px;
+    max-width: 360px;
+    box-shadow: var(--shadow);
+  }
+  .confirm-box p { margin-bottom: 16px; font-size: 14px; line-height: 1.5; }
+  .confirm-box .actions { display: flex; gap: 8px; justify-content: flex-end; }
+  .confirm-box button {
+    padding: 6px 16px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text);
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .confirm-box button.danger-btn {
+    background: var(--red);
+    border-color: var(--red);
+    color: #fff;
+  }
+  .confirm-box button:hover { opacity: 0.9; }
+
+  /* ── Unread Badge ── */
+  .unread-badge {
+    background: var(--accent);
+    color: #fff;
+    font-size: 10px;
+    font-weight: 700;
+    min-width: 18px;
+    height: 18px;
+    border-radius: 9px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 5px;
+    margin-left: 6px;
+  }
+
+  /* ── Create Form ── */
+  .create-form {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  .create-form-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    cursor: pointer;
+    user-select: none;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .create-form-toggle:hover { color: var(--accent); }
+  .create-form-toggle .chevron { transition: transform 0.15s; }
+  .create-form.open .chevron { transform: rotate(90deg); }
+  .create-form-body {
+    display: none;
+    padding: 0 14px 14px;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .create-form.open .create-form-body { display: flex; }
+  .create-form input, .create-form select, .create-form textarea {
+    padding: 8px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text);
+    font-size: 13px;
+    font-family: inherit;
+    outline: none;
+    resize: vertical;
+  }
+  .create-form input:focus, .create-form select:focus, .create-form textarea:focus { border-color: var(--accent); }
+  .create-form-actions { display: flex; gap: 6px; }
+  .create-form-actions button {
+    padding: 7px 14px;
+    border-radius: 6px;
+    border: none;
+    background: var(--accent);
+    color: #fff;
+    font-weight: 600;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .create-form-actions button:hover { opacity: 0.9; }
+  .create-form-actions button.secondary {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+  }
+  .create-form-actions button.secondary:hover { border-color: var(--accent); color: var(--accent); }
+
+  /* ── System message ── */
+  .msg.system-msg {
+    align-self: center;
+    max-width: 90%;
+    background: rgba(139,148,158,0.08);
+    border: 1px dashed var(--border);
+    color: var(--text-dim);
+    font-size: 12px;
+    font-style: italic;
+  }
+
+  /* ── Button loading state ── */
+  .agent-actions button.loading {
+    opacity: 0.5;
+    pointer-events: none;
+    position: relative;
+  }
+  .agent-actions button.loading::after {
+    content: '';
+    width: 10px; height: 10px;
+    border: 2px solid var(--text-dim);
+    border-top-color: transparent;
+    border-radius: 50%;
+    animation: btn-spin 0.6s linear infinite;
+    display: inline-block;
+    margin-left: 4px;
+    vertical-align: middle;
+  }
+  @keyframes btn-spin {
+    to { transform: rotate(360deg); }
+  }
+
+  /* ── Agent time ── */
+  .agent-time {
+    font-size: 11px;
+    color: var(--text-dim);
+    margin-left: auto;
+  }
+
+  /* ── Agent failure reason ── */
+  .agent-failure {
+    font-size: 11px;
+    color: var(--red);
+    margin-top: 4px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* ── Thread header enriched ── */
+  .thread-header {
+    padding: 12px 20px;
+    border-bottom: 1px solid var(--border);
+    font-weight: 600;
+    font-size: 14px;
+    background: var(--surface);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
   /* ── Toast ── */
   .toast {
     position: fixed;
@@ -254,6 +421,52 @@
     from { opacity: 0; transform: translateX(-50%) translateY(-8px); }
     to   { opacity: 1; transform: translateX(-50%) translateY(0); }
   }
+
+  /* ── Auth Modal ── */
+  .auth-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.7);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10001;
+  }
+  .auth-box {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 24px 28px;
+    max-width: 380px;
+    width: 90%;
+    box-shadow: var(--shadow);
+  }
+  .auth-box h2 { font-size: 16px; font-weight: 600; margin-bottom: 4px; }
+  .auth-box p { font-size: 13px; color: var(--text-dim); margin-bottom: 16px; line-height: 1.5; }
+  .auth-box input {
+    width: 100%;
+    padding: 10px 12px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+    outline: none;
+    margin-bottom: 12px;
+  }
+  .auth-box input:focus { border-color: var(--accent); }
+  .auth-box .auth-actions { display: flex; gap: 8px; justify-content: flex-end; }
+  .auth-box button {
+    padding: 8px 20px;
+    border-radius: 6px;
+    border: none;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .auth-box button.primary { background: var(--accent); color: #fff; }
+  .auth-box button.secondary { background: transparent; border: 1px solid var(--border); color: var(--text-dim); }
+  .auth-box button:hover { opacity: 0.9; }
 
   /* ── Responsive ── */
   @media (max-width: 768px) {
@@ -287,15 +500,14 @@
 <script>
 (function() {
   // ── Auth ──
+  // Token stored in sessionStorage — cleared when tab closes
   function getToken() {
-    // Use sessionStorage instead of localStorage — token is cleared when tab closes,
-    // reducing exposure window for stolen credentials
-    let token = sessionStorage.getItem('orchestrator_token');
-    if (!token) {
-      token = prompt('Enter orchestrator token (leave empty for dev mode):');
-      if (token) sessionStorage.setItem('orchestrator_token', token);
-    }
-    return token || '';
+    return sessionStorage.getItem('orchestrator_token') || '';
+  }
+
+  function setToken(token) {
+    if (token) sessionStorage.setItem('orchestrator_token', token);
+    else sessionStorage.removeItem('orchestrator_token');
   }
 
   function authHeaders() {
@@ -306,8 +518,49 @@
   }
 
   function handleAuthError() {
-    sessionStorage.removeItem('orchestrator_token');
-    showToast('Authentication failed — token cleared. Reload to re-enter.', 'error');
+    setToken('');
+    promptForToken('Authentication failed. Please re-enter your token.');
+  }
+
+  function promptForToken(message) {
+    // Remove existing overlay if present
+    const existing = document.querySelector('.auth-overlay');
+    if (existing) existing.remove();
+
+    const overlay = document.createElement('div');
+    overlay.className = 'auth-overlay';
+    overlay.innerHTML = `
+      <div class="auth-box">
+        <h2>Agentic Collab</h2>
+        <p>${message || 'Enter your orchestrator token to connect, or skip for dev mode (no auth).'}</p>
+        <input type="password" id="authTokenInput" placeholder="Orchestrator token" autocomplete="off" />
+        <div class="auth-actions">
+          <button class="secondary" id="authSkipBtn">Dev Mode</button>
+          <button class="primary" id="authConnectBtn">Connect</button>
+        </div>
+      </div>
+    `;
+
+    function submit(token) {
+      setToken(token);
+      overlay.remove();
+      // Reconnect with new token
+      if (ws) { ws.onclose = null; ws.close(); }
+      connect();
+    }
+
+    overlay.querySelector('#authConnectBtn').onclick = () => {
+      const val = document.getElementById('authTokenInput').value.trim();
+      if (!val) { document.getElementById('authTokenInput').style.borderColor = 'var(--red)'; return; }
+      submit(val);
+    };
+    overlay.querySelector('#authSkipBtn').onclick = () => submit('');
+    overlay.querySelector('#authTokenInput').onkeydown = (e) => {
+      if (e.key === 'Enter') overlay.querySelector('#authConnectBtn').click();
+    };
+
+    document.body.appendChild(overlay);
+    setTimeout(() => document.getElementById('authTokenInput')?.focus(), 50);
   }
 
   // ── State ──
@@ -316,6 +569,7 @@
     threads: {},
     selected: null,
     connected: false,
+    unread: {},  // { agentName: count }
   };
 
   let ws = null;
@@ -327,9 +581,11 @@
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     const token = getToken();
     const tokenParam = token ? `?token=${encodeURIComponent(token)}` : '';
+    let opened = false;
     ws = new WebSocket(`${proto}://${location.host}/ws${tokenParam}`);
 
     ws.onopen = () => {
+      opened = true;
       state.connected = true;
       reconnectDelay = 1000;
       updateConnStatus();
@@ -339,6 +595,12 @@
     ws.onclose = () => {
       state.connected = false;
       updateConnStatus();
+      if (!opened) {
+        // Never connected — likely auth failure (401 on upgrade)
+        setToken('');
+        promptForToken('Connection rejected — enter your orchestrator token.');
+        return;
+      }
       const jitter = Math.random() * 1000;
       reconnectTimer = setTimeout(connect, reconnectDelay + jitter);
       reconnectDelay = Math.min(reconnectDelay * 2, 30000);
@@ -387,13 +649,24 @@
     if (idx >= 0) state.agents[idx] = agent;
     else state.agents.push(agent);
     renderAgents();
-    if (agent.name === state.selected) updateSendability();
+    if (agent.name === state.selected) {
+      updateSendability();
+      // Re-render thread header to reflect state change
+      const header = document.getElementById('threadHeader');
+      const headerBadge = `<span class="state-badge state-${agent.state}">${agent.state}</span>`;
+      header.innerHTML = `<span>${esc(agent.name)}</span>${headerBadge}`;
+    }
   }
 
   function addMessage(msg) {
     if (!state.threads[msg.agent]) state.threads[msg.agent] = [];
     state.threads[msg.agent].push(msg);
-    if (state.selected === msg.agent) renderThread();
+    if (state.selected === msg.agent) {
+      renderThread();
+    } else {
+      // Track unread for non-selected agents
+      state.unread[msg.agent] = (state.unread[msg.agent] || 0) + 1;
+    }
 
     // Flash the agent card
     const card = document.querySelector(`[data-agent="${msg.agent}"]`);
@@ -401,12 +674,52 @@
       card.classList.add('flash');
       setTimeout(() => card.classList.remove('flash'), 600);
     }
+    renderAgents();
   }
 
   // ── Render ──
+  let createFormOpen = false;
+
   function renderAgents() {
     const list = document.getElementById('agentList');
+
+    // Preserve create form input values before clearing
+    const prevName = document.getElementById('createName')?.value || '';
+    const prevEngine = document.getElementById('createEngine')?.value || 'claude';
+    const prevCwd = document.getElementById('createCwd')?.value || '/tmp';
+    const prevTask = document.getElementById('createTask')?.value || '';
+
     list.innerHTML = '';
+
+    // Collapsible create agent form
+    const form = document.createElement('div');
+    form.className = `create-form${createFormOpen ? ' open' : ''}`;
+    form.innerHTML = `
+      <div class="create-form-toggle">
+        <span>+ New Agent</span>
+        <span class="chevron">\u25B8</span>
+      </div>
+      <div class="create-form-body">
+        <input type="text" id="createName" placeholder="Agent name" value="${esc(prevName)}" />
+        <select id="createEngine">
+          <option value="claude"${prevEngine === 'claude' ? ' selected' : ''}>claude</option>
+          <option value="codex"${prevEngine === 'codex' ? ' selected' : ''}>codex</option>
+          <option value="opencode"${prevEngine === 'opencode' ? ' selected' : ''}>opencode</option>
+        </select>
+        <input type="text" id="createCwd" placeholder="Working directory" value="${esc(prevCwd)}" />
+        <textarea id="createTask" rows="2" placeholder="Initial task (optional)">${esc(prevTask)}</textarea>
+        <div class="create-form-actions">
+          <button onclick="document.dispatchEvent(new CustomEvent('create-agent', {detail:{spawn:true}}))">Create & Spawn</button>
+          <button class="secondary" onclick="document.dispatchEvent(new CustomEvent('create-agent', {detail:{spawn:false}}))">Create Only</button>
+        </div>
+      </div>
+    `;
+    form.querySelector('.create-form-toggle').onclick = () => {
+      createFormOpen = !createFormOpen;
+      form.classList.toggle('open', createFormOpen);
+    };
+    list.appendChild(form);
+
     for (const agent of state.agents) {
       const card = document.createElement('div');
       card.className = `agent-card${state.selected === agent.name ? ' selected' : ''}`;
@@ -415,23 +728,34 @@
       const stateClass = `state-${agent.state}`;
       const modelStr = [agent.engine, agent.model, agent.thinking].filter(Boolean).join(' ');
       const ctxStr = agent.lastContextPct != null ? `${agent.lastContextPct}%` : '--';
+      const unreadCount = state.unread[agent.name] || 0;
+      const unreadBadge = unreadCount > 0 ? `<span class="unread-badge">${unreadCount}</span>` : '';
+      const activityTime = agent.lastActivity || agent.createdAt;
+      const timeStr = timeAgo(activityTime);
 
       const activeIdle = agent.state === 'active' || agent.state === 'idle';
       const suspendedFailed = agent.state === 'suspended' || agent.state === 'failed';
       const transitioning = agent.state === 'spawning' || agent.state === 'suspending' || agent.state === 'resuming';
+      const isVoid = agent.state === 'void';
+      const failureInfo = agent.state === 'failed' && agent.failureReason
+        ? `<div class="agent-failure" title="${esc(agent.failureReason)}">${esc(agent.failureReason)}</div>` : '';
+      card.setAttribute('tabindex', '0');
       card.innerHTML = `
         <div class="agent-header">
-          <span class="agent-name">${esc(agent.name)}</span>
+          <span class="agent-name">${esc(agent.name)}${unreadBadge}</span>
+          <span class="agent-time">${timeStr}</span>
           <span class="state-badge ${stateClass}">${agent.state}</span>
         </div>
         <div class="agent-meta">
           <span>${esc(modelStr)}</span>
           <span>ctx: ${ctxStr}</span>
         </div>
+        ${failureInfo}
         <div class="agent-actions">
           ${activeIdle ? `
             <button data-action="interrupt">Interrupt</button>
             <button data-action="compact">Compact</button>
+            <button data-action="suspend">Suspend</button>
             <button class="danger" data-action="kill">Kill</button>
           ` : ''}
           ${suspendedFailed ? `
@@ -440,6 +764,10 @@
           ` : ''}
           ${transitioning ? `
             <button class="danger" data-action="kill">Kill</button>
+          ` : ''}
+          ${isVoid ? `
+            <button data-action="spawn">Spawn</button>
+            <button class="danger" data-action="destroy">Destroy</button>
           ` : ''}
         </div>
       `;
@@ -459,7 +787,9 @@
       return;
     }
 
-    header.textContent = `Thread: ${state.selected}`;
+    const selectedAgent = state.agents.find(a => a.name === state.selected);
+    const headerBadge = selectedAgent ? `<span class="state-badge state-${selectedAgent.state}">${selectedAgent.state}</span>` : '';
+    header.innerHTML = `<span>${esc(state.selected)}</span>${headerBadge}`;
     input.style.display = 'flex';
 
     const thread = state.threads[state.selected] || [];
@@ -471,13 +801,19 @@
     messages.innerHTML = '';
     for (const msg of thread) {
       const div = document.createElement('div');
-      div.className = `msg ${msg.direction === 'to_agent' ? 'to-agent' : 'from-agent'}`;
-      const sender = msg.direction === 'to_agent' ? 'you' : state.selected;
+      const isSystem = msg.message && msg.message.startsWith('[system]');
+      if (isSystem) {
+        div.className = 'msg system-msg';
+      } else {
+        div.className = `msg ${msg.direction === 'to_agent' ? 'to-agent' : 'from-agent'}`;
+      }
+      const sender = isSystem ? 'system' : (msg.direction === 'to_agent' ? 'you' : state.selected);
       const time = new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       const topicStr = msg.topic ? ` (re: ${esc(msg.topic)})` : '';
+      const displayMsg = isSystem ? msg.message.replace(/^\[system\]\s*/, '') : msg.message;
       div.innerHTML = `
         <div class="msg-sender">${esc(sender)}${topicStr}</div>
-        <div>${esc(msg.message)}</div>
+        <div>${esc(displayMsg)}</div>
         <div class="msg-time">${time}</div>
       `;
       messages.appendChild(div);
@@ -487,6 +823,7 @@
 
   function selectAgent(name) {
     state.selected = name;
+    state.unread[name] = 0;
     renderAgents();
     renderThread();
     updateSendability();
@@ -529,8 +866,40 @@
     }
   }
 
+  // ── Confirm Dialog ──
+  function confirmAction(message) {
+    return new Promise((resolve) => {
+      const overlay = document.createElement('div');
+      overlay.className = 'confirm-overlay';
+      overlay.innerHTML = `
+        <div class="confirm-box">
+          <p>${esc(message)}</p>
+          <div class="actions">
+            <button class="cancel-btn">Cancel</button>
+            <button class="danger-btn">Confirm</button>
+          </div>
+        </div>
+      `;
+      overlay.querySelector('.cancel-btn').onclick = () => { overlay.remove(); resolve(false); };
+      overlay.querySelector('.danger-btn').onclick = () => { overlay.remove(); resolve(true); };
+      overlay.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') { overlay.remove(); resolve(false); }
+      });
+      document.body.appendChild(overlay);
+      overlay.querySelector('.danger-btn').focus();
+    });
+  }
+
+  const DESTRUCTIVE_ACTIONS = new Set(['kill', 'destroy']);
+  const ACTION_LABELS = { kill: 'Kill', destroy: 'Destroy', suspend: 'Suspend', resume: 'Resume', interrupt: 'Interrupt', compact: 'Compact', spawn: 'Spawn' };
+
   // ── Actions ──
   async function agentAction(name, act) {
+    if (DESTRUCTIVE_ACTIONS.has(act)) {
+      const confirmed = await confirmAction(`${ACTION_LABELS[act] || act} agent "${name}"? This cannot be undone.`);
+      if (!confirmed) return;
+    }
+
     try {
       const res = await fetch(`/api/agents/${encodeURIComponent(name)}/${act}`, {
         method: 'POST',
@@ -544,6 +913,8 @@
           if (body && body.error) msg = body.error;
         } catch (_) {}
         showToast(msg, 'error');
+      } else {
+        showToast(`${ACTION_LABELS[act] || act}: ${name}`, 'success');
       }
     } catch (err) {
       console.error(`Action ${act} failed:`, err);
@@ -552,19 +923,41 @@
   }
 
   // Event delegation on agent list — handles both card selection and action buttons.
-  document.getElementById('agentList').addEventListener('click', (e) => {
+  function handleAgentListEvent(e) {
     const btn = e.target.closest('button[data-action]');
     if (btn) {
       e.stopPropagation();
+      if (btn.classList.contains('loading')) return;
       const card = btn.closest('[data-agent]');
-      if (card) agentAction(card.dataset.agent, btn.dataset.action);
+      if (card) {
+        btn.classList.add('loading');
+        agentAction(card.dataset.agent, btn.dataset.action)
+          .finally(() => btn.classList.remove('loading'));
+      }
       return;
     }
     const card = e.target.closest('[data-agent]');
     if (card) selectAgent(card.dataset.agent);
+  }
+  document.getElementById('agentList').addEventListener('click', handleAgentListEvent);
+  document.getElementById('agentList').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      handleAgentListEvent(e);
+    }
   });
 
   // ── Send Message ──
+  function showSendError(input, sendBtn) {
+    input.style.borderColor = 'var(--red)';
+    const errEl = document.createElement('span');
+    errEl.id = 'sendError';
+    errEl.style.cssText = 'color:var(--red);font-size:11px;align-self:center;white-space:nowrap';
+    errEl.textContent = 'Send failed';
+    input.parentNode.insertBefore(errEl, sendBtn);
+    setTimeout(() => { errEl.remove(); input.style.borderColor = ''; }, 3000);
+  }
+
   async function sendMessage() {
     if (!state.selected) return;
     const input = document.getElementById('msgInput');
@@ -589,38 +982,18 @@
         let body = null;
         try { body = await res.json(); } catch (_) {}
         if (body && body.msg) {
-          // Message was persisted but delivery failed — partial success
           input.value = '';
           showToast('Message saved but delivery failed \u2014 agent may be unreachable', 'warning');
         } else {
-          // Full failure — message not saved, keep input
           console.error('Send failed: HTTP', res.status);
-          input.style.borderColor = 'var(--red)';
-          const errEl = document.createElement('span');
-          errEl.id = 'sendError';
-          errEl.style.cssText = 'color:var(--red);font-size:11px;align-self:center;white-space:nowrap';
-          errEl.textContent = 'Send failed';
-          input.parentNode.insertBefore(errEl, sendBtn);
-          setTimeout(() => {
-            errEl.remove();
-            input.style.borderColor = '';
-          }, 3000);
+          showSendError(input, sendBtn);
         }
       } else {
         input.value = '';
       }
     } catch (err) {
       console.error('Send failed:', err);
-      input.style.borderColor = 'var(--red)';
-      const errEl = document.createElement('span');
-      errEl.id = 'sendError';
-      errEl.style.cssText = 'color:var(--red);font-size:11px;align-self:center;white-space:nowrap';
-      errEl.textContent = 'Send failed';
-      input.parentNode.insertBefore(errEl, sendBtn);
-      setTimeout(() => {
-        errEl.remove();
-        input.style.borderColor = '';
-      }, 3000);
+      showSendError(input, sendBtn);
     } finally {
       updateSendability();
     }
@@ -639,8 +1012,76 @@
     return div.innerHTML;
   }
 
+  function timeAgo(isoStr) {
+    if (!isoStr) return '';
+    const diff = Math.max(0, Date.now() - new Date(isoStr).getTime());
+    const secs = Math.floor(diff / 1000);
+    if (secs < 60) return `${secs}s ago`;
+    const mins = Math.floor(secs / 60);
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    const days = Math.floor(hrs / 24);
+    return `${days}d ago`;
+  }
+
+  // ── Create Agent ──
+  document.addEventListener('create-agent', async (e) => {
+    const shouldSpawn = e.detail?.spawn ?? false;
+    const name = document.getElementById('createName')?.value.trim();
+    const engine = document.getElementById('createEngine')?.value;
+    const cwd = document.getElementById('createCwd')?.value.trim();
+    const task = document.getElementById('createTask')?.value.trim();
+    if (!name) { showToast('Agent name is required', 'error'); return; }
+    if (!cwd) { showToast('Working directory is required', 'error'); return; }
+
+    try {
+      // Step 1: Create the agent
+      const createRes = await fetch('/api/agents', {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({ name, engine, cwd }),
+      });
+      if (createRes.status === 401) { handleAuthError(); return; }
+      const createBody = await createRes.json();
+      if (!createRes.ok) {
+        showToast(createBody.error || 'Create failed', 'error');
+        return;
+      }
+
+      document.getElementById('createName').value = '';
+      document.getElementById('createTask').value = '';
+      createFormOpen = false;
+
+      if (shouldSpawn) {
+        // Step 2: Spawn with optional task
+        const spawnBody = {};
+        if (task) spawnBody.task = task;
+        const spawnRes = await fetch(`/api/agents/${encodeURIComponent(name)}/spawn`, {
+          method: 'POST',
+          headers: authHeaders(),
+          body: JSON.stringify(spawnBody),
+        });
+        if (spawnRes.ok) {
+          showToast(`Agent "${name}" created and spawning`, 'success');
+        } else {
+          showToast(`Agent created but spawn failed`, 'warning');
+        }
+      } else {
+        showToast(`Agent "${name}" created`, 'success');
+      }
+      selectAgent(name);
+    } catch (err) {
+      showToast('Create failed — network error', 'error');
+    }
+  });
+
   // ── Init ──
+  // Always try connecting first. If the server requires auth and we don't have
+  // a token, the WebSocket will close with 401 and we'll show the auth modal.
   connect();
+  // Refresh relative timestamps every 30s
+  setInterval(() => { if (state.agents.length > 0) renderAgents(); }, 30000);
 })();
 </script>
 </body>
