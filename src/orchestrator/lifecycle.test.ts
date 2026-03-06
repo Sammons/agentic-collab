@@ -193,7 +193,7 @@ describe('Lifecycle', () => {
       // System prompt is always present (--append-system-prompt), but task flag (-p 'xxx') should not
       assert.ok(paste.text.includes('--append-system-prompt'), 'should include system prompt');
       assert.ok(!paste.text.includes('--dangerously-skip-permissions'), 'should not include skip-permissions without permissions=skip');
-      assert.ok(paste.text.startsWith('claude --append-system-prompt'), 'should be claude with system prompt only');
+      assert.ok(paste.text.startsWith('export COLLAB_AGENT=cmd-minimal && claude'), 'should have COLLAB_AGENT prefix and claude command');
     });
   });
 

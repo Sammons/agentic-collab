@@ -118,12 +118,50 @@ else
   echo -e "${DIM}  tip: install mise for automatic Node version management: https://mise.jdx.dev${RESET}"
 fi
 
+# ── Prepare Config Directory ──
+
+# Pre-create config dir so Docker bind-mount inherits host user ownership.
+# Without this, Docker creates it as root and the secret file becomes unreadable.
+mkdir -p "${HOME}/.config/agentic-collab"
+
+# ── Activate collab CLI ──
+
+COLLAB_BIN="$SCRIPT_DIR/bin"
+if [ -f "$COLLAB_BIN/collab" ]; then
+  # Detect shell rc file
+  SHELL_NAME="$(basename "$SHELL")"
+  case "$SHELL_NAME" in
+    zsh)  RC_FILE="$HOME/.zshrc" ;;
+    bash) RC_FILE="$HOME/.bashrc" ;;
+    *)    RC_FILE="" ;;
+  esac
+
+  MARKER="# agentic-collab CLI"
+  if [ -n "$RC_FILE" ]; then
+    if ! grep -qF "$MARKER" "$RC_FILE" 2>/dev/null; then
+      echo "" >> "$RC_FILE"
+      echo "$MARKER" >> "$RC_FILE"
+      echo "export PATH=\"$COLLAB_BIN:\$PATH\"" >> "$RC_FILE"
+      info "Added collab CLI to PATH in $RC_FILE"
+      info "  Run 'source $RC_FILE' or start a new shell to activate"
+    else
+      info "collab CLI already in $RC_FILE"
+    fi
+  fi
+
+  # Also activate for this session
+  export PATH="$COLLAB_BIN:$PATH"
+fi
+
 # ── Start Orchestrator ──
 
 step "Starting orchestrator"
 
 if command -v docker &>/dev/null; then
   if docker compose version &>/dev/null 2>&1; then
+    # Export UID/GID so docker-compose.yml user: "${UID}:${GID}" runs as the host user.
+    # This ensures secret files created inside the container are owned by the host user.
+    export UID GID="$(id -g)"
     if docker compose ps --status running 2>/dev/null | grep -q orchestrator; then
       info "Orchestrator already running"
     else
