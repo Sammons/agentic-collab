@@ -219,7 +219,8 @@ export class HealthMonitor {
   }
 
   /**
-   * Check if an idle agent has exceeded the suspend timeout. Logs but does not auto-suspend.
+   * Check if an idle agent has exceeded the suspend timeout.
+   * Currently logs only — auto-suspend is not implemented yet.
    */
   private checkIdleSuspendTimeout(agentName: string): void {
     const agent = this.db.getAgent(agentName);
@@ -227,9 +228,10 @@ export class HealthMonitor {
 
     const idleDuration = Date.now() - new Date(agent.lastActivity).getTime();
     if (idleDuration > this.idleSuspendMs) {
-      console.log(`[health] ${agent.name} idle for ${Math.round(idleDuration / 1000)}s — suspending`);
-      this.db.logEvent(agent.name, 'idle_suspend_triggered', undefined, {
+      console.log(`[health] ${agent.name} idle for ${Math.round(idleDuration / 1000)}s (exceeds ${Math.round(this.idleSuspendMs / 1000)}s threshold)`);
+      this.db.logEvent(agent.name, 'idle_timeout_exceeded', undefined, {
         idleDurationMs: idleDuration,
+        thresholdMs: this.idleSuspendMs,
       });
     }
   }
@@ -296,18 +298,22 @@ export class HealthMonitor {
   private autoReplyToSender(message: PendingMessage): void {
     const failureText = `[system] Delivery to ${message.targetAgent} failed after ${message.retryCount} attempts: ${message.error ?? 'unknown error'}`;
 
-    if (message.sourceAgent) {
-      // Agent-to-agent: enqueue a notification back to the sender
-      const reply = this.db.enqueueMessage({
-        sourceAgent: null, // system notification
-        targetAgent: message.sourceAgent,
-        envelope: failureText,
-      });
-      this.onQueueUpdate(reply);
-    } else {
-      // Dashboard-to-agent: insert a from_agent message so operator sees it
-      const msg = this.db.addDashboardMessage(message.targetAgent, 'from_agent', failureText);
-      this.onDashboardMessage(msg);
+    try {
+      if (message.sourceAgent) {
+        // Agent-to-agent: enqueue a notification back to the sender
+        const reply = this.db.enqueueMessage({
+          sourceAgent: null, // system notification
+          targetAgent: message.sourceAgent,
+          envelope: failureText,
+        });
+        this.onQueueUpdate(reply);
+      } else {
+        // Dashboard-to-agent: insert a from_agent message so operator sees it
+        const msg = this.db.addDashboardMessage(message.targetAgent, 'from_agent', failureText);
+        this.onDashboardMessage(msg);
+      }
+    } catch (err) {
+      console.error(`[health] Failed to enqueue auto-reply for ${message.targetAgent}:`, (err as Error).message);
     }
   }
 

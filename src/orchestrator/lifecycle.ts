@@ -47,7 +47,7 @@ const INTERRUPT_KEY_DELAY_MS = 300;
  * Start a watchdog timer that marks an agent 'failed' if it's still in
  * the given intermediate state after timeoutMs.
  */
-function startWatchdog(
+export function startWatchdog(
   ctx: LifecycleContext,
   name: string,
   intermediateState: string,
@@ -71,11 +71,15 @@ function startWatchdog(
             await ctx.proxyDispatch(proxyId, {
               action: 'kill_session',
               sessionName: tmuxSession,
-            }).catch(() => {});
+            }).catch((err) => {
+              console.warn(`[watchdog] Best-effort kill_session failed for ${name}:`, (err as Error).message);
+            });
           }
         }
       });
-    } catch { /* watchdog is best-effort */ }
+    } catch (err) {
+      console.warn(`[watchdog] Failed for ${name}:`, (err as Error).message);
+    }
   }, timeoutMs);
 }
 
@@ -182,6 +186,7 @@ export async function spawnAgent(
       });
     }
 
+    // Let the CLI fully initialize before finalizing state
     await sleep(POST_SPAWN_ACTIVE_DELAY_MS);
 
     // ── Phase 3: finalize (lock) ──

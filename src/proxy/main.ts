@@ -12,7 +12,7 @@ import type { ProxyCommand, ProxyResponse } from '../shared/types.ts';
 const PROXY_PORT = parseInt(process.env['PROXY_PORT'] ?? '3100', 10);
 const ORCHESTRATOR_URL = process.env['ORCHESTRATOR_URL'] ?? 'http://localhost:3000';
 const PROXY_HOST = process.env['PROXY_HOST'] ?? `host.docker.internal:${PROXY_PORT}`;
-import { randomBytes } from 'node:crypto';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 const PROXY_ID = process.env['PROXY_ID'] ?? `proxy-${randomBytes(4).toString('hex')}`;
 const ORCHESTRATOR_SECRET = process.env['ORCHESTRATOR_SECRET'] ?? null;
 
@@ -69,8 +69,8 @@ async function heartbeat(): Promise<void> {
     try {
       token = generateToken();
       await register();
-    } catch {
-      // Will retry on next heartbeat
+    } catch (err) {
+      console.warn(`[proxy] Re-register failed:`, (err as Error).message);
     }
   }
 }
@@ -124,7 +124,7 @@ async function executeCommand(command: ProxyCommand): Promise<ProxyResponse> {
         return { ok: true };
 
       default:
-        return { ok: false, error: `Unknown action: ${(command as ProxyCommand).action}` };
+        return { ok: false, error: `Unknown action: ${(command as Record<string, unknown>).action}` };
     }
   } catch (err) {
     return { ok: false, error: (err as Error).message };
@@ -158,7 +158,8 @@ const server = createServer(async (req, res) => {
   // Command endpoint — token-protected
   if (req.method === 'POST' && req.url === '/command') {
     const incomingToken = req.headers['x-proxy-token'];
-    if (incomingToken !== token) {
+    if (typeof incomingToken !== 'string' || incomingToken.length !== token.length ||
+        !timingSafeEqual(Buffer.from(incomingToken), Buffer.from(token))) {
       json(res, 401, { ok: false, error: 'Invalid token' });
       return;
     }
