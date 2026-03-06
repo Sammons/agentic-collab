@@ -90,8 +90,10 @@ export class HealthMonitor {
   /**
    * Poll a single agent. Priority: reload > compact > idle detection.
    */
-  async pollAgent(agent: AgentRecord): Promise<void> {
-    if (!agent.proxyId) return;
+  async pollAgent(agentSnapshot: AgentRecord): Promise<void> {
+    // Re-read fresh state to avoid acting on stale data from pollAll()
+    const agent = this.db.getAgent(agentSnapshot.name);
+    if (!agent || !agent.proxyId || !canSuspend(agent)) return;
 
     const adapter = getAdapter(agent.engine);
     const session = sessionName(agent);

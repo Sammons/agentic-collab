@@ -177,20 +177,18 @@ export class WebSocketServer {
       offset = 10;
     }
 
-    const maskLength = masked ? 4 : 0;
+    // RFC 6455 §5.1: client frames MUST be masked
+    if (!masked) return null;
+
+    const maskLength = 4;
     const totalLength = offset + maskLength + payloadLength;
 
     if (buffer.length < totalLength) return null;
 
-    let payload: Buffer;
-    if (masked) {
-      const maskKey = buffer.subarray(offset, offset + 4);
-      payload = Buffer.alloc(payloadLength);
-      for (let i = 0; i < payloadLength; i++) {
-        payload[i] = buffer[offset + 4 + i]! ^ maskKey[i % 4]!;
-      }
-    } else {
-      payload = buffer.subarray(offset, offset + payloadLength);
+    const maskKey = buffer.subarray(offset, offset + 4);
+    const payload = Buffer.alloc(payloadLength);
+    for (let i = 0; i < payloadLength; i++) {
+      payload[i] = buffer[offset + 4 + i]! ^ maskKey[i % 4]!;
     }
 
     return { opcode, payload, totalLength };

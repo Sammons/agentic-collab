@@ -15,7 +15,7 @@ export function sanitizeMessage(text: string): string {
   // Strip ANSI/tmux escape sequences (\x1B[...)
   let cleaned = text
     .replace(/\x1B\[[0-9;]*[A-Za-z]/g, '') // ANSI CSI sequences
-    .replace(/\x1B\][^\x07]*\x07/g, '')     // OSC sequences
+    .replace(/\x1B\].*?(?:\x07|\x1B\\)/gs, '') // OSC sequences (BEL or ST terminator)
     .replace(/\x1B[^[\]]/g, '')              // Other ESC sequences
     .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, '');
 

@@ -47,24 +47,23 @@ describe('Engine Adapters', () => {
       assert.ok(cmd.includes('fix the bug'));
     });
 
-    it('builds spawn command with minimal options', () => {
+    it('builds spawn command with minimal options (no skip-permissions by default)', () => {
       const cmd = adapter.buildSpawnCommand({
         name: 'test-agent',
         cwd: '/tmp/test',
       });
       assert.ok(cmd.includes('claude'));
       assert.ok(!cmd.includes('--model'));
-      // dangerouslySkipPermissions defaults to true (unless explicitly false)
-      assert.ok(cmd.includes('--dangerously-skip-permissions'));
+      assert.ok(!cmd.includes('--dangerously-skip-permissions'));
     });
 
-    it('builds spawn command without skip-permissions when explicitly disabled', () => {
+    it('builds spawn command with skip-permissions when explicitly enabled', () => {
       const cmd = adapter.buildSpawnCommand({
         name: 'test-agent',
         cwd: '/tmp/test',
-        dangerouslySkipPermissions: false,
+        dangerouslySkipPermissions: true,
       });
-      assert.ok(!cmd.includes('--dangerously-skip-permissions'));
+      assert.ok(cmd.includes('--dangerously-skip-permissions'));
     });
 
     it('builds resume command with session ID', () => {

@@ -17,10 +17,16 @@ describe('Persona', () => {
   });
 
   describe('resolvePersonaPath', () => {
-    it('returns explicit path if it exists', () => {
+    it('returns explicit path if it exists within personasDir', () => {
       const path = join(tmpDir, 'custom.md');
       writeFileSync(path, '# Custom persona');
-      assert.equal(resolvePersonaPath('agent-1', path), path);
+      assert.equal(resolvePersonaPath('agent-1', path, tmpDir), path);
+    });
+
+    it('rejects explicit path outside personasDir', () => {
+      const path = join(tmpDir, 'custom.md');
+      writeFileSync(path, '# Custom persona');
+      assert.equal(resolvePersonaPath('agent-1', path, '/some/other/dir'), null);
     });
 
     it('returns null if explicit path does not exist', () => {
