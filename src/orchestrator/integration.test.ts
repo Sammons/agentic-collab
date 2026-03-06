@@ -6,7 +6,7 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http';
-import { mkdtempSync, rmSync, readFileSync, existsSync, createWriteStream, realpathSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, existsSync, createWriteStream, realpathSync, unlinkSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { Database } from './database.ts';
@@ -326,15 +326,25 @@ describe('Integration: file upload via streaming', () => {
     db = new Database(join(tmpDir, 'test.db'));
     wss = new WebSocketServer();
 
-    // ── Mock proxy that handles /upload ──
+    // ── Mock proxy that handles /upload (validates token, streams to disk) ──
     mockProxy = createServer((req: IncomingMessage, res: ServerResponse) => {
       if (req.method === 'POST' && req.url?.startsWith('/upload')) {
+        // Verify proxy token is forwarded
+        const incomingToken = req.headers['x-proxy-token'];
+        if (incomingToken !== PROXY_TOKEN) {
+          res.writeHead(401, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, error: 'Invalid token' }));
+          return;
+        }
+
         const url = new URL(req.url, 'http://localhost');
         const cwd = url.searchParams.get('cwd');
         const filename = url.searchParams.get('filename');
 
         if (!filename || filename.includes('/') || filename.includes('\\') ||
-            filename === '.' || filename === '..') {
+            filename === '.' || filename === '..' ||
+            filename.includes('\0') || filename.length > 255 ||
+            /^(CON|PRN|AUX|NUL|COM\d|LPT\d)(\..+)?$/i.test(filename)) {
           res.writeHead(400, { 'content-type': 'application/json' });
           res.end(JSON.stringify({ ok: false, error: 'Invalid filename' }));
           return;
@@ -357,6 +367,7 @@ describe('Integration: file upload via streaming', () => {
           res.end(JSON.stringify({ ok: true, data: { path: targetPath, size } }));
         });
         ws.on('error', (err) => {
+          try { unlinkSync(targetPath); } catch { /* may not exist */ }
           res.writeHead(500, { 'content-type': 'application/json' });
           res.end(JSON.stringify({ ok: false, error: err.message }));
         });
@@ -513,5 +524,69 @@ describe('Integration: file upload via streaming', () => {
       },
     );
     assert.equal(res.status, 401);
+  });
+
+  it('forwards x-proxy-token correctly (mock verifies token)', async () => {
+    // The mock proxy now validates x-proxy-token — if the orchestrator didn't
+    // forward it, the mock would return 401 and the orchestrator would return 500.
+    const res = await uploadFile('upload-agent', 'token-test.txt', 'token-verified');
+    assert.equal(res.status, 202);
+    assert.equal(res.data.ok, true);
+    // File was written — proxy accepted the token
+    assert.ok(existsSync(join(tmpDir, 'token-test.txt')));
+  });
+
+  it('handles proxy error gracefully (settle guard)', async () => {
+    // Upload to a filename that will cause a proxy-side write error
+    // by targeting a non-existent subdirectory in cwd
+    // The proxy validates cwd exists but won't have this subpath
+    // Instead, test with a deliberately bad agent cwd
+    db.createAgent({ name: 'bad-cwd-agent', engine: 'claude', cwd: '/nonexistent/path/xyz' });
+    const badAgent = db.getAgent('bad-cwd-agent')!;
+    db.updateAgentState('bad-cwd-agent', 'active', badAgent.version, { proxyId: 'upload-proxy' });
+
+    const res = await uploadFile('bad-cwd-agent', 'test.txt', 'will-fail');
+    assert.equal(res.status, 500);
+    assert.equal(res.data.ok, undefined); // error response from orchestrator
+    assert.ok(res.data.error, 'Should have error message');
+  });
+
+  it('uploads concurrent files correctly', async () => {
+    const files = Array.from({ length: 5 }, (_, i) => ({
+      name: `concurrent-${i}.txt`,
+      content: `Content of file ${i}: ${'x'.repeat(1000)}`,
+    }));
+
+    const results = await Promise.all(
+      files.map(f => uploadFile('upload-agent', f.name, f.content)),
+    );
+
+    // All should succeed
+    for (let i = 0; i < files.length; i++) {
+      assert.equal(results[i].status, 202, `File ${files[i].name} should succeed`);
+      assert.equal(results[i].data.ok, true);
+    }
+
+    // All files should exist with correct content
+    for (const f of files) {
+      const content = readFileSync(join(tmpDir, f.name), 'utf-8');
+      assert.equal(content, f.content, `Content mismatch for ${f.name}`);
+    }
+  });
+
+  it('rejects null byte in filename at orchestrator level', async () => {
+    const res = await uploadFile('upload-agent', 'evil\0.txt', 'data');
+    assert.equal(res.status, 400);
+  });
+
+  it('rejects reserved Windows filename at orchestrator level', async () => {
+    const res = await uploadFile('upload-agent', 'CON.txt', 'data');
+    assert.equal(res.status, 400);
+  });
+
+  it('rejects filename exceeding 255 chars at orchestrator level', async () => {
+    const longName = 'a'.repeat(256) + '.txt';
+    const res = await uploadFile('upload-agent', longName, 'data');
+    assert.equal(res.status, 400);
   });
 });
