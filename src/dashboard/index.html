@@ -170,8 +170,13 @@
     font-size: 13px;
     line-height: 1.5;
     word-break: break-word;
-    white-space: pre-wrap;
   }
+  .msg-body { white-space: normal; }
+  .msg-body p { margin: 4px 0; }
+  .msg-body code { background: rgba(255,255,255,0.1); padding: 1px 4px; border-radius: 3px; font-size: 12px; }
+  .msg-body pre { white-space: pre-wrap; }
+  .msg-body ul, .msg-body ol { margin: 4px 0; padding-left: 20px; }
+  .msg-body h1, .msg-body h2, .msg-body h3, .msg-body h4, .msg-body h5, .msg-body h6 { margin: 8px 0 4px; }
   .msg.to-agent {
     align-self: flex-end;
     background: #1a3a5c;
@@ -1071,7 +1076,7 @@
       } else {
         div.innerHTML = `
           <div class="msg-sender">${esc(sender)}${topicStr}</div>
-          <div>${esc(displayMsg)}</div>
+          <div class="msg-body">${renderMarkdown(esc(displayMsg))}</div>
           <div class="msg-time">${time}</div>${statusHtml}
         `;
       }
@@ -1144,7 +1149,7 @@
       html += '</dl>';
     }
     if (data.body) {
-      html += '<div class="persona-body">' + esc(data.body) + '</div>';
+      html += '<div class="persona-body">' + renderMarkdown(esc(data.body)) + '</div>';
     }
     panel.innerHTML = html || '<div class="persona-empty">Persona file is empty.</div>';
   }
@@ -1460,6 +1465,51 @@
     const div = document.createElement('div');
     div.textContent = s;
     return div.innerHTML;
+  }
+
+  /**
+   * Minimal zero-dependency markdown renderer.
+   * Input must already be HTML-escaped via esc().
+   * Supports: headings, bold, italic, code blocks, inline code, lists, links, paragraphs.
+   */
+  function renderMarkdown(escaped) {
+    if (!escaped) return '';
+    // Preserve code blocks first — extract and replace with placeholders
+    const codeBlocks = [];
+    let text = escaped.replace(/```(?:\w*)\n([\s\S]*?)```/g, (_m, code) => {
+      codeBlocks.push(code.replace(/\n$/, ''));
+      return '\x00CB' + (codeBlocks.length - 1) + '\x00';
+    });
+    // Inline code
+    text = text.replace(/`([^`\n]+)`/g, '<code>$1</code>');
+    // Headings (must be at start of line)
+    text = text.replace(/^(#{1,6})\s+(.+)$/gm, (_m, hashes, content) => {
+      const level = hashes.length;
+      return `<h${level} style="margin:8px 0 4px;font-size:${18 - level * 1.5}px">${content}</h${level}>`;
+    });
+    // Bold
+    text = text.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    // Italic (single asterisk, not inside words)
+    text = text.replace(/(?<!\w)\*(.+?)\*(?!\w)/g, '<em>$1</em>');
+    // Links
+    text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" style="color:var(--accent)">$1</a>');
+    // Unordered lists
+    text = text.replace(/^[-*]\s+(.+)$/gm, '<li>$1</li>');
+    text = text.replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul style="margin:4px 0;padding-left:20px">$1</ul>');
+    // Ordered lists
+    text = text.replace(/^\d+\.\s+(.+)$/gm, '<li>$1</li>');
+    // Horizontal rules
+    text = text.replace(/^---+$/gm, '<hr style="border:none;border-top:1px solid var(--border);margin:8px 0">');
+    // Paragraphs: double newlines
+    text = text.replace(/\n\n+/g, '</p><p style="margin:4px 0">');
+    text = '<p style="margin:4px 0">' + text + '</p>';
+    // Clean up empty paragraphs
+    text = text.replace(/<p style="margin:4px 0"><\/p>/g, '');
+    // Restore code blocks
+    text = text.replace(/\x00CB(\d+)\x00/g, (_m, idx) => {
+      return `<pre style="background:var(--bg);padding:8px;border-radius:4px;overflow-x:auto;margin:4px 0;font-size:12px"><code>${codeBlocks[parseInt(idx)]}</code></pre>`;
+    });
+    return text;
   }
 
   function timeAgo(isoStr) {
