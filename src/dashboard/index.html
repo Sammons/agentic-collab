@@ -243,6 +243,20 @@
   .thread-input textarea:disabled { opacity: 0.5; cursor: not-allowed; }
 
   /* ── Upload Button ── */
+  .upload-wrap {
+    position: relative;
+    display: inline-flex;
+  }
+  .upload-wrap input[type="file"] {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0;
+    cursor: pointer;
+    z-index: 1;
+  }
+  .upload-wrap input[type="file"]:disabled { cursor: not-allowed; }
   .upload-btn {
     padding: 8px 12px;
     border-radius: 6px;
@@ -254,15 +268,18 @@
     cursor: pointer;
     transition: all 0.15s;
     line-height: 1;
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
   }
   .upload-btn:hover { border-color: var(--accent); color: var(--accent); }
-  .upload-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-  .upload-btn.uploading {
-    pointer-events: none;
-    position: relative;
+  .upload-btn.disabled { opacity: 0.5; cursor: not-allowed; }
+  .upload-wrap.uploading { pointer-events: none; }
+  .upload-wrap.uploading .upload-btn {
     color: transparent;
   }
-  .upload-btn.uploading::after {
+  .upload-wrap.uploading .upload-btn::after {
     content: '';
     position: absolute;
     inset: 0;
@@ -720,7 +737,7 @@
       flex: 0 0 100%;
       order: 0;
     }
-    .thread-input .upload-btn { order: 1; }
+    .thread-input .upload-wrap { order: 1; }
     .thread-input #sendBtn {
       order: 2;
       margin-left: auto;
@@ -802,9 +819,11 @@
     <div class="persona-panel" id="personaPanel" style="display:none"></div>
     <div class="watch-panel" id="watchPanel" style="display:none"></div>
     <div class="thread-input" id="threadInput" style="display:none">
-      <input type="file" id="fileInput" style="display:none" multiple />
       <textarea id="msgInput" placeholder="Type a message..." rows="1"></textarea>
-      <button class="upload-btn" id="uploadBtn" disabled title="Upload files">+</button>
+      <div class="upload-wrap" id="uploadWrap">
+        <input type="file" id="fileInput" multiple disabled />
+        <span class="upload-btn" id="uploadBtn">+</span>
+      </div>
       <button id="sendBtn" disabled>Send</button>
     </div>
   </div>
@@ -1414,7 +1433,9 @@
     const agent = state.agents.find(a => a.name === state.selected);
     const blocked = agent && CANT_RECEIVE.has(agent.state);
     sendBtn.disabled = blocked;
-    uploadBtn.disabled = blocked;
+    const fileInput = document.getElementById('fileInput');
+    fileInput.disabled = blocked;
+    uploadBtn.classList.toggle('disabled', !!blocked);
     msgInput.disabled = blocked;
     msgInput.placeholder = blocked
       ? `Agent is ${agent ? agent.state : 'unavailable'} — cannot receive messages`
@@ -1626,10 +1647,6 @@
     return { file: file.name, ok: res.ok, ...body };
   }
 
-  document.getElementById('uploadBtn').onclick = () => {
-    document.getElementById('fileInput').click();
-  };
-
   const LARGE_FILE_THRESHOLD = 100 * 1024 * 1024; // 100 MB
 
   function formatFileSize(bytes) {
@@ -1653,8 +1670,17 @@
       if (!confirmed) { e.target.value = ''; return; }
     }
 
-    const uploadBtn = document.getElementById('uploadBtn');
-    uploadBtn.classList.add('uploading');
+    const uploadWrap = document.getElementById('uploadWrap');
+    uploadWrap.classList.add('uploading');
+
+    // Show uploading indicator in thread
+    const messagesEl = document.getElementById('threadMessages');
+    const uploadIndicator = document.createElement('div');
+    uploadIndicator.className = 'msg to-agent file-upload';
+    const fileNames = files.map(f => `${f.name} (${formatFileSize(f.size)})`).join(', ');
+    uploadIndicator.innerHTML = `<div class="msg-header"><span class="msg-sender">you</span><span class="msg-meta"><span class="msg-status pending">\u2022\u2022\u2022 uploading</span></span></div><div class="file-info"><span class="file-icon">&#128206;</span> ${esc(fileNames)}</div>`;
+    messagesEl.appendChild(uploadIndicator);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
 
     try {
       const results = await Promise.allSettled(files.map(uploadFile));
@@ -1669,7 +1695,8 @@
     } catch (err) {
       if (err.message !== 'auth') showToast('Upload failed', 'error');
     } finally {
-      uploadBtn.classList.remove('uploading');
+      uploadWrap.classList.remove('uploading');
+      uploadIndicator.remove(); // real message appears via WebSocket
       e.target.value = '';
     }
   };
