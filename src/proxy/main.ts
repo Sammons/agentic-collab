@@ -128,6 +128,11 @@ async function executeCommand(command: ProxyCommand): Promise<ProxyResponse> {
         return { ok: true, data: exists };
       }
 
+      case 'pane_activity': {
+        const activity = tmux.paneActivity(command.sessionName);
+        return { ok: true, data: activity };
+      }
+
       case 'send_keys':
         tmux.sendKeys(command.sessionName, command.keys);
         return { ok: true };
