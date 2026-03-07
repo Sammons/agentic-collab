@@ -1597,6 +1597,30 @@
     }
   };
 
+  // Paste image/file from clipboard
+  document.getElementById('msgInput').addEventListener('paste', (e) => {
+    const items = e.clipboardData?.items;
+    if (!items || !state.selected) return;
+
+    const files = [];
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.kind === 'file') {
+        const file = item.getAsFile();
+        if (file) files.push(file);
+      }
+    }
+
+    if (files.length === 0) return; // plain text paste, let default handle it
+    e.preventDefault();
+
+    const dt = new DataTransfer();
+    for (const f of files) dt.items.add(f);
+    const fileInput = document.getElementById('fileInput');
+    fileInput.files = dt.files;
+    fileInput.dispatchEvent(new Event('change'));
+  });
+
   // Drag-and-drop on thread messages
   const threadMsgs = document.getElementById('threadMessages');
   threadMsgs.addEventListener('dragover', (e) => {
