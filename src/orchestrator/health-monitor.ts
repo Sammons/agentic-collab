@@ -38,6 +38,7 @@ const DEFAULT_IDLE_SUSPEND_MS = 5 * 60 * 1000;
 
 export class HealthMonitor {
   private timer: ReturnType<typeof setInterval> | null = null;
+  private fastTimer: ReturnType<typeof setInterval> | null = null;
   private readonly quickPollTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly db: Database;
   private readonly locks: LockManager;
@@ -48,6 +49,7 @@ export class HealthMonitor {
   private readonly autoCompactThreshold: number;
   private readonly autoReloadThreshold: number;
   private readonly idleSuspendMs: number;
+  static readonly FAST_POLL_MS = 5_000;
   private readonly onAgentUpdate: (agentName: string) => void;
   private readonly onQueueUpdate: (message: PendingMessage) => void;
   private readonly onDashboardMessage: (message: DashboardMessage) => void;
@@ -69,15 +71,24 @@ export class HealthMonitor {
 
   start(): void {
     if (this.timer) return;
-    console.log(`[health] Starting monitor (poll every ${this.pollIntervalMs}ms)`);
+    console.log(`[health] Starting monitor (poll every ${this.pollIntervalMs}ms, fast-poll every ${HealthMonitor.FAST_POLL_MS}ms for active agents)`);
     this.timer = setInterval(() => {
       this.pollAll().catch((err) => {
         console.error('[health] Poll error:', err);
       });
     }, this.pollIntervalMs);
+    this.fastTimer = setInterval(() => {
+      this.pollActiveAgents().catch((err) => {
+        console.error('[health] Fast poll error:', err);
+      });
+    }, HealthMonitor.FAST_POLL_MS);
   }
 
   stop(): void {
+    if (this.fastTimer) {
+      clearInterval(this.fastTimer);
+      this.fastTimer = null;
+    }
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
@@ -106,6 +117,32 @@ export class HealthMonitor {
       }
     }, 1000);
     this.quickPollTimers.set(agentName, timer);
+  }
+
+  /**
+   * Fast-poll only active agents (every 5s) for near real-time state detection.
+   * Only captures pane output and handles idle transitions — skips the heavy
+   * operations (context thresholds, reload, compact, suspend timeout) which
+   * are handled by the full 30s pollAll.
+   */
+  async pollActiveAgents(): Promise<void> {
+    const agents = this.db.listAgents().filter(
+      (a) => a.state === 'active' && a.proxyId,
+    );
+    for (const agent of agents) {
+      try {
+        const paneOutput = await this.capturePaneOutput(agent);
+        if (paneOutput === null) continue;
+        const adapter = getAdapter(agent.engine);
+        const idleState = adapter.detectIdleState(paneOutput);
+        this.handleIdleTransitions(agent, idleState);
+        if (idleState === 'waiting_for_input') {
+          await this.messageDispatcher.deliverIfReady(agent.name);
+        }
+      } catch (err) {
+        console.error(`[health] Fast poll error for ${agent.name}:`, err);
+      }
+    }
   }
 
   /**
