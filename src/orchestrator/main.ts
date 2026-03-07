@@ -160,6 +160,20 @@ const lifecycleCtx: LifecycleContext = {
   orchestratorHost: ORCHESTRATOR_HOST,
 };
 
+// Voice proxy config
+const ELEVENLABS_API_KEY = process.env['ELEVENLABS_API_KEY'] ?? '';
+const voiceOpts: VoiceProxyOptions | null = ELEVENLABS_API_KEY
+  ? {
+      elevenLabsApiKey: ELEVENLABS_API_KEY,
+      sttModel: process.env['ELEVENLABS_STT_MODEL'],
+      language: process.env['ELEVENLABS_STT_LANGUAGE'],
+    }
+  : null;
+
+if (voiceOpts) {
+  console.log('[orchestrator] Voice dictation enabled (ElevenLabs API key set)');
+}
+
 const routeCtx: RouteContext = {
   db,
   wss,
@@ -189,20 +203,6 @@ const server = createServer(async (req, res) => {
 
   await router(req, res);
 });
-
-// Voice proxy config
-const ELEVENLABS_API_KEY = process.env['ELEVENLABS_API_KEY'] ?? '';
-const voiceOpts: VoiceProxyOptions | null = ELEVENLABS_API_KEY
-  ? {
-      elevenLabsApiKey: ELEVENLABS_API_KEY,
-      sttModel: process.env['ELEVENLABS_STT_MODEL'],
-      language: process.env['ELEVENLABS_STT_LANGUAGE'],
-    }
-  : null;
-
-if (voiceOpts) {
-  console.log('[orchestrator] Voice dictation enabled (ElevenLabs API key set)');
-}
 
 // WebSocket upgrade
 server.on('upgrade', (req, socket, head) => {
