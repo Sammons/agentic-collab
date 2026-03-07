@@ -187,9 +187,6 @@ export class HealthMonitor {
     this.handleIdleTransitions(agent, idleState);
 
     if (idleState === 'waiting_for_input') {
-      // Check for stuck elicitation prompts before attempting delivery
-      if (await this.handleElicitation(agent, adapter, paneOutput)) return;
-
       // Fallback delivery — primary delivery is event-driven via MessageDispatcher
       await this.messageDispatcher.deliverIfReady(agent.name);
     }
@@ -333,65 +330,6 @@ export class HealthMonitor {
     if (latest && latest.reloadQueued) {
       await this.handleReload(latest);
     }
-  }
-
-  /**
-   * Detect and auto-respond to user elicitation prompts (plan mode,
-   * AskUserQuestion, permission prompts). These cause agents to get stuck
-   * even in permission-skip mode.
-   * Returns true if an elicitation was detected and handled.
-   */
-  private readonly lastElicitationAt = new Map<string, number>();
-  private static readonly ELICITATION_COOLDOWN_MS = 30_000; // 30s between auto-responses
-
-  private async handleElicitation(
-    agent: AgentRecord,
-    adapter: ReturnType<typeof getAdapter>,
-    paneOutput: string,
-  ): Promise<boolean> {
-    const elicitation = adapter.detectElicitation(paneOutput);
-    if (!elicitation) return false;
-
-    // Cooldown to prevent spamming keys
-    const lastAt = this.lastElicitationAt.get(agent.name) ?? 0;
-    if (Date.now() - lastAt < HealthMonitor.ELICITATION_COOLDOWN_MS) return false;
-
-    console.log(`[health] ${agent.name}: ${elicitation.description} — auto-responding with [${elicitation.autoRespondKeys.join(', ')}]`);
-    this.lastElicitationAt.set(agent.name, Date.now());
-
-    const session = sessionName(agent);
-    const proxyId = agent.proxyId!;
-
-    try {
-      for (const key of elicitation.autoRespondKeys) {
-        await this.proxyDispatch(proxyId, {
-          action: 'send_keys',
-          sessionName: session,
-          keys: key,
-        });
-      }
-
-      this.db.logEvent(agent.name, 'elicitation_auto_responded', undefined, {
-        type: elicitation.type,
-        description: elicitation.description,
-        keys: elicitation.autoRespondKeys,
-      });
-
-      // Notify dashboard
-      this.onDashboardMessage({
-        id: 0,
-        agent: agent.name,
-        direction: 'from_agent' as const,
-        topic: null,
-        message: `[system] Auto-responded to ${elicitation.type}: ${elicitation.description}`,
-        createdAt: new Date().toISOString(),
-        queueId: null,
-      });
-    } catch (err) {
-      console.error(`[health] Elicitation auto-respond failed for ${agent.name}:`, (err as Error).message);
-    }
-
-    return true;
   }
 
   private async handleReload(agent: AgentRecord): Promise<void> {
