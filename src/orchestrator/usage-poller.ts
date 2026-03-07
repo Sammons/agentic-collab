@@ -218,26 +218,35 @@ export class UsagePoller {
  *   ███████████                                        22% used
  *   Resets Mar 13, 12am (America/Chicago)
  */
+const PROGRESS_BAR_RE = /[█▌▊▋▍▎▏░]/;
+
 export function parseClaudeUsage(output: string): UsageBucket[] {
   const buckets: UsageBucket[] = [];
   const lines = output.split('\n');
 
   for (let i = 0; i < lines.length; i++) {
-    const pctMatch = lines[i]!.match(/(\d+)%\s+used/);
+    // Match lines where "NN% used" appears alongside a progress bar
+    const line = lines[i]!;
+    const pctMatch = line.match(/(\d+)%\s+used/);
     if (!pctMatch) continue;
+
+    // Require a progress bar on the same line or the line immediately above
+    const hasBarOnLine = PROGRESS_BAR_RE.test(line);
+    const hasBarAbove = i > 0 && PROGRESS_BAR_RE.test(lines[i - 1]!);
+    if (!hasBarOnLine && !hasBarAbove) continue;
 
     const pctUsed = parseInt(pctMatch[1]!, 10);
 
     // Look backwards for the label (skip bar lines and blank lines)
     let label = '';
     for (let j = i - 1; j >= 0; j--) {
-      const line = lines[j]!.trim();
-      if (!line) continue;
+      const l = lines[j]!.trim();
+      if (!l) continue;
       // Skip progress bar lines (contain block characters)
-      if (/^[█▌▊▋▍▎▏\s░]+$/.test(line)) continue;
+      if (/^[█▌▊▋▍▎▏\s░]+$/.test(l)) continue;
       // Skip lines that are just the percentage
-      if (/^\d+%/.test(line)) continue;
-      label = line;
+      if (/^\d+%/.test(l)) continue;
+      label = l;
       break;
     }
 
