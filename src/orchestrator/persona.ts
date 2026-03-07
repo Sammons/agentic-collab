@@ -227,6 +227,41 @@ import type { EngineType } from '../shared/types.ts';
 const VALID_ENGINES = new Set<string>(['claude', 'codex', 'opencode']);
 
 /**
+ * Re-sync a single agent's persona from disk.
+ * Call before spawn/resume to pick up config changes (engine, model, etc.).
+ * Returns true if the persona was found and synced.
+ */
+export function syncSinglePersona(db: Database, name: string, personasDir?: string): boolean {
+  const dir = personasDir ?? getPersonasDir();
+  const filePath = join(dir, `${name}.md`);
+  let raw: string;
+  try {
+    raw = readFileSync(filePath, 'utf-8');
+  } catch {
+    return false; // no persona file
+  }
+  if (!raw.trim()) return false;
+
+  const { frontmatter } = parseFrontmatter(raw);
+  const fm = frontmatter as PersonaFrontmatter;
+  const engine = fm.engine;
+  const cwd = fm.cwd;
+  if (!engine || !VALID_ENGINES.has(engine) || !cwd) return false;
+
+  db.upsertAgentFromPersona({
+    name,
+    engine: engine as EngineType,
+    model: fm.model,
+    thinking: fm.thinking,
+    cwd,
+    persona: name,
+    permissions: fm.permissions,
+    proxyHost: fm.proxy_host,
+  });
+  return true;
+}
+
+/**
  * Scan persona files and idempotently merge into SQLite.
  * Creates new agents, updates config fields on existing ones.
  * Preserves runtime state (active/idle/suspended, session, proxy, etc.).

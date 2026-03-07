@@ -14,7 +14,7 @@ import type { WebSocketServer } from '../shared/websocket-server.ts';
 import type { AgentState, EngineType, ProxyCommand, ProxyResponse } from '../shared/types.ts';
 import { sanitizeMessage, generateMessageId } from '../shared/sanitize.ts';
 import type { LockManager } from '../shared/lock.ts';
-import { getPersonasDir, parseFrontmatter, createPersonaAndAgent } from './persona.ts';
+import { getPersonasDir, parseFrontmatter, createPersonaAndAgent, syncSinglePersona } from './persona.ts';
 import {
   spawnAgent, resumeAgent, suspendAgent, destroyAgent,
   reloadAgent, interruptAgent, compactAgent, killAgent,
@@ -491,6 +491,8 @@ route('POST', '/api/agents/:name/spawn', async (req, res, match, ctx) => {
 
   try {
     const lifecycleCtx = makeLifecycleCtx(ctx);
+    // Re-sync persona from disk to pick up config changes (engine, model, etc.)
+    syncSinglePersona(ctx.db, name);
     const agent = ctx.db.getAgent(name);
     if (!agent) return json(res, 404, { error: 'Agent not found' });
 
@@ -518,6 +520,8 @@ route('POST', '/api/agents/:name/resume', async (req, res, match, ctx) => {
 
   try {
     const lifecycleCtx = makeLifecycleCtx(ctx);
+    // Re-sync persona from disk to pick up config changes (engine, model, etc.)
+    syncSinglePersona(ctx.db, name);
     const agent = ctx.db.getAgent(name);
     if (!agent) return json(res, 404, { error: 'Agent not found' });
 
@@ -685,6 +689,16 @@ route('GET', '/api/engines/status', async (_req, res, _match, ctx) => {
   }
   const usage = ctx.usagePoller.getUsageData();
   json(res, 200, { engines, usage });
+});
+
+route('POST', '/api/engines/poll', async (_req, res, _match, ctx) => {
+  try {
+    await ctx.usagePoller.pollNow();
+    const usage = ctx.usagePoller.getUsageData();
+    json(res, 200, { ok: true, usage });
+  } catch (err) {
+    json(res, 500, { error: (err as Error).message });
+  }
 });
 
 route('GET', '/api/orchestrator/status', async (_req, res, _match, ctx) => {
