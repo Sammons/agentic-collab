@@ -33,7 +33,8 @@ export type UsagePollerOptions = {
 };
 
 const DEFAULT_POLL_MS = 10 * 60 * 1000; // 10 minutes
-const CAPTURE_DELAY_MS = 3000; // wait for /usage output to render
+const CAPTURE_POLL_MS = 2000; // interval between capture attempts
+const CAPTURE_TIMEOUT_MS = 20_000; // max time to wait for usage data to load
 
 export class UsagePoller {
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -111,17 +112,26 @@ export class UsagePoller {
           pressEnter: true,
         });
 
-        await sleep(CAPTURE_DELAY_MS);
+        // Poll capture until we see usage data or timeout
+        let buckets: UsageBucket[] = [];
+        const deadline = Date.now() + CAPTURE_TIMEOUT_MS;
+        while (Date.now() < deadline) {
+          await sleep(CAPTURE_POLL_MS);
 
-        // Capture output
-        const result = await this.proxyDispatch(proxyId, {
-          action: 'capture',
-          sessionName: session,
-          lines: 40,
-        });
+          const result = await this.proxyDispatch(proxyId, {
+            action: 'capture',
+            sessionName: session,
+            lines: 40,
+          });
+          if (!result.ok) break;
+          const output = (result.data as string) ?? '';
 
-        if (!result.ok) return;
-        const output = (result.data as string) ?? '';
+          buckets = parseClaudeUsage(output);
+          if (buckets.length > 0) break;
+
+          // If the dialog was dismissed or failed, stop waiting
+          if (/Status dialog dismissed|Error loading/i.test(output) && !/Loading usage/i.test(output)) break;
+        }
 
         // Dismiss the /usage dialog
         await this.proxyDispatch(proxyId, {
@@ -130,8 +140,6 @@ export class UsagePoller {
           keys: 'Escape',
         });
 
-        // Parse
-        const buckets = parseClaudeUsage(output);
         if (buckets.length > 0) {
           this.usageData.set('claude', {
             engine: 'claude',
@@ -140,8 +148,10 @@ export class UsagePoller {
             queriedFrom: agent.name,
           });
           console.log(`[usage] Claude: ${buckets.map(b => `${b.label}: ${b.pctUsed}%`).join(', ')}`);
+        } else {
+          console.warn(`[usage] Claude: no usage data found within ${CAPTURE_TIMEOUT_MS / 1000}s`);
         }
-      }, 10_000, 5_000); // 10s lock duration, 5s timeout
+      }, 30_000, 5_000); // 30s lock duration (usage dialog can be slow), 5s acquire timeout
     } catch (err) {
       console.error(`[usage] Claude poll error for ${agent.name}:`, (err as Error).message);
     }
@@ -172,16 +182,23 @@ export class UsagePoller {
           pressEnter: true,
         });
 
-        await sleep(CAPTURE_DELAY_MS);
+        // Poll capture until we see status data or timeout
+        let buckets: UsageBucket[] = [];
+        const deadline = Date.now() + CAPTURE_TIMEOUT_MS;
+        while (Date.now() < deadline) {
+          await sleep(CAPTURE_POLL_MS);
 
-        const result = await this.proxyDispatch(proxyId, {
-          action: 'capture',
-          sessionName: session,
-          lines: 40,
-        });
+          const result = await this.proxyDispatch(proxyId, {
+            action: 'capture',
+            sessionName: session,
+            lines: 40,
+          });
+          if (!result.ok) break;
+          const output = (result.data as string) ?? '';
 
-        if (!result.ok) return;
-        const output = (result.data as string) ?? '';
+          buckets = parseCodexStatus(output);
+          if (buckets.length > 0) break;
+        }
 
         // Dismiss the /status dialog
         await this.proxyDispatch(proxyId, {
@@ -190,7 +207,6 @@ export class UsagePoller {
           keys: 'Escape',
         });
 
-        const buckets = parseCodexStatus(output);
         if (buckets.length > 0) {
           this.usageData.set('codex', {
             engine: 'codex',
@@ -200,7 +216,7 @@ export class UsagePoller {
           });
           console.log(`[usage] Codex: ${buckets.map(b => `${b.label}: ${b.pctUsed}%`).join(', ')}`);
         }
-      }, 10_000, 5_000);
+      }, 30_000, 5_000);
     } catch (err) {
       console.error(`[usage] Codex poll error for ${agent.name}:`, (err as Error).message);
     }
