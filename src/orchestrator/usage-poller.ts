@@ -268,39 +268,31 @@ export function parseClaudeUsage(output: string): UsageBucket[] {
 
 /**
  * Parse Codex /status output.
- * Format is inline: "│  Weekly: [████████░░░░] 80% left (resets 01:44 on 13 Mar) │"
- * Each line with "NN% left/used" and a label prefix is a bucket.
+ * Real format (after stripping │ borders):
+ *   5h limit:             [████████████████░░░░] 80% left (resets 12:19)
+ *   Weekly limit:         [█████░░░░░░░░░░░░░░░] 26% left (resets 01:44 on 13 Mar)
  */
 export function parseCodexStatus(output: string): UsageBucket[] {
   const buckets: UsageBucket[] = [];
-  const lines = output.split('\n');
+  // Match lines with: <label>: ... NN% left/used (resets ...)
+  // The label must contain a colon, followed by optional progress bar, then percentage
+  const lineRe = /^\s*([A-Za-z0-9][A-Za-z0-9 ]*?\s*\w+)\s*:\s+.*?(\d+)%\s+(left|used)(?:\s*\(resets?\s+(.+?)\))?\s*$/;
 
-  for (const rawLine of lines) {
-    // Strip box-drawing borders
-    const line = rawLine.replace(/[│┃|]/g, '').trim();
+  for (const rawLine of output.split('\n')) {
+    // Strip box-drawing borders (│ ╭ ╰ ─ etc.)
+    const line = rawLine.replace(/[│┃╭╮╰╯─]/g, '').trim();
     if (!line) continue;
 
-    // Match "NN% left" or "NN% used" on lines with a label prefix
-    const leftMatch = line.match(/^(.+?)\s*\[?[█░▒▓\s]*\]?\s*(\d+)%\s+left(?:\s*\(resets?\s+(.+?)\))?/);
-    if (leftMatch) {
-      const label = leftMatch[1]!.replace(/:\s*$/, '').trim();
-      const pctUsed = 100 - parseInt(leftMatch[2]!, 10);
-      const resetsAt = leftMatch[3]?.trim() ?? '';
-      if (label && !/^[›>]/.test(label)) {
-        buckets.push({ label, pctUsed, resetsAt });
-      }
-      continue;
-    }
+    const m = line.match(lineRe);
+    if (!m) continue;
 
-    const usedMatch = line.match(/^(.+?)\s*\[?[█░▒▓\s]*\]?\s*(\d+)%\s+used(?:\s*\(resets?\s+(.+?)\))?/);
-    if (usedMatch) {
-      const label = usedMatch[1]!.replace(/:\s*$/, '').trim();
-      const pctUsed = parseInt(usedMatch[2]!, 10);
-      const resetsAt = usedMatch[3]?.trim() ?? '';
-      if (label && !/^[›>]/.test(label)) {
-        buckets.push({ label, pctUsed, resetsAt });
-      }
-    }
+    const label = m[1]!.trim();
+    const pct = parseInt(m[2]!, 10);
+    const direction = m[3]!;
+    const resetsAt = m[4]?.trim() ?? '';
+    const pctUsed = direction === 'left' ? 100 - pct : pct;
+
+    buckets.push({ label, pctUsed, resetsAt });
   }
 
   return buckets;

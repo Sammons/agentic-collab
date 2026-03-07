@@ -1000,6 +1000,7 @@
         <div class="agent-meta">
           <span>${esc(modelStr)}</span>
           <span>ctx: ${ctxStr}</span>
+          ${agent.proxyId ? `<span title="proxy: ${esc(agent.proxyId)}">${esc(agent.proxyId)}</span>` : ''}
         </div>
         ${failureInfo}
         <div class="agent-actions">

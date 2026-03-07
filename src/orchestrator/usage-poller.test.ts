@@ -93,33 +93,44 @@ describe('parseClaudeUsage', () => {
 });
 
 describe('parseCodexStatus', () => {
-  it('parses box-drawing format with "NN% left"', () => {
+  it('parses real codex /status output', () => {
     const output = [
+      '╭─────────────────────────────────────────────────────────────────────────────────╮',
+      '│  >_ OpenAI Codex (v0.111.0)                                                     │',
       '│                                                                                 │',
-      '│  Weekly:          [████████████████████░░░░░░░] 80% left (resets 01:44 on 13 Mar) │',
-      '│  5h limit:        [████████████████░░░░] 80% left (resets 12:19)                │',
+      '│  Model:                gpt-5.4 (reasoning xhigh, summaries auto)                │',
+      '│  Account:              ben@sammons.io (Plus)                                    │',
       '│                                                                                 │',
+      '│  5h limit:             [████████████████░░░░] 80% left (resets 12:19)           │',
+      '│  Weekly limit:         [█████░░░░░░░░░░░░░░░] 26% left (resets 01:44 on 13 Mar) │',
+      '╰─────────────────────────────────────────────────────────────────────────────────╯',
     ].join('\n');
     const buckets = parseCodexStatus(output);
     assert.equal(buckets.length, 2);
-    assert.equal(buckets[0]!.label, 'Weekly');
-    assert.equal(buckets[0]!.pctUsed, 20);
-    assert.equal(buckets[0]!.resetsAt, '01:44 on 13 Mar');
-    assert.equal(buckets[1]!.label, '5h limit');
-    assert.equal(buckets[1]!.pctUsed, 20);
+    assert.equal(buckets[0]!.label, '5h limit');
+    assert.equal(buckets[0]!.pctUsed, 20); // 100 - 80
+    assert.equal(buckets[0]!.resetsAt, '12:19');
+    assert.equal(buckets[1]!.label, 'Weekly limit');
+    assert.equal(buckets[1]!.pctUsed, 74); // 100 - 26
+    assert.equal(buckets[1]!.resetsAt, '01:44 on 13 Mar');
   });
 
   it('parses "NN% used" format', () => {
-    const output = '│  Daily:  [████] 45% used (resets tomorrow) │';
+    const output = '│  Daily limit:  [████] 45% used (resets tomorrow) │';
     const buckets = parseCodexStatus(output);
     assert.equal(buckets.length, 1);
-    assert.equal(buckets[0]!.label, 'Daily');
+    assert.equal(buckets[0]!.label, 'Daily limit');
     assert.equal(buckets[0]!.pctUsed, 45);
     assert.equal(buckets[0]!.resetsAt, 'tomorrow');
   });
 
-  it('ignores prompt lines (› prefix)', () => {
-    const output = '› Implement {feature}\n  83% context left';
+  it('ignores non-limit lines (model, account, prompts)', () => {
+    const output = [
+      '│  Model:                gpt-5.4 (reasoning xhigh)                │',
+      '│  Account:              test@test.io (Plus)                      │',
+      '› Implement {feature}',
+      '  83% context left',
+    ].join('\n');
     const buckets = parseCodexStatus(output);
     assert.equal(buckets.length, 0);
   });
