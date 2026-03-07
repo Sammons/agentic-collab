@@ -428,6 +428,14 @@ export class Database {
     this.db.prepare('UPDATE dashboard_messages SET queue_id = ? WHERE id = ?').run(queueId, dashboardMsgId);
   }
 
+  clearDashboardMessages(agentName: string): void {
+    this.db.prepare('DELETE FROM dashboard_messages WHERE agent = ?').run(agentName);
+  }
+
+  clearPendingMessages(agentName: string): void {
+    this.db.prepare("DELETE FROM pending_messages WHERE target_agent = ? AND source_agent IS NULL AND status = 'pending'").run(agentName);
+  }
+
   getPendingMessageById(id: number): PendingMessage | undefined {
     const row = this.db.prepare('SELECT * FROM pending_messages WHERE id = ?').get(id) as Record<string, unknown> | undefined;
     if (!row) return undefined;
