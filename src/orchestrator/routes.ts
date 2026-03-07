@@ -632,6 +632,22 @@ route('POST', '/api/orchestrator/restore', async (_req, res, _match, ctx) => {
   }
 });
 
+route('GET', '/api/engines/status', async (_req, res, _match, ctx) => {
+  const agents = ctx.db.listAgents();
+  const engines: Record<string, { configured: number; active: number; idle: number; failed: number; agents: string[] }> = {};
+  for (const engine of ['claude', 'codex', 'opencode']) {
+    const engineAgents = agents.filter(a => a.engine === engine);
+    engines[engine] = {
+      configured: engineAgents.length,
+      active: engineAgents.filter(a => a.state === 'active').length,
+      idle: engineAgents.filter(a => a.state === 'idle').length,
+      failed: engineAgents.filter(a => a.state === 'failed').length,
+      agents: engineAgents.map(a => a.name),
+    };
+  }
+  json(res, 200, { engines });
+});
+
 route('GET', '/api/orchestrator/status', async (_req, res, _match, ctx) => {
   const agents = ctx.db.listAgents();
   const proxies = ctx.db.listProxies();
