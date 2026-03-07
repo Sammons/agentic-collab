@@ -252,6 +252,7 @@ function shutdown(): void {
   console.log('[orchestrator] Shutting down...');
   clearInterval(staleProxyTimer);
   healthMonitor.stop();
+  messageDispatcher.stop();
 
   // Save agent states for network restore
   try {

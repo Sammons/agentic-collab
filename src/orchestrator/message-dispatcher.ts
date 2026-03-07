@@ -34,6 +34,9 @@ export class MessageDispatcher {
   private readonly onQueueUpdate: (message: PendingMessage) => void;
   private readonly onDashboardMessage: (message: DashboardMessage) => void;
   private readonly onMessageDelivered: (agentName: string) => void;
+  private readonly drainTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private static readonly DRAIN_INTERVAL_MS = 3000;
+  private static readonly DRAIN_MAX_ATTEMPTS = 20;
 
   constructor(opts: MessageDispatcherOptions) {
     this.db = opts.db;
@@ -50,6 +53,8 @@ export class MessageDispatcher {
    * Called on enqueue (event-driven) and from health monitor poll (fallback).
    *
    * Returns true if a message was delivered, false otherwise.
+   * If a message was delivered and more are queued, schedules a drain
+   * timer to retry delivery every 3s until the queue is empty.
    */
   async tryDeliver(agentName: string): Promise<boolean> {
     const agent = this.db.getAgent(agentName);
@@ -59,7 +64,52 @@ export class MessageDispatcher {
     const isIdle = await this.checkAgentIdle(agent);
     if (!isIdle) return false;
 
-    return this.deliverNextMessage(agentName);
+    const delivered = await this.deliverNextMessage(agentName);
+    if (delivered) {
+      this.scheduleDrain(agentName);
+    }
+    return delivered;
+  }
+
+  /**
+   * Clean up drain timers on shutdown.
+   */
+  stop(): void {
+    for (const timer of this.drainTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.drainTimers.clear();
+  }
+
+  /**
+   * Schedule a drain attempt to deliver remaining queued messages.
+   * Retries every DRAIN_INTERVAL_MS until queue is empty or max attempts reached.
+   */
+  private scheduleDrain(agentName: string, attempt: number = 0): void {
+    if (this.drainTimers.has(agentName)) return; // already draining
+    if (attempt >= MessageDispatcher.DRAIN_MAX_ATTEMPTS) return;
+
+    const remaining = this.db.getDeliverableMessages(agentName);
+    if (remaining.length === 0) return;
+
+    const timer = setTimeout(async () => {
+      this.drainTimers.delete(agentName);
+      try {
+        const delivered = await this.tryDeliver(agentName);
+        if (delivered) {
+          this.scheduleDrain(agentName, attempt + 1);
+        } else {
+          // Agent not idle yet — retry
+          const still = this.db.getDeliverableMessages(agentName);
+          if (still.length > 0) {
+            this.scheduleDrain(agentName, attempt + 1);
+          }
+        }
+      } catch (err) {
+        console.error(`[dispatcher] Drain error for ${agentName}:`, (err as Error).message);
+      }
+    }, MessageDispatcher.DRAIN_INTERVAL_MS);
+    this.drainTimers.set(agentName, timer);
   }
 
   /**

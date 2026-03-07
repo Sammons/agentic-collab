@@ -425,4 +425,90 @@ describe('HealthMonitor', () => {
     assert.ok(senderMessages.length >= 1);
     assert.ok(senderMessages.some(m => m.envelope.includes('[system]')));
   });
+
+  it('drains queued messages after first delivery', async () => {
+    db.createAgent({ name: 'health-drain', engine: 'claude', cwd: '/tmp', proxyId: 'p1' });
+    const a = db.getAgent('health-drain')!;
+    db.updateAgentState('health-drain', 'active', a.version, {
+      tmuxSession: 'agent-health-drain',
+      proxyId: 'p1',
+    });
+
+    // Enqueue two messages
+    const msg1 = db.enqueueMessage({ sourceAgent: 'sender', targetAgent: 'health-drain', envelope: '[from: sender]: msg1' });
+    const msg2 = db.enqueueMessage({ sourceAgent: 'sender', targetAgent: 'health-drain', envelope: '[from: sender]: msg2' });
+
+    // Agent starts idle, then goes active after first delivery, then back to idle
+    let deliveryCount = 0;
+    const drainDispatch = async (_proxyId: string, command: ProxyCommand): Promise<ProxyResponse> => {
+      if (command.action === 'capture') {
+        // After first delivery, simulate agent going active then idle again
+        return { ok: true, data: 'some output\n> ' }; // always idle for test
+      }
+      if (command.action === 'has_session') return { ok: true, data: true };
+      if (command.action === 'paste') {
+        deliveryCount++;
+        return { ok: true };
+      }
+      return { ok: true };
+    };
+
+    const drainLocks = new LockManager(db.rawDb);
+    const drainDispatcher = new MessageDispatcher({
+      db, locks: drainLocks, proxyDispatch: drainDispatch, orchestratorHost: 'http://localhost:3000',
+    });
+
+    // First delivery
+    const delivered = await drainDispatcher.tryDeliver('health-drain');
+    assert.ok(delivered, 'first message should be delivered');
+    assert.equal(deliveryCount, 1);
+
+    // Drain timer is scheduled — wait for it to fire (3s + buffer)
+    await new Promise(resolve => setTimeout(resolve, 3500));
+
+    // Second message should have been delivered by drain
+    assert.equal(deliveryCount, 2);
+
+    const updated1 = db.getPendingMessageById(msg1.id)!;
+    const updated2 = db.getPendingMessageById(msg2.id)!;
+    assert.equal(updated1.status, 'delivered');
+    assert.equal(updated2.status, 'delivered');
+
+    drainDispatcher.stop();
+  });
+
+  it('stop() clears drain timers', async () => {
+    db.createAgent({ name: 'health-drain-stop', engine: 'claude', cwd: '/tmp', proxyId: 'p1' });
+    const a = db.getAgent('health-drain-stop')!;
+    db.updateAgentState('health-drain-stop', 'active', a.version, {
+      tmuxSession: 'agent-health-drain-stop',
+      proxyId: 'p1',
+    });
+
+    db.enqueueMessage({ sourceAgent: 'sender', targetAgent: 'health-drain-stop', envelope: '[from: sender]: msg1' });
+    db.enqueueMessage({ sourceAgent: 'sender', targetAgent: 'health-drain-stop', envelope: '[from: sender]: msg2' });
+
+    let deliveryCount = 0;
+    const stopDispatch = async (_proxyId: string, command: ProxyCommand): Promise<ProxyResponse> => {
+      if (command.action === 'capture') return { ok: true, data: 'some output\n> ' };
+      if (command.action === 'has_session') return { ok: true, data: true };
+      if (command.action === 'paste') { deliveryCount++; return { ok: true }; }
+      return { ok: true };
+    };
+
+    const stopLocks = new LockManager(db.rawDb);
+    const stopDispatcher = new MessageDispatcher({
+      db, locks: stopLocks, proxyDispatch: stopDispatch, orchestratorHost: 'http://localhost:3000',
+    });
+
+    await stopDispatcher.tryDeliver('health-drain-stop');
+    assert.equal(deliveryCount, 1);
+
+    // Stop before drain fires
+    stopDispatcher.stop();
+
+    await new Promise(resolve => setTimeout(resolve, 3500));
+    // Should still be 1 — drain was cancelled
+    assert.equal(deliveryCount, 1);
+  });
 });
