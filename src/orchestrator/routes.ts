@@ -22,6 +22,7 @@ import {
 } from './lifecycle.ts';
 import { shutdownAgents, restoreAllAgents } from './network.ts';
 import type { MessageDispatcher } from './message-dispatcher.ts';
+import type { UsagePoller } from './usage-poller.ts';
 
 /**
  * Shared context injected into all route handlers.
@@ -45,6 +46,7 @@ export type RouteContext = {
   orchestratorHost: string;
   orchestratorSecret: string | null;
   messageDispatcher: MessageDispatcher;
+  usagePoller: UsagePoller;
 };
 
 /**
@@ -681,7 +683,8 @@ route('GET', '/api/engines/status', async (_req, res, _match, ctx) => {
       agents: engineAgents.map(a => a.name),
     };
   }
-  json(res, 200, { engines });
+  const usage = ctx.usagePoller.getUsageData();
+  json(res, 200, { engines, usage });
 });
 
 route('GET', '/api/orchestrator/status', async (_req, res, _match, ctx) => {
