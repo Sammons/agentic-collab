@@ -7,6 +7,7 @@ import { shellQuote } from '../../shared/utils.ts';
 
 export class CodexAdapter implements EngineAdapter {
   readonly engine = 'codex';
+  readonly canDeliverWhileActive = false;
 
   buildSpawnCommand(opts: SpawnOptions): string {
     const parts = ['codex'];

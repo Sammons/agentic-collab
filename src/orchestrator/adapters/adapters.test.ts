@@ -119,6 +119,20 @@ describe('Engine Adapters', () => {
       assert.equal(adapter.detectIdleState('some output\n❯'), 'waiting_for_input');
     });
 
+    it('detects idle state skipping context-left and Remote Control status bar', () => {
+      const pane = [
+        '  Standing by for new tasks.',
+        '',
+        '──────────── ▪▪▪ ─',
+        '❯ ',
+        '────────────────────────',
+        '  ⏵⏵ bypass permissions on (shift+tab to cyc…      155377 tokens Remote Control reconnecting',
+        '                                                       Context left until auto-compact: 7%',
+        '                                                          current: 2.1.70 · latest: 2.1.71',
+      ].join('\n');
+      assert.equal(adapter.detectIdleState(pane), 'waiting_for_input');
+    });
+
     it('detects idle state skipping status bar lines', () => {
       // Real Claude Code v2.x output: status bar at bottom, prompt above it
       const pane = [

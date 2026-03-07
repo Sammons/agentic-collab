@@ -7,6 +7,7 @@ import { shellQuote } from '../../shared/utils.ts';
 
 export class OpenCodeAdapter implements EngineAdapter {
   readonly engine = 'opencode';
+  readonly canDeliverWhileActive = false;
 
   buildSpawnCommand(opts: SpawnOptions): string {
     // opencode TUI mode for interactive sessions; 'run' subcommand for headless

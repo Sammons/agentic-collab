@@ -7,6 +7,7 @@ import { shellQuote } from '../../shared/utils.ts';
 
 export class ClaudeAdapter implements EngineAdapter {
   readonly engine = 'claude';
+  readonly canDeliverWhileActive = true;
 
   buildSpawnCommand(opts: SpawnOptions): string {
     const parts = ['claude'];
@@ -55,11 +56,13 @@ export class ClaudeAdapter implements EngineAdapter {
       const line = lines[i]!.trim();
       if (!line) continue;
 
-      // Skip status bar lines (token counts, version info, permission mode, /ide hints)
+      // Skip status bar lines (token counts, version info, permission mode, /ide hints, context warnings)
       if (/\d+\s*tokens/.test(line)) continue;
       if (/current:.*latest:/.test(line)) continue;
       if (/bypass permissions/.test(line)) continue;
       if (/\/ide\s/.test(line)) continue;
+      if (/Context left until/.test(line)) continue;
+      if (/Remote Control/.test(line)) continue;
 
       // Claude Code shows "❯" (U+276F) or ">" prompt when waiting for input.
       // The prompt line may contain only the prompt character and whitespace.

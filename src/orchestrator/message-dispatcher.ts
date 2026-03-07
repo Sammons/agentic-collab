@@ -60,9 +60,13 @@ export class MessageDispatcher {
     const agent = this.db.getAgent(agentName);
     if (!agent || !agent.proxyId || !canSuspend(agent)) return false;
 
-    // Check if agent is waiting for input before attempting delivery
-    const isIdle = await this.checkAgentIdle(agent);
-    if (!isIdle) return false;
+    // Engines that buffer pasted input (e.g. Claude) can receive messages while active.
+    // Others must be idle (waiting_for_input) before delivery.
+    const adapter = getAdapter(agent.engine);
+    if (!adapter.canDeliverWhileActive) {
+      const isIdle = await this.checkAgentIdle(agent);
+      if (!isIdle) return false;
+    }
 
     const delivered = await this.deliverNextMessage(agentName);
     if (delivered) {
