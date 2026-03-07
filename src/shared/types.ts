@@ -58,6 +58,7 @@ export type DashboardMessage = {
   message: string;
   queueId: number | null;
   deliveryStatus: string | null;
+  withdrawn: boolean;
   createdAt: string;
 };
 

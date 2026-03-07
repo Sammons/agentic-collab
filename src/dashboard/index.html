@@ -215,6 +215,17 @@
   .msg-status.pending { color: var(--text-dim); }
   .msg-status.delivered { color: var(--green); }
   .msg-status.failed { color: var(--red); }
+  .msg.withdrawn { opacity: 0.5; }
+  .msg.withdrawn .msg-body { text-decoration: line-through; }
+  .msg-withdraw {
+    font-size: 10px;
+    color: var(--text-dim);
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.15s;
+  }
+  .msg:hover .msg-withdraw { opacity: 1; }
+  .msg-withdraw:hover { color: var(--red); }
 
   /* ── Input ── */
   .thread-input {
@@ -1014,6 +1025,9 @@
         case 'queue_update':
           handleQueueUpdate(data.message);
           break;
+        case 'message_withdrawn':
+          handleMessageWithdrawn(data.msg);
+          break;
       }
     };
   }
@@ -1060,6 +1074,16 @@
       setTimeout(() => card.classList.remove('flash'), 600);
     }
     renderAgents();
+  }
+
+  function handleMessageWithdrawn(msg) {
+    const thread = state.threads[msg.agent];
+    if (!thread) return;
+    const idx = thread.findIndex(m => m.id === msg.id);
+    if (idx >= 0) {
+      thread[idx] = msg;
+      if (state.selected === msg.agent) renderThread();
+    }
   }
 
   // ── Render ──
@@ -1309,6 +1333,7 @@
       } else {
         div.className = `msg ${msg.direction === 'to_agent' ? 'to-agent' : 'from-agent'}`;
       }
+      if (msg.withdrawn) div.classList.add('withdrawn');
       const sender = isSystem ? 'system' : (msg.direction === 'to_agent' ? 'you' : state.selected);
       const time = new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       const topicStr = (!isUpload && msg.topic) ? ` (re: ${esc(msg.topic)})` : '';
@@ -1320,7 +1345,9 @@
             '\u2022\u2022\u2022 sending'
           }</span>`
         : '';
-      const headerHtml = `<div class="msg-header"><span class="msg-sender">${esc(sender)}${topicStr}</span><span class="msg-meta"><span class="msg-time">${time}</span>${statusHtml}</span></div>`;
+      const canWithdraw = msg.direction === 'to_agent' && !isSystem && !msg.withdrawn;
+      const withdrawHtml = canWithdraw ? `<span class="msg-withdraw" data-msg-id="${msg.id}" title="Withdraw message">unsend</span>` : '';
+      const headerHtml = `<div class="msg-header"><span class="msg-sender">${esc(sender)}${topicStr}</span><span class="msg-meta">${withdrawHtml}<span class="msg-time">${time}</span>${statusHtml}</span></div>`;
       if (isUpload) {
         div.innerHTML = `${headerHtml}<div class="file-info"><span class="file-icon">&#128206;</span> ${esc(displayMsg)}</div>`;
       } else {
@@ -1931,6 +1958,29 @@
       const fileInput = document.getElementById('fileInput');
       fileInput.files = dt.files;
       fileInput.dispatchEvent(new Event('change'));
+    }
+  });
+
+  // Withdraw/unsend message handler
+  threadMsgs.addEventListener('click', async (e) => {
+    const btn = e.target.closest('.msg-withdraw');
+    if (!btn) return;
+    const msgId = btn.dataset.msgId;
+    if (!msgId || !confirm('Withdraw this message? The agent will be notified.')) return;
+    btn.textContent = '...';
+    btn.style.pointerEvents = 'none';
+    try {
+      const res = await fetch(`/api/dashboard/messages/${msgId}/withdraw`, {
+        method: 'POST',
+        headers: authHeaders(),
+      });
+      if (res.status === 401) { handleAuthError(); return; }
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        console.error('Withdraw failed:', body?.error || res.status);
+      }
+    } catch (err) {
+      console.error('Withdraw failed:', err);
     }
   });
 

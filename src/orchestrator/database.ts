@@ -125,6 +125,11 @@ export class Database {
     if (!agentColNames.has('sort_order')) {
       this.db.exec('ALTER TABLE agents ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0');
     }
+
+    // Add withdrawn column to dashboard_messages
+    if (!dmColumns.some((c) => c['name'] === 'withdrawn')) {
+      this.db.exec('ALTER TABLE dashboard_messages ADD COLUMN withdrawn INTEGER NOT NULL DEFAULT 0');
+    }
   }
 
   /** Expose raw handle for LockManager (shares same DB connection). */
@@ -449,6 +454,25 @@ export class Database {
     this.db.prepare('UPDATE dashboard_messages SET queue_id = ? WHERE id = ?').run(queueId, dashboardMsgId);
   }
 
+  getDashboardMessageById(id: number): DashboardMessage | undefined {
+    const row = this.db.prepare(`
+      SELECT dm.*, pm.status AS delivery_status
+      FROM dashboard_messages dm
+      LEFT JOIN pending_messages pm ON dm.queue_id = pm.id
+      WHERE dm.id = ?
+    `).get(id) as Record<string, unknown> | undefined;
+    if (!row) return undefined;
+    return mapDashboardMessageRow(row);
+  }
+
+  withdrawMessage(id: number): void {
+    this.db.prepare('UPDATE dashboard_messages SET withdrawn = 1 WHERE id = ?').run(id);
+  }
+
+  cancelPendingMessage(id: number): void {
+    this.db.prepare("UPDATE pending_messages SET status = 'failed', error = 'Withdrawn by sender' WHERE id = ? AND status = 'pending'").run(id);
+  }
+
   clearDashboardMessages(agentName: string): void {
     this.db.prepare('DELETE FROM dashboard_messages WHERE agent = ?').run(agentName);
   }
@@ -540,6 +564,7 @@ function mapDashboardMessageRow(row: Record<string, unknown>): DashboardMessage 
     message: row['message'] as string,
     queueId: (row['queue_id'] as number | null) ?? null,
     deliveryStatus: (row['delivery_status'] as string | null) ?? null,
+    withdrawn: (row['withdrawn'] as number) === 1,
     createdAt: row['created_at'] as string,
   };
 }
