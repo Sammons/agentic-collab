@@ -267,55 +267,41 @@ export function parseClaudeUsage(output: string): UsageBucket[] {
 }
 
 /**
- * Parse Codex /status output. Looks for percentage patterns like:
- *   NN% used  or  NN% remaining / NN% left
- * Falls back to generic percentage extraction.
+ * Parse Codex /status output.
+ * Format is inline: "│  Weekly: [████████░░░░] 80% left (resets 01:44 on 13 Mar) │"
+ * Each line with "NN% left/used" and a label prefix is a bucket.
  */
 export function parseCodexStatus(output: string): UsageBucket[] {
   const buckets: UsageBucket[] = [];
   const lines = output.split('\n');
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]!;
+  for (const rawLine of lines) {
+    // Strip box-drawing borders
+    const line = rawLine.replace(/[│┃|]/g, '').trim();
+    if (!line) continue;
 
-    // Match "NN% used"
-    const usedMatch = line.match(/(\d+)%\s+used/);
-    if (usedMatch) {
-      const pctUsed = parseInt(usedMatch[1]!, 10);
-      const label = findLabelAbove(lines, i);
-      const resetsAt = findResetBelow(lines, i);
-      buckets.push({ label: label || 'Unknown', pctUsed, resetsAt });
+    // Match "NN% left" or "NN% used" on lines with a label prefix
+    const leftMatch = line.match(/^(.+?)\s*\[?[█░▒▓\s]*\]?\s*(\d+)%\s+left(?:\s*\(resets?\s+(.+?)\))?/);
+    if (leftMatch) {
+      const label = leftMatch[1]!.replace(/:\s*$/, '').trim();
+      const pctUsed = 100 - parseInt(leftMatch[2]!, 10);
+      const resetsAt = leftMatch[3]?.trim() ?? '';
+      if (label && !/^[›>]/.test(label)) {
+        buckets.push({ label, pctUsed, resetsAt });
+      }
       continue;
     }
 
-    // Match "NN% remaining" or "NN% left" (convert to used)
-    const remainMatch = line.match(/(\d+)%\s+(?:remaining|left)/);
-    if (remainMatch) {
-      const pctUsed = 100 - parseInt(remainMatch[1]!, 10);
-      const label = findLabelAbove(lines, i);
-      const resetsAt = findResetBelow(lines, i);
-      buckets.push({ label: label || 'Unknown', pctUsed, resetsAt });
+    const usedMatch = line.match(/^(.+?)\s*\[?[█░▒▓\s]*\]?\s*(\d+)%\s+used(?:\s*\(resets?\s+(.+?)\))?/);
+    if (usedMatch) {
+      const label = usedMatch[1]!.replace(/:\s*$/, '').trim();
+      const pctUsed = parseInt(usedMatch[2]!, 10);
+      const resetsAt = usedMatch[3]?.trim() ?? '';
+      if (label && !/^[›>]/.test(label)) {
+        buckets.push({ label, pctUsed, resetsAt });
+      }
     }
   }
 
   return buckets;
-}
-
-function findLabelAbove(lines: string[], idx: number): string {
-  for (let j = idx - 1; j >= 0; j--) {
-    const line = lines[j]!.trim();
-    if (!line) continue;
-    if (/^[█▌▊▋▍▎▏\s░]+$/.test(line)) continue;
-    if (/^\d+%/.test(line)) continue;
-    return line;
-  }
-  return '';
-}
-
-function findResetBelow(lines: string[], idx: number): string {
-  for (let j = idx + 1; j < Math.min(idx + 3, lines.length); j++) {
-    const resetMatch = lines[j]!.match(/[Rr]esets?\s+(.+)/);
-    if (resetMatch) return resetMatch[1]!.trim();
-  }
-  return '';
 }

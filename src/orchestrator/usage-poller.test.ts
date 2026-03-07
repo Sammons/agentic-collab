@@ -93,34 +93,35 @@ describe('parseClaudeUsage', () => {
 });
 
 describe('parseCodexStatus', () => {
+  it('parses box-drawing format with "NN% left"', () => {
+    const output = [
+      '│                                                                                 │',
+      '│  Weekly:          [████████████████████░░░░░░░] 80% left (resets 01:44 on 13 Mar) │',
+      '│  5h limit:        [████████████████░░░░] 80% left (resets 12:19)                │',
+      '│                                                                                 │',
+    ].join('\n');
+    const buckets = parseCodexStatus(output);
+    assert.equal(buckets.length, 2);
+    assert.equal(buckets[0]!.label, 'Weekly');
+    assert.equal(buckets[0]!.pctUsed, 20);
+    assert.equal(buckets[0]!.resetsAt, '01:44 on 13 Mar');
+    assert.equal(buckets[1]!.label, '5h limit');
+    assert.equal(buckets[1]!.pctUsed, 20);
+  });
+
   it('parses "NN% used" format', () => {
-    const output = [
-      '  API usage',
-      '  45% used',
-      '  Resets Mar 20',
-    ].join('\n');
+    const output = '│  Daily:  [████] 45% used (resets tomorrow) │';
     const buckets = parseCodexStatus(output);
     assert.equal(buckets.length, 1);
-    assert.equal(buckets[0]!.label, 'API usage');
+    assert.equal(buckets[0]!.label, 'Daily');
     assert.equal(buckets[0]!.pctUsed, 45);
-    assert.equal(buckets[0]!.resetsAt, 'Mar 20');
+    assert.equal(buckets[0]!.resetsAt, 'tomorrow');
   });
 
-  it('parses "NN% remaining" format and converts to used', () => {
-    const output = [
-      '  Weekly budget',
-      '  70% remaining',
-    ].join('\n');
+  it('ignores prompt lines (› prefix)', () => {
+    const output = '› Implement {feature}\n  83% context left';
     const buckets = parseCodexStatus(output);
-    assert.equal(buckets.length, 1);
-    assert.equal(buckets[0]!.pctUsed, 30);
-  });
-
-  it('parses "NN% left" format and converts to used', () => {
-    const output = '  Budget\n  85% left\n';
-    const buckets = parseCodexStatus(output);
-    assert.equal(buckets.length, 1);
-    assert.equal(buckets[0]!.pctUsed, 15);
+    assert.equal(buckets.length, 0);
   });
 
   it('returns empty for no usage data', () => {
