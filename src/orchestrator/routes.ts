@@ -218,8 +218,9 @@ route('POST', '/api/dashboard/send', async (req, res, _match, ctx) => {
   // Link dashboard message to queue entry
   ctx.db.linkDashboardMessageToQueue(msg.id, pending.id);
 
-  // Broadcast both events
-  ctx.wss.broadcast(JSON.stringify({ type: 'message', msg }));
+  // Broadcast with linked queueId so dashboard can track delivery status
+  const linkedMsg = { ...msg, queueId: pending.id, deliveryStatus: 'pending' };
+  ctx.wss.broadcast(JSON.stringify({ type: 'message', msg: linkedMsg }));
   ctx.wss.broadcast(JSON.stringify({ type: 'queue_update', message: pending }));
 
   // Event-driven delivery — attempt immediately, don't block response

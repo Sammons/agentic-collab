@@ -55,6 +55,7 @@ export type DashboardMessage = {
   topic: string | null;
   message: string;
   queueId: number | null;
+  deliveryStatus: string | null;
   createdAt: string;
 };
 
