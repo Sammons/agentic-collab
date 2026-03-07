@@ -13,6 +13,7 @@ import { Database } from './database.ts';
 import { createRouter, type RouteContext } from './routes.ts';
 import { WebSocketServer } from '../shared/websocket-server.ts';
 import { LockManager } from '../shared/lock.ts';
+import { MessageDispatcher } from './message-dispatcher.ts';
 import type { ProxyCommand, ProxyResponse } from '../shared/types.ts';
 
 describe('Integration: full lifecycle via HTTP', () => {
@@ -63,14 +64,16 @@ describe('Integration: full lifecycle via HTTP', () => {
     // Register a proxy
     db.registerProxy('int-proxy', 'tok', 'localhost:3100');
 
+    const intLocks = new LockManager(db.rawDb);
     const ctx: RouteContext = {
       db,
       wss,
-      locks: new LockManager(db.rawDb),
+      locks: intLocks,
       proxyDispatch: realisticProxy,
       getDashboardHtml: () => '<html></html>',
       orchestratorHost: 'http://localhost:3000',
       orchestratorSecret: 'test-secret-123',
+      messageDispatcher: new MessageDispatcher({ db, locks: intLocks, proxyDispatch: realisticProxy, orchestratorHost: 'http://localhost:3000' }),
     };
 
     const router = createRouter(ctx);
@@ -366,14 +369,17 @@ describe('Integration: file upload via streaming', () => {
     // Register proxy with the DB using the actual mock proxy port
     db.registerProxy('upload-proxy', PROXY_TOKEN, `localhost:${proxyPort}`);
 
+    const uploadLocks = new LockManager(db.rawDb);
+    const uploadDispatch = async () => ({ ok: true as const });
     const ctx: RouteContext = {
       db,
       wss,
-      locks: new LockManager(db.rawDb),
-      proxyDispatch: async () => ({ ok: true }), // Not used for upload
+      locks: uploadLocks,
+      proxyDispatch: uploadDispatch, // Not used for upload
       getDashboardHtml: () => '<html></html>',
       orchestratorHost: 'http://localhost:3000',
       orchestratorSecret: SECRET,
+      messageDispatcher: new MessageDispatcher({ db, locks: uploadLocks, proxyDispatch: uploadDispatch, orchestratorHost: 'http://localhost:3000' }),
     };
 
     const router = createRouter(ctx);
