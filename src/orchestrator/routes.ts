@@ -21,6 +21,7 @@ import {
   type LifecycleContext,
 } from './lifecycle.ts';
 import { shutdownAgents, restoreAllAgents } from './network.ts';
+import { sessionName } from '../shared/agent-entity.ts';
 import type { MessageDispatcher } from './message-dispatcher.ts';
 import type { UsagePoller } from './usage-poller.ts';
 
@@ -72,6 +73,48 @@ function resolveProxyId(ctx: RouteContext, agent: { proxyId: string | null; prox
   if (proxies.length > 0) return proxies[0]!.proxyId;
 
   return '';
+}
+
+/**
+ * Self-heal: when a proxy (re-)registers, recover any failed agents on it
+ * whose tmux sessions are still alive.
+ */
+async function recoverFailedAgents(ctx: RouteContext, proxyId: string): Promise<void> {
+  const agents = ctx.db.listAgents().filter(
+    (a) => a.proxyId === proxyId && a.state === 'failed',
+  );
+  if (agents.length === 0) return;
+
+  let recovered = 0;
+  for (const agent of agents) {
+    const session = sessionName(agent);
+    const result = await ctx.proxyDispatch(proxyId, {
+      action: 'has_session',
+      sessionName: session,
+    });
+
+    if (result.ok && result.data === true) {
+      const current = ctx.db.getAgent(agent.name);
+      if (!current || current.state !== 'failed') continue;
+      ctx.db.updateAgentState(agent.name, 'active', current.version, {
+        lastActivity: new Date().toISOString(),
+        failedAt: null,
+        failureReason: null,
+      });
+      ctx.db.logEvent(agent.name, 'self_healed', undefined, {
+        reason: 'Proxy re-registered, tmux session alive',
+      });
+      ctx.wss.broadcast(JSON.stringify({
+        type: 'agent_update',
+        agent: ctx.db.getAgent(agent.name),
+      }));
+      recovered++;
+    }
+  }
+
+  if (recovered > 0) {
+    console.log(`[proxy-register] Self-healed ${recovered} agents on ${proxyId}`);
+  }
 }
 
 type RouteHandler = (req: IncomingMessage, res: ServerResponse, match: URLPatternResult, ctx: RouteContext) => Promise<void>;
@@ -418,6 +461,11 @@ route('POST', '/api/proxy/register', async (req, res, _match, ctx) => {
   const proxy = ctx.db.registerProxy(body.proxyId, body.token, body.host);
   broadcastProxyUpdate(ctx);
   json(res, 200, proxy);
+
+  // Self-heal: recover failed agents on this proxy whose tmux sessions survived
+  recoverFailedAgents(ctx, body.proxyId).catch((err) => {
+    console.error(`[proxy-register] Recovery failed for ${body.proxyId}:`, err);
+  });
 });
 
 route('POST', '/api/proxy/heartbeat', async (req, res, _match, ctx) => {

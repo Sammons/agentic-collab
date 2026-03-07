@@ -145,6 +145,11 @@ describe('HealthMonitor', () => {
       pollIntervalMs: 100,
     });
 
+    // Requires 3 consecutive failures before marking as failed
+    await failMonitor.pollAll();
+    assert.equal(db.getAgent('health-fail')?.state, 'active', 'still active after 1 failure');
+    await failMonitor.pollAll();
+    assert.equal(db.getAgent('health-fail')?.state, 'active', 'still active after 2 failures');
     await failMonitor.pollAll();
 
     const agent = db.getAgent('health-fail');
@@ -198,8 +203,13 @@ describe('HealthMonitor', () => {
       onAgentUpdate: (name) => updates.push(name),
     });
 
+    // Requires 3 consecutive failures before marking as failed
     await failMonitor.pollAll();
-    assert.ok(updates.includes('health-cb-fail'));
+    assert.ok(!updates.includes('health-cb-fail'), 'should not fail after 1 attempt');
+    await failMonitor.pollAll();
+    assert.ok(!updates.includes('health-cb-fail'), 'should not fail after 2 attempts');
+    await failMonitor.pollAll();
+    assert.ok(updates.includes('health-cb-fail'), 'should fail after 3 attempts');
   });
 
   it('triggers compact at threshold', async () => {
