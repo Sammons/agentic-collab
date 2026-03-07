@@ -241,11 +241,6 @@ describe('Engine Adapters', () => {
       assert.equal(adapter.buildRenameCommand('test'), null);
     });
 
-    it('returns null context percent', () => {
-      const result = adapter.parseContextPercent('anything');
-      assert.equal(result.contextPct, null);
-    });
-
     it('builds exit command', () => {
       assert.equal(adapter.buildExitCommand(), '/exit');
     });
@@ -260,8 +255,18 @@ describe('Engine Adapters', () => {
       assert.ok(keys.every(k => k === 'Escape'));
     });
 
-    it('detects idle state from prompt', () => {
+    it('detects idle state from ASCII > prompt', () => {
       assert.equal(adapter.detectIdleState('output\n> '), 'waiting_for_input');
+    });
+
+    it('detects idle state from Unicode › prompt', () => {
+      assert.equal(adapter.detectIdleState('output\n› Implement {feature}'), 'waiting_for_input');
+      assert.equal(adapter.detectIdleState('output\n› '), 'waiting_for_input');
+      assert.equal(adapter.detectIdleState('output\n›'), 'waiting_for_input');
+    });
+
+    it('detects idle state from status bar with % left', () => {
+      assert.equal(adapter.detectIdleState('output\n  gpt-5.4 xhigh · 81% left · ~/Desktop'), 'waiting_for_input');
     });
 
     it('detects running state from spinner', () => {
@@ -270,6 +275,24 @@ describe('Engine Adapters', () => {
 
     it('returns unknown for ambiguous output', () => {
       assert.equal(adapter.detectIdleState('random text'), 'unknown');
+    });
+
+    it('parses context percent from status bar', () => {
+      const result = adapter.parseContextPercent('gpt-5.4 xhigh · 81% left · ~/Desktop');
+      assert.equal(result.contextPct, 19); // 100 - 81 = 19% used
+      assert.equal(result.confident, true);
+    });
+
+    it('parses context percent from low remaining', () => {
+      const result = adapter.parseContextPercent('gpt-5.4 · 15% left · ~/path');
+      assert.equal(result.contextPct, 85);
+      assert.equal(result.confident, true);
+    });
+
+    it('returns null context when no match', () => {
+      const result = adapter.parseContextPercent('no context info');
+      assert.equal(result.contextPct, null);
+      assert.equal(result.confident, false);
     });
   });
 

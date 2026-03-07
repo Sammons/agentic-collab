@@ -49,8 +49,12 @@ export class CodexAdapter implements EngineAdapter {
       const line = lines[i]!.trim();
       if (!line) continue;
 
-      // Codex shows a prompt when waiting
-      if (/^>\s*$/.test(line) || /codex.*>\s*$/.test(line)) return 'waiting_for_input';
+      // Codex TUI prompt: › (U+203A) optionally followed by placeholder text
+      // e.g. "› Implement {feature}" or just "›"
+      if (/^[›>]\s/.test(line) || /^[›>]\s*$/.test(line)) return 'waiting_for_input';
+
+      // Status bar: "gpt-5.4 xhigh · 81% left · ~/path"
+      if (/\d+%\s+left/.test(line)) return 'waiting_for_input';
 
       // Running indicators
       if (SPINNER_REGEX.test(line)) return 'running_tool';
@@ -61,8 +65,14 @@ export class CodexAdapter implements EngineAdapter {
     return 'unknown';
   }
 
-  parseContextPercent(_paneOutput: string): ContextResult {
-    // Codex doesn't expose context percentage in status bar
+  parseContextPercent(paneOutput: string): ContextResult {
+    // Codex status bar: "gpt-5.4 xhigh · 81% left · ~/path"
+    const match = paneOutput.match(/(\d+)%\s+left/);
+    if (match) {
+      // Codex shows "% left" (remaining), convert to "% used"
+      const remaining = parseInt(match[1]!, 10);
+      return { contextPct: 100 - remaining, confident: true };
+    }
     return { contextPct: null, confident: false };
   }
 
