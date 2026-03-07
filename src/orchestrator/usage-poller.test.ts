@@ -53,7 +53,7 @@ describe('parseClaudeUsage', () => {
   });
 
   it('handles missing reset info', () => {
-    const output = '  Session\n  50% used\n';
+    const output = '  Session\n  ████████████████████  50% used\n';
     const buckets = parseClaudeUsage(output);
     assert.equal(buckets.length, 1);
     assert.equal(buckets[0]!.pctUsed, 50);
@@ -70,6 +70,25 @@ describe('parseClaudeUsage', () => {
     const buckets = parseClaudeUsage(output);
     assert.equal(buckets[0]!.label, 'My label');
     assert.equal(buckets[0]!.pctUsed, 75);
+  });
+
+  it('ignores "NN% used" without adjacent progress bar (false positive)', () => {
+    const output = [
+      '  Claude adapter: parseContextPercent reports %',
+      '  used directly: 19% used',
+      '  some other text',
+    ].join('\n');
+    const buckets = parseClaudeUsage(output);
+    assert.equal(buckets.length, 0);
+  });
+
+  it('ignores stray "NN% used" in conversation text', () => {
+    const output = [
+      '  The API shows 45% used this month',
+      '  We need to reduce usage',
+    ].join('\n');
+    const buckets = parseClaudeUsage(output);
+    assert.equal(buckets.length, 0);
   });
 });
 
