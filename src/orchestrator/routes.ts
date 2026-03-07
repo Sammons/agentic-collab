@@ -626,7 +626,7 @@ route('GET', '/api/agents/:name/peek', async (_req, res, match, ctx) => {
 
 route('POST', '/api/agents/:name/keys', async (req, res, match, ctx) => {
   const name = match.pathname.groups['name']!;
-  const body = await readJsonBody(req);
+  const body = await readJson(req);
   const keys = body?.keys;
   if (typeof keys !== 'string' || !keys) { json(res, 400, { error: 'keys required' }); return; }
 
