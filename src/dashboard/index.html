@@ -89,6 +89,10 @@
     padding: 8px 4px 2px;
     margin-top: 4px;
   }
+  .agent-card[draggable="true"] { cursor: grab; }
+  .agent-card.dragging { opacity: 0.4; }
+  .agent-card.drag-over-above { box-shadow: 0 -2px 0 var(--accent); }
+  .agent-card.drag-over-below { box-shadow: 0 2px 0 var(--accent); }
 
   @keyframes flash-card {
     0%,100% { background: var(--surface); }
@@ -1117,6 +1121,7 @@
       const failureInfo = agent.state === 'failed' && agent.failureReason
         ? `<div class="agent-failure" title="${esc(agent.failureReason)}">${esc(agent.failureReason)}</div>` : '';
       card.setAttribute('tabindex', '0');
+      card.setAttribute('draggable', 'true');
       card.innerHTML = `
         <div class="agent-header">
           <span class="agent-name">${esc(agent.name)}${unreadBadge}</span>
@@ -1576,6 +1581,82 @@
       e.preventDefault();
       handleAgentListEvent(e);
     }
+  });
+
+  // ── Drag-to-Reorder ──
+  let draggedAgent = null;
+  const agentListEl = document.getElementById('agentList');
+
+  agentListEl.addEventListener('dragstart', (e) => {
+    const card = e.target.closest('.agent-card[data-agent]');
+    if (!card) return;
+    draggedAgent = card.dataset.agent;
+    card.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', draggedAgent);
+  });
+
+  agentListEl.addEventListener('dragend', (e) => {
+    const card = e.target.closest('.agent-card');
+    if (card) card.classList.remove('dragging');
+    agentListEl.querySelectorAll('.drag-over-above, .drag-over-below').forEach(el => {
+      el.classList.remove('drag-over-above', 'drag-over-below');
+    });
+    draggedAgent = null;
+  });
+
+  agentListEl.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    const card = e.target.closest('.agent-card[data-agent]');
+    if (!card || card.dataset.agent === draggedAgent) return;
+    // Clear previous indicators
+    agentListEl.querySelectorAll('.drag-over-above, .drag-over-below').forEach(el => {
+      el.classList.remove('drag-over-above', 'drag-over-below');
+    });
+    const rect = card.getBoundingClientRect();
+    const midY = rect.top + rect.height / 2;
+    if (e.clientY < midY) {
+      card.classList.add('drag-over-above');
+    } else {
+      card.classList.add('drag-over-below');
+    }
+  });
+
+  agentListEl.addEventListener('dragleave', (e) => {
+    const card = e.target.closest('.agent-card');
+    if (card) {
+      card.classList.remove('drag-over-above', 'drag-over-below');
+    }
+  });
+
+  agentListEl.addEventListener('drop', (e) => {
+    e.preventDefault();
+    const targetCard = e.target.closest('.agent-card[data-agent]');
+    if (!targetCard || !draggedAgent || targetCard.dataset.agent === draggedAgent) return;
+
+    const rect = targetCard.getBoundingClientRect();
+    const insertBefore = e.clientY < rect.top + rect.height / 2;
+
+    // Reorder in state.agents
+    const fromIdx = state.agents.findIndex(a => a.name === draggedAgent);
+    const targetName = targetCard.dataset.agent;
+    if (fromIdx === -1) return;
+    const [moved] = state.agents.splice(fromIdx, 1);
+    let toIdx = state.agents.findIndex(a => a.name === targetName);
+    if (!insertBefore) toIdx++;
+    state.agents.splice(toIdx, 0, moved);
+
+    // Assign sort orders and persist
+    const orders = state.agents.map((a, i) => ({ name: a.name, sortOrder: i }));
+    state.agents.forEach((a, i) => { a.sortOrder = i; });
+    renderAgents();
+
+    fetch('/api/agents/reorder', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ orders }),
+    }).catch(err => console.error('[drag] Reorder save failed:', err));
   });
 
   // ── Clear Chat ──
