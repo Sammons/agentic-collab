@@ -119,6 +119,9 @@ export class Database {
     if (!agentColNames.has('proxy_host')) {
       this.db.exec('ALTER TABLE agents ADD COLUMN proxy_host TEXT');
     }
+    if (!agentColNames.has('agent_group')) {
+      this.db.exec('ALTER TABLE agents ADD COLUMN agent_group TEXT');
+    }
   }
 
   /** Expose raw handle for LockManager (shares same DB connection). */
@@ -142,10 +145,11 @@ export class Database {
     permissions?: string;
     proxyHost?: string;
     proxyId?: string;
+    agentGroup?: string;
   }): AgentRecord {
     this.db.prepare(`
-      INSERT INTO agents (name, engine, model, thinking, cwd, persona, permissions, proxy_host, proxy_id, state)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'void')
+      INSERT INTO agents (name, engine, model, thinking, cwd, persona, permissions, proxy_host, proxy_id, agent_group, state)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'void')
     `).run(
       opts.name,
       opts.engine,
@@ -156,6 +160,7 @@ export class Database {
       opts.permissions ?? null,
       opts.proxyHost ?? null,
       opts.proxyId ?? null,
+      opts.agentGroup ?? null,
     );
     return this.getAgent(opts.name)!;
   }
@@ -173,6 +178,7 @@ export class Database {
     persona?: string;
     permissions?: string;
     proxyHost?: string;
+    agentGroup?: string;
   }): AgentRecord {
     const existing = this.getAgent(opts.name);
     if (!existing) {
@@ -181,7 +187,7 @@ export class Database {
     // Update config fields only — preserve runtime state
     this.db.prepare(`
       UPDATE agents SET engine = ?, model = ?, thinking = ?, cwd = ?,
-        persona = ?, permissions = ?, proxy_host = ?
+        persona = ?, permissions = ?, proxy_host = ?, agent_group = ?
       WHERE name = ?
     `).run(
       opts.engine,
@@ -191,6 +197,7 @@ export class Database {
       opts.persona ?? null,
       opts.permissions ?? null,
       opts.proxyHost ?? null,
+      opts.agentGroup ?? null,
       opts.name,
     );
     return this.getAgent(opts.name)!;
@@ -480,6 +487,7 @@ function mapAgentRow(row: Record<string, unknown>): AgentRecord {
     persona: row['persona'] as string | null,
     permissions: row['permissions'] as string | null,
     proxyHost: row['proxy_host'] as string | null,
+    agentGroup: row['agent_group'] as string | null,
     state: row['state'] as AgentState,
     stateBeforeShutdown: row['state_before_shutdown'] as string | null,
     currentSessionId: row['current_session_id'] as string | null,

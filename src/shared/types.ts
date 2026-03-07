@@ -17,6 +17,7 @@ export type AgentRecord = {
   persona: string | null;
   permissions: string | null; // 'skip' | null
   proxyHost: string | null; // hostname for proxy pinning
+  agentGroup: string | null; // grouping label from persona frontmatter
   state: AgentState;
   stateBeforeShutdown: string | null;
   currentSessionId: string | null;
