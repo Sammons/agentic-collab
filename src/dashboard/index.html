@@ -193,6 +193,14 @@
     margin-top: 4px;
     text-align: right;
   }
+  .msg-status {
+    font-size: 10px;
+    margin-top: 2px;
+    text-align: right;
+  }
+  .msg-status.pending { color: var(--text-dim); }
+  .msg-status.delivered { color: var(--green); }
+  .msg-status.failed { color: var(--red); }
 
   /* ── Input ── */
   .thread-input {
@@ -1032,17 +1040,24 @@
       const time = new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       const topicStr = (!isUpload && msg.topic) ? ` (re: ${esc(msg.topic)})` : '';
       const displayMsg = isSystem ? msg.message.replace(/^\[system\]\s*/, '') : msg.message;
+      const statusHtml = (msg.direction === 'to_agent' && msg.queueId)
+        ? `<div class="msg-status ${msg.deliveryStatus || 'pending'}" data-queue-id="${msg.queueId}">${
+            msg.deliveryStatus === 'delivered' ? '\u2713 delivered' :
+            msg.deliveryStatus === 'failed' ? '\u2717 failed' :
+            '\u2022\u2022\u2022 sending'
+          }</div>`
+        : '';
       if (isUpload) {
         div.innerHTML = `
           <div class="msg-sender">${esc(sender)}</div>
           <div class="file-info"><span class="file-icon">&#128206;</span> ${esc(displayMsg)}</div>
-          <div class="msg-time">${time}</div>
+          <div class="msg-time">${time}</div>${statusHtml}
         `;
       } else {
         div.innerHTML = `
           <div class="msg-sender">${esc(sender)}${topicStr}</div>
           <div>${esc(displayMsg)}</div>
-          <div class="msg-time">${time}</div>
+          <div class="msg-time">${time}</div>${statusHtml}
         `;
       }
       messages.appendChild(div);
@@ -1150,10 +1165,24 @@
 
   // ── Queue Updates ──
   function handleQueueUpdate(message) {
-    if (message.status === 'delivered') {
-      showToast(`Message delivered to ${message.targetAgent}`, 'success');
-    } else if (message.status === 'failed') {
-      showToast(`Delivery to ${message.targetAgent} failed: ${message.error || 'unknown'}`, 'error');
+    // Update delivery status in thread data
+    const thread = state.threads[message.targetAgent];
+    if (thread) {
+      for (const msg of thread) {
+        if (msg.queueId === message.id) {
+          msg.deliveryStatus = message.status;
+          break;
+        }
+      }
+    }
+
+    // Update inline status badge in DOM
+    const badge = document.querySelector(`[data-queue-id="${message.id}"]`);
+    if (badge) {
+      badge.className = `msg-status ${message.status}`;
+      badge.textContent = message.status === 'delivered' ? '\u2713 delivered' :
+                          message.status === 'failed' ? '\u2717 failed' :
+                          '\u2022\u2022\u2022 sending';
     }
   }
 
@@ -1275,7 +1304,7 @@
         if (body && body.msg) {
           input.value = '';
           input.style.height = 'auto';
-          showToast('Message saved but delivery failed \u2014 agent may be unreachable', 'warning');
+          // Delivery status shown inline on the message bubble via queue_update
         } else {
           console.error('Send failed: HTTP', res.status);
           showSendError(input, sendBtn);

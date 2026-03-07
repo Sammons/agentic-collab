@@ -292,16 +292,16 @@ export class Database {
   }
 
   getDashboardThreads(agentName?: string): Record<string, DashboardMessage[]> {
-    let rows: Array<Record<string, unknown>>;
-    if (agentName) {
-      rows = this.db.prepare(
-        'SELECT * FROM dashboard_messages WHERE agent = ? ORDER BY created_at ASC'
-      ).all(agentName) as Array<Record<string, unknown>>;
-    } else {
-      rows = this.db.prepare(
-        'SELECT * FROM dashboard_messages ORDER BY created_at ASC'
-      ).all() as Array<Record<string, unknown>>;
-    }
+    const query = `
+      SELECT dm.*, pm.status AS delivery_status
+      FROM dashboard_messages dm
+      LEFT JOIN pending_messages pm ON dm.queue_id = pm.id
+      ${agentName ? 'WHERE dm.agent = ?' : ''}
+      ORDER BY dm.created_at ASC
+    `;
+    const rows = agentName
+      ? this.db.prepare(query).all(agentName) as Array<Record<string, unknown>>
+      : this.db.prepare(query).all() as Array<Record<string, unknown>>;
 
     const threads: Record<string, DashboardMessage[]> = {};
     for (const row of rows) {
@@ -508,6 +508,7 @@ function mapDashboardMessageRow(row: Record<string, unknown>): DashboardMessage 
     topic: row['topic'] as string | null,
     message: row['message'] as string,
     queueId: (row['queue_id'] as number | null) ?? null,
+    deliveryStatus: (row['delivery_status'] as string | null) ?? null,
     createdAt: row['created_at'] as string,
   };
 }
