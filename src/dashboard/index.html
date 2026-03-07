@@ -2297,14 +2297,29 @@
     sid: null,       // session ID
   };
 
-  // Check if voice is available (test /ws/voice upgrade feasibility)
   async function initVoice() {
     const controls = document.getElementById('voiceControls');
-    // Show voice controls — they'll fail gracefully if no API key
-    controls.style.display = 'flex';
-
     const select = document.getElementById('voiceModeSelect');
     const btn = document.getElementById('voiceBtn');
+
+    // Check if voice is enabled on the server
+    try {
+      const resp = await fetch('/api/voice/status', {
+        headers: { 'Authorization': 'Bearer ' + getToken() },
+      });
+      const data = await resp.json();
+      if (!data.enabled) {
+        controls.style.display = 'flex';
+        select.disabled = true;
+        select.style.opacity = '0.4';
+        select.title = 'Voice unavailable — ELEVENLABS_API_KEY not configured on server';
+        return;
+      }
+    } catch {
+      return; // Server unreachable, hide controls entirely
+    }
+
+    controls.style.display = 'flex';
 
     select.addEventListener('change', (e) => {
       voiceState.mode = e.target.value;
