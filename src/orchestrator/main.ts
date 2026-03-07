@@ -101,6 +101,9 @@ function getDashboardHtml(): string {
 
 // ── Message Dispatcher (event-driven delivery) ──
 
+// Forward-declared so the dispatcher can reference it (circular init resolved below)
+let healthMonitorRef: HealthMonitor | null = null;
+
 const messageDispatcher = new MessageDispatcher({
   db,
   locks,
@@ -111,6 +114,9 @@ const messageDispatcher = new MessageDispatcher({
   },
   onDashboardMessage: (msg) => {
     wss.broadcast(JSON.stringify({ type: 'message', msg }));
+  },
+  onMessageDelivered: (agentName) => {
+    healthMonitorRef?.scheduleQuickPoll(agentName);
   },
 });
 
@@ -135,6 +141,7 @@ const healthMonitor = new HealthMonitor({
     wss.broadcast(JSON.stringify({ type: 'message', msg }));
   },
 });
+healthMonitorRef = healthMonitor;
 
 const lifecycleCtx: LifecycleContext = {
   db,

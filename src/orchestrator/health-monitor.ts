@@ -38,6 +38,7 @@ const DEFAULT_IDLE_SUSPEND_MS = 5 * 60 * 1000;
 
 export class HealthMonitor {
   private timer: ReturnType<typeof setInterval> | null = null;
+  private readonly quickPollTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly db: Database;
   private readonly locks: LockManager;
   private readonly proxyDispatch: (proxyId: string, command: ProxyCommand) => Promise<ProxyResponse>;
@@ -82,6 +83,29 @@ export class HealthMonitor {
       this.timer = null;
       console.log('[health] Monitor stopped');
     }
+    for (const timer of this.quickPollTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.quickPollTimers.clear();
+  }
+
+  /**
+   * Schedule a one-shot poll for a specific agent ~1s from now.
+   * Used after message delivery to catch the idle→active transition quickly.
+   * Deduplicates: only one quick poll per agent at a time.
+   */
+  scheduleQuickPoll(agentName: string): void {
+    if (this.quickPollTimers.has(agentName)) return;
+    const timer = setTimeout(() => {
+      this.quickPollTimers.delete(agentName);
+      const agent = this.db.getAgent(agentName);
+      if (agent && agent.proxyId) {
+        this.pollAgent(agent).catch((err) => {
+          console.error(`[health] Quick poll error for ${agentName}:`, err);
+        });
+      }
+    }, 1000);
+    this.quickPollTimers.set(agentName, timer);
   }
 
   /**

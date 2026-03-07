@@ -23,6 +23,7 @@ export type MessageDispatcherOptions = {
   orchestratorHost: string;
   onQueueUpdate?: (message: PendingMessage) => void;
   onDashboardMessage?: (message: DashboardMessage) => void;
+  onMessageDelivered?: (agentName: string) => void;
 };
 
 export class MessageDispatcher {
@@ -32,6 +33,7 @@ export class MessageDispatcher {
   private readonly orchestratorHost: string;
   private readonly onQueueUpdate: (message: PendingMessage) => void;
   private readonly onDashboardMessage: (message: DashboardMessage) => void;
+  private readonly onMessageDelivered: (agentName: string) => void;
 
   constructor(opts: MessageDispatcherOptions) {
     this.db = opts.db;
@@ -40,6 +42,7 @@ export class MessageDispatcher {
     this.orchestratorHost = opts.orchestratorHost;
     this.onQueueUpdate = opts.onQueueUpdate ?? (() => {});
     this.onDashboardMessage = opts.onDashboardMessage ?? (() => {});
+    this.onMessageDelivered = opts.onMessageDelivered ?? (() => {});
   }
 
   /**
@@ -130,6 +133,7 @@ export class MessageDispatcher {
     if (updated) {
       this.onQueueUpdate(updated);
     }
+    this.onMessageDelivered(agentName);
     return true;
   }
 

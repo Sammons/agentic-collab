@@ -5,7 +5,7 @@
  * Parses YAML-like frontmatter for agent configuration.
  */
 
-import { readFileSync, readdirSync, realpathSync } from 'node:fs';
+import { readFileSync, readdirSync, realpathSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, resolve, relative, isAbsolute } from 'node:path';
 
 export const PERSONAS_DIR = process.env['PERSONAS_DIR'] ?? join(process.env['HOME'] ?? '/data', 'persistent-agents');
@@ -262,4 +262,46 @@ export function syncPersonasToDb(db: Database, personasDir?: string): number {
   }
 
   return synced;
+}
+
+// ── Atomic Persona Creation ──
+
+/**
+ * Write a persona file to persistent-agents/<name>.md and upsert the agent
+ * into the database in one atomic operation.
+ * Returns the parsed persona on success.
+ */
+export function createPersonaAndAgent(
+  db: Database,
+  name: string,
+  content: string,
+  personasDir?: string,
+): ParsedPersona {
+  const dir = personasDir ?? getPersonasDir();
+  const { frontmatter, body } = parseFrontmatter(content);
+  const fm = frontmatter as PersonaFrontmatter;
+
+  const engine = fm.engine;
+  const cwd = fm.cwd;
+  if (!engine || !VALID_ENGINES.has(engine) || !cwd) {
+    throw new Error(`engine and cwd are required in frontmatter (got engine=${engine ?? 'undefined'}, cwd=${cwd ?? 'undefined'})`);
+  }
+
+  // Write file
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, `${name}.md`), content, 'utf-8');
+
+  // Upsert agent
+  db.upsertAgentFromPersona({
+    name,
+    engine: engine as EngineType,
+    model: fm.model,
+    thinking: fm.thinking,
+    cwd,
+    persona: name,
+    permissions: fm.permissions,
+    proxyHost: fm.proxy_host,
+  });
+
+  return { name, frontmatter: fm, body };
 }
