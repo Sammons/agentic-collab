@@ -35,6 +35,13 @@ export interface EngineAdapter {
   /** Engine identifier */
   readonly engine: string;
 
+  /**
+   * Whether this engine buffers pasted input while active.
+   * If true, messages can be delivered even when the agent is not idle —
+   * the CLI will process them when the current task finishes.
+   */
+  readonly canDeliverWhileActive: boolean;
+
   /** Build the shell command to spawn a new agent session */
   buildSpawnCommand(opts: SpawnOptions): string;
 
