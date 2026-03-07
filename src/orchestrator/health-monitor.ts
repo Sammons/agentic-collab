@@ -41,6 +41,9 @@ export class HealthMonitor {
   private fastTimer: ReturnType<typeof setInterval> | null = null;
   private readonly quickPollTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly lastCompactAt = new Map<string, number>();
+  /** Consecutive health check failure count per agent. */
+  private readonly consecutiveFailures = new Map<string, number>();
+  private static readonly FAILURE_THRESHOLD = 3; // failures before marking agent as failed
   /** Last known tmux pane activity timestamp (Unix seconds) per agent. */
   private readonly lastTmuxActivity = new Map<string, number>();
   private static readonly COMPACT_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes between compacts
@@ -221,16 +224,27 @@ export class HealthMonitor {
     });
 
     if (!captureResult.ok) {
-      console.warn(`[health] Cannot capture ${agent.name}: ${captureResult.error}`);
-      this.db.updateAgentState(agent.name, 'failed', agent.version, {
-        failedAt: new Date().toISOString(),
-        failureReason: `Health check failed: ${captureResult.error}`,
-      });
-      this.db.logEvent(agent.name, 'health_check_failed', undefined, { reason: captureResult.error });
-      this.onAgentUpdate(agent.name);
+      const failures = (this.consecutiveFailures.get(agent.name) ?? 0) + 1;
+      this.consecutiveFailures.set(agent.name, failures);
+      console.warn(`[health] Cannot capture ${agent.name} (${failures}/${HealthMonitor.FAILURE_THRESHOLD}): ${captureResult.error}`);
+
+      if (failures >= HealthMonitor.FAILURE_THRESHOLD) {
+        this.db.updateAgentState(agent.name, 'failed', agent.version, {
+          failedAt: new Date().toISOString(),
+          failureReason: `Health check failed ${failures}x: ${captureResult.error}`,
+        });
+        this.db.logEvent(agent.name, 'health_check_failed', undefined, {
+          reason: captureResult.error,
+          consecutiveFailures: failures,
+        });
+        this.onAgentUpdate(agent.name);
+        this.consecutiveFailures.delete(agent.name);
+      }
       return null;
     }
 
+    // Reset failure counter on success
+    this.consecutiveFailures.delete(agent.name);
     return (captureResult.data as string) ?? '';
   }
 
