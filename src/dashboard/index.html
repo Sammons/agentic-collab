@@ -187,22 +187,18 @@
     background: var(--surface);
     border: 1px solid var(--border);
   }
-  .msg-sender {
+  .msg-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 4px;
     font-size: 11px;
     color: var(--text-dim);
-    margin-bottom: 2px;
   }
-  .msg-time {
-    font-size: 10px;
-    color: var(--text-dim);
-    margin-top: 4px;
-    text-align: right;
-  }
-  .msg-status {
-    font-size: 10px;
-    margin-top: 2px;
-    text-align: right;
-  }
+  .msg-sender { font-weight: 600; }
+  .msg-time { font-size: 10px; }
+  .msg-meta { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+  .msg-status { font-size: 10px; }
   .msg-status.pending { color: var(--text-dim); }
   .msg-status.delivered { color: var(--green); }
   .msg-status.failed { color: var(--red); }
@@ -1092,24 +1088,17 @@
       const topicStr = (!isUpload && msg.topic) ? ` (re: ${esc(msg.topic)})` : '';
       const displayMsg = isSystem ? msg.message.replace(/^\[system\]\s*/, '') : msg.message;
       const statusHtml = (msg.direction === 'to_agent' && msg.queueId)
-        ? `<div class="msg-status ${msg.deliveryStatus || 'pending'}" data-queue-id="${msg.queueId}">${
+        ? `<span class="msg-status ${msg.deliveryStatus || 'pending'}" data-queue-id="${msg.queueId}">${
             msg.deliveryStatus === 'delivered' ? '\u2713 delivered' :
             msg.deliveryStatus === 'failed' ? '\u2717 failed' :
             '\u2022\u2022\u2022 sending'
-          }</div>`
+          }</span>`
         : '';
+      const headerHtml = `<div class="msg-header"><span class="msg-sender">${esc(sender)}${topicStr}</span><span class="msg-meta"><span class="msg-time">${time}</span>${statusHtml}</span></div>`;
       if (isUpload) {
-        div.innerHTML = `
-          <div class="msg-sender">${esc(sender)}</div>
-          <div class="file-info"><span class="file-icon">&#128206;</span> ${esc(displayMsg)}</div>
-          <div class="msg-time">${time}</div>${statusHtml}
-        `;
+        div.innerHTML = `${headerHtml}<div class="file-info"><span class="file-icon">&#128206;</span> ${esc(displayMsg)}</div>`;
       } else {
-        div.innerHTML = `
-          <div class="msg-sender">${esc(sender)}${topicStr}</div>
-          <div class="msg-body">${renderMarkdown(esc(displayMsg))}</div>
-          <div class="msg-time">${time}</div>${statusHtml}
-        `;
+        div.innerHTML = `${headerHtml}<div class="msg-body">${renderMarkdown(esc(displayMsg))}</div>`;
       }
       messages.appendChild(div);
     }
