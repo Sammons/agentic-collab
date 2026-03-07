@@ -268,11 +268,12 @@ export class UsagePoller {
 
   /**
    * Wait for the CLI in the session to be idle (showing a prompt).
+   * Handles startup dialogs (e.g. folder trust confirmation) automatically.
    * Returns true if idle, false if timed out.
    */
   private async waitForIdle(proxyId: string, config: EngineConfig): Promise<boolean> {
     const adapter = getAdapter(config.engine);
-    const deadline = Date.now() + 15_000; // 15s max wait for idle
+    const deadline = Date.now() + 20_000; // 20s max wait for idle
 
     while (Date.now() < deadline) {
       const result = await this.proxyDispatch(proxyId, {
@@ -282,6 +283,17 @@ export class UsagePoller {
       });
       if (!result.ok) return false;
       const output = (result.data as string) ?? '';
+
+      // Handle Claude's folder trust dialog ("Yes, I trust this folder")
+      if (/I trust this folder|Enter to confirm/i.test(output)) {
+        await this.proxyDispatch(proxyId, {
+          action: 'send_keys',
+          sessionName: config.sessionName,
+          keys: 'Enter',
+        });
+        await sleep(3000);
+        continue;
+      }
 
       const state = adapter.detectIdleState(output);
       if (state === 'waiting_for_input') return true;
