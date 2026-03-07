@@ -14,7 +14,7 @@ import type { WebSocketServer } from '../shared/websocket-server.ts';
 import type { AgentState, EngineType, ProxyCommand, ProxyResponse } from '../shared/types.ts';
 import { sanitizeMessage, generateMessageId } from '../shared/sanitize.ts';
 import type { LockManager } from '../shared/lock.ts';
-import { getPersonasDir, parseFrontmatter, createPersonaAndAgent, syncSinglePersona } from './persona.ts';
+import { getPersonasDir, parseFrontmatter, createPersonaAndAgent, syncSinglePersona, updateFrontmatterField, resolvePersonaPath } from './persona.ts';
 import {
   spawnAgent, resumeAgent, suspendAgent, destroyAgent,
   reloadAgent, interruptAgent, compactAgent, killAgent,
@@ -784,6 +784,37 @@ route('POST', '/api/agents/reorder', async (req, res, _match, ctx) => {
     return;
   }
   ctx.db.batchUpdateSortOrder(orders as Array<{ name: string; sortOrder: number }>);
+  json(res, 200, { ok: true });
+});
+
+route('PATCH', '/api/agents/:name/group', async (req, res, match, ctx) => {
+  const name = match.pathname.groups['name']!;
+  const body = await readJson(req);
+  const group = body?.group;
+  if (typeof group !== 'string') { json(res, 400, { error: 'group (string) required' }); return; }
+
+  const agent = ctx.db.getAgent(name);
+  if (!agent) { json(res, 404, { error: `Agent "${name}" not found` }); return; }
+
+  // Update persona frontmatter on disk
+  const personaPath = resolvePersonaPath(name);
+  if (personaPath) {
+    updateFrontmatterField(personaPath, 'group', group || null);
+  }
+
+  // Update DB
+  const current = ctx.db.getAgent(name);
+  if (current) {
+    ctx.db.updateAgentState(name, current.state, current.version, {
+      agentGroup: group || null,
+    });
+  }
+
+  ctx.wss.broadcast(JSON.stringify({
+    type: 'agent_update',
+    agent: ctx.db.getAgent(name),
+  }));
+
   json(res, 200, { ok: true });
 });
 
