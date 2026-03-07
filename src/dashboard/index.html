@@ -1334,7 +1334,7 @@
   function selectAgent(name) {
     state.selected = name;
     state.unread[name] = 0;
-    state.threadView = 'messages';
+    // Preserve current tab (messages/persona/watch) when switching agents
     renderAgents();
     renderThread();
     updateSendability();

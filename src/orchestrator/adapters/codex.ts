@@ -2,7 +2,7 @@
  * OpenAI Codex CLI adapter.
  */
 
-import { SPINNER_REGEX, type EngineAdapter, type SpawnOptions, type ResumeOptions, type IdleState, type ContextResult } from './types.ts';
+import { SPINNER_REGEX, type EngineAdapter, type SpawnOptions, type ResumeOptions, type IdleState, type ContextResult, type ElicitationResult } from './types.ts';
 import { shellQuote } from '../../shared/utils.ts';
 
 export class CodexAdapter implements EngineAdapter {
@@ -101,6 +101,12 @@ export class CodexAdapter implements EngineAdapter {
 
   interruptKeys(): string[] {
     return ['Escape', 'Escape'];
+  }
+
+  detectElicitation(_paneOutput: string): ElicitationResult | null {
+    // Codex with --dangerously-bypass-approvals-and-sandbox shouldn't prompt
+    // TODO: add detection for approval prompts if observed
+    return null;
   }
 }
 
