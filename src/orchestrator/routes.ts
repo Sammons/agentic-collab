@@ -690,6 +690,28 @@ route('POST', '/api/agents/:name/keys', async (req, res, match, ctx) => {
   json(res, 200, { ok: true });
 });
 
+route('POST', '/api/agents/:name/type', async (req, res, match, ctx) => {
+  const name = match.pathname.groups['name']!;
+  const body = await readJson(req);
+  const text = body?.text;
+  if (typeof text !== 'string' || !text) { json(res, 400, { error: 'text required' }); return; }
+
+  const agent = ctx.db.getAgent(name);
+  if (!agent) { json(res, 404, { error: `Agent "${name}" not found` }); return; }
+  if (!agent.proxyId) { json(res, 400, { error: `Agent "${name}" has no proxy` }); return; }
+
+  const pressEnter = body?.pressEnter === true;
+  const result = await ctx.proxyDispatch(agent.proxyId, {
+    action: 'paste',
+    sessionName: agent.tmuxSession ?? `agent-${name}`,
+    text,
+    pressEnter,
+  });
+
+  if (!result.ok) { json(res, 500, { error: result.error }); return; }
+  json(res, 200, { ok: true });
+});
+
 route('POST', '/api/agents/:name/destroy', async (_req, res, match, ctx) => {
   const name = match.pathname.groups['name']!;
 
