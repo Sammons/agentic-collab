@@ -361,6 +361,51 @@ route('DELETE', '/api/dashboard/messages/:agent', async (_req, res, match, ctx) 
   json(res, 200, { ok: true });
 });
 
+route('POST', '/api/dashboard/messages/:id/withdraw', async (_req, res, match, ctx) => {
+  const id = parseInt(match.pathname.groups['id']!, 10);
+  if (isNaN(id)) return json(res, 400, { error: 'Invalid message ID' });
+
+  const msg = ctx.db.getDashboardMessageById(id);
+  if (!msg) return json(res, 404, { error: 'Message not found' });
+  if (msg.direction !== 'to_agent') return json(res, 400, { error: 'Can only withdraw outgoing messages' });
+  if (msg.withdrawn) return json(res, 400, { error: 'Message already withdrawn' });
+
+  // Cancel pending delivery if not yet delivered
+  if (msg.queueId) {
+    ctx.db.cancelPendingMessage(msg.queueId);
+  }
+
+  // Mark the original message as withdrawn
+  ctx.db.withdrawMessage(id);
+
+  // Send a follow-up withdrawal notice to the agent
+  const withdrawalText = `[system] the user withdrew this message: "${msg.message}"`;
+  const withdrawMsg = ctx.db.addDashboardMessage(msg.agent, 'to_agent', withdrawalText);
+
+  const envelope = `[from: dashboard, reply with /collaboration reply]: '${sanitizeMessage(withdrawalText)}'`;
+  const pending = ctx.db.enqueueMessage({
+    sourceAgent: null,
+    targetAgent: msg.agent,
+    envelope,
+  });
+  ctx.db.linkDashboardMessageToQueue(withdrawMsg.id, pending.id);
+
+  // Broadcast updates
+  const updatedOriginal = ctx.db.getDashboardMessageById(id)!;
+  ctx.wss.broadcast(JSON.stringify({ type: 'message_withdrawn', msg: updatedOriginal }));
+
+  const linkedWithdrawMsg = { ...withdrawMsg, queueId: pending.id, deliveryStatus: 'pending' };
+  ctx.wss.broadcast(JSON.stringify({ type: 'message', msg: linkedWithdrawMsg }));
+  ctx.wss.broadcast(JSON.stringify({ type: 'queue_update', message: pending }));
+
+  // Attempt delivery
+  ctx.messageDispatcher.tryDeliver(msg.agent).catch((err) => {
+    console.error(`[routes] Withdrawal delivery failed for ${msg.agent}:`, (err as Error).message);
+  });
+
+  json(res, 200, { ok: true, withdrawnMsg: updatedOriginal, noticeMsg: linkedWithdrawMsg });
+});
+
 // ── Proxy Registration ──
 
 route('POST', '/api/proxy/register', async (req, res, _match, ctx) => {
