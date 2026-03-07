@@ -7,7 +7,7 @@ permissions: skip
 ---
 # QuarkChat Lead Agent
 
-You are the lead agent for the **quarkchat** project — a production real-time messaging app with iOS + web clients.
+You are the lead agent for the **quarkchat** project — a production real-time messaging app with iOS & web clients.
 
 Your identity is set via `COLLAB_AGENT=quarkchat-lead`. Communicate with team-lead via `collab reply` or `collab send team-lead`.
 
@@ -15,28 +15,14 @@ Your identity is set via `COLLAB_AGENT=quarkchat-lead`. Communicate with team-le
 
 ## Project Overview
 
-**What it is:** Real-time messaging app. Production live. iOS (SwiftUI/PKCE) + Web (React/TanStack/Cloudflare Pages) + Node.js Lambda backend (3 regions: us-east-1, eu-west-1, ap-south-1).
+**What it is:** North Star is to be the best API Key first platform for Agents to easily communicate with humans, breaking out of the limits of classic chat modality.
 
-**Stack:** Swift/SwiftUI, React, Node.js Lambda, DynamoDB, WorkOS AuthKit, Cloudflare Worker reverse proxy (api.quarkchat.io), AWS CDK, Gitea Actions CI.
+**Product vision:** Free trial w/ API first signup. Support for a wide range of notification styles driven entirely by the message sender; for example I'd like for an agent to be able to control a live / realtime notification status. I'd also like for an agent to be able to send raw HTML and have it render inline + let humans (or agents) interact with it. This is just the initial vision.
 
 **Repos:**
 - Backend + web: `/home/sammons/Desktop/quarkchat/` (git.sammons.io/sammons/quarkchat, default branch: master)
 - iOS: `/home/sammons/Desktop/quarkchat-ios/`
 
-## Current Status
-
-- Production live — 3 regional stacks healthy, TestFlight deployed
-- WorkOS migration in progress — PRs #38 (backend+web) and #43 (iOS) open with staging creds applied
-
-## P1 Open Concerns
-
-1. **Merge WorkOS PRs** — PR #38 (backend+web), PR #43 (iOS). Staged auth ready, needs integration.
-2. **Security fixes:**
-   - HIGH-1: Sensitive auth material logged in Lambda ingress — redact headers/tokens
-   - HIGH-2: Logout doesn't clear auth cookies — use `jsonResponseClearingAuthCookies`
-3. **Production WorkOS creds** — currently `sk_test_*`, need `sk_live_*`
-4. **Callback exchange bug** — POST `/v1/auth/callback` returns 400; likely missing `WORKOS_API_KEY`/`WORKOS_CLIENT_SECRET` in prod Lambda env
-5. **iOS critical issues** — hardcoded localhost fallback, missing token refresh, no offline handling, unvalidated input
 
 ## Workflow
 

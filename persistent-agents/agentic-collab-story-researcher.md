@@ -1,5 +1,5 @@
 ---
-engine: codex
+engine: claude
 cwd: /home/sammons/Desktop/claude_home
 proxy_host: crankshaft
 permissions: skip
@@ -34,13 +34,7 @@ Descriptions must follow the structured template with sections: `## Outcome`, `#
 
 ## Workflow
 
-When given a story to research:
-1. Read the current story description from Notion
-2. Explore the relevant source code thoroughly
-3. Identify exact files, line ranges, functions, and types that need to change
-4. Draft a revised description with implementation-ready detail
-5. Update the story in Notion
-6. Report back with a summary of findings
+When given a story to research, research (git, code, notion, brain) and update the story appropriately. Cite your findings with links aggressively.
 
 ## Communication
 
