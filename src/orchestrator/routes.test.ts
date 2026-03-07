@@ -8,7 +8,13 @@ import { Database } from './database.ts';
 import { createRouter, type RouteContext } from './routes.ts';
 import { WebSocketServer } from '../shared/websocket-server.ts';
 import { LockManager } from '../shared/lock.ts';
+import { MessageDispatcher } from './message-dispatcher.ts';
 import type { ProxyCommand, ProxyResponse } from '../shared/types.ts';
+
+/** Helper to build a MessageDispatcher for tests */
+function makeTestDispatcher(db: Database, locks: LockManager, proxyDispatch: (id: string, cmd: ProxyCommand) => Promise<ProxyResponse>): MessageDispatcher {
+  return new MessageDispatcher({ db, locks, proxyDispatch, orchestratorHost: 'http://localhost:3000' });
+}
 
 describe('API Routes', () => {
   let server: Server;
@@ -29,14 +35,16 @@ describe('API Routes', () => {
       return { ok: true };
     };
 
+    const locks = new LockManager(db.rawDb);
     const ctx: RouteContext = {
       db,
       wss,
-      locks: new LockManager(db.rawDb),
+      locks,
       proxyDispatch: mockProxyDispatch,
       getDashboardHtml: () => '<html><body>Dashboard</body></html>',
       orchestratorHost: 'http://localhost:3000',
       orchestratorSecret: null, // no auth for base tests
+      messageDispatcher: makeTestDispatcher(db, locks, mockProxyDispatch),
     };
 
     const router = createRouter(ctx);
@@ -383,14 +391,17 @@ describe('API Routes — Auth', () => {
     db = new Database(join(tmpDir, 'test.db'));
     wss = new WebSocketServer();
 
+    const authLocks = new LockManager(db.rawDb);
+    const authDispatch = async () => ({ ok: true as const });
     const ctx: RouteContext = {
       db,
       wss,
-      locks: new LockManager(db.rawDb),
-      proxyDispatch: async () => ({ ok: true }),
+      locks: authLocks,
+      proxyDispatch: authDispatch,
       getDashboardHtml: () => '<html>Dashboard</html>',
       orchestratorHost: 'http://localhost:3000',
       orchestratorSecret: SECRET,
+      messageDispatcher: makeTestDispatcher(db, authLocks, authDispatch),
     };
 
     const router = createRouter(ctx);
@@ -483,14 +494,17 @@ describe('API Routes — Rate Limiting', () => {
     db = new Database(join(tmpDir, 'test.db'));
     wss = new WebSocketServer();
 
+    const rateLocks = new LockManager(db.rawDb);
+    const rateDispatch = async () => ({ ok: true as const });
     const ctx: RouteContext = {
       db,
       wss,
-      locks: new LockManager(db.rawDb),
-      proxyDispatch: async () => ({ ok: true }),
+      locks: rateLocks,
+      proxyDispatch: rateDispatch,
       getDashboardHtml: () => '<html>Dashboard</html>',
       orchestratorHost: 'http://localhost:3000',
       orchestratorSecret: SECRET,
+      messageDispatcher: makeTestDispatcher(db, rateLocks, rateDispatch),
     };
 
     const router = createRouter(ctx);
@@ -558,14 +572,17 @@ describe('API Routes — Personas', () => {
     db = new Database(join(tmpDir, 'test.db'));
     wss = new WebSocketServer();
 
+    const personaLocks = new LockManager(db.rawDb);
+    const personaDispatch = async () => ({ ok: true as const });
     const ctx: RouteContext = {
       db,
       wss,
-      locks: new LockManager(db.rawDb),
-      proxyDispatch: async () => ({ ok: true }),
+      locks: personaLocks,
+      proxyDispatch: personaDispatch,
       getDashboardHtml: () => '<html>Dashboard</html>',
       orchestratorHost: 'http://localhost:3000',
       orchestratorSecret: null,
+      messageDispatcher: makeTestDispatcher(db, personaLocks, personaDispatch),
     };
 
     const router = createRouter(ctx);

@@ -21,6 +21,7 @@ import {
   type LifecycleContext,
 } from './lifecycle.ts';
 import { shutdownAgents, restoreAllAgents } from './network.ts';
+import type { MessageDispatcher } from './message-dispatcher.ts';
 
 /**
  * Shared context injected into all route handlers.
@@ -43,6 +44,7 @@ export type RouteContext = {
   getDashboardHtml: () => string;
   orchestratorHost: string;
   orchestratorSecret: string | null;
+  messageDispatcher: MessageDispatcher;
 };
 
 /**
@@ -176,6 +178,11 @@ route('POST', '/api/agents/send', async (req, res, _match, ctx) => {
   // Broadcast queue update
   ctx.wss.broadcast(JSON.stringify({ type: 'queue_update', message: pending }));
 
+  // Event-driven delivery — attempt immediately, don't block response
+  ctx.messageDispatcher.tryDeliver(body.to as string).catch((err) => {
+    console.error(`[routes] Immediate delivery failed for ${body.to}:`, (err as Error).message);
+  });
+
   json(res, 202, { ok: true, messageId, queueId: pending.id, status: 'pending' });
 });
 
@@ -212,6 +219,11 @@ route('POST', '/api/dashboard/send', async (req, res, _match, ctx) => {
   // Broadcast both events
   ctx.wss.broadcast(JSON.stringify({ type: 'message', msg }));
   ctx.wss.broadcast(JSON.stringify({ type: 'queue_update', message: pending }));
+
+  // Event-driven delivery — attempt immediately, don't block response
+  ctx.messageDispatcher.tryDeliver(body.agent as string).catch((err) => {
+    console.error(`[routes] Immediate delivery failed for ${body.agent}:`, (err as Error).message);
+  });
 
   json(res, 202, { ok: true, msg, queueId: pending.id, status: 'pending' });
 });
@@ -303,6 +315,11 @@ route('POST', '/api/dashboard/upload', async (req, res, _match, ctx) => {
 
   ctx.wss.broadcast(JSON.stringify({ type: 'message', msg }));
   ctx.wss.broadcast(JSON.stringify({ type: 'queue_update', message: pending }));
+
+  // Event-driven delivery — attempt immediately, don't block response
+  ctx.messageDispatcher.tryDeliver(agentName).catch((err) => {
+    console.error(`[routes] Immediate delivery failed for ${agentName}:`, (err as Error).message);
+  });
 
   json(res, 202, { ok: true, msg, queueId: pending.id, path: writtenPath, size: fileSize });
 });

@@ -7,6 +7,7 @@ import { Database } from './database.ts';
 import { LockManager } from '../shared/lock.ts';
 import type { ProxyCommand, ProxyResponse } from '../shared/types.ts';
 import { HealthMonitor } from './health-monitor.ts';
+import { MessageDispatcher } from './message-dispatcher.ts';
 
 describe('HealthMonitor', () => {
   let db: Database;
@@ -30,25 +31,41 @@ describe('HealthMonitor', () => {
     captureOutput = '> \n';
   });
 
-  function makeMonitor(overrides?: Partial<ConstructorParameters<typeof HealthMonitor>[0]>): HealthMonitor {
+  function makeDispatcherAndMonitor(overrides?: Partial<ConstructorParameters<typeof HealthMonitor>[0]>): HealthMonitor {
+    const dispatch = overrides?.proxyDispatch ?? (async (_proxyId: string, command: ProxyCommand): Promise<ProxyResponse> => {
+      proxyCommands.push(command);
+      if (command.action === 'capture') {
+        return { ok: true, data: captureOutput };
+      }
+      if (command.action === 'has_session') {
+        return { ok: true, data: true };
+      }
+      return { ok: true };
+    });
+
+    const locks = new LockManager(db.rawDb);
+    const dispatcher = new MessageDispatcher({
+      db,
+      locks,
+      proxyDispatch: dispatch,
+      orchestratorHost: 'http://localhost:3000',
+      onQueueUpdate: overrides?.onQueueUpdate,
+      onDashboardMessage: overrides?.onDashboardMessage,
+    });
+
     return new HealthMonitor({
       db,
-      locks: new LockManager(db.rawDb),
-      proxyDispatch: async (_proxyId: string, command: ProxyCommand): Promise<ProxyResponse> => {
-        proxyCommands.push(command);
-        if (command.action === 'capture') {
-          return { ok: true, data: captureOutput };
-        }
-        if (command.action === 'has_session') {
-          return { ok: true, data: true };
-        }
-        return { ok: true };
-      },
+      locks,
+      proxyDispatch: dispatch,
       orchestratorHost: 'http://localhost:3000',
+      messageDispatcher: dispatcher,
       pollIntervalMs: 100,
       ...overrides,
     });
   }
+
+  // Alias for backward compatibility in tests
+  const makeMonitor = makeDispatcherAndMonitor;
 
   it('starts and stops without error', () => {
     const monitor = makeMonitor();
@@ -114,11 +131,17 @@ describe('HealthMonitor', () => {
       proxyId: 'p1',
     });
 
+    const failDispatch = async () => ({ ok: false as const, error: 'Session not found' });
+    const failLocks = new LockManager(db.rawDb);
+    const failDispatcher = new MessageDispatcher({
+      db, locks: failLocks, proxyDispatch: failDispatch, orchestratorHost: 'http://localhost:3000',
+    });
     const failMonitor = new HealthMonitor({
       db,
-      locks: new LockManager(db.rawDb),
-      proxyDispatch: async () => ({ ok: false, error: 'Session not found' }),
+      locks: failLocks,
+      proxyDispatch: failDispatch,
       orchestratorHost: 'http://localhost:3000',
+      messageDispatcher: failDispatcher,
       pollIntervalMs: 100,
     });
 
@@ -160,11 +183,17 @@ describe('HealthMonitor', () => {
     });
 
     const updates: string[] = [];
+    const cbFailDispatch = async () => ({ ok: false as const, error: 'Session not found' });
+    const cbFailLocks = new LockManager(db.rawDb);
+    const cbFailDispatcher = new MessageDispatcher({
+      db, locks: cbFailLocks, proxyDispatch: cbFailDispatch, orchestratorHost: 'http://localhost:3000',
+    });
     const failMonitor = new HealthMonitor({
       db,
-      locks: new LockManager(db.rawDb),
-      proxyDispatch: async () => ({ ok: false, error: 'Session not found' }),
+      locks: cbFailLocks,
+      proxyDispatch: cbFailDispatch,
       orchestratorHost: 'http://localhost:3000',
+      messageDispatcher: cbFailDispatcher,
       pollIntervalMs: 100,
       onAgentUpdate: (name) => updates.push(name),
     });
@@ -242,16 +271,22 @@ describe('HealthMonitor', () => {
     captureOutput = 'some output\n> ';
 
     // Use a dispatch that fails on paste
+    const retryDispatch = async (_proxyId: string, command: ProxyCommand): Promise<ProxyResponse> => {
+      if (command.action === 'capture') return { ok: true, data: captureOutput };
+      if (command.action === 'has_session') return { ok: true, data: true };
+      if (command.action === 'paste') return { ok: false, error: 'tmux paste failed' };
+      return { ok: true };
+    };
+    const retryLocks = new LockManager(db.rawDb);
+    const retryDispatcher = new MessageDispatcher({
+      db, locks: retryLocks, proxyDispatch: retryDispatch, orchestratorHost: 'http://localhost:3000',
+    });
     const failMonitor = new HealthMonitor({
       db,
-      locks: new LockManager(db.rawDb),
-      proxyDispatch: async (_proxyId: string, command: ProxyCommand): Promise<ProxyResponse> => {
-        if (command.action === 'capture') return { ok: true, data: captureOutput };
-        if (command.action === 'has_session') return { ok: true, data: true };
-        if (command.action === 'paste') return { ok: false, error: 'tmux paste failed' };
-        return { ok: true };
-      },
+      locks: retryLocks,
+      proxyDispatch: retryDispatch,
       orchestratorHost: 'http://localhost:3000',
+      messageDispatcher: retryDispatcher,
       pollIntervalMs: 100,
     });
 
@@ -286,16 +321,22 @@ describe('HealthMonitor', () => {
 
     captureOutput = 'some output\n> ';
 
+    const autoReplyDispatch = async (_proxyId: string, command: ProxyCommand): Promise<ProxyResponse> => {
+      if (command.action === 'capture') return { ok: true, data: captureOutput };
+      if (command.action === 'has_session') return { ok: true, data: true };
+      if (command.action === 'paste') return { ok: false, error: 'final failure' };
+      return { ok: true };
+    };
+    const autoReplyLocks = new LockManager(db.rawDb);
+    const autoReplyDispatcher = new MessageDispatcher({
+      db, locks: autoReplyLocks, proxyDispatch: autoReplyDispatch, orchestratorHost: 'http://localhost:3000',
+    });
     const failMonitor = new HealthMonitor({
       db,
-      locks: new LockManager(db.rawDb),
-      proxyDispatch: async (_proxyId: string, command: ProxyCommand): Promise<ProxyResponse> => {
-        if (command.action === 'capture') return { ok: true, data: captureOutput };
-        if (command.action === 'has_session') return { ok: true, data: true };
-        if (command.action === 'paste') return { ok: false, error: 'final failure' };
-        return { ok: true };
-      },
+      locks: autoReplyLocks,
+      proxyDispatch: autoReplyDispatch,
       orchestratorHost: 'http://localhost:3000',
+      messageDispatcher: autoReplyDispatcher,
       pollIntervalMs: 100,
     });
 
