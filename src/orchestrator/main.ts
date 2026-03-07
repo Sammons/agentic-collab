@@ -12,6 +12,7 @@ import { createRouter, type RouteContext } from './routes.ts';
 import { WebSocketServer } from '../shared/websocket-server.ts';
 import { LockManager } from '../shared/lock.ts';
 import { HealthMonitor } from './health-monitor.ts';
+import { MessageDispatcher } from './message-dispatcher.ts';
 import { shutdownAgents, restoreAllAgents } from './network.ts';
 import type { LifecycleContext } from './lifecycle.ts';
 import { syncPersonasToDb } from './persona.ts';
@@ -98,6 +99,21 @@ function getDashboardHtml(): string {
 
 // ── Server Setup ──
 
+// ── Message Dispatcher (event-driven delivery) ──
+
+const messageDispatcher = new MessageDispatcher({
+  db,
+  locks,
+  proxyDispatch,
+  orchestratorHost: ORCHESTRATOR_HOST,
+  onQueueUpdate: (message) => {
+    wss.broadcast(JSON.stringify({ type: 'queue_update', message }));
+  },
+  onDashboardMessage: (msg) => {
+    wss.broadcast(JSON.stringify({ type: 'message', msg }));
+  },
+});
+
 // ── Health Monitor ──
 
 const healthMonitor = new HealthMonitor({
@@ -105,6 +121,7 @@ const healthMonitor = new HealthMonitor({
   locks,
   proxyDispatch,
   orchestratorHost: ORCHESTRATOR_HOST,
+  messageDispatcher,
   onAgentUpdate: (agentName) => {
     const agent = db.getAgent(agentName);
     if (agent) {
@@ -134,6 +151,7 @@ const routeCtx: RouteContext = {
   getDashboardHtml,
   orchestratorHost: ORCHESTRATOR_HOST,
   orchestratorSecret: ORCHESTRATOR_SECRET,
+  messageDispatcher,
 };
 
 const router = createRouter(routeCtx);
