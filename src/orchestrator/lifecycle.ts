@@ -680,6 +680,14 @@ export async function compactAgent(
       pressEnter: true,
     });
 
+    // Transition to active so the agent doesn't appear idle during compaction.
+    // The health monitor will detect idle again once compaction finishes.
+    if (agent.state === 'idle') {
+      ctx.db.updateAgentState(name, 'active', agent.version, {
+        lastActivity: new Date().toISOString(),
+      });
+    }
+
     ctx.db.logEvent(name, 'compact_requested');
   });
 }
