@@ -47,6 +47,7 @@ export type RouteContext = {
   orchestratorSecret: string | null;
   messageDispatcher: MessageDispatcher;
   usagePoller: UsagePoller;
+  voiceEnabled: boolean;
 };
 
 /**
@@ -749,6 +750,10 @@ route('GET', '/api/engines/status', async (_req, res, _match, ctx) => {
   }
   const usage = ctx.usagePoller.getUsageData();
   json(res, 200, { engines, usage });
+});
+
+route('GET', '/api/voice/status', async (_req, res, _match, ctx) => {
+  json(res, 200, { enabled: ctx.voiceEnabled });
 });
 
 route('POST', '/api/engines/poll', async (_req, res, _match, ctx) => {

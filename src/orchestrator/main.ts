@@ -170,6 +170,7 @@ const routeCtx: RouteContext = {
   orchestratorSecret: ORCHESTRATOR_SECRET,
   messageDispatcher,
   usagePoller,
+  voiceEnabled: !!voiceOpts,
 };
 
 const router = createRouter(routeCtx);
