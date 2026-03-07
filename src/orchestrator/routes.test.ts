@@ -45,6 +45,8 @@ describe('API Routes', () => {
       orchestratorHost: 'http://localhost:3000',
       orchestratorSecret: null, // no auth for base tests
       messageDispatcher: makeTestDispatcher(db, locks, mockProxyDispatch),
+      usagePoller: { getUsageData: () => ({}), pollNow: async () => {} } as any,
+      voiceEnabled: false,
     };
 
     const router = createRouter(ctx);
@@ -402,6 +404,8 @@ describe('API Routes — Auth', () => {
       orchestratorHost: 'http://localhost:3000',
       orchestratorSecret: SECRET,
       messageDispatcher: makeTestDispatcher(db, authLocks, authDispatch),
+      usagePoller: { getUsageData: () => ({}), pollNow: async () => {} } as any,
+      voiceEnabled: false,
     };
 
     const router = createRouter(ctx);
@@ -505,6 +509,8 @@ describe('API Routes — Rate Limiting', () => {
       orchestratorHost: 'http://localhost:3000',
       orchestratorSecret: SECRET,
       messageDispatcher: makeTestDispatcher(db, rateLocks, rateDispatch),
+      usagePoller: { getUsageData: () => ({}), pollNow: async () => {} } as any,
+      voiceEnabled: false,
     };
 
     const router = createRouter(ctx);
@@ -583,6 +589,8 @@ describe('API Routes — Personas', () => {
       orchestratorHost: 'http://localhost:3000',
       orchestratorSecret: null,
       messageDispatcher: makeTestDispatcher(db, personaLocks, personaDispatch),
+      usagePoller: { getUsageData: () => ({}), pollNow: async () => {} } as any,
+      voiceEnabled: false,
     };
 
     const router = createRouter(ctx);
