@@ -258,8 +258,20 @@
   .upload-btn:hover { border-color: var(--accent); color: var(--accent); }
   .upload-btn:disabled { opacity: 0.5; cursor: not-allowed; }
   .upload-btn.uploading {
-    opacity: 0.5;
     pointer-events: none;
+    position: relative;
+    color: transparent;
+  }
+  .upload-btn.uploading::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    margin: auto;
+    width: 14px; height: 14px;
+    border: 2px solid var(--text-dim);
+    border-top-color: transparent;
+    border-radius: 50%;
+    animation: btn-spin 0.6s linear infinite;
   }
 
   .msg.file-upload .file-info {
@@ -683,6 +695,7 @@
 
   /* ── Responsive ── */
   @media (max-width: 768px) {
+    html, body { overflow-x: hidden; }
     .layout { grid-template-columns: 1fr; grid-template-rows: 1fr; }
     .agent-list {
       border-right: none;
@@ -696,10 +709,36 @@
     .layout:not(.mobile-thread) .agent-list { display: flex; }
     .mobile-back { display: block; }
     .msg { max-width: 85%; }
-    .thread-input { padding: 8px 12px; }
-    .thread-input input { font-size: 16px; } /* prevent iOS zoom */
+    .thread-input { padding: 8px 10px; gap: 6px; }
+    .thread-input textarea { font-size: 16px; } /* prevent iOS zoom */
     header h1 { font-size: 14px; }
+    header { padding: 10px 12px; }
     .agent-card { padding: 10px; }
+    .thread-header {
+      flex-wrap: wrap;
+      padding: 10px 12px;
+      gap: 6px;
+    }
+    .thread-header > span {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 50vw;
+    }
+    .thread-tabs {
+      order: 10;
+      width: 100%;
+      margin-left: 0;
+      justify-content: stretch;
+    }
+    .thread-tabs button {
+      flex: 1;
+      text-align: center;
+    }
+    .clear-chat-btn { margin-left: auto; }
+    .thread-messages { padding: 12px 10px; }
+    .persona-panel { padding: 14px 10px; }
+    .watch-panel { padding: 10px 8px; font-size: 11px; }
   }
 </style>
 </head>
