@@ -18,6 +18,7 @@ services:
       - AGENTIC_COLLAB_CONFIG_DIR=/config/agentic-collab
       - PERSONAS_DIR=/app/persistent-agents
       - ORCHESTRATOR_HOST=${ORCHESTRATOR_HOST:-http://localhost:3000}
+      - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY:-}
     labels:
       io.agentic-collab.role: orchestrator
     restart: unless-stopped
