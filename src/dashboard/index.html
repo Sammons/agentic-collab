@@ -93,6 +93,7 @@
   .agent-card.dragging { opacity: 0.4; }
   .agent-card.drag-over-above { box-shadow: 0 -2px 0 var(--accent); }
   .agent-card.drag-over-below { box-shadow: 0 2px 0 var(--accent); }
+  .reorder-buttons { display: none; }
 
   @keyframes flash-card {
     0%,100% { background: var(--surface); }
@@ -801,6 +802,28 @@
     header h1 { font-size: 14px; }
     header { padding: 10px 12px; }
     .agent-card { padding: 10px; }
+    .agent-card[draggable] { cursor: pointer; }
+    .reorder-buttons {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      position: absolute;
+      right: 8px;
+      top: 50%;
+      transform: translateY(-50%);
+    }
+    .reorder-buttons button {
+      font-size: 14px;
+      line-height: 1;
+      padding: 4px 6px;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      background: var(--surface);
+      color: var(--text-dim);
+      cursor: pointer;
+    }
+    .reorder-buttons button:active { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .agent-card { position: relative; padding-right: 40px; }
     .agent-header { flex-wrap: wrap; gap: 4px; }
     .agent-name {
       overflow: hidden;
@@ -1190,6 +1213,10 @@
           ${agent.proxyId ? `<span title="proxy: ${esc(agent.proxyId)}">${esc(agent.proxyId)}</span>` : ''}
         </div>
         ${failureInfo}
+        <div class="reorder-buttons">
+          <button data-reorder="up" title="Move up">\u25B2</button>
+          <button data-reorder="down" title="Move down">\u25BC</button>
+        </div>
         <div class="agent-actions">
           ${activeIdle ? `
             <button data-action="interrupt">Interrupt</button>
@@ -1659,6 +1686,15 @@
 
   // Event delegation on agent list — handles both card selection and action buttons.
   function handleAgentListEvent(e) {
+    // Reorder buttons (mobile)
+    const reorderBtn = e.target.closest('button[data-reorder]');
+    if (reorderBtn) {
+      e.stopPropagation();
+      const card = reorderBtn.closest('[data-agent]');
+      if (card) moveAgent(card.dataset.agent, reorderBtn.dataset.reorder);
+      return;
+    }
+
     const btn = e.target.closest('button[data-action]');
     if (btn) {
       e.stopPropagation();
@@ -1682,7 +1718,23 @@
     }
   });
 
-  // ── Drag-to-Reorder ──
+  // ── Reorder (mobile tap + desktop drag) ──
+  function moveAgent(name, direction) {
+    const idx = state.agents.findIndex(a => a.name === name);
+    if (idx === -1) return;
+    const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
+    if (swapIdx < 0 || swapIdx >= state.agents.length) return;
+    [state.agents[idx], state.agents[swapIdx]] = [state.agents[swapIdx], state.agents[idx]];
+    const orders = state.agents.map((a, i) => ({ name: a.name, sortOrder: i }));
+    state.agents.forEach((a, i) => { a.sortOrder = i; });
+    renderAgents();
+    fetch('/api/agents/reorder', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ orders }),
+    }).catch(err => console.error('[reorder] Save failed:', err));
+  }
+
   let draggedAgent = null;
   const agentListEl = document.getElementById('agentList');
 
