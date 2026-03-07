@@ -714,6 +714,29 @@
     header h1 { font-size: 14px; }
     header { padding: 10px 12px; }
     .agent-card { padding: 10px; }
+    .agent-header { flex-wrap: wrap; gap: 4px; }
+    .agent-name {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: calc(100vw - 140px);
+    }
+    .agent-meta {
+      flex-wrap: wrap;
+      gap: 6px 10px;
+    }
+    .agent-meta span {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: calc(100vw - 60px);
+    }
+    .agent-actions { gap: 4px; }
+    .agent-actions button { padding: 4px 8px; font-size: 11px; }
+    .agent-list { padding: 8px; overflow-x: hidden; }
+    .create-form-body input,
+    .create-form-body select,
+    .create-form-body textarea { font-size: 16px; } /* prevent iOS zoom */
     .thread-header {
       flex-wrap: wrap;
       padding: 10px 12px;
