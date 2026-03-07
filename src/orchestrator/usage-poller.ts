@@ -1,15 +1,15 @@
 /**
  * Engine usage poller.
- * Periodically queries idle agents for account-level usage data
- * by pasting slash commands (/usage for Claude, etc.) and parsing output.
+ * Spawns dedicated tmux sessions per engine (usage-claude, usage-codex)
+ * to query account-level usage data without disrupting real agents.
  *
+ * Sessions are hidden from the dashboard — they don't appear in the agents table.
  * Results are stored in memory and exposed via getUsageData().
  */
 
 import type { Database } from './database.ts';
-import type { LockManager } from '../shared/lock.ts';
 import type { ProxyCommand, ProxyResponse } from '../shared/types.ts';
-import { sessionName } from '../shared/agent-entity.ts';
+import { getAdapter } from './adapters/index.ts';
 import { sleep } from '../shared/utils.ts';
 
 export type UsageBucket = {
@@ -22,42 +22,54 @@ export type EngineUsage = {
   engine: string;
   buckets: UsageBucket[];
   queriedAt: string;   // ISO timestamp
-  queriedFrom: string; // agent name used for the query
+  queriedFrom: string; // session name used for the query
 };
 
 export type UsagePollerOptions = {
   db: Database;
-  locks: LockManager;
   proxyDispatch: (proxyId: string, command: ProxyCommand) => Promise<ProxyResponse>;
   pollIntervalMs?: number;
+  cwd?: string;
 };
 
 const DEFAULT_POLL_MS = 10 * 60 * 1000; // 10 minutes
 const CAPTURE_POLL_MS = 2000; // interval between capture attempts
-const CAPTURE_TIMEOUT_MS = 20_000; // max time to wait for usage data to load
+const CAPTURE_TIMEOUT_MS = 30_000; // max time to wait for usage data to load
+const SESSION_BOOT_MS = 5_000; // time to wait for CLI to boot after spawn
+const SESSION_PREFIX = 'usage-';
+
+type EngineConfig = {
+  engine: 'claude' | 'codex';
+  sessionName: string;
+  spawnCommand: string;
+  usageCommand: string;
+  parser: (output: string) => UsageBucket[];
+};
 
 export class UsagePoller {
   private timer: ReturnType<typeof setInterval> | null = null;
   private readonly db: Database;
-  private readonly locks: LockManager;
   private readonly proxyDispatch: (proxyId: string, command: ProxyCommand) => Promise<ProxyResponse>;
   private readonly pollIntervalMs: number;
+  private readonly cwd: string;
   private readonly usageData = new Map<string, EngineUsage>();
+  // Track which sessions are booted to avoid re-spawning every cycle
+  private readonly activeSessions = new Set<string>();
 
   constructor(opts: UsagePollerOptions) {
     this.db = opts.db;
-    this.locks = opts.locks;
     this.proxyDispatch = opts.proxyDispatch;
     this.pollIntervalMs = opts.pollIntervalMs ?? DEFAULT_POLL_MS;
+    this.cwd = opts.cwd ?? '/tmp';
   }
 
   start(): void {
     if (this.timer) return;
-    console.log(`[usage] Starting poller (every ${Math.round(this.pollIntervalMs / 60000)}min)`);
-    // Delay initial poll by 60s to let agents reach idle state after restart
+    console.log(`[usage] Starting poller (every ${Math.round(this.pollIntervalMs / 60000)}min, dedicated sessions)`);
+    // Delay initial poll to let proxies register after restart
     setTimeout(() => {
       this.pollAll().catch(err => console.error('[usage] Initial poll error:', err));
-    }, 60_000);
+    }, 30_000);
     this.timer = setInterval(() => {
       this.pollAll().catch(err => console.error('[usage] Poll error:', err));
     }, this.pollIntervalMs);
@@ -75,151 +87,209 @@ export class UsagePoller {
     }
   }
 
+  /** Tear down dedicated sessions on shutdown. */
+  async cleanup(): Promise<void> {
+    const proxyId = this.findProxy();
+    if (!proxyId) return;
+    for (const session of this.activeSessions) {
+      try {
+        await this.proxyDispatch(proxyId, { action: 'kill_session', sessionName: session });
+        console.log(`[usage] Killed session ${session}`);
+      } catch { /* best effort */ }
+    }
+    this.activeSessions.clear();
+  }
+
   getUsageData(): Record<string, EngineUsage> {
     return Object.fromEntries(this.usageData);
   }
 
+  private findProxy(): string | null {
+    const proxies = this.db.listProxies();
+    return proxies.length > 0 ? proxies[0]!.proxyId : null;
+  }
+
+  private getEngineConfigs(): EngineConfig[] {
+    const agents = this.db.listAgents();
+    const configs: EngineConfig[] = [];
+
+    const hasClaude = agents.some(a => a.engine === 'claude');
+    if (hasClaude) {
+      const adapter = getAdapter('claude');
+      configs.push({
+        engine: 'claude',
+        sessionName: `${SESSION_PREFIX}claude`,
+        spawnCommand: adapter.buildSpawnCommand({
+          name: 'usage-claude',
+          cwd: this.cwd,
+          dangerouslySkipPermissions: true,
+        }),
+        usageCommand: '/usage',
+        parser: parseClaudeUsage,
+      });
+    }
+
+    const hasCodex = agents.some(a => a.engine === 'codex');
+    if (hasCodex) {
+      const adapter = getAdapter('codex');
+      configs.push({
+        engine: 'codex',
+        sessionName: `${SESSION_PREFIX}codex`,
+        spawnCommand: adapter.buildSpawnCommand({
+          name: 'usage-codex',
+          cwd: this.cwd,
+          dangerouslySkipPermissions: true,
+        }),
+        usageCommand: '/status',
+        parser: parseCodexStatus,
+      });
+    }
+
+    return configs;
+  }
+
   private async pollAll(): Promise<void> {
-    await this.pollClaude();
-    await this.pollCodex();
-  }
+    const proxyId = this.findProxy();
+    if (!proxyId) {
+      console.warn('[usage] No proxy available, skipping poll');
+      return;
+    }
 
-  /**
-   * Find an idle Claude agent, paste /usage, capture output, parse it, dismiss with Escape.
-   * Acquires the agent lock to prevent conflicts with message delivery.
-   */
-  private async pollClaude(): Promise<void> {
-    const agents = this.db.listAgents().filter(
-      a => a.engine === 'claude' && a.state === 'idle' && a.proxyId
-    );
-    if (agents.length === 0) return;
-
-    // Pick the agent with lowest context to minimize disruption
-    const agent = agents.reduce((best, a) =>
-      (a.lastContextPct ?? 100) < (best.lastContextPct ?? 100) ? a : best
-    );
-
-    const session = sessionName(agent);
-    const proxyId = agent.proxyId!;
-
-    try {
-      await this.locks.withLock(agent.name, async () => {
-        // Paste /usage
-        await this.proxyDispatch(proxyId, {
-          action: 'paste',
-          sessionName: session,
-          text: '/usage',
-          pressEnter: true,
-        });
-
-        // Poll capture until we see usage data or timeout
-        let buckets: UsageBucket[] = [];
-        const deadline = Date.now() + CAPTURE_TIMEOUT_MS;
-        while (Date.now() < deadline) {
-          await sleep(CAPTURE_POLL_MS);
-
-          const result = await this.proxyDispatch(proxyId, {
-            action: 'capture',
-            sessionName: session,
-            lines: 40,
-          });
-          if (!result.ok) break;
-          const output = (result.data as string) ?? '';
-
-          buckets = parseClaudeUsage(output);
-          if (buckets.length > 0) break;
-
-          // If the dialog was dismissed or failed, stop waiting
-          if (/Status dialog dismissed|Error loading/i.test(output) && !/Loading usage/i.test(output)) break;
-        }
-
-        // Dismiss the /usage dialog
-        await this.proxyDispatch(proxyId, {
-          action: 'send_keys',
-          sessionName: session,
-          keys: 'Escape',
-        });
-
-        if (buckets.length > 0) {
-          this.usageData.set('claude', {
-            engine: 'claude',
-            buckets,
-            queriedAt: new Date().toISOString(),
-            queriedFrom: agent.name,
-          });
-          console.log(`[usage] Claude: ${buckets.map(b => `${b.label}: ${b.pctUsed}%`).join(', ')}`);
-        } else {
-          console.warn(`[usage] Claude: no usage data found within ${CAPTURE_TIMEOUT_MS / 1000}s`);
-        }
-      }, 30_000, 5_000); // 30s lock duration (usage dialog can be slow), 5s acquire timeout
-    } catch (err) {
-      console.error(`[usage] Claude poll error for ${agent.name}:`, (err as Error).message);
+    const configs = this.getEngineConfigs();
+    for (const config of configs) {
+      try {
+        await this.pollEngine(proxyId, config);
+      } catch (err) {
+        console.error(`[usage] ${config.engine} poll error:`, (err as Error).message);
+      }
     }
   }
 
   /**
-   * Find an idle Codex agent, paste /status, capture output, parse it, dismiss with Escape.
+   * Ensure the dedicated session exists and is responsive, then query usage.
    */
-  private async pollCodex(): Promise<void> {
-    const agents = this.db.listAgents().filter(
-      a => a.engine === 'codex' && a.state === 'idle' && a.proxyId
-    );
-    if (agents.length === 0) return;
+  private async pollEngine(proxyId: string, config: EngineConfig): Promise<void> {
+    // Ensure session exists
+    await this.ensureSession(proxyId, config);
 
-    const agent = agents.reduce((best, a) =>
-      (a.lastContextPct ?? 100) < (best.lastContextPct ?? 100) ? a : best
-    );
-
-    const session = sessionName(agent);
-    const proxyId = agent.proxyId!;
-
-    try {
-      await this.locks.withLock(agent.name, async () => {
-        await this.proxyDispatch(proxyId, {
-          action: 'paste',
-          sessionName: session,
-          text: '/status',
-          pressEnter: true,
-        });
-
-        // Poll capture until we see status data or timeout
-        let buckets: UsageBucket[] = [];
-        const deadline = Date.now() + CAPTURE_TIMEOUT_MS;
-        while (Date.now() < deadline) {
-          await sleep(CAPTURE_POLL_MS);
-
-          const result = await this.proxyDispatch(proxyId, {
-            action: 'capture',
-            sessionName: session,
-            lines: 40,
-          });
-          if (!result.ok) break;
-          const output = (result.data as string) ?? '';
-
-          buckets = parseCodexStatus(output);
-          if (buckets.length > 0) break;
-        }
-
-        // Dismiss the /status dialog
-        await this.proxyDispatch(proxyId, {
-          action: 'send_keys',
-          sessionName: session,
-          keys: 'Escape',
-        });
-
-        if (buckets.length > 0) {
-          this.usageData.set('codex', {
-            engine: 'codex',
-            buckets,
-            queriedAt: new Date().toISOString(),
-            queriedFrom: agent.name,
-          });
-          console.log(`[usage] Codex: ${buckets.map(b => `${b.label}: ${b.pctUsed}%`).join(', ')}`);
-        }
-      }, 30_000, 5_000);
-    } catch (err) {
-      console.error(`[usage] Codex poll error for ${agent.name}:`, (err as Error).message);
+    // Check if the CLI is at a prompt (idle)
+    const ready = await this.waitForIdle(proxyId, config);
+    if (!ready) {
+      console.warn(`[usage] ${config.engine} session not ready, skipping`);
+      return;
     }
+
+    // Send usage command
+    await this.proxyDispatch(proxyId, {
+      action: 'paste',
+      sessionName: config.sessionName,
+      text: config.usageCommand,
+      pressEnter: true,
+    });
+
+    // Poll capture until we see usage data or timeout
+    let buckets: UsageBucket[] = [];
+    const deadline = Date.now() + CAPTURE_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      await sleep(CAPTURE_POLL_MS);
+
+      const result = await this.proxyDispatch(proxyId, {
+        action: 'capture',
+        sessionName: config.sessionName,
+        lines: 40,
+      });
+      if (!result.ok) break;
+      const output = (result.data as string) ?? '';
+
+      buckets = config.parser(output);
+      if (buckets.length > 0) break;
+
+      // Claude-specific: stop if dialog was dismissed without data
+      if (config.engine === 'claude') {
+        if (/Status dialog dismissed|Error loading/i.test(output) && !/Loading usage/i.test(output)) break;
+      }
+    }
+
+    // Dismiss dialog
+    await this.proxyDispatch(proxyId, {
+      action: 'send_keys',
+      sessionName: config.sessionName,
+      keys: 'Escape',
+    });
+
+    if (buckets.length > 0) {
+      this.usageData.set(config.engine, {
+        engine: config.engine,
+        buckets,
+        queriedAt: new Date().toISOString(),
+        queriedFrom: config.sessionName,
+      });
+      console.log(`[usage] ${config.engine}: ${buckets.map(b => `${b.label}: ${b.pctUsed}%`).join(', ')}`);
+    } else {
+      console.warn(`[usage] ${config.engine}: no usage data found within ${CAPTURE_TIMEOUT_MS / 1000}s`);
+    }
+  }
+
+  /**
+   * Ensure the dedicated tmux session exists with the CLI running.
+   * Creates and spawns if needed.
+   */
+  private async ensureSession(proxyId: string, config: EngineConfig): Promise<void> {
+    // Check if session exists
+    const hasResult = await this.proxyDispatch(proxyId, {
+      action: 'has_session',
+      sessionName: config.sessionName,
+    });
+
+    if (hasResult.ok && hasResult.data === true) {
+      return; // Session already running
+    }
+
+    // Create session and spawn CLI
+    console.log(`[usage] Spawning dedicated ${config.engine} session: ${config.sessionName}`);
+    await this.proxyDispatch(proxyId, {
+      action: 'create_session',
+      sessionName: config.sessionName,
+      cwd: this.cwd,
+    });
+
+    await this.proxyDispatch(proxyId, {
+      action: 'paste',
+      sessionName: config.sessionName,
+      text: config.spawnCommand,
+      pressEnter: true,
+    });
+
+    this.activeSessions.add(config.sessionName);
+
+    // Wait for CLI to boot
+    await sleep(SESSION_BOOT_MS);
+  }
+
+  /**
+   * Wait for the CLI in the session to be idle (showing a prompt).
+   * Returns true if idle, false if timed out.
+   */
+  private async waitForIdle(proxyId: string, config: EngineConfig): Promise<boolean> {
+    const adapter = getAdapter(config.engine);
+    const deadline = Date.now() + 15_000; // 15s max wait for idle
+
+    while (Date.now() < deadline) {
+      const result = await this.proxyDispatch(proxyId, {
+        action: 'capture',
+        sessionName: config.sessionName,
+        lines: 20,
+      });
+      if (!result.ok) return false;
+      const output = (result.data as string) ?? '';
+
+      const state = adapter.detectIdleState(output);
+      if (state === 'waiting_for_input') return true;
+
+      await sleep(2000);
+    }
+
+    return false;
   }
 }
 

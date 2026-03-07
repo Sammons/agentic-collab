@@ -148,8 +148,8 @@ healthMonitorRef = healthMonitor;
 
 const usagePoller = new UsagePoller({
   db,
-  locks,
   proxyDispatch,
+  cwd: '/tmp',
 });
 
 const lifecycleCtx: LifecycleContext = {
@@ -258,12 +258,14 @@ const staleProxyTimer = setInterval(() => {
 
 // ── Graceful Shutdown ──
 
-function shutdown(): void {
+async function shutdown(): Promise<void> {
   console.log('[orchestrator] Shutting down...');
   clearInterval(staleProxyTimer);
   healthMonitor.stop();
   messageDispatcher.stop();
   usagePoller.stop();
+  await usagePoller.cleanup().catch(err =>
+    console.error('[orchestrator] Usage session cleanup error:', err));
 
   // Save agent states for network restore
   try {
