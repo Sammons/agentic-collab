@@ -1136,7 +1136,7 @@
       panel.innerHTML = '<div class="persona-empty">No persona defined for this agent.<br>Create <code>persistent-agents/' + esc(state.selected) + '.md</code> to add one.</div>';
       return;
     }
-    let html = '';
+    let html = '<div style="display:flex;justify-content:flex-end;margin-bottom:8px"><button class="clear-chat-btn" id="editPersonaBtn">Edit</button></div>';
     const fm = data.frontmatter;
     if (fm && Object.keys(fm).length > 0) {
       html += '<dl class="persona-meta">';
@@ -1152,6 +1152,52 @@
       html += '<div class="persona-body">' + renderMarkdown(esc(data.body)) + '</div>';
     }
     panel.innerHTML = html || '<div class="persona-empty">Persona file is empty.</div>';
+    const editBtn = document.getElementById('editPersonaBtn');
+    if (editBtn) {
+      editBtn.onclick = () => enterPersonaEdit(state.selected, data.content);
+    }
+  }
+
+  function enterPersonaEdit(agentName, rawContent) {
+    const panel = document.getElementById('personaPanel');
+    panel.innerHTML = `
+      <div style="display:flex;flex-direction:column;height:100%;padding:0">
+        <div style="display:flex;gap:8px;padding:8px 0;align-items:center">
+          <button class="clear-chat-btn" id="cancelEditBtn">Cancel</button>
+          <button id="savePersonaBtn" style="padding:4px 12px;border:none;border-radius:4px;background:var(--green);color:#fff;font-size:12px;cursor:pointer">Save</button>
+          <span id="personaSaveStatus" style="font-size:11px;color:var(--text-dim)"></span>
+        </div>
+        <textarea id="personaEditor" style="flex:1;width:100%;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:12px;font-family:monospace;font-size:12px;resize:none;outline:none;box-sizing:border-box">${esc(rawContent || '')}</textarea>
+      </div>
+    `;
+    document.getElementById('cancelEditBtn').onclick = () => {
+      delete state.personaCache[agentName];
+      renderPersona();
+    };
+    document.getElementById('savePersonaBtn').onclick = async () => {
+      const content = document.getElementById('personaEditor').value;
+      const statusEl = document.getElementById('personaSaveStatus');
+      try {
+        const res = await fetch(`/api/personas/${encodeURIComponent(agentName)}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
+          body: JSON.stringify({ content }),
+        });
+        if (res.status === 401) { handleAuthError(); return; }
+        if (res.ok) {
+          statusEl.style.color = 'var(--green)';
+          statusEl.textContent = '\u2713 Saved — changes take effect when the agent restarts';
+          delete state.personaCache[agentName];
+        } else {
+          const err = await res.json().catch(() => ({}));
+          statusEl.style.color = 'var(--red)';
+          statusEl.textContent = '\u2717 ' + (err.error || 'Save failed');
+        }
+      } catch (err) {
+        statusEl.style.color = 'var(--red)';
+        statusEl.textContent = '\u2717 Save failed';
+      }
+    };
   }
 
   // ── Toast ──
