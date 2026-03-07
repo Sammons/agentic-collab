@@ -20,6 +20,7 @@ import { syncPersonasToDb } from './persona.ts';
 import { isRunning } from '../shared/agent-entity.ts';
 import { resolveSecret, getSecretPath } from '../shared/config.ts';
 import type { ProxyCommand, ProxyResponse } from '../shared/types.ts';
+import { handleVoiceUpgrade, type VoiceProxyOptions } from './voice-proxy.ts';
 
 const PORT = parseInt(process.env['PORT'] ?? '3000', 10);
 const DB_PATH = process.env['DB_PATH'] ?? join(process.env['HOME'] ?? '/data', '.agentic-collab', 'orchestrator.db');
@@ -188,22 +189,51 @@ const server = createServer(async (req, res) => {
   await router(req, res);
 });
 
+// Voice proxy config
+const ELEVENLABS_API_KEY = process.env['ELEVENLABS_API_KEY'] ?? '';
+const voiceOpts: VoiceProxyOptions | null = ELEVENLABS_API_KEY
+  ? {
+      elevenLabsApiKey: ELEVENLABS_API_KEY,
+      sttModel: process.env['ELEVENLABS_STT_MODEL'],
+      language: process.env['ELEVENLABS_STT_LANGUAGE'],
+    }
+  : null;
+
+if (voiceOpts) {
+  console.log('[orchestrator] Voice dictation enabled (ElevenLabs API key set)');
+}
+
 // WebSocket upgrade
 server.on('upgrade', (req, socket, head) => {
   const url = new URL(req.url!, `http://${req.headers.host}`);
+
+  // Auth check helper
+  const checkAuth = (): boolean => {
+    if (!ORCHESTRATOR_SECRET) return true;
+    const token = url.searchParams.get('token') ?? '';
+    return token.length === ORCHESTRATOR_SECRET.length
+      && timingSafeEqual(Buffer.from(token), Buffer.from(ORCHESTRATOR_SECRET));
+  };
+
   if (url.pathname === '/ws') {
-    // Validate auth token on WS upgrade when secret is set
-    if (ORCHESTRATOR_SECRET) {
-      const token = url.searchParams.get('token') ?? '';
-      const valid = token.length === ORCHESTRATOR_SECRET.length
-        && timingSafeEqual(Buffer.from(token), Buffer.from(ORCHESTRATOR_SECRET));
-      if (!valid) {
-        socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
-        socket.destroy();
-        return;
-      }
+    if (!checkAuth()) {
+      socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+      socket.destroy();
+      return;
     }
     wss.handleUpgrade(req, socket, head);
+  } else if (url.pathname === '/ws/voice') {
+    if (!checkAuth()) {
+      socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+    if (!voiceOpts) {
+      socket.write('HTTP/1.1 503 Service Unavailable\r\n\r\nELEVENLABS_API_KEY not configured');
+      socket.destroy();
+      return;
+    }
+    handleVoiceUpgrade(req, socket, head, voiceOpts);
   } else {
     socket.destroy();
   }
