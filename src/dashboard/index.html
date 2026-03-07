@@ -709,8 +709,22 @@
     .layout:not(.mobile-thread) .agent-list { display: flex; }
     .mobile-back { display: block; }
     .msg { max-width: 85%; }
-    .thread-input { padding: 8px 10px; gap: 6px; }
-    .thread-input textarea { font-size: 16px; } /* prevent iOS zoom */
+    .thread-input {
+      padding: 8px 10px;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .thread-input textarea {
+      font-size: 16px; /* prevent iOS zoom */
+      width: 100%;
+      flex: 0 0 100%;
+      order: 0;
+    }
+    .thread-input .upload-btn { order: 1; }
+    .thread-input #sendBtn {
+      order: 2;
+      margin-left: auto;
+    }
     header h1 { font-size: 14px; }
     header { padding: 10px 12px; }
     .agent-card { padding: 10px; }
@@ -1585,8 +1599,9 @@
 
   document.getElementById('sendBtn').onclick = sendMessage;
   const msgTextarea = document.getElementById('msgInput');
+  const isMobile = window.matchMedia('(max-width: 768px)').matches;
   msgTextarea.onkeydown = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter' && !e.shiftKey && !isMobile) {
       e.preventDefault();
       sendMessage();
     }
