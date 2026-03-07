@@ -23,6 +23,7 @@ export type PersonaFrontmatter = {
   cwd?: string;
   proxy_host?: string;
   permissions?: string;
+  group?: string;
 };
 
 export type ParsedPersona = {
@@ -257,6 +258,7 @@ export function syncSinglePersona(db: Database, name: string, personasDir?: stri
     persona: name,
     permissions: fm.permissions,
     proxyHost: fm.proxy_host,
+    agentGroup: fm.group,
   });
   return true;
 }
@@ -291,6 +293,7 @@ export function syncPersonasToDb(db: Database, personasDir?: string): number {
       persona: name,
       permissions: frontmatter.permissions,
       proxyHost: frontmatter.proxy_host,
+      agentGroup: frontmatter.group,
     });
 
     synced++;
@@ -336,6 +339,7 @@ export function createPersonaAndAgent(
     persona: name,
     permissions: fm.permissions,
     proxyHost: fm.proxy_host,
+    agentGroup: fm.group,
   });
 
   return { name, frontmatter: fm, body };

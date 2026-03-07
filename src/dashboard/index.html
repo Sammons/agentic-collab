@@ -80,6 +80,15 @@
   .agent-card:hover { border-color: var(--accent); }
   .agent-card.selected { border-color: var(--accent); background: #1c2333; }
   .agent-card.flash { animation: flash-card 0.6s ease; }
+  .agent-group-header {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-dim);
+    padding: 8px 4px 2px;
+    margin-top: 4px;
+  }
 
   @keyframes flash-card {
     0%,100% { background: var(--surface); }
@@ -1063,10 +1072,32 @@
 
     const filter = state.searchFilter.toLowerCase();
     const filtered = filter
-      ? state.agents.filter(a => a.name.toLowerCase().includes(filter) || a.engine.toLowerCase().includes(filter) || a.state.toLowerCase().includes(filter))
+      ? state.agents.filter(a => a.name.toLowerCase().includes(filter) || a.engine.toLowerCase().includes(filter) || a.state.toLowerCase().includes(filter) || (a.agentGroup || '').toLowerCase().includes(filter))
       : state.agents;
 
+    // Group agents
+    const groups = new Map();
     for (const agent of filtered) {
+      const g = agent.agentGroup || 'General';
+      if (!groups.has(g)) groups.set(g, []);
+      groups.get(g).push(agent);
+    }
+    // Sort: General first, then alphabetical
+    const sortedGroups = [...groups.keys()].sort((a, b) => {
+      if (a === 'General') return -1;
+      if (b === 'General') return 1;
+      return a.localeCompare(b);
+    });
+
+    for (const groupName of sortedGroups) {
+      if (sortedGroups.length > 1 || groupName !== 'General') {
+        const groupHeader = document.createElement('div');
+        groupHeader.className = 'agent-group-header';
+        groupHeader.textContent = groupName;
+        list.appendChild(groupHeader);
+      }
+
+    for (const agent of groups.get(groupName)) {
       const card = document.createElement('div');
       card.className = `agent-card${state.selected === agent.name ? ' selected' : ''}`;
       card.dataset.agent = agent.name;
@@ -1120,6 +1151,7 @@
       `;
       list.appendChild(card);
     }
+    } // end group loop
 
     // Engine status summary
     const engineSummary = document.createElement('div');
