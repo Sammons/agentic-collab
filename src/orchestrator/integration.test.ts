@@ -74,6 +74,8 @@ describe('Integration: full lifecycle via HTTP', () => {
       orchestratorHost: 'http://localhost:3000',
       orchestratorSecret: 'test-secret-123',
       messageDispatcher: new MessageDispatcher({ db, locks: intLocks, proxyDispatch: realisticProxy, orchestratorHost: 'http://localhost:3000' }),
+      usagePoller: { getUsageData: () => ({}), pollNow: async () => {} } as any,
+      voiceEnabled: false,
     };
 
     const router = createRouter(ctx);
@@ -380,6 +382,8 @@ describe('Integration: file upload via streaming', () => {
       orchestratorHost: 'http://localhost:3000',
       orchestratorSecret: SECRET,
       messageDispatcher: new MessageDispatcher({ db, locks: uploadLocks, proxyDispatch: uploadDispatch, orchestratorHost: 'http://localhost:3000' }),
+      usagePoller: { getUsageData: () => ({}), pollNow: async () => {} } as any,
+      voiceEnabled: false,
     };
 
     const router = createRouter(ctx);

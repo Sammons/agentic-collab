@@ -233,11 +233,12 @@
     padding: 12px 20px;
     border-top: 1px solid var(--border);
     display: flex;
+    flex-wrap: wrap;
     gap: 8px;
     background: var(--surface);
   }
   .thread-input textarea {
-    flex: 1;
+    flex: 0 0 100%;
     padding: 8px 12px;
     border-radius: 6px;
     border: 1px solid var(--border);
@@ -253,6 +254,11 @@
     line-height: 1.4;
   }
   .thread-input textarea:focus { border-color: var(--accent); }
+  .thread-input .upload-wrap { order: 1; }
+  .thread-input #sendBtn {
+    order: 2;
+    margin-left: auto;
+  }
   .thread-input button {
     padding: 8px 16px;
     border-radius: 6px;
@@ -323,6 +329,59 @@
     font-size: 12px;
   }
   .msg.file-upload .file-icon { font-size: 16px; }
+
+  /* ── Voice Dictation ── */
+  .voice-controls {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    order: 3;
+  }
+  .voice-mode-select {
+    padding: 4px 6px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text);
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .voice-btn {
+    width: 32px; height: 32px;
+    border-radius: 50%;
+    border: 2px solid var(--border);
+    background: var(--surface);
+    color: var(--text-dim);
+    font-size: 14px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.15s;
+    padding: 0;
+  }
+  .voice-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .voice-btn.recording {
+    border-color: #e74c3c;
+    background: #e74c3c;
+    color: #fff;
+    animation: voice-pulse 1.5s ease-in-out infinite;
+  }
+  .voice-btn.disabled { opacity: 0.4; cursor: not-allowed; }
+  .voice-btn.hidden { display: none; }
+  @keyframes voice-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(231, 76, 60, 0.4); }
+    50% { box-shadow: 0 0 0 6px rgba(231, 76, 60, 0); }
+  }
+  .voice-partial {
+    font-size: 11px;
+    color: var(--text-dim);
+    font-style: italic;
+    max-width: 200px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 
   .thread-messages.drag-over {
     outline: 2px dashed var(--accent);
@@ -786,18 +845,9 @@
     .thread-input {
       padding: 8px 10px;
       gap: 6px;
-      flex-wrap: wrap;
     }
     .thread-input textarea {
       font-size: 16px; /* prevent iOS zoom */
-      width: 100%;
-      flex: 0 0 100%;
-      order: 0;
-    }
-    .thread-input .upload-wrap { order: 1; }
-    .thread-input #sendBtn {
-      order: 2;
-      margin-left: auto;
     }
     header h1 { font-size: 14px; }
     header { padding: 10px 12px; }
@@ -902,6 +952,15 @@
       <div class="upload-wrap" id="uploadWrap">
         <input type="file" id="fileInput" multiple disabled />
         <span class="upload-btn" id="uploadBtn">+</span>
+      </div>
+      <div class="voice-controls" id="voiceControls" style="display:none">
+        <select class="voice-mode-select" id="voiceModeSelect">
+          <option value="off">Voice: Off</option>
+          <option value="vad">Voice: VAD</option>
+          <option value="ptt">Voice: Push-to-Talk</option>
+        </select>
+        <button class="voice-btn hidden" id="voiceBtn" title="Hold to talk">&#127908;</button>
+        <span class="voice-partial" id="voicePartial"></span>
       </div>
       <button id="sendBtn" disabled>Send</button>
     </div>
@@ -2226,10 +2285,218 @@
     } catch { /* ignore */ }
   }
 
+  // ── Voice Dictation ──
+
+  const voiceState = {
+    ws: null,        // WebSocket to orchestrator /ws/voice
+    mode: 'off',     // off | vad | ptt
+    recording: false,
+    stream: null,    // MediaStream
+    audioCtx: null,  // AudioContext
+    processor: null,  // ScriptProcessorNode
+    sid: null,       // session ID
+  };
+
+  async function initVoice() {
+    const controls = document.getElementById('voiceControls');
+    const select = document.getElementById('voiceModeSelect');
+    const btn = document.getElementById('voiceBtn');
+
+    // Check if voice is enabled on the server
+    try {
+      const resp = await fetch('/api/voice/status', {
+        headers: { 'Authorization': 'Bearer ' + getToken() },
+      });
+      const data = await resp.json();
+      if (!data.enabled) {
+        controls.style.display = 'flex';
+        select.disabled = true;
+        select.style.opacity = '0.4';
+        select.title = 'Voice unavailable — ELEVENLABS_API_KEY not configured on server';
+        return;
+      }
+    } catch {
+      return; // Server unreachable, hide controls entirely
+    }
+
+    controls.style.display = 'flex';
+
+    select.addEventListener('change', (e) => {
+      voiceState.mode = e.target.value;
+      if (voiceState.mode === 'off') {
+        stopVoice();
+        btn.classList.add('hidden');
+      } else if (voiceState.mode === 'ptt') {
+        stopVoice();
+        btn.classList.remove('hidden');
+      } else if (voiceState.mode === 'vad') {
+        btn.classList.add('hidden');
+        startVoice();
+      }
+    });
+
+    // Push-to-talk: hold button
+    btn.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      if (voiceState.mode !== 'ptt') return;
+      startVoice();
+    });
+    btn.addEventListener('pointerup', () => {
+      if (voiceState.mode !== 'ptt' || !voiceState.recording) return;
+      commitAndStopPtt();
+    });
+    btn.addEventListener('pointerleave', () => {
+      if (voiceState.mode !== 'ptt' || !voiceState.recording) return;
+      commitAndStopPtt();
+    });
+  }
+
+  function commitAndStopPtt() {
+    if (voiceState.ws && voiceState.ws.readyState === WebSocket.OPEN) {
+      voiceState.ws.send(JSON.stringify({ type: 'commit' }));
+    }
+    // Wait briefly for committed transcript then stop
+    setTimeout(() => stopVoice(), 1500);
+  }
+
+  async function startVoice() {
+    if (voiceState.recording) return;
+
+    try {
+      voiceState.stream = await navigator.mediaDevices.getUserMedia({
+        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      });
+    } catch (err) {
+      console.error('[voice] Mic access denied:', err);
+      document.getElementById('voicePartial').textContent = 'Mic denied';
+      setTimeout(() => { document.getElementById('voicePartial').textContent = ''; }, 3000);
+      return;
+    }
+
+    voiceState.sid = crypto.randomUUID();
+    voiceState.recording = true;
+
+    const btn = document.getElementById('voiceBtn');
+    btn.classList.add('recording');
+
+    // Determine sample rate — use 16kHz if possible, else native
+    voiceState.audioCtx = new AudioContext({ sampleRate: 16000 });
+    const actualRate = voiceState.audioCtx.sampleRate;
+
+    // Connect WebSocket to orchestrator voice proxy
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    const params = new URLSearchParams({
+      sid: voiceState.sid,
+      mode: voiceState.mode === 'ptt' ? 'manual' : 'vad',
+      silence: '1.5',
+      sample_rate: String(actualRate),
+      token: getToken(),
+    });
+    const wsUrl = `${proto}://${location.host}/ws/voice?${params}`;
+    const ws = new WebSocket(wsUrl);
+    voiceState.ws = ws;
+
+    ws.onopen = () => {
+      console.log('[voice] Connected, sid=' + voiceState.sid);
+    };
+
+    ws.onmessage = (e) => {
+      try {
+        const msg = JSON.parse(e.data);
+        const partial = document.getElementById('voicePartial');
+        const input = document.getElementById('msgInput');
+
+        if (msg.type === 'partial') {
+          partial.textContent = msg.text || '';
+        } else if (msg.type === 'committed') {
+          partial.textContent = '';
+          if (msg.text && msg.text.trim()) {
+            // Append to textarea
+            const sep = input.value && !input.value.endsWith('\n') && !input.value.endsWith(' ') ? ' ' : '';
+            input.value += sep + msg.text.trim();
+            input.dispatchEvent(new Event('input'));
+            // Enable send button
+            document.getElementById('sendBtn').disabled = !input.value.trim() || !state.selected;
+          }
+        } else if (msg.type === 'error') {
+          console.error('[voice] Error:', msg.error);
+          partial.textContent = msg.error;
+          setTimeout(() => { partial.textContent = ''; }, 5000);
+          stopVoice();
+        } else if (msg.type === 'ready') {
+          document.getElementById('voicePartial').textContent = 'Listening...';
+          setTimeout(() => {
+            if (document.getElementById('voicePartial').textContent === 'Listening...')
+              document.getElementById('voicePartial').textContent = '';
+          }, 2000);
+        }
+      } catch { /* ignore */ }
+    };
+
+    ws.onclose = () => {
+      if (voiceState.recording) stopVoiceLocal();
+    };
+
+    ws.onerror = () => {
+      document.getElementById('voicePartial').textContent = 'Connection failed';
+      setTimeout(() => { document.getElementById('voicePartial').textContent = ''; }, 3000);
+      stopVoiceLocal();
+    };
+
+    // Audio capture pipeline
+    const source = voiceState.audioCtx.createMediaStreamSource(voiceState.stream);
+    // ScriptProcessor is deprecated but widely supported and simple for PCM capture
+    voiceState.processor = voiceState.audioCtx.createScriptProcessor(4096, 1, 1);
+    voiceState.processor.onaudioprocess = (e) => {
+      if (!voiceState.recording || !ws || ws.readyState !== WebSocket.OPEN) return;
+      const float32 = e.inputBuffer.getChannelData(0);
+      // Convert Float32 to Int16 PCM
+      const int16 = new Int16Array(float32.length);
+      for (let i = 0; i < float32.length; i++) {
+        const s = Math.max(-1, Math.min(1, float32[i]));
+        int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+      }
+      // Send as binary
+      ws.send(int16.buffer);
+    };
+    source.connect(voiceState.processor);
+    voiceState.processor.connect(voiceState.audioCtx.destination);
+  }
+
+  function stopVoice() {
+    if (voiceState.ws && voiceState.ws.readyState === WebSocket.OPEN) {
+      voiceState.ws.close();
+    }
+    stopVoiceLocal();
+  }
+
+  function stopVoiceLocal() {
+    voiceState.recording = false;
+    voiceState.sid = null;
+
+    document.getElementById('voiceBtn').classList.remove('recording');
+    document.getElementById('voicePartial').textContent = '';
+
+    if (voiceState.processor) {
+      voiceState.processor.disconnect();
+      voiceState.processor = null;
+    }
+    if (voiceState.audioCtx) {
+      voiceState.audioCtx.close().catch(() => {});
+      voiceState.audioCtx = null;
+    }
+    if (voiceState.stream) {
+      voiceState.stream.getTracks().forEach(t => t.stop());
+      voiceState.stream = null;
+    }
+    voiceState.ws = null;
+  }
+
   // ── Init ──
   // Always try connecting first. If the server requires auth and we don't have
   // a token, the WebSocket will close with 401 and we'll show the auth modal.
   connect();
+  initVoice();
   // Refresh relative timestamps every 30s
   setInterval(() => { if (state.agents.length > 0) renderAgents(); }, 30000);
   // Fetch engine usage every 2 minutes (poller runs server-side every 10min)
