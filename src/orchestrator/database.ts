@@ -234,6 +234,7 @@ export class Database {
     failureReason: string | null;
     stateBeforeShutdown: string | null;
     spawnCount: number;
+    agentGroup: string | null;
   }>): AgentRecord {
     const agent = this.getAgent(name);
     if (!agent) throw new Error(`Agent "${name}" not found`);
@@ -607,6 +608,7 @@ const COLUMN_MAP: Record<string, string> = {
   failureReason: 'failure_reason',
   stateBeforeShutdown: 'state_before_shutdown',
   spawnCount: 'spawn_count',
+  agentGroup: 'agent_group',
 };
 
 function toColumnName(key: string): string {

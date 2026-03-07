@@ -88,7 +88,17 @@
     color: var(--text-dim);
     padding: 8px 4px 2px;
     margin-top: 4px;
+    cursor: grab;
+    border-radius: 4px;
+    transition: background 0.15s;
   }
+  .agent-group-header.dragging { opacity: 0.4; }
+  .agent-group-header.drag-over {
+    background: color-mix(in srgb, var(--accent) 15%, transparent);
+    box-shadow: 0 0 0 1px var(--accent);
+  }
+  .agent-group-header.drag-over-above { box-shadow: 0 -2px 0 var(--accent); }
+  .agent-group-header.drag-over-below { box-shadow: 0 2px 0 var(--accent); }
   .agent-card[draggable="true"] { cursor: grab; }
   .agent-card.dragging { opacity: 0.4; }
   .agent-card.drag-over-above { box-shadow: 0 -2px 0 var(--accent); }
@@ -1258,8 +1268,14 @@
       if (!groups.has(g)) groups.set(g, []);
       groups.get(g).push(agent);
     }
-    // Sort: General first, then alphabetical
+    // Sort: use saved order from localStorage, then General first, then alphabetical
+    const savedOrder = JSON.parse(localStorage.getItem('sectionOrder') || '[]');
     const sortedGroups = [...groups.keys()].sort((a, b) => {
+      const ai = savedOrder.indexOf(a);
+      const bi = savedOrder.indexOf(b);
+      if (ai !== -1 && bi !== -1) return ai - bi;
+      if (ai !== -1) return -1;
+      if (bi !== -1) return 1;
       if (a === 'General') return -1;
       if (b === 'General') return 1;
       return a.localeCompare(b);
@@ -1270,6 +1286,8 @@
         const groupHeader = document.createElement('div');
         groupHeader.className = 'agent-group-header';
         groupHeader.textContent = groupName;
+        groupHeader.setAttribute('draggable', 'true');
+        groupHeader.dataset.group = groupName;
         list.appendChild(groupHeader);
       }
 
@@ -1864,78 +1882,135 @@
   }
 
   let draggedAgent = null;
+  let draggedGroup = null;
   const agentListEl = document.getElementById('agentList');
+
+  function clearDragIndicators() {
+    agentListEl.querySelectorAll('.drag-over-above, .drag-over-below, .drag-over').forEach(el => {
+      el.classList.remove('drag-over-above', 'drag-over-below', 'drag-over');
+    });
+  }
 
   agentListEl.addEventListener('dragstart', (e) => {
     const card = e.target.closest('.agent-card[data-agent]');
-    if (!card) return;
-    draggedAgent = card.dataset.agent;
-    card.classList.add('dragging');
-    e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('text/plain', draggedAgent);
+    const header = e.target.closest('.agent-group-header[data-group]');
+    if (card) {
+      draggedAgent = card.dataset.agent;
+      draggedGroup = null;
+      card.classList.add('dragging');
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', draggedAgent);
+    } else if (header) {
+      draggedGroup = header.dataset.group;
+      draggedAgent = null;
+      header.classList.add('dragging');
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', draggedGroup);
+    }
   });
 
   agentListEl.addEventListener('dragend', (e) => {
-    const card = e.target.closest('.agent-card');
-    if (card) card.classList.remove('dragging');
-    agentListEl.querySelectorAll('.drag-over-above, .drag-over-below').forEach(el => {
-      el.classList.remove('drag-over-above', 'drag-over-below');
-    });
+    const el = e.target.closest('.agent-card, .agent-group-header');
+    if (el) el.classList.remove('dragging');
+    clearDragIndicators();
     draggedAgent = null;
+    draggedGroup = null;
   });
 
   agentListEl.addEventListener('dragover', (e) => {
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
+    clearDragIndicators();
+
+    const header = e.target.closest('.agent-group-header[data-group]');
     const card = e.target.closest('.agent-card[data-agent]');
-    if (!card || card.dataset.agent === draggedAgent) return;
-    // Clear previous indicators
-    agentListEl.querySelectorAll('.drag-over-above, .drag-over-below').forEach(el => {
-      el.classList.remove('drag-over-above', 'drag-over-below');
-    });
-    const rect = card.getBoundingClientRect();
-    const midY = rect.top + rect.height / 2;
-    if (e.clientY < midY) {
-      card.classList.add('drag-over-above');
-    } else {
-      card.classList.add('drag-over-below');
+
+    if (draggedAgent && header) {
+      // Agent dragged over a section header → highlight for group change
+      header.classList.add('drag-over');
+    } else if (draggedAgent && card && card.dataset.agent !== draggedAgent) {
+      // Agent dragged over another agent → reorder indicator
+      const rect = card.getBoundingClientRect();
+      card.classList.add(e.clientY < rect.top + rect.height / 2 ? 'drag-over-above' : 'drag-over-below');
+    } else if (draggedGroup && header && header.dataset.group !== draggedGroup) {
+      // Section header dragged over another section header → reorder indicator
+      const rect = header.getBoundingClientRect();
+      header.classList.add(e.clientY < rect.top + rect.height / 2 ? 'drag-over-above' : 'drag-over-below');
     }
   });
 
   agentListEl.addEventListener('dragleave', (e) => {
-    const card = e.target.closest('.agent-card');
-    if (card) {
-      card.classList.remove('drag-over-above', 'drag-over-below');
-    }
+    const el = e.target.closest('.agent-card, .agent-group-header');
+    if (el) el.classList.remove('drag-over-above', 'drag-over-below', 'drag-over');
   });
 
   agentListEl.addEventListener('drop', (e) => {
     e.preventDefault();
+    clearDragIndicators();
+
+    const targetHeader = e.target.closest('.agent-group-header[data-group]');
     const targetCard = e.target.closest('.agent-card[data-agent]');
-    if (!targetCard || !draggedAgent || targetCard.dataset.agent === draggedAgent) return;
 
-    const rect = targetCard.getBoundingClientRect();
-    const insertBefore = e.clientY < rect.top + rect.height / 2;
+    // Case 1: Agent dropped on a section header → change group
+    if (draggedAgent && targetHeader) {
+      const newGroup = targetHeader.dataset.group;
+      const agent = state.agents.find(a => a.name === draggedAgent);
+      if (agent && (agent.agentGroup || 'General') !== newGroup) {
+        agent.agentGroup = newGroup === 'General' ? null : newGroup;
+        renderAgents();
+        fetch(`/api/agents/${encodeURIComponent(draggedAgent)}/group`, {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json', ...authHeaders() },
+          body: JSON.stringify({ group: newGroup === 'General' ? '' : newGroup }),
+        }).catch(err => console.error('[drag] Group change failed:', err));
+      }
+      return;
+    }
 
-    // Reorder in state.agents
-    const fromIdx = state.agents.findIndex(a => a.name === draggedAgent);
-    const targetName = targetCard.dataset.agent;
-    if (fromIdx === -1) return;
-    const [moved] = state.agents.splice(fromIdx, 1);
-    let toIdx = state.agents.findIndex(a => a.name === targetName);
-    if (!insertBefore) toIdx++;
-    state.agents.splice(toIdx, 0, moved);
+    // Case 2: Agent dropped on another agent → reorder within list
+    if (draggedAgent && targetCard && targetCard.dataset.agent !== draggedAgent) {
+      const rect = targetCard.getBoundingClientRect();
+      const insertBefore = e.clientY < rect.top + rect.height / 2;
+      const fromIdx = state.agents.findIndex(a => a.name === draggedAgent);
+      const targetName = targetCard.dataset.agent;
+      if (fromIdx === -1) return;
+      const [moved] = state.agents.splice(fromIdx, 1);
+      let toIdx = state.agents.findIndex(a => a.name === targetName);
+      if (!insertBefore) toIdx++;
+      state.agents.splice(toIdx, 0, moved);
 
-    // Assign sort orders and persist
-    const orders = state.agents.map((a, i) => ({ name: a.name, sortOrder: i }));
-    state.agents.forEach((a, i) => { a.sortOrder = i; });
-    renderAgents();
+      const orders = state.agents.map((a, i) => ({ name: a.name, sortOrder: i }));
+      state.agents.forEach((a, i) => { a.sortOrder = i; });
+      renderAgents();
 
-    fetch('/api/agents/reorder', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', ...authHeaders() },
-      body: JSON.stringify({ orders }),
-    }).catch(err => console.error('[drag] Reorder save failed:', err));
+      fetch('/api/agents/reorder', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ orders }),
+      }).catch(err => console.error('[drag] Reorder save failed:', err));
+      return;
+    }
+
+    // Case 3: Section header dropped on another section header → reorder sections
+    if (draggedGroup && targetHeader && targetHeader.dataset.group !== draggedGroup) {
+      const savedOrder = JSON.parse(localStorage.getItem('sectionOrder') || '[]');
+      // Build current order from DOM
+      const headers = agentListEl.querySelectorAll('.agent-group-header[data-group]');
+      const currentOrder = [...headers].map(h => h.dataset.group);
+      // Ensure all groups are in the order list
+      for (const g of currentOrder) {
+        if (!savedOrder.includes(g)) savedOrder.push(g);
+      }
+      // Move dragged group
+      const fromIdx = savedOrder.indexOf(draggedGroup);
+      if (fromIdx !== -1) savedOrder.splice(fromIdx, 1);
+      const rect = targetHeader.getBoundingClientRect();
+      let targetIdx = savedOrder.indexOf(targetHeader.dataset.group);
+      if (e.clientY >= rect.top + rect.height / 2) targetIdx++;
+      savedOrder.splice(targetIdx, 0, draggedGroup);
+      localStorage.setItem('sectionOrder', JSON.stringify(savedOrder));
+      renderAgents();
+    }
   });
 
   // ── Clear Chat ──

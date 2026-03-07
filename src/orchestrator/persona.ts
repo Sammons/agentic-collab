@@ -152,6 +152,61 @@ export function loadPersonaFull(path: string): ParsedPersona | null {
 }
 
 /**
+ * Update a single frontmatter field in a persona file.
+ * If the field exists, replaces its value. If not, adds it.
+ * If value is empty/null, removes the field.
+ */
+export function updateFrontmatterField(filePath: string, field: string, value: string | null): void {
+  const raw = readFileSync(filePath, 'utf-8');
+  const trimmed = raw.trimStart();
+
+  if (!trimmed.startsWith('---')) {
+    // No frontmatter — add one with the field
+    if (!value) return; // nothing to remove
+    const newContent = `---\n${field}: ${value}\n---\n${raw}`;
+    writeFileSync(filePath, newContent, 'utf-8');
+    return;
+  }
+
+  const endIdx = trimmed.indexOf('\n---', 3);
+  if (endIdx === -1) {
+    if (!value) return;
+    const newContent = `---\n${field}: ${value}\n---\n${raw}`;
+    writeFileSync(filePath, newContent, 'utf-8');
+    return;
+  }
+
+  const fmBlock = trimmed.slice(4, endIdx);
+  const body = trimmed.slice(endIdx + 4);
+  const lines = fmBlock.split('\n');
+  let found = false;
+
+  const updatedLines = lines.filter((line) => {
+    const colonIdx = line.indexOf(':');
+    if (colonIdx === -1) return true;
+    const key = line.slice(0, colonIdx).trim();
+    if (key === field) {
+      found = true;
+      return !!value; // keep line only if we have a new value
+    }
+    return true;
+  }).map((line) => {
+    const colonIdx = line.indexOf(':');
+    if (colonIdx === -1) return line;
+    const key = line.slice(0, colonIdx).trim();
+    if (key === field && value) return `${field}: ${value}`;
+    return line;
+  });
+
+  if (!found && value) {
+    updatedLines.push(`${field}: ${value}`);
+  }
+
+  const newContent = `---\n${updatedLines.join('\n')}\n---${body}`;
+  writeFileSync(filePath, newContent, 'utf-8');
+}
+
+/**
  * Compose the full system prompt for an agent.
  * Combines persona + messaging instructions + orchestrator rules.
  */
