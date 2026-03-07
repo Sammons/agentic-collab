@@ -602,6 +602,42 @@ route('POST', '/api/agents/:name/kill', async (_req, res, match, ctx) => {
   }
 });
 
+route('GET', '/api/agents/:name/peek', async (_req, res, match, ctx) => {
+  const name = match.pathname.groups['name']!;
+  const agent = ctx.db.getAgent(name);
+  if (!agent) { json(res, 404, { error: `Agent "${name}" not found` }); return; }
+  if (!agent.proxyId) { json(res, 400, { error: `Agent "${name}" has no proxy` }); return; }
+
+  const result = await ctx.proxyDispatch(agent.proxyId, {
+    action: 'capture',
+    sessionName: agent.tmuxSession ?? `agent-${name}`,
+    lines: 50,
+  });
+
+  if (!result.ok) { json(res, 500, { error: result.error }); return; }
+  json(res, 200, { output: result.data });
+});
+
+route('POST', '/api/agents/:name/keys', async (req, res, match, ctx) => {
+  const name = match.pathname.groups['name']!;
+  const body = await readJsonBody(req);
+  const keys = body?.keys;
+  if (typeof keys !== 'string' || !keys) { json(res, 400, { error: 'keys required' }); return; }
+
+  const agent = ctx.db.getAgent(name);
+  if (!agent) { json(res, 404, { error: `Agent "${name}" not found` }); return; }
+  if (!agent.proxyId) { json(res, 400, { error: `Agent "${name}" has no proxy` }); return; }
+
+  const result = await ctx.proxyDispatch(agent.proxyId, {
+    action: 'send_keys',
+    sessionName: agent.tmuxSession ?? `agent-${name}`,
+    keys,
+  });
+
+  if (!result.ok) { json(res, 500, { error: result.error }); return; }
+  json(res, 200, { ok: true });
+});
+
 route('POST', '/api/agents/:name/destroy', async (_req, res, match, ctx) => {
   const name = match.pathname.groups['name']!;
 

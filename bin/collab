@@ -258,6 +258,21 @@ cmd('events', 'events <name> [--limit N]', 'View agent event log', async (args) 
   }
 });
 
+cmd('peek', 'peek <name>', 'Peek at agent tmux pane output', async (args) => {
+  const name = args[0];
+  if (!name) { console.error('usage: collab peek <name>'); process.exit(1); }
+  const data = await api('GET', `/api/agents/${encodeURIComponent(name)}/peek`);
+  console.log(data.output);
+});
+
+cmd('keys', 'keys <name> <keys>', 'Send tmux keys to an agent', async (args) => {
+  const name = args[0];
+  const keys = args.slice(1).join(' ');
+  if (!name || !keys) { console.error('usage: collab keys <name> <keys>'); process.exit(1); }
+  await api('POST', `/api/agents/${encodeURIComponent(name)}/keys`, { keys });
+  console.log(`sent keys to ${name}`);
+});
+
 cmd('reload', 'reload <name> [task...]', 'Reload an agent (kill + respawn)', async (args) => {
   const name = args[0];
   if (!name) { console.error('usage: collab reload <name> [task...]'); process.exit(1); }
