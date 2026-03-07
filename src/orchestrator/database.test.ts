@@ -330,5 +330,30 @@ describe('Database', () => {
       assert.equal(updated.retryCount, 1);
       assert.ok(updated.nextAttemptAt !== null);
     });
+
+    it('clearDashboardMessages removes all messages for agent', () => {
+      db.addDashboardMessage('clear-agent', 'to_agent', 'msg1');
+      db.addDashboardMessage('clear-agent', 'from_agent', 'msg2');
+      db.addDashboardMessage('clear-other', 'to_agent', 'msg3');
+
+      db.clearDashboardMessages('clear-agent');
+
+      const threads = db.getDashboardThreads();
+      assert.equal(threads['clear-agent'], undefined);
+      assert.ok(threads['clear-other']?.length === 1);
+    });
+
+    it('clearPendingMessages removes only pending dashboard messages', () => {
+      const pending = db.enqueueMessage({ sourceAgent: null, targetAgent: 'clear-pending', envelope: 'test' });
+      const agentMsg = db.enqueueMessage({ sourceAgent: 'some-agent', targetAgent: 'clear-pending', envelope: 'from agent' });
+
+      db.clearPendingMessages('clear-pending');
+
+      // Dashboard-sourced pending message should be gone
+      assert.equal(db.getPendingMessageById(pending.id), undefined);
+      // Agent-sourced message should remain
+      const remaining = db.getPendingMessageById(agentMsg.id);
+      assert.ok(remaining);
+    });
   });
 });

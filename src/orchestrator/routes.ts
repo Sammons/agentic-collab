@@ -349,6 +349,16 @@ route('GET', '/api/dashboard/threads', async (req, res, _match, ctx) => {
   json(res, 200, threads);
 });
 
+route('DELETE', '/api/dashboard/messages/:agent', async (_req, res, match, ctx) => {
+  const agentName = match.pathname.groups['agent']!;
+  const agent = ctx.db.getAgent(agentName);
+  if (!agent) return json(res, 404, { error: 'Agent not found' });
+
+  ctx.db.clearDashboardMessages(agentName);
+  ctx.db.clearPendingMessages(agentName);
+  json(res, 200, { ok: true });
+});
+
 // ── Proxy Registration ──
 
 route('POST', '/api/proxy/register', async (req, res, _match, ctx) => {

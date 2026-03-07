@@ -441,6 +441,7 @@
     padding: 12px 20px;
     border-bottom: 1px solid var(--border);
     font-weight: 600;
+    position: relative;
     font-size: 14px;
     background: var(--surface);
     display: flex;
@@ -473,6 +474,18 @@
     background: var(--surface);
     color: var(--fg);
   }
+  .clear-chat-btn {
+    padding: 4px 8px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-dim);
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.15s;
+    margin-left: 4px;
+  }
+  .clear-chat-btn:hover { border-color: var(--red); color: var(--red); }
 
   /* ── Persona panel ── */
   .persona-panel {
@@ -1002,8 +1015,10 @@
       <button class="${state.threadView === 'messages' ? 'active' : ''}" data-tab="messages">Messages</button>
       <button class="${state.threadView === 'persona' ? 'active' : ''}" data-tab="persona">Persona</button>
     </div>`;
-    header.innerHTML = `<button class="mobile-back" id="mobileBackBtn">\u2190</button><span>${esc(state.selected)}</span>${headerBadge}${tabs}`;
+    const clearBtn = `<button class="clear-chat-btn" id="clearChatBtn" title="Clear chat history">\u2715</button>`;
+    header.innerHTML = `<button class="mobile-back" id="mobileBackBtn">\u2190</button><span>${esc(state.selected)}</span>${headerBadge}${tabs}${clearBtn}`;
     document.getElementById('mobileBackBtn').onclick = mobileBack;
+    document.getElementById('clearChatBtn').onclick = () => clearChat(state.selected);
     header.querySelectorAll('.thread-tabs button').forEach(btn => {
       btn.onclick = () => { state.threadView = btn.dataset.tab; renderThread(); };
     });
@@ -1266,6 +1281,24 @@
       handleAgentListEvent(e);
     }
   });
+
+  // ── Clear Chat ──
+  async function clearChat(agentName) {
+    if (!agentName) return;
+    try {
+      const res = await fetch(`/api/dashboard/messages/${encodeURIComponent(agentName)}`, {
+        method: 'DELETE',
+        headers: authHeaders(),
+      });
+      if (res.status === 401) { handleAuthError(); return; }
+      if (res.ok) {
+        state.threads[agentName] = [];
+        renderThread();
+      }
+    } catch (err) {
+      console.error('Clear chat failed:', err);
+    }
+  }
 
   // ── Send Message ──
   function showSendError(input, sendBtn) {
