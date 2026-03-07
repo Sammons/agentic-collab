@@ -265,8 +265,30 @@ describe('Engine Adapters', () => {
       assert.equal(adapter.detectIdleState('output\n›'), 'waiting_for_input');
     });
 
-    it('detects idle state from status bar with % left', () => {
-      assert.equal(adapter.detectIdleState('output\n  gpt-5.4 xhigh · 81% left · ~/Desktop'), 'waiting_for_input');
+    it('detects idle from prompt with status bar below', () => {
+      const pane = '› Implement {feature}\n\n  gpt-5.4 xhigh · 81% left · ~/Desktop';
+      assert.equal(adapter.detectIdleState(pane), 'waiting_for_input');
+    });
+
+    it('detects idle from prompt with "context left" status bar', () => {
+      const pane = '› \n\n  tab to queue message                                                  83% context left';
+      assert.equal(adapter.detectIdleState(pane), 'waiting_for_input');
+    });
+
+    it('detects running from Working indicator above prompt', () => {
+      const pane = [
+        '◦ Working (32s • esc to interrupt)',
+        '',
+        '› [Pasted Content]',
+        '',
+        '  tab to queue message                                                  79% context left',
+      ].join('\n');
+      assert.equal(adapter.detectIdleState(pane), 'running_tool');
+    });
+
+    it('detects running from bullet Working indicator', () => {
+      const pane = '• Working (1m 14s • esc to interrupt)\n› queued msg\n  83% context left';
+      assert.equal(adapter.detectIdleState(pane), 'running_tool');
     });
 
     it('detects running state from spinner', () => {
@@ -286,6 +308,12 @@ describe('Engine Adapters', () => {
     it('parses context percent from low remaining', () => {
       const result = adapter.parseContextPercent('gpt-5.4 · 15% left · ~/path');
       assert.equal(result.contextPct, 85);
+      assert.equal(result.confident, true);
+    });
+
+    it('parses context percent from "context left" variant', () => {
+      const result = adapter.parseContextPercent('tab to queue message                                                  83% context left');
+      assert.equal(result.contextPct, 17);
       assert.equal(result.confident, true);
     });
 
