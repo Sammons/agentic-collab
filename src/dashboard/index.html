@@ -555,9 +555,15 @@
 
   .watch-panel {
     flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    background: #0d1117;
+  }
+  .watch-output {
+    flex: 1;
     overflow-y: auto;
     padding: 12px;
-    background: #0d1117;
     font-family: 'SF Mono', 'Menlo', 'Monaco', 'Consolas', monospace;
     font-size: 12px;
     line-height: 1.4;
@@ -565,14 +571,40 @@
     white-space: pre-wrap;
     word-wrap: break-word;
   }
-  .watch-panel .watch-status {
+  .watch-output .watch-status {
     color: var(--text-dim);
-    font-family: var(--font);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
     font-size: 11px;
     padding: 4px 0;
     border-bottom: 1px solid var(--border);
     margin-bottom: 8px;
   }
+  .watch-keys {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 8px 12px;
+    border-top: 1px solid var(--border);
+    background: var(--surface);
+    justify-content: center;
+    align-items: center;
+  }
+  .watch-keys button {
+    min-width: 36px;
+    height: 32px;
+    padding: 4px 8px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.1s;
+    font-family: inherit;
+  }
+  .watch-keys button:hover { border-color: var(--accent); color: var(--accent); }
+  .watch-keys button:active { background: var(--accent); color: #fff; border-color: var(--accent); }
 
   /* ── Toast ── */
   .toast {
@@ -1388,17 +1420,57 @@
   function startWatchPolling() {
     const panel = document.getElementById('watchPanel');
     if (!state.selected) return;
-    panel.innerHTML = '<div class="watch-status">Connecting...</div>';
+
+    const keyButtons = [
+      { label: '\u2191', key: 'Up' },
+      { label: '\u2193', key: 'Down' },
+      { label: '\u2190', key: 'Left' },
+      { label: '\u2192', key: 'Right' },
+      { label: 'Enter', key: 'Enter' },
+      { label: 'Esc', key: 'Escape' },
+      { label: 'q', key: 'q' },
+      { label: 'Tab', key: 'Tab' },
+      { label: 'Space', key: 'Space' },
+      { label: 'y', key: 'y' },
+      { label: 'n', key: 'n' },
+    ];
+
+    const keysHtml = keyButtons.map(b =>
+      `<button data-key="${b.key}" title="Send ${b.key}">${b.label}</button>`
+    ).join('');
+
+    panel.innerHTML = `
+      <div class="watch-output"><div class="watch-status">Connecting...</div></div>
+      <div class="watch-keys">${keysHtml}</div>
+    `;
+
+    const outputEl = panel.querySelector('.watch-output');
+
+    // Key button handlers
+    panel.querySelector('.watch-keys').addEventListener('click', async (e) => {
+      const btn = e.target.closest('button[data-key]');
+      if (!btn || !state.selected) return;
+      const key = btn.dataset.key;
+      try {
+        await fetch(`/api/agents/${encodeURIComponent(state.selected)}/keys`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', ...authHeaders() },
+          body: JSON.stringify({ keys: key }),
+        });
+      } catch (err) {
+        console.error('[watch] Key send failed:', err);
+      }
+    });
 
     async function poll() {
       if (state.threadView !== 'watch' || !state.selected) return;
       const output = await fetchPaneOutput(state.selected);
       if (state.threadView !== 'watch' || !state.selected) return;
       if (output === null) {
-        panel.innerHTML = '<div class="watch-status">Agent has no active session</div>';
+        outputEl.innerHTML = '<div class="watch-status">Agent has no active session</div>';
       } else {
         const now = new Date().toLocaleTimeString();
-        panel.innerHTML = `<div class="watch-status">Last capture: ${now}</div>${esc(output)}`;
+        outputEl.innerHTML = `<div class="watch-status">Last capture: ${now}</div>${esc(output)}`;
       }
     }
 
