@@ -53,11 +53,18 @@ export class UsagePoller {
   start(): void {
     if (this.timer) return;
     console.log(`[usage] Starting poller (every ${Math.round(this.pollIntervalMs / 60000)}min)`);
-    // Run immediately on start, then on interval
-    this.pollAll().catch(err => console.error('[usage] Initial poll error:', err));
+    // Delay initial poll by 60s to let agents reach idle state after restart
+    setTimeout(() => {
+      this.pollAll().catch(err => console.error('[usage] Initial poll error:', err));
+    }, 60_000);
     this.timer = setInterval(() => {
       this.pollAll().catch(err => console.error('[usage] Poll error:', err));
     }, this.pollIntervalMs);
+  }
+
+  /** Manually trigger a poll (e.g. from API). */
+  async pollNow(): Promise<void> {
+    await this.pollAll();
   }
 
   stop(): void {
