@@ -2,7 +2,7 @@
  * Claude Code CLI adapter.
  */
 
-import { SPINNER_REGEX, type EngineAdapter, type SpawnOptions, type ResumeOptions, type IdleState, type ContextResult, type ElicitationResult } from './types.ts';
+import { SPINNER_REGEX, type EngineAdapter, type SpawnOptions, type ResumeOptions, type IdleState, type ContextResult } from './types.ts';
 import { shellQuote } from '../../shared/utils.ts';
 
 export class ClaudeAdapter implements EngineAdapter {
@@ -131,61 +131,6 @@ export class ClaudeAdapter implements EngineAdapter {
 
   interruptKeys(): string[] {
     return ['Escape', 'Escape', 'Escape'];
-  }
-
-  detectElicitation(paneOutput: string): ElicitationResult | null {
-    const lines = paneOutput.split('\n');
-
-    // Scan for AskUserQuestion patterns — numbered options with selection cursor
-    // Claude Code shows: "? Question text\n  ❯ Option 1\n    Option 2\n    Option 3"
-    let hasQuestionMark = false;
-    let hasSelectionCursor = false;
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (/^\?/.test(trimmed)) hasQuestionMark = true;
-      // Selection cursor ❯ (U+276F) at start of option line (different from input prompt)
-      if (/^[\u276f]\s+\S/.test(trimmed)) hasSelectionCursor = true;
-    }
-    if (hasQuestionMark && hasSelectionCursor) {
-      return {
-        type: 'user_question',
-        autoRespondKeys: ['Enter'], // Accept the pre-selected (first) option
-        description: 'Agent is waiting for user to select an option (AskUserQuestion)',
-      };
-    }
-
-    // Plan mode detection — look for plan mode indicators
-    // Claude Code shows "Plan:" header and options to exit plan mode
-    let hasPlanIndicator = false;
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (/plan mode/i.test(trimmed) || /ExitPlanMode/i.test(trimmed)) {
-        hasPlanIndicator = true;
-        break;
-      }
-    }
-    if (hasPlanIndicator) {
-      return {
-        type: 'plan_mode',
-        autoRespondKeys: ['Escape'], // Exit plan mode
-        description: 'Agent entered plan mode — auto-exiting',
-      };
-    }
-
-    // Permission prompt detection — "Allow" / "Deny" / "Always allow"
-    // Should not happen with --dangerously-skip-permissions but detect it anyway
-    for (let i = lines.length - 1; i >= Math.max(0, lines.length - 15); i--) {
-      const trimmed = (lines[i] ?? '').trim();
-      if (/^(Allow|Deny|Always allow)/i.test(trimmed) || /\bAllow\b.*\bDeny\b/i.test(trimmed)) {
-        return {
-          type: 'permission_prompt',
-          autoRespondKeys: ['y'], // Allow
-          description: 'Agent is waiting for permission approval',
-        };
-      }
-    }
-
-    return null;
   }
 }
 
