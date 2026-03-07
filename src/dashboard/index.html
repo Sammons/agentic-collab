@@ -640,12 +640,14 @@
     font-size: 12px;
   }
   .persona-body {
-    white-space: pre-wrap;
+    white-space: normal;
     word-wrap: break-word;
     font-family: inherit;
     margin: 0;
     line-height: 1.7;
   }
+  .persona-body ul, .persona-body ol { margin: 4px 0; padding-left: 20px; }
+  .persona-body li { margin: 2px 0; }
 
   /* ── Mobile back button ── */
   .mobile-back {
@@ -1568,18 +1570,70 @@
     text = text.replace(/(?<!\w)\*(.+?)\*(?!\w)/g, '<em>$1</em>');
     // Links
     text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" style="color:var(--accent)">$1</a>');
-    // Unordered lists
-    text = text.replace(/^[-*]\s+(.+)$/gm, '<li>$1</li>');
-    text = text.replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul style="margin:4px 0;padding-left:20px">$1</ul>');
-    // Ordered lists
-    text = text.replace(/^\d+\.\s+(.+)$/gm, '<li>$1</li>');
-    // Horizontal rules
-    text = text.replace(/^---+$/gm, '<hr style="border:none;border-top:1px solid var(--border);margin:8px 0">');
-    // Paragraphs: double newlines
-    text = text.replace(/\n\n+/g, '</p><p style="margin:4px 0">');
-    text = '<p style="margin:4px 0">' + text + '</p>';
-    // Clean up empty paragraphs
-    text = text.replace(/<p style="margin:4px 0"><\/p>/g, '');
+    // Lists and paragraphs: line-based parser for proper nesting
+    {
+      const lines = text.split('\n');
+      const out = [];
+      const listStack = []; // stack of { tag: 'ul'|'ol', indent: number }
+      let inPara = false;
+
+      function closeListsTo(indent) {
+        while (listStack.length > 0 && listStack[listStack.length - 1].indent >= indent) {
+          out.push('</' + listStack.pop().tag + '>');
+        }
+      }
+      function closeAllLists() { closeListsTo(-1); }
+      function closePara() { if (inPara) { out.push('</p>'); inPara = false; } }
+
+      for (const line of lines) {
+        const hrMatch = line.match(/^---+$/);
+        if (hrMatch) {
+          closePara(); closeAllLists();
+          out.push('<hr style="border:none;border-top:1px solid var(--border);margin:8px 0">');
+          continue;
+        }
+
+        const ulMatch = line.match(/^(\s*)([-*])\s+(.+)$/);
+        const olMatch = !ulMatch && line.match(/^(\s*)\d+\.\s+(.+)$/);
+
+        if (ulMatch || olMatch) {
+          closePara();
+          const indent = (ulMatch || olMatch)[1].length;
+          const tag = ulMatch ? 'ul' : 'ol';
+          const content = ulMatch ? ulMatch[3] : olMatch[2];
+
+          if (listStack.length === 0 || indent > listStack[listStack.length - 1].indent) {
+            out.push('<' + tag + '>');
+            listStack.push({ tag, indent });
+          } else if (indent < listStack[listStack.length - 1].indent) {
+            closeListsTo(indent);
+            if (listStack.length === 0 || listStack[listStack.length - 1].indent < indent) {
+              out.push('<' + tag + '>');
+              listStack.push({ tag, indent });
+            }
+          }
+          out.push('<li>' + content + '</li>');
+          continue;
+        }
+
+        // Non-list line
+        closeAllLists();
+
+        if (line.trim() === '') {
+          closePara();
+        } else if (line.startsWith('<h') || line.startsWith('<hr')) {
+          closePara();
+          out.push(line);
+        } else {
+          if (!inPara) { out.push('<p style="margin:4px 0">'); inPara = true; }
+          else { out.push('<br>'); }
+          out.push(line);
+        }
+      }
+      closePara();
+      closeAllLists();
+      text = out.join('\n');
+    }
     // Restore code blocks
     text = text.replace(/\x00CB(\d+)\x00/g, (_m, idx) => {
       return `<pre style="background:var(--bg);padding:8px;border-radius:4px;overflow-x:auto;margin:4px 0;font-size:12px"><code>${codeBlocks[parseInt(idx)]}</code></pre>`;
