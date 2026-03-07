@@ -54,12 +54,19 @@ export function shutdownAgents(ctx: LifecycleContext): number {
  */
 export async function restoreAllAgents(ctx: LifecycleContext): Promise<number> {
   const agents = ctx.db.listAgents();
+  const toReadopt: AgentRecord[] = [];
   const toRestore: AgentRecord[] = [];
 
   for (const agent of agents) {
     // Mode 1: Graceful shutdown — stateBeforeShutdown is set
     if (agent.state === 'suspended' && agent.stateBeforeShutdown) {
-      toRestore.push(agent);
+      // Check if the tmux session survived the restart
+      const hasSession = await checkTmuxSession(ctx, agent);
+      if (hasSession) {
+        toReadopt.push(agent);
+      } else {
+        toRestore.push(agent);
+      }
       continue;
     }
 
@@ -81,9 +88,40 @@ export async function restoreAllAgents(ctx: LifecycleContext): Promise<number> {
     }
   }
 
-  if (toRestore.length === 0) {
+  const total = toReadopt.length + toRestore.length;
+  if (total === 0) {
     console.log('[network] No agents to restore');
     return 0;
+  }
+
+  // Re-adopt agents whose tmux sessions survived the restart (no re-spawn needed)
+  let readopted = 0;
+  for (const agent of toReadopt) {
+    try {
+      // Restore to active — health monitor will detect idle if needed
+      const current = ctx.db.getAgent(agent.name);
+      if (!current) continue;
+      ctx.db.updateAgentState(agent.name, 'active', current.version, {
+        stateBeforeShutdown: null,
+        lastActivity: new Date().toISOString(),
+      });
+      ctx.db.logEvent(agent.name, 'session_readopted', undefined, {
+        previousState: agent.stateBeforeShutdown,
+      });
+      readopted++;
+    } catch (err) {
+      console.error(`[network] Failed to re-adopt ${agent.name}:`, err);
+      // Fall through to full restore
+      toRestore.push(agent);
+    }
+  }
+
+  if (readopted > 0) {
+    console.log(`[network] Re-adopted ${readopted} agents with existing tmux sessions`);
+  }
+
+  if (toRestore.length === 0) {
+    return readopted;
   }
 
   console.log(`[network] Restoring ${toRestore.length} agents with ${RESTORE_STAGGER_MS}ms stagger`);
@@ -135,7 +173,7 @@ export async function restoreAllAgents(ctx: LifecycleContext): Promise<number> {
   }
 
   console.log(`[network] Restored ${restored}/${toRestore.length} agents`);
-  return restored;
+  return readopted + restored;
 }
 
 /**

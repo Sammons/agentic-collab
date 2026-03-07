@@ -177,6 +177,52 @@ describe('Network', () => {
       }
     });
 
+    it('re-adopts agents whose tmux sessions survived restart', async () => {
+      // Clean up all agents to isolate this test
+      for (const a of db.listAgents()) {
+        if (a.stateBeforeShutdown || a.state === 'active' || a.state === 'idle'
+            || a.state === 'suspending' || a.state === 'resuming') {
+          db.updateAgentState(a.name, 'suspended', a.version, { stateBeforeShutdown: null });
+        }
+      }
+
+      db.createAgent({ name: 'net-readopt', engine: 'claude', cwd: '/tmp', proxyId: 'p1' });
+      const a = db.getAgent('net-readopt')!;
+      db.updateAgentState('net-readopt', 'active', a.version, {
+        tmuxSession: 'agent-net-readopt',
+        proxyId: 'p1',
+      });
+      // Simulate graceful shutdown
+      const active = db.getAgent('net-readopt')!;
+      db.updateAgentState('net-readopt', 'suspended', active.version, {
+        stateBeforeShutdown: 'active',
+      });
+
+      // Context where has_session returns true — tmux survived
+      const readoptCtx: LifecycleContext = {
+        ...ctx,
+        proxyDispatch: async (_proxyId: string, command: ProxyCommand): Promise<ProxyResponse> => {
+          proxyCommands.push(command);
+          if (command.action === 'has_session') {
+            return { ok: true, data: true };
+          }
+          return { ok: true };
+        },
+      };
+
+      proxyCommands = [];
+      const count = await restoreAllAgents(readoptCtx);
+      assert.equal(count, 1);
+
+      const agent = db.getAgent('net-readopt')!;
+      assert.equal(agent.state, 'active');
+      assert.equal(agent.stateBeforeShutdown, null);
+
+      // Should NOT have created a new tmux session or pasted any commands
+      assert.ok(!proxyCommands.some(c => c.action === 'create_session'));
+      assert.ok(!proxyCommands.some(c => c.action === 'paste'));
+    });
+
     it('skips active agents with existing tmux session (no crash)', async () => {
       db.createAgent({ name: 'net-healthy', engine: 'claude', cwd: '/tmp', proxyId: 'p1' });
       const a = db.getAgent('net-healthy')!;
