@@ -676,6 +676,40 @@
   }
   .watch-keys button:hover { border-color: var(--accent); color: var(--accent); }
   .watch-keys button:active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .watch-type {
+    display: flex;
+    gap: 6px;
+    padding: 6px 12px 8px;
+    border-top: 1px solid var(--border);
+    align-items: center;
+  }
+  .watch-type-input {
+    flex: 1;
+    height: 32px;
+    padding: 4px 8px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text);
+    font-size: 13px;
+    font-family: monospace;
+    outline: none;
+    box-sizing: border-box;
+  }
+  .watch-type-input:focus { border-color: var(--accent); }
+  .watch-type button {
+    height: 32px;
+    padding: 4px 10px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .watch-type button:hover { border-color: var(--accent); color: var(--accent); }
 
   /* ── Toast ── */
   .toast {
@@ -1539,6 +1573,7 @@
       { label: '\u2193', key: 'Down' },
       { label: '\u2190', key: 'Left' },
       { label: '\u2192', key: 'Right' },
+      { label: '\u232b', key: 'BSpace' },
       { label: 'Enter', key: 'Enter' },
       { label: 'Esc', key: 'Escape' },
       { label: 'q', key: 'q' },
@@ -1555,6 +1590,11 @@
     panel.innerHTML = `
       <div class="watch-output"><div class="watch-status">Connecting...</div></div>
       <div class="watch-keys">${keysHtml}</div>
+      <div class="watch-type">
+        <input type="text" class="watch-type-input" placeholder="Type literal text..." />
+        <button class="watch-type-send" title="Send text (no Enter)">Send</button>
+        <button class="watch-type-enter" title="Send text + Enter">Send+\u21b5</button>
+      </div>
     `;
 
     const outputEl = panel.querySelector('.watch-output');
@@ -1572,6 +1612,35 @@
         });
       } catch (err) {
         console.error('[watch] Key send failed:', err);
+      }
+    });
+
+    // Literal text input handlers
+    const typeInput = panel.querySelector('.watch-type-input');
+    const typeSend = panel.querySelector('.watch-type-send');
+    const typeEnter = panel.querySelector('.watch-type-enter');
+
+    async function sendLiteral(pressEnter) {
+      const text = typeInput.value;
+      if (!text || !state.selected) return;
+      try {
+        await fetch(`/api/agents/${encodeURIComponent(state.selected)}/type`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', ...authHeaders() },
+          body: JSON.stringify({ text, pressEnter }),
+        });
+        typeInput.value = '';
+      } catch (err) {
+        console.error('[watch] Type send failed:', err);
+      }
+    }
+
+    typeSend.addEventListener('click', () => sendLiteral(false));
+    typeEnter.addEventListener('click', () => sendLiteral(true));
+    typeInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        sendLiteral(e.shiftKey ? false : true);
       }
     });
 
