@@ -787,6 +787,7 @@
     threadView: 'messages',  // 'messages' | 'persona'
     personaCache: {},  // { agentName: { content, fetched } }
     searchFilter: '',
+    engineUsage: {},  // { engine: EngineUsage }
   };
 
   let ws = null;
@@ -1021,6 +1022,24 @@
         const rest = c.total - c.active - c.idle - c.failed;
         if (rest > 0) parts.push(`${rest} other`);
         engineHtml += `<div style="margin:2px 0">${engine}: ${parts.join(', ')}</div>`;
+
+        // Usage buckets
+        const usage = state.engineUsage[engine];
+        if (usage && usage.buckets && usage.buckets.length > 0) {
+          for (const b of usage.buckets) {
+            const barPct = Math.min(100, Math.max(0, b.pctUsed));
+            const color = barPct >= 80 ? 'var(--red)' : barPct >= 50 ? 'var(--yellow)' : 'var(--green)';
+            engineHtml += `<div style="margin:2px 0 2px 12px;font-size:11px;color:var(--text-dim)">`;
+            engineHtml += `${b.label}: `;
+            engineHtml += `<span style="display:inline-block;width:60px;height:8px;background:var(--border);border-radius:4px;vertical-align:middle;overflow:hidden">`;
+            engineHtml += `<span style="display:block;width:${barPct}%;height:100%;background:${color};border-radius:4px"></span></span>`;
+            engineHtml += ` <span style="color:${color}">${b.pctUsed}%</span>`;
+            if (b.resetsAt) engineHtml += ` <span style="font-size:10px">(resets ${b.resetsAt})</span>`;
+            engineHtml += `</div>`;
+          }
+          const ago = timeAgo(usage.queriedAt);
+          engineHtml += `<div style="margin:1px 0 4px 12px;font-size:10px;color:var(--text-dim)">queried ${ago}</div>`;
+        }
       }
     }
     engineSummary.innerHTML = engineHtml;
@@ -1700,12 +1719,30 @@
     renderAgents();
   });
 
+  // ── Engine Usage Fetch ──
+  async function fetchEngineUsage() {
+    try {
+      const resp = await fetch('/api/engines/status', {
+        headers: getToken() ? { 'Authorization': `Bearer ${getToken()}` } : {},
+      });
+      if (!resp.ok) return;
+      const data = await resp.json();
+      if (data.usage) {
+        state.engineUsage = data.usage;
+        renderAgents();
+      }
+    } catch { /* ignore */ }
+  }
+
   // ── Init ──
   // Always try connecting first. If the server requires auth and we don't have
   // a token, the WebSocket will close with 401 and we'll show the auth modal.
   connect();
   // Refresh relative timestamps every 30s
   setInterval(() => { if (state.agents.length > 0) renderAgents(); }, 30000);
+  // Fetch engine usage every 2 minutes (poller runs server-side every 10min)
+  fetchEngineUsage();
+  setInterval(fetchEngineUsage, 120_000);
 })();
 </script>
 </body>

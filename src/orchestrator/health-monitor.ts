@@ -40,6 +40,8 @@ export class HealthMonitor {
   private timer: ReturnType<typeof setInterval> | null = null;
   private fastTimer: ReturnType<typeof setInterval> | null = null;
   private readonly quickPollTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly lastCompactAt = new Map<string, number>();
+  private static readonly COMPACT_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes between compacts
   private readonly db: Database;
   private readonly locks: LockManager;
   private readonly proxyDispatch: (proxyId: string, command: ProxyCommand) => Promise<ProxyResponse>;
@@ -254,9 +256,14 @@ export class HealthMonitor {
     }
 
     if (contextResult.contextPct >= this.autoCompactThreshold) {
+      const lastCompact = this.lastCompactAt.get(agent.name) ?? 0;
+      if (Date.now() - lastCompact < HealthMonitor.COMPACT_COOLDOWN_MS) {
+        return false; // cooldown active, skip
+      }
       console.log(`[health] ${agent.name} context at ${contextResult.contextPct}% — sending compact`);
       const lifecycleCtx = this.makeLifecycleCtx();
       await compactAgent(lifecycleCtx, agent.name);
+      this.lastCompactAt.set(agent.name, Date.now());
       return true;
     }
 

@@ -13,6 +13,7 @@ import { WebSocketServer } from '../shared/websocket-server.ts';
 import { LockManager } from '../shared/lock.ts';
 import { HealthMonitor } from './health-monitor.ts';
 import { MessageDispatcher } from './message-dispatcher.ts';
+import { UsagePoller } from './usage-poller.ts';
 import { shutdownAgents, restoreAllAgents } from './network.ts';
 import type { LifecycleContext } from './lifecycle.ts';
 import { syncPersonasToDb } from './persona.ts';
@@ -143,6 +144,14 @@ const healthMonitor = new HealthMonitor({
 });
 healthMonitorRef = healthMonitor;
 
+// ── Usage Poller ──
+
+const usagePoller = new UsagePoller({
+  db,
+  locks,
+  proxyDispatch,
+});
+
 const lifecycleCtx: LifecycleContext = {
   db,
   locks,
@@ -159,6 +168,7 @@ const routeCtx: RouteContext = {
   orchestratorHost: ORCHESTRATOR_HOST,
   orchestratorSecret: ORCHESTRATOR_SECRET,
   messageDispatcher,
+  usagePoller,
 };
 
 const router = createRouter(routeCtx);
@@ -253,6 +263,7 @@ function shutdown(): void {
   clearInterval(staleProxyTimer);
   healthMonitor.stop();
   messageDispatcher.stop();
+  usagePoller.stop();
 
   // Save agent states for network restore
   try {
@@ -288,8 +299,9 @@ server.listen(PORT, '0.0.0.0', async () => {
     console.error('[orchestrator] Persona sync failed:', err);
   }
 
-  // Start health monitor
+  // Start health monitor + usage poller
   healthMonitor.start();
+  usagePoller.start();
 
   // Attempt network restore for agents that were running before last shutdown/crash
   try {
