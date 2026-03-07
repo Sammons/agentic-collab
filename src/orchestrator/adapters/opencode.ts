@@ -2,7 +2,7 @@
  * OpenCode CLI adapter.
  */
 
-import { SPINNER_REGEX, type EngineAdapter, type SpawnOptions, type ResumeOptions, type IdleState, type ContextResult } from './types.ts';
+import { SPINNER_REGEX, type EngineAdapter, type SpawnOptions, type ResumeOptions, type IdleState, type ContextResult, type ElicitationResult } from './types.ts';
 import { shellQuote } from '../../shared/utils.ts';
 
 export class OpenCodeAdapter implements EngineAdapter {
@@ -82,6 +82,10 @@ export class OpenCodeAdapter implements EngineAdapter {
 
   interruptKeys(): string[] {
     return ['Escape', 'Escape'];
+  }
+
+  detectElicitation(_paneOutput: string): ElicitationResult | null {
+    return null;
   }
 }
 
