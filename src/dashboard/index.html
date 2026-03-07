@@ -998,6 +998,35 @@
       `;
       list.appendChild(card);
     }
+
+    // Engine status summary
+    const engineSummary = document.createElement('div');
+    engineSummary.style.cssText = 'margin-top:12px;padding:10px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);font-size:12px';
+    const engineCounts = {};
+    for (const a of state.agents) {
+      if (!engineCounts[a.engine]) engineCounts[a.engine] = { total: 0, active: 0, idle: 0, failed: 0 };
+      engineCounts[a.engine].total++;
+      if (a.state === 'active') engineCounts[a.engine].active++;
+      else if (a.state === 'idle') engineCounts[a.engine].idle++;
+      else if (a.state === 'failed') engineCounts[a.engine].failed++;
+    }
+    let engineHtml = '<div style="font-weight:600;margin-bottom:6px;color:var(--text)">Engines</div>';
+    for (const engine of ['claude', 'codex', 'opencode']) {
+      const c = engineCounts[engine];
+      if (!c) {
+        engineHtml += `<div style="color:var(--text-dim);margin:2px 0">${engine}: <span style="color:var(--text-dim)">not configured</span></div>`;
+      } else {
+        const parts = [];
+        if (c.active) parts.push(`<span style="color:var(--green)">${c.active} active</span>`);
+        if (c.idle) parts.push(`<span style="color:var(--yellow)">${c.idle} idle</span>`);
+        if (c.failed) parts.push(`<span style="color:var(--red)">${c.failed} failed</span>`);
+        const rest = c.total - c.active - c.idle - c.failed;
+        if (rest > 0) parts.push(`${rest} other`);
+        engineHtml += `<div style="margin:2px 0">${engine}: ${parts.join(', ')}</div>`;
+      }
+    }
+    engineSummary.innerHTML = engineHtml;
+    list.appendChild(engineSummary);
   }
 
   function renderThread() {
