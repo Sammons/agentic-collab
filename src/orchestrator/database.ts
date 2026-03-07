@@ -122,6 +122,9 @@ export class Database {
     if (!agentColNames.has('agent_group')) {
       this.db.exec('ALTER TABLE agents ADD COLUMN agent_group TEXT');
     }
+    if (!agentColNames.has('sort_order')) {
+      this.db.exec('ALTER TABLE agents ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0');
+    }
   }
 
   /** Expose raw handle for LockManager (shares same DB connection). */
@@ -210,7 +213,7 @@ export class Database {
   }
 
   listAgents(): AgentRecord[] {
-    const rows = this.db.prepare('SELECT * FROM agents ORDER BY name').all() as Array<Record<string, unknown>>;
+    const rows = this.db.prepare('SELECT * FROM agents ORDER BY sort_order ASC, name ASC').all() as Array<Record<string, unknown>>;
     return rows.map(mapAgentRow);
   }
 
@@ -257,6 +260,17 @@ export class Database {
     }
 
     return this.getAgent(name)!;
+  }
+
+  updateAgentSortOrder(name: string, sortOrder: number): void {
+    this.db.prepare('UPDATE agents SET sort_order = ? WHERE name = ?').run(sortOrder, name);
+  }
+
+  batchUpdateSortOrder(orders: Array<{ name: string; sortOrder: number }>): void {
+    const stmt = this.db.prepare('UPDATE agents SET sort_order = ? WHERE name = ?');
+    for (const { name, sortOrder } of orders) {
+      stmt.run(sortOrder, name);
+    }
   }
 
   deleteAgent(name: string): boolean {
@@ -488,6 +502,7 @@ function mapAgentRow(row: Record<string, unknown>): AgentRecord {
     permissions: row['permissions'] as string | null,
     proxyHost: row['proxy_host'] as string | null,
     agentGroup: row['agent_group'] as string | null,
+    sortOrder: (row['sort_order'] as number) ?? 0,
     state: row['state'] as AgentState,
     stateBeforeShutdown: row['state_before_shutdown'] as string | null,
     currentSessionId: row['current_session_id'] as string | null,

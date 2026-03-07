@@ -656,6 +656,21 @@ route('POST', '/api/agents/:name/destroy', async (_req, res, match, ctx) => {
   }
 });
 
+// ── Agent Reorder ──
+
+route('POST', '/api/agents/reorder', async (req, res, _match, ctx) => {
+  const body = await readJson(req);
+  const orders = body?.orders;
+  if (!Array.isArray(orders) || !orders.every((o: unknown) =>
+    typeof o === 'object' && o !== null && typeof (o as Record<string, unknown>).name === 'string' && typeof (o as Record<string, unknown>).sortOrder === 'number'
+  )) {
+    json(res, 400, { error: 'orders must be an array of {name, sortOrder}' });
+    return;
+  }
+  ctx.db.batchUpdateSortOrder(orders as Array<{ name: string; sortOrder: number }>);
+  json(res, 200, { ok: true });
+});
+
 // ── Orchestrator Control ──
 
 route('POST', '/api/orchestrator/shutdown', async (_req, res, _match, ctx) => {
