@@ -196,6 +196,15 @@ export class HealthMonitor {
     if (idleState === 'waiting_for_input') {
       await this.handleQueuedReload(agent.name);
     }
+
+    // Update lastActivity on every successful poll so dashboard timestamps stay fresh.
+    // Done last to avoid version conflicts with other state updates above.
+    const latest = this.db.getAgent(agent.name);
+    if (latest) {
+      this.db.updateAgentState(agent.name, latest.state, latest.version, {
+        lastActivity: new Date().toISOString(),
+      });
+    }
   }
 
   /**
