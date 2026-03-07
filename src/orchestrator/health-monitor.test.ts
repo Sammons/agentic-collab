@@ -220,6 +220,42 @@ describe('HealthMonitor', () => {
     assert.ok(proxyCommands.some(c => c.action === 'paste'));
   });
 
+  it('fires onMessageDelivered callback after successful delivery', async () => {
+    db.createAgent({ name: 'health-cb-deliver', engine: 'claude', cwd: '/tmp', proxyId: 'p1' });
+    const a = db.getAgent('health-cb-deliver')!;
+    db.updateAgentState('health-cb-deliver', 'active', a.version, {
+      tmuxSession: 'agent-health-cb-deliver',
+      proxyId: 'p1',
+    });
+
+    db.enqueueMessage({
+      sourceAgent: 'sender',
+      targetAgent: 'health-cb-deliver',
+      envelope: '[from: sender]: callback test',
+    });
+
+    captureOutput = 'some output\n> ';
+
+    const deliveredAgents: string[] = [];
+    const locks = new LockManager(db.rawDb);
+    const dispatch = async (_proxyId: string, command: ProxyCommand): Promise<ProxyResponse> => {
+      proxyCommands.push(command);
+      if (command.action === 'capture') return { ok: true, data: captureOutput };
+      if (command.action === 'has_session') return { ok: true, data: true };
+      return { ok: true };
+    };
+    const dispatcher = new MessageDispatcher({
+      db,
+      locks,
+      proxyDispatch: dispatch,
+      orchestratorHost: 'http://localhost:3000',
+      onMessageDelivered: (name) => deliveredAgents.push(name),
+    });
+
+    await dispatcher.tryDeliver('health-cb-deliver');
+    assert.ok(deliveredAgents.includes('health-cb-deliver'));
+  });
+
   it('delivers pending messages when agent is waiting_for_input', async () => {
     db.createAgent({ name: 'health-deliver', engine: 'claude', cwd: '/tmp', proxyId: 'p1' });
     const a = db.getAgent('health-deliver')!;
@@ -296,6 +332,44 @@ describe('HealthMonitor', () => {
     assert.equal(updated.retryCount, 1);
     assert.equal(updated.status, 'pending'); // still pending, will retry
     assert.ok(updated.nextAttemptAt !== null);
+  });
+
+  it('scheduleQuickPoll triggers a one-shot poll after ~1s', async () => {
+    // Ensure agent is active so the quick poll can detect idle
+    const a = db.getAgent('health-a1')!;
+    if (a.state !== 'active') {
+      db.updateAgentState('health-a1', 'active', a.version, {
+        proxyId: 'p1',
+        tmuxSession: 'agent-health-a1',
+      });
+    }
+
+    captureOutput = 'some output\n> '; // waiting_for_input
+
+    const updates: string[] = [];
+    const monitor = makeMonitor({
+      onAgentUpdate: (name) => updates.push(name),
+    });
+
+    monitor.scheduleQuickPoll('health-a1');
+    // Duplicate should be deduplicated
+    monitor.scheduleQuickPoll('health-a1');
+
+    // Wait for the 1s timer to fire
+    await new Promise<void>((resolve) => setTimeout(resolve, 1200));
+
+    // Should have polled and detected idle
+    const agent = db.getAgent('health-a1');
+    assert.equal(agent?.state, 'idle');
+    assert.ok(updates.includes('health-a1'));
+
+    monitor.stop();
+  });
+
+  it('stop() clears pending quick poll timers', () => {
+    const monitor = makeMonitor();
+    monitor.scheduleQuickPoll('health-a1');
+    monitor.stop(); // should not throw, timers cleared
   });
 
   it('auto-replies to sender on permanent failure', async () => {

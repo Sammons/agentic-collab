@@ -142,9 +142,12 @@
     display: flex;
     flex-direction: column;
     height: 100%;
+    min-height: 0;
+    overflow: hidden;
   }
   .thread-messages {
     flex: 1;
+    min-height: 0;
     overflow-y: auto;
     padding: 16px 20px;
     display: flex;
@@ -167,6 +170,7 @@
     font-size: 13px;
     line-height: 1.5;
     word-break: break-word;
+    white-space: pre-wrap;
   }
   .msg.to-agent {
     align-self: flex-end;
@@ -198,7 +202,7 @@
     gap: 8px;
     background: var(--surface);
   }
-  .thread-input input {
+  .thread-input textarea {
     flex: 1;
     padding: 8px 12px;
     border-radius: 6px;
@@ -206,9 +210,15 @@
     background: var(--bg);
     color: var(--text);
     font-size: 13px;
+    font-family: inherit;
     outline: none;
+    resize: none;
+    overflow-y: hidden;
+    min-height: 36px;
+    max-height: 120px;
+    line-height: 1.4;
   }
-  .thread-input input:focus { border-color: var(--accent); }
+  .thread-input textarea:focus { border-color: var(--accent); }
   .thread-input button {
     padding: 8px 16px;
     border-radius: 6px;
@@ -221,7 +231,7 @@
   }
   .thread-input button:hover { opacity: 0.9; }
   .thread-input button:disabled { opacity: 0.5; cursor: not-allowed; }
-  .thread-input input:disabled { opacity: 0.5; cursor: not-allowed; }
+  .thread-input textarea:disabled { opacity: 0.5; cursor: not-allowed; }
 
   /* ── Upload Button ── */
   .upload-btn {
@@ -670,7 +680,7 @@
     <div class="persona-panel" id="personaPanel" style="display:none"></div>
     <div class="thread-input" id="threadInput" style="display:none">
       <input type="file" id="fileInput" style="display:none" multiple />
-      <input type="text" id="msgInput" placeholder="Type a message..." />
+      <textarea id="msgInput" placeholder="Type a message..." rows="1"></textarea>
       <button class="upload-btn" id="uploadBtn" disabled title="Upload files">&#128206;</button>
       <button id="sendBtn" disabled>Send</button>
     </div>
@@ -1264,6 +1274,7 @@
         try { body = await res.json(); } catch (_) {}
         if (body && body.msg) {
           input.value = '';
+          input.style.height = 'auto';
           showToast('Message saved but delivery failed \u2014 agent may be unreachable', 'warning');
         } else {
           console.error('Send failed: HTTP', res.status);
@@ -1271,6 +1282,7 @@
         }
       } else {
         input.value = '';
+        input.style.height = 'auto';
       }
     } catch (err) {
       console.error('Send failed:', err);
@@ -1281,8 +1293,17 @@
   }
 
   document.getElementById('sendBtn').onclick = sendMessage;
-  document.getElementById('msgInput').onkeydown = (e) => {
-    if (e.key === 'Enter') sendMessage();
+  const msgTextarea = document.getElementById('msgInput');
+  msgTextarea.onkeydown = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    }
+  };
+  msgTextarea.oninput = () => {
+    msgTextarea.style.height = 'auto';
+    msgTextarea.style.height = Math.min(msgTextarea.scrollHeight, 120) + 'px';
+    msgTextarea.style.overflowY = msgTextarea.scrollHeight > 120 ? 'auto' : 'hidden';
   };
 
   // ── File Upload ──

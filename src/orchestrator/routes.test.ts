@@ -681,4 +681,59 @@ describe('API Routes — Personas', () => {
     });
     assert.equal(status, 400);
   });
+
+  it('POST /api/personas creates persona file and agent atomically', async () => {
+    const content = '---\nengine: claude\nmodel: opus\ncwd: /my-project\n---\n# Atomic Agent\nDoes atomic things.';
+    const { status, data } = await api('POST', '/api/personas', { name: 'atomic-agent', content });
+    assert.equal(status, 201);
+
+    const result = data as { persona: { name: string; frontmatter: Record<string, string> }; agent: { name: string; engine: string; cwd: string; state: string } };
+    assert.equal(result.persona.name, 'atomic-agent');
+    assert.equal(result.persona.frontmatter.engine, 'claude');
+    assert.equal(result.agent.name, 'atomic-agent');
+    assert.equal(result.agent.engine, 'claude');
+    assert.equal(result.agent.cwd, '/my-project');
+    assert.equal(result.agent.state, 'void');
+
+    // Verify file exists via GET
+    const { status: getStatus, data: getData } = await api('GET', '/api/personas/atomic-agent');
+    assert.equal(getStatus, 200);
+    assert.ok((getData as { content: string }).content.includes('Atomic Agent'));
+
+    // Verify agent is in agent list
+    const { data: agents } = await api('GET', '/api/agents');
+    const agentList = agents as Array<{ name: string }>;
+    assert.ok(agentList.some(a => a.name === 'atomic-agent'));
+  });
+
+  it('POST /api/personas updates existing agent on re-create', async () => {
+    const content = '---\nengine: claude\nmodel: sonnet\ncwd: /my-project-v2\n---\n# Atomic Agent v2';
+    const { status, data } = await api('POST', '/api/personas', { name: 'atomic-agent', content });
+    assert.equal(status, 201);
+
+    const result = data as { agent: { model: string; cwd: string } };
+    assert.equal(result.agent.model, 'sonnet');
+    assert.equal(result.agent.cwd, '/my-project-v2');
+  });
+
+  it('POST /api/personas rejects missing name', async () => {
+    const { status } = await api('POST', '/api/personas', { content: '---\nengine: claude\ncwd: /tmp\n---\nBody' });
+    assert.equal(status, 400);
+  });
+
+  it('POST /api/personas rejects missing content', async () => {
+    const { status } = await api('POST', '/api/personas', { name: 'test' });
+    assert.equal(status, 400);
+  });
+
+  it('POST /api/personas rejects invalid name', async () => {
+    const { status } = await api('POST', '/api/personas', { name: '../escape', content: '---\nengine: claude\ncwd: /tmp\n---\n' });
+    assert.equal(status, 400);
+  });
+
+  it('POST /api/personas rejects content missing required frontmatter', async () => {
+    const { status, data } = await api('POST', '/api/personas', { name: 'bad-fm', content: '# No frontmatter' });
+    assert.equal(status, 400);
+    assert.ok((data as { error: string }).error.includes('engine and cwd are required'));
+  });
 });

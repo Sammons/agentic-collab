@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, mkdirSync, symlinkSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { resolvePersonaPath, loadPersona, composeSystemPrompt, parseFrontmatter, scanPersonas, syncPersonasToDb } from './persona.ts';
+import { readFileSync } from 'node:fs';
+import { resolvePersonaPath, loadPersona, composeSystemPrompt, parseFrontmatter, scanPersonas, syncPersonasToDb, createPersonaAndAgent } from './persona.ts';
 import { Database } from './database.ts';
 
 describe('Persona', () => {
@@ -316,6 +317,79 @@ describe('Persona', () => {
       assert.ok(content);
       assert.ok(content.includes('# The Agent'));
       assert.ok(!content.includes('engine: claude'));
+    });
+  });
+
+  describe('createPersonaAndAgent', () => {
+    let createDb: Database;
+    let createDir: string;
+
+    before(() => {
+      createDir = mkdtempSync(join(tmpdir(), 'persona-create-'));
+      createDb = new Database(join(createDir, 'create.db'));
+    });
+
+    after(() => {
+      createDb.close();
+      rmSync(createDir, { recursive: true, force: true });
+    });
+
+    it('writes persona file and creates agent in DB', () => {
+      const personasDir = join(createDir, 'personas');
+      const content = '---\nengine: claude\nmodel: opus\ncwd: /project\n---\n# My Agent\nDoes stuff.';
+      const persona = createPersonaAndAgent(createDb, 'my-agent', content, personasDir);
+
+      assert.equal(persona.name, 'my-agent');
+      assert.equal(persona.frontmatter.engine, 'claude');
+      assert.equal(persona.frontmatter.model, 'opus');
+      assert.equal(persona.frontmatter.cwd, '/project');
+      assert.ok(persona.body.includes('# My Agent'));
+
+      // Verify file was written
+      const raw = readFileSync(join(personasDir, 'my-agent.md'), 'utf-8');
+      assert.equal(raw, content);
+
+      // Verify agent in DB
+      const agent = createDb.getAgent('my-agent');
+      assert.ok(agent);
+      assert.equal(agent.engine, 'claude');
+      assert.equal(agent.model, 'opus');
+      assert.equal(agent.cwd, '/project');
+      assert.equal(agent.state, 'void');
+    });
+
+    it('updates existing agent config on re-create', () => {
+      const personasDir = join(createDir, 'personas');
+      const updated = '---\nengine: claude\nmodel: sonnet\ncwd: /project-v2\n---\n# My Agent v2';
+      createPersonaAndAgent(createDb, 'my-agent', updated, personasDir);
+
+      const agent = createDb.getAgent('my-agent')!;
+      assert.equal(agent.model, 'sonnet');
+      assert.equal(agent.cwd, '/project-v2');
+    });
+
+    it('throws when engine is missing', () => {
+      const personasDir = join(createDir, 'personas');
+      assert.throws(
+        () => createPersonaAndAgent(createDb, 'bad-agent', '---\ncwd: /tmp\n---\nBody', personasDir),
+        /engine and cwd are required/,
+      );
+    });
+
+    it('throws when cwd is missing', () => {
+      const personasDir = join(createDir, 'personas');
+      assert.throws(
+        () => createPersonaAndAgent(createDb, 'bad-agent', '---\nengine: claude\n---\nBody', personasDir),
+        /engine and cwd are required/,
+      );
+    });
+
+    it('throws for invalid engine', () => {
+      const personasDir = join(createDir, 'personas');
+      assert.throws(
+        () => createPersonaAndAgent(createDb, 'bad-agent', '---\nengine: gpt\ncwd: /tmp\n---\nBody', personasDir),
+        /engine and cwd are required/,
+      );
     });
   });
 });

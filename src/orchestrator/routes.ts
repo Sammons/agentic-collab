@@ -14,7 +14,7 @@ import type { WebSocketServer } from '../shared/websocket-server.ts';
 import type { AgentState, EngineType, ProxyCommand, ProxyResponse } from '../shared/types.ts';
 import { sanitizeMessage, generateMessageId } from '../shared/sanitize.ts';
 import type { LockManager } from '../shared/lock.ts';
-import { getPersonasDir, parseFrontmatter } from './persona.ts';
+import { getPersonasDir, parseFrontmatter, createPersonaAndAgent } from './persona.ts';
 import {
   spawnAgent, resumeAgent, suspendAgent, destroyAgent,
   reloadAgent, interruptAgent, compactAgent, killAgent,
@@ -130,7 +130,9 @@ route('POST', '/api/agents', async (req, res, _match, ctx) => {
     thinking: body.thinking,
     cwd: body.cwd,
     persona: body.persona,
+    permissions: body.permissions,
     proxyId: body.proxyId,
+    proxyHost: body.proxyHost,
   });
 
   ctx.db.logEvent(agent.name, 'created');
@@ -442,6 +444,29 @@ route('PUT', '/api/personas/:name', async (req, res, match) => {
     json(res, 200, { name, content: body.content });
   } catch (err) {
     json(res, 500, { error: `Failed to write persona: ${(err as Error).message}` });
+  }
+});
+
+route('POST', '/api/personas', async (req, res, _match, ctx) => {
+  const body = await readJson(req);
+  if (!body.name || typeof body.name !== 'string') {
+    return json(res, 400, { error: 'name (string) required' });
+  }
+  if (!body.content || typeof body.content !== 'string') {
+    return json(res, 400, { error: 'content (string) required' });
+  }
+
+  const name = body.name as string;
+  if (!PERSONA_NAME_RE.test(name)) return json(res, 400, { error: 'Invalid persona name' });
+
+  try {
+    const persona = createPersonaAndAgent(ctx.db, name, body.content as string);
+    const agent = ctx.db.getAgent(name);
+    ctx.db.logEvent(name, 'persona_created');
+    broadcastAgentUpdate(ctx, name);
+    json(res, 201, { persona: { name: persona.name, frontmatter: persona.frontmatter }, agent });
+  } catch (err) {
+    json(res, 400, { error: (err as Error).message });
   }
 });
 
