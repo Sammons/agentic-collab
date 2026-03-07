@@ -5,17 +5,6 @@
 
 export type IdleState = 'waiting_for_input' | 'running_tool' | 'streaming' | 'unknown';
 
-/** Types of user elicitation that can cause an agent to get stuck. */
-export type ElicitationType = 'user_question' | 'plan_mode' | 'permission_prompt' | null;
-
-export type ElicitationResult = {
-  type: ElicitationType;
-  /** Keys to auto-send to dismiss the elicitation. */
-  autoRespondKeys: string[];
-  /** Human-readable description for logging/dashboard. */
-  description: string;
-};
-
 /** Braille spinner characters used by CLI tools to indicate activity. */
 export const SPINNER_REGEX = /^⠋|^⠙|^⠹|^⠸|^⠼|^⠴|^⠦|^⠧|^⠇|^⠏/;
 
@@ -76,11 +65,4 @@ export interface EngineAdapter {
 
   /** Keys to send to interrupt/cancel the current operation */
   interruptKeys(): string[];
-
-  /**
-   * Detect if the agent is stuck on a user elicitation prompt
-   * (e.g., plan mode approval, AskUserQuestion, permission prompt).
-   * Returns null if no elicitation detected.
-   */
-  detectElicitation(paneOutput: string): ElicitationResult | null;
 }
