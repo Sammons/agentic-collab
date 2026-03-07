@@ -130,6 +130,7 @@ export type ProxyCommand =
   | { action: 'kill_session'; sessionName: string }
   | { action: 'list_sessions' }
   | { action: 'has_session'; sessionName: string }
+  | { action: 'pane_activity'; sessionName: string }
   | { action: 'send_keys'; sessionName: string; keys: string };
 
 export type ProxyResponse = {

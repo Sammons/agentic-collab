@@ -80,6 +80,17 @@ export function capturePaneLines(sessionName: string, lines: number): string {
 }
 
 /**
+ * Get the last activity timestamp for a tmux session pane.
+ * Returns Unix timestamp (seconds) from tmux's #{window_activity}.
+ */
+export function paneActivity(sessionName: string): number {
+  validateSessionName(sessionName);
+  const output = exec(`tmux display-message -t '${esc(sessionName)}' -p '#{window_activity}'`);
+  const ts = parseInt(output, 10);
+  return Number.isFinite(ts) ? ts : 0;
+}
+
+/**
  * Send raw keys to a tmux session.
  * Keys are validated to prevent shell injection — only known tmux key names
  * and safe patterns (e.g. "Escape Escape Escape", "C-c", "Enter") are allowed.

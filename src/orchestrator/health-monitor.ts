@@ -41,6 +41,8 @@ export class HealthMonitor {
   private fastTimer: ReturnType<typeof setInterval> | null = null;
   private readonly quickPollTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly lastCompactAt = new Map<string, number>();
+  /** Last known tmux pane activity timestamp (Unix seconds) per agent. */
+  private readonly lastTmuxActivity = new Map<string, number>();
   private static readonly COMPACT_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes between compacts
   private readonly db: Database;
   private readonly locks: LockManager;
@@ -137,7 +139,7 @@ export class HealthMonitor {
         if (paneOutput === null) continue;
         const adapter = getAdapter(agent.engine);
         const idleState = adapter.detectIdleState(paneOutput);
-        this.handleIdleTransitions(agent, idleState);
+        await this.handleIdleTransitions(agent, idleState);
         if (idleState === 'waiting_for_input') {
           await this.messageDispatcher.deliverIfReady(agent.name);
         }
@@ -184,7 +186,7 @@ export class HealthMonitor {
     if (await this.handleContextThresholds(agent, adapter, paneOutput)) return;
 
     const idleState = adapter.detectIdleState(paneOutput);
-    this.handleIdleTransitions(agent, idleState);
+    await this.handleIdleTransitions(agent, idleState);
 
     if (idleState === 'waiting_for_input') {
       // Fallback delivery — primary delivery is event-driven via MessageDispatcher
@@ -280,26 +282,65 @@ export class HealthMonitor {
   }
 
   /**
-   * Detect and apply idle state transitions (active ↔ idle).
+   * Fetch tmux pane activity timestamp for an agent.
+   * Returns Unix seconds, or 0 if unavailable.
    */
-  private handleIdleTransitions(agent: AgentRecord, idleState: string): void {
-    if (idleState === 'waiting_for_input' && agent.state === 'active') {
-      const current = this.db.getAgent(agent.name);
-      if (current && current.state === 'active') {
-        this.db.updateAgentState(agent.name, 'idle', current.version, {
-          lastActivity: new Date().toISOString(),
-        });
-        this.db.logEvent(agent.name, 'idle_detected');
-        this.onAgentUpdate(agent.name);
+  private async fetchPaneActivity(agent: AgentRecord): Promise<number> {
+    try {
+      const result = await this.proxyDispatch(agent.proxyId!, {
+        action: 'pane_activity',
+        sessionName: sessionName(agent),
+      });
+      return result.ok ? (result.data as number) : 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  /**
+   * Hybrid idle detection: tmux activity timestamp (primary) + content regex (confirmation).
+   *
+   * - active → idle: requires BOTH tmux activity unchanged AND content shows waiting_for_input
+   * - idle → active: triggers if EITHER tmux activity changed OR content shows not waiting_for_input
+   *
+   * This eliminates false idle transitions from regex-only detection (e.g. during
+   * compaction, elicitation dialogs, or CLI version changes).
+   */
+  private async handleIdleTransitions(agent: AgentRecord, idleState: string): Promise<void> {
+    const tmuxActivity = await this.fetchPaneActivity(agent);
+    const prevActivity = this.lastTmuxActivity.get(agent.name) ?? 0;
+    const tmuxChanged = tmuxActivity > 0 && tmuxActivity !== prevActivity;
+
+    // Always track the latest tmux activity
+    if (tmuxActivity > 0) {
+      this.lastTmuxActivity.set(agent.name, tmuxActivity);
+    }
+
+    if (agent.state === 'active') {
+      // active → idle: require BOTH signals to agree
+      // tmux must show no new activity AND content must show prompt
+      if (!tmuxChanged && idleState === 'waiting_for_input') {
+        const current = this.db.getAgent(agent.name);
+        if (current && current.state === 'active') {
+          this.db.updateAgentState(agent.name, 'idle', current.version, {
+            lastActivity: new Date().toISOString(),
+          });
+          this.db.logEvent(agent.name, 'idle_detected');
+          this.onAgentUpdate(agent.name);
+        }
       }
-    } else if (idleState !== 'waiting_for_input' && agent.state === 'idle') {
-      const current = this.db.getAgent(agent.name);
-      if (current && current.state === 'idle') {
-        this.db.updateAgentState(agent.name, 'active', current.version, {
-          lastActivity: new Date().toISOString(),
-        });
-        this.db.logEvent(agent.name, 'activity_detected');
-        this.onAgentUpdate(agent.name);
+    } else if (agent.state === 'idle') {
+      // idle → active: EITHER signal is enough
+      // tmux activity changed OR content no longer shows prompt
+      if (tmuxChanged || idleState !== 'waiting_for_input') {
+        const current = this.db.getAgent(agent.name);
+        if (current && current.state === 'idle') {
+          this.db.updateAgentState(agent.name, 'active', current.version, {
+            lastActivity: new Date().toISOString(),
+          });
+          this.db.logEvent(agent.name, 'activity_detected');
+          this.onAgentUpdate(agent.name);
+        }
       }
     }
   }
