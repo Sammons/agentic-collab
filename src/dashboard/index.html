@@ -1714,6 +1714,12 @@
       return;
     }
     let html = '<div style="display:flex;justify-content:flex-end;margin-bottom:8px"><button class="clear-chat-btn" id="editPersonaBtn">Edit</button></div>';
+    if (data.hostname || data.filePath) {
+      html += '<dl class="persona-meta">';
+      if (data.hostname) html += '<dt>Host</dt><dd>' + esc(data.hostname) + '</dd>';
+      if (data.filePath) html += '<dt>File</dt><dd>' + esc(data.filePath) + '</dd>';
+      html += '</dl>';
+    }
     const fm = data.frontmatter;
     if (fm && Object.keys(fm).length > 0) {
       html += '<dl class="persona-meta">';

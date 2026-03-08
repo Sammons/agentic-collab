@@ -9,6 +9,7 @@ import { pipeline } from 'node:stream/promises';
 import { timingSafeEqual } from 'node:crypto';
 import { readdirSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { hostname } from 'node:os';
 import type { Database } from './database.ts';
 import type { WebSocketServer } from '../shared/websocket-server.ts';
 import type { AgentState, EngineType, ProxyCommand, ProxyResponse } from '../shared/types.ts';
@@ -563,9 +564,10 @@ route('GET', '/api/personas/:name', async (_req, res, match) => {
   const name = match.pathname.groups['name']!;
   if (!PERSONA_NAME_RE.test(name)) return json(res, 400, { error: 'Invalid persona name' });
   try {
-    const raw = readFileSync(join(getPersonasDir(), `${name}.md`), 'utf-8');
+    const filePath = join(getPersonasDir(), `${name}.md`);
+    const raw = readFileSync(filePath, 'utf-8');
     const { frontmatter, body } = parseFrontmatter(raw);
-    json(res, 200, { name, content: raw, frontmatter, body });
+    json(res, 200, { name, content: raw, frontmatter, body, filePath, hostname: hostname() });
   } catch {
     json(res, 404, { error: 'Persona not found' });
   }

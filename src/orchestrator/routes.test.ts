@@ -644,6 +644,16 @@ describe('API Routes — Personas', () => {
     assert.ok(persona.content.includes('research agent'));
   });
 
+  it('GET /api/personas/:name includes filePath and hostname', async () => {
+    const { status, data } = await api('GET', '/api/personas/researcher');
+    assert.equal(status, 200);
+    const persona = data as { filePath: string; hostname: string };
+    assert.ok(persona.filePath.endsWith('/researcher.md'), `expected filePath ending with /researcher.md, got: ${persona.filePath}`);
+    assert.ok(persona.filePath.includes(personasDir), 'filePath should include personas dir');
+    assert.equal(typeof persona.hostname, 'string');
+    assert.ok(persona.hostname.length > 0, 'hostname should not be empty');
+  });
+
   it('GET /api/personas/:name returns 404 for missing persona', async () => {
     const { status } = await api('GET', '/api/personas/nonexistent');
     assert.equal(status, 404);
