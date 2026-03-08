@@ -20,7 +20,10 @@ export function createSession(sessionName: string, cwd: string): void {
   validateSessionName(sessionName);
   // Unset CLAUDECODE so spawned Claude Code instances don't think they're nested.
   // The proxy may itself be launched from within a Claude Code session.
-  exec(`tmux new-session -d -s '${esc(sessionName)}' -c '${esc(cwd)}' -e CLAUDECODE=`);
+  // Explicitly pass PATH so engines like Codex that spawn sub-shells don't lose
+  // the collab bin directory that the proxy prepended at startup.
+  const path = process.env['PATH'] ?? '';
+  exec(`tmux new-session -d -s '${esc(sessionName)}' -c '${esc(cwd)}' -e CLAUDECODE= -e PATH='${esc(path)}'`);
 }
 
 export function hasSession(sessionName: string): boolean {
