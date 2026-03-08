@@ -191,6 +191,7 @@ route('DELETE', '/api/agents/:name', async (_req, res, match, ctx) => {
   const deleted = ctx.db.deleteAgent(name);
   if (!deleted) return json(res, 404, { error: 'Agent not found' });
   ctx.db.logEvent(name, 'destroyed');
+  ctx.wss.broadcast(JSON.stringify({ type: 'agent_destroyed', name }));
   json(res, 200, { ok: true });
 });
 
@@ -766,6 +767,7 @@ route('POST', '/api/agents/:name/destroy', async (_req, res, match, ctx) => {
   try {
     const lifecycleCtx = makeLifecycleCtx(ctx);
     await destroyAgent(lifecycleCtx, name);
+    ctx.wss.broadcast(JSON.stringify({ type: 'agent_destroyed', name }));
     json(res, 200, { ok: true });
   } catch (err) {
     json(res, 400, { error: (err as Error).message });
