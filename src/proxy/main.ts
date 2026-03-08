@@ -19,6 +19,13 @@ import { resolveSecret, waitForSecret, discoverOrchestrator, getSecretPath, hasD
 import * as tmux from './tmux.ts';
 import type { ProxyCommand, ProxyResponse } from '../shared/types.ts';
 
+// Ensure the collab CLI (bin/collab) is on PATH for spawned tmux sessions.
+// The proxy lives at src/proxy/main.ts, so bin/ is ../../bin relative to here.
+const collabBinDir = join(import.meta.dirname, '..', '..', 'bin');
+if (existsSync(join(collabBinDir, 'collab')) && !process.env['PATH']?.split(':').includes(collabBinDir)) {
+  process.env['PATH'] = `${collabBinDir}:${process.env['PATH'] ?? ''}`;
+}
+
 const PROXY_PORT = parseInt(process.env['PROXY_PORT'] ?? '3100', 10);
 const PROXY_HOST = process.env['PROXY_HOST'] ?? `host.docker.internal:${PROXY_PORT}`;
 const PROXY_ID = process.env['PROXY_ID'] ?? hostname();
