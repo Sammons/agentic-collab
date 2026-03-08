@@ -1649,16 +1649,17 @@
     // Preserve current tab (messages/persona/watch) when switching agents
     renderAgents();
     renderThread();
-    // Restore draft for new agent
-    if (input) {
-      input.value = state.drafts[name] || '';
-      input.style.height = 'auto';
-      input.style.height = input.scrollHeight + 'px';
+    // Restore draft for new agent (re-query since renderThread rebuilds DOM)
+    const freshInput = document.getElementById('msgInput');
+    if (freshInput) {
+      freshInput.value = state.drafts[name] || '';
+      freshInput.style.height = 'auto';
+      freshInput.style.height = freshInput.scrollHeight + 'px';
     }
     updateSendability();
     // Mobile: show thread panel
     document.querySelector('.layout').classList.add('mobile-thread');
-    input?.focus();
+    freshInput?.focus();
   }
 
   function mobileBack() {
