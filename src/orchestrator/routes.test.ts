@@ -254,6 +254,35 @@ describe('API Routes', () => {
     assert.equal((data as Record<string, unknown>).proxyId, 'new-proxy');
   });
 
+  it('POST /api/proxy/register includes version match info', async () => {
+    const { status, data } = await api('POST', '/api/proxy/register', {
+      proxyId: 'versioned-proxy',
+      token: 'v-token',
+      host: 'localhost:3300',
+      version: 'test-sha-abc',
+    });
+    assert.equal(status, 200);
+    const result = data as Record<string, unknown>;
+    assert.equal(result['proxyId'], 'versioned-proxy');
+    assert.equal(result['version'], 'test-sha-abc');
+    // orchestratorVersion should be present in response
+    assert.ok('orchestratorVersion' in result);
+    // versionMatch should be false since test-sha-abc won't match
+    assert.equal(result['versionMatch'], false);
+  });
+
+  it('POST /api/proxy/register without version sets versionMatch false', async () => {
+    const { status, data } = await api('POST', '/api/proxy/register', {
+      proxyId: 'no-version-proxy',
+      token: 'nv-token',
+      host: 'localhost:3400',
+    });
+    assert.equal(status, 200);
+    const result = data as Record<string, unknown>;
+    assert.equal(result['version'], null);
+    assert.equal(result['versionMatch'], false);
+  });
+
   it('POST /api/proxy/heartbeat updates heartbeat', async () => {
     const { status } = await api('POST', '/api/proxy/heartbeat', { proxyId: 'new-proxy' });
     assert.equal(status, 200);
