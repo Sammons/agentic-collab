@@ -2654,7 +2654,7 @@
 
     // Spacebar PTT when text input is not focused
     document.addEventListener('keydown', (e) => {
-      if (e.code !== 'Space' || voiceState.mode !== 'ptt') return;
+      if (e.code !== 'Space' || e.repeat || voiceState.mode !== 'ptt') return;
       const tag = document.activeElement?.tagName;
       if (tag === 'TEXTAREA' || tag === 'INPUT' || tag === 'SELECT') return;
       if (voiceState.recording) return; // already recording
@@ -2706,7 +2706,12 @@
 
     // Determine sample rate — use 16kHz if possible, else native
     voiceState.audioCtx = new AudioContext({ sampleRate: 16000 });
+    // Ensure AudioContext is running (browsers may suspend it without user gesture)
+    if (voiceState.audioCtx.state === 'suspended') {
+      await voiceState.audioCtx.resume();
+    }
     const actualRate = voiceState.audioCtx.sampleRate;
+    console.log('[voice] AudioContext state:', voiceState.audioCtx.state, 'rate:', actualRate);
 
     // Connect WebSocket to orchestrator voice proxy
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -2772,8 +2777,11 @@
     const source = voiceState.audioCtx.createMediaStreamSource(voiceState.stream);
     // ScriptProcessor is deprecated but widely supported and simple for PCM capture
     voiceState.processor = voiceState.audioCtx.createScriptProcessor(4096, 1, 1);
+    let audioChunkCount = 0;
     voiceState.processor.onaudioprocess = (e) => {
       if (!voiceState.recording || !ws || ws.readyState !== WebSocket.OPEN) return;
+      audioChunkCount++;
+      if (audioChunkCount % 50 === 1) console.log('[voice] Sending audio chunk', audioChunkCount);
       const float32 = e.inputBuffer.getChannelData(0);
       // Convert Float32 to Int16 PCM
       const int16 = new Int16Array(float32.length);
