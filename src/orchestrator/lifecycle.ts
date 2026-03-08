@@ -766,7 +766,10 @@ function buildSystemPrompt(
   peers: string[],
   persona?: string | null,
 ): string {
-  const personaPath = resolvePersonaPath(agentName, persona);
+  // persona from DB is typically just a name (e.g. "almanac-lead"), not a path.
+  // Only pass as explicit path if it looks like one; otherwise let convention resolve.
+  const explicitPath = persona && (persona.includes('/') || persona.endsWith('.md')) ? persona : null;
+  const personaPath = resolvePersonaPath(agentName, explicitPath);
   const personaContent = personaPath ? loadPersona(personaPath) : null;
 
   return composeSystemPrompt({
