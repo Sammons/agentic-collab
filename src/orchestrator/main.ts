@@ -19,7 +19,8 @@ import type { LifecycleContext } from './lifecycle.ts';
 import { syncPersonasToDb } from './persona.ts';
 import { isRunning } from '../shared/agent-entity.ts';
 import { resolveSecret, getSecretPath } from '../shared/config.ts';
-import type { ProxyCommand, ProxyResponse } from '../shared/types.ts';
+import type { ProxyCommand, ProxyResponse, ProxyRegistration } from '../shared/types.ts';
+import { getVersion } from '../shared/version.ts';
 import { handleVoiceUpgrade, type VoiceProxyOptions } from './voice-proxy.ts';
 
 const PORT = parseInt(process.env['PORT'] ?? '3000', 10);
@@ -244,8 +245,14 @@ server.on('upgrade', (req, socket, head) => {
 wss.onConnect((client) => {
   const agents = db.listAgents();
   const threads = db.getDashboardThreads();
-  const proxies = db.listProxies();
+  const rawProxies = db.listProxies();
   const unreadCounts = db.getUnreadCounts();
+  // Enrich proxies with version match status
+  const orchestratorVersion = getVersion();
+  const proxies: ProxyRegistration[] = rawProxies.map(p => ({
+    ...p,
+    versionMatch: !!p.version && p.version === orchestratorVersion,
+  }));
   wss.send(client, JSON.stringify({
     type: 'init',
     agents,

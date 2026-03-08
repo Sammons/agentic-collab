@@ -87,6 +87,8 @@ export type ProxyRegistration = {
   proxyId: string;
   token: string;
   host: string; // hostname:port of the proxy
+  version: string | null;
+  versionMatch: boolean; // true if proxy version matches orchestrator
   lastHeartbeat: string;
   registeredAt: string;
 };
