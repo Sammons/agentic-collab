@@ -12,6 +12,8 @@ COPY package.json .
 # Data directory for SQLite — writable by any UID (container runs as host user via docker-compose user:)
 RUN mkdir -p /data/.agentic-collab && chmod 777 /data/.agentic-collab
 
+ARG COMMIT_SHA=
+ENV COMMIT_SHA=${COMMIT_SHA}
 ENV PORT=3000
 ENV DB_PATH=/data/.agentic-collab/orchestrator.db
 ENV HOME=/data

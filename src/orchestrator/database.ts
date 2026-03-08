@@ -141,6 +141,12 @@ export class Database {
     if (!dmColsRefresh.some((c) => c['name'] === 'archived_at')) {
       this.db.exec('ALTER TABLE dashboard_messages ADD COLUMN archived_at TEXT');
     }
+
+    // Add version column to proxies
+    const proxyColumns = this.db.prepare('PRAGMA table_info(proxies)').all() as Array<Record<string, unknown>>;
+    if (!proxyColumns.some((c) => c['name'] === 'version')) {
+      this.db.exec('ALTER TABLE proxies ADD COLUMN version TEXT');
+    }
   }
 
   /** Expose raw handle for LockManager (shares same DB connection). */
@@ -354,20 +360,20 @@ export class Database {
 
   // ── Proxies ──
 
-  registerProxy(proxyId: string, token: string, host: string): ProxyRegistration {
+  registerProxy(proxyId: string, token: string, host: string, version?: string): ProxyRegistration {
     const existing = this.getProxy(proxyId);
     if (existing) {
       // Update existing registration — preserves registered_at
       this.db.prepare(`
-        UPDATE proxies SET token = ?, host = ?, last_heartbeat = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+        UPDATE proxies SET token = ?, host = ?, version = ?, last_heartbeat = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
         WHERE proxy_id = ?
-      `).run(token, host, proxyId);
+      `).run(token, host, version ?? null, proxyId);
     } else {
       // New registration
       this.db.prepare(`
-        INSERT INTO proxies (proxy_id, token, host, last_heartbeat, registered_at)
-        VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
-      `).run(proxyId, token, host);
+        INSERT INTO proxies (proxy_id, token, host, version, last_heartbeat, registered_at)
+        VALUES (?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+      `).run(proxyId, token, host, version ?? null);
     }
     return this.getProxy(proxyId)!;
   }
@@ -637,6 +643,8 @@ function mapProxyRow(row: Record<string, unknown>): ProxyRegistration {
     proxyId: row['proxy_id'] as string,
     token: row['token'] as string,
     host: row['host'] as string,
+    version: (row['version'] as string | null) ?? null,
+    versionMatch: true, // computed by caller when orchestrator version is known
     lastHeartbeat: row['last_heartbeat'] as string,
     registeredAt: row['registered_at'] as string,
   };
