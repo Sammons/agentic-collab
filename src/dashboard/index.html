@@ -289,7 +289,7 @@
   .thread-input textarea:focus { border-color: var(--accent); }
   .thread-input .upload-wrap { order: 1; }
   .thread-input #sendBtn {
-    order: 2;
+    order: 3;
     margin-left: auto;
   }
   .thread-input button {
@@ -368,7 +368,7 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    order: 3;
+    order: 2;
   }
   .voice-toggle {
     display: flex;
@@ -422,7 +422,7 @@
     animation: voice-pulse 1.5s ease-in-out infinite;
   }
   .voice-btn.disabled { opacity: 0.4; cursor: not-allowed; }
-  .voice-btn.hidden { display: none; }
+  .voice-btn.inactive { opacity: 0.3; cursor: default; }
   @keyframes voice-pulse {
     0%, 100% { box-shadow: 0 0 0 0 rgba(231, 76, 60, 0.4); }
     50% { box-shadow: 0 0 0 6px rgba(231, 76, 60, 0); }
@@ -1048,7 +1048,7 @@
           <button data-mode="off" class="active">Off</button>
           <button data-mode="ptt">PTT</button>
         </div>
-        <button class="voice-btn hidden" id="voiceBtn" title="Hold to talk (or hold Spacebar)">&#127908;</button>
+        <button class="voice-btn inactive" id="voiceBtn" title="Hold to talk (or hold Spacebar)">&#127908;</button>
         <span class="voice-partial" id="voicePartial"></span>
       </div>
       <button id="sendBtn" disabled>Send</button>
@@ -2750,10 +2750,10 @@
           voiceState.pttStream.getTracks().forEach(t => t.stop());
           voiceState.pttStream = null;
         }
-        btn.classList.add('hidden');
+        btn.classList.add('inactive');
       } else if (mode === 'ptt') {
         stopVoice();
-        btn.classList.remove('hidden');
+        btn.classList.remove('inactive');
         // Pre-acquire mic for instant PTT response
         try {
           voiceState.pttStream = await navigator.mediaDevices.getUserMedia({
