@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Zero-dependency orchestrator for managing AI coding agents (Claude, Codex, OpenCode) via tmux sessions. Built on Node 24 — no build step, no npm install.
+Zero-dependency orchestrator for managing AI coding agents (Claude, Codex, OpenCode) via tmux sessions. Built on Node 24 — no build step, no npm install. Production-tested with 15+ concurrent agents.
 
 ## Dashboard
 
@@ -274,6 +274,7 @@ The orchestrator polls active/idle agents every 30 seconds:
 - **Idle detection**: transitions agents between `active` and `idle` states
 - **Message delivery**: delivers one queued message per poll cycle when agent is idle
 - **Crash recovery**: on startup, restores agents stuck in transitional states (`suspending`, `resuming`)
+- **Version handshake**: proxy presents its git SHA during registration; orchestrator compares and warns on mismatch
 
 ## Engine adapters
 
@@ -291,11 +292,13 @@ Supported engines: `claude`, `codex`, `opencode`.
 node --test 'src/**/*.test.ts'
 ```
 
-384 tests across 63 suites covering lifecycle operations, database persistence, networking, locking, health monitoring, adapters, message delivery, crash recovery, file upload, streaming upload, rate limiting, path traversal, persona frontmatter, integration tests, and input validation.
+410+ tests across 64 suites covering lifecycle operations, database persistence, networking, locking, health monitoring, adapters, message delivery, crash recovery, file upload, streaming upload, rate limiting, path traversal, persona frontmatter, version handshake, unread cursors, integration tests, and input validation.
 
 ## Project structure
 
 ```
+bin/
+└── collab                 # Agent CLI (send, reply, spawn, suspend, resume, etc.)
 persistent-agents/         # Persona .md files (frontmatter config)
 src/
 ├── orchestrator/           # Runs in Docker
@@ -304,20 +307,25 @@ src/
 │   ├── routes.ts           # HTTP API (25+ endpoints)
 │   ├── lifecycle.ts        # Agent state machine + 3-phase locking
 │   ├── network.ts          # Graceful shutdown + crash recovery
-│   ├── health-monitor.ts   # Polling, thresholds, message delivery
+│   ├── health-monitor.ts   # Polling, thresholds, idle detection
+│   ├── message-dispatcher.ts # Event-driven message delivery
+│   ├── usage-poller.ts     # Token usage tracking via CLI sessions
+│   ├── voice-proxy.ts      # WebSocket voice dictation proxy
 │   ├── persona.ts          # Persona loading, frontmatter, startup sync
 │   └── adapters/           # Engine-specific behavior
 │       ├── claude.ts
 │       ├── codex.ts
 │       └── opencode.ts
 ├── proxy/                  # Runs on host
-│   ├── main.ts             # Proxy server + heartbeat
+│   ├── main.ts             # Proxy server + heartbeat + version handshake
 │   └── tmux.ts             # tmux command execution
 ├── shared/                 # Used by both
 │   ├── types.ts            # All shared types
 │   ├── lock.ts             # SQLite-based lock manager
 │   ├── agent-entity.ts     # Agent state helpers
 │   ├── sanitize.ts         # Message sanitization
+│   ├── version.ts          # Git SHA version utility (shared)
+│   ├── config.ts           # Secret resolution + orchestrator discovery
 │   ├── websocket-server.ts # RFC 6455 implementation
 │   └── utils.ts            # Shell quoting, sleep
 └── dashboard/
