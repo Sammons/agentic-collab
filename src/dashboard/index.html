@@ -26,6 +26,7 @@
     background: var(--bg);
     color: var(--text);
     min-height: 100vh;
+    min-height: 100dvh;
   }
 
   /* ── Header ── */
@@ -57,6 +58,7 @@
     display: grid;
     grid-template-columns: 340px 1fr;
     height: calc(100vh - 49px);
+    height: calc(100dvh - 49px);
   }
 
   /* ── Agent Grid ── */
@@ -103,7 +105,7 @@
   .agent-card.dragging { opacity: 0.4; }
   .agent-card.drag-over-above { box-shadow: 0 -2px 0 var(--accent); }
   .agent-card.drag-over-below { box-shadow: 0 2px 0 var(--accent); }
-  .reorder-buttons { display: none; }
+  .drag-handle { display: none; }
 
   @keyframes flash-card {
     0%,100% { background: var(--surface); }
@@ -118,6 +120,7 @@
   }
   .agent-name { font-weight: 600; font-size: 14px; }
   .state-badge {
+    margin-left: auto;
     font-size: 11px;
     padding: 2px 8px;
     border-radius: 12px;
@@ -509,6 +512,7 @@
     cursor: pointer;
   }
   .create-form-actions button:hover { opacity: 0.9; }
+  .create-form-actions button:disabled { opacity: 0.4; cursor: not-allowed; }
   .create-form-actions button.secondary {
     background: transparent;
     border: 1px solid var(--border);
@@ -548,12 +552,6 @@
     to { transform: rotate(360deg); }
   }
 
-  /* ── Agent time ── */
-  .agent-time {
-    font-size: 11px;
-    color: var(--text-dim);
-    margin-left: auto;
-  }
 
   /* ── Agent failure reason ── */
   .agent-failure {
@@ -881,9 +879,10 @@
     .agent-list {
       border-right: none;
       height: calc(100vh - 49px);
+      height: calc(100dvh - 49px);
       max-height: none;
     }
-    .thread-panel { height: calc(100vh - 49px); }
+    .thread-panel { height: calc(100vh - 49px); height: calc(100dvh - 49px); }
     .layout.mobile-thread .agent-list { display: none; }
     .layout.mobile-thread .thread-panel { display: flex; }
     .layout:not(.mobile-thread) .thread-panel { display: none; }
@@ -909,26 +908,24 @@
     header { padding: 10px 12px; }
     .agent-card { padding: 10px; }
     .agent-card[draggable] { cursor: pointer; }
-    .reorder-buttons {
+    .drag-handle {
       display: flex;
-      flex-direction: column;
-      gap: 2px;
+      align-items: center;
+      justify-content: center;
       position: absolute;
       right: 8px;
       top: 50%;
       transform: translateY(-50%);
-    }
-    .reorder-buttons button {
-      font-size: 14px;
-      line-height: 1;
-      padding: 4px 6px;
-      border: 1px solid var(--border);
-      border-radius: 4px;
-      background: var(--surface);
+      font-size: 22px;
       color: var(--text-dim);
-      cursor: pointer;
+      cursor: grab;
+      padding: 8px 4px;
+      touch-action: none;
+      -webkit-touch-callout: none;
+      -webkit-user-select: none;
+      user-select: none;
     }
-    .reorder-buttons button:active { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .drag-handle:active { color: var(--accent); }
     .agent-card { position: relative; padding-right: 40px; }
     .agent-header { flex-wrap: wrap; gap: 4px; }
     .agent-name {
@@ -993,7 +990,7 @@
   <div class="agent-list" id="agentList">
     <div class="agent-search" style="position:relative">
       <span class="search-icon">&#128269;</span>
-      <input type="text" id="agentSearch" placeholder="Filter agents..." />
+      <input type="text" id="agentSearch" placeholder="Filter agents..." autocomplete="off" />
     </div>
   </div>
   <div class="thread-panel" id="threadPanel">
@@ -1004,7 +1001,7 @@
     <div class="persona-panel" id="personaPanel" style="display:none"></div>
     <div class="watch-panel" id="watchPanel" style="display:none"></div>
     <div class="thread-input" id="threadInput" style="display:none">
-      <textarea id="msgInput" placeholder="Type a message..." rows="1"></textarea>
+      <textarea id="msgInput" placeholder="Type a message..." rows="1" autocomplete="off" autocorrect="on" autocapitalize="sentences" spellcheck="false" name="msg-no-autofill"></textarea>
       <div class="upload-wrap" id="uploadWrap">
         <input type="file" id="fileInput" multiple disabled />
         <span class="upload-btn" id="uploadBtn">+</span>
@@ -1101,6 +1098,8 @@
     personaCache: {},  // { agentName: { content, fetched } }
     searchFilter: '',
     engineUsage: {},  // { engine: EngineUsage }
+    proxies: [],      // registered proxy list from init
+    emptyGroups: [],  // groups created via + New Group (no agents yet)
   };
 
   let ws = null;
@@ -1151,6 +1150,7 @@
         case 'init':
           state.agents = data.agents;
           state.threads = data.threads;
+          state.proxies = data.proxies || [];
           renderAgents();
           renderThread();
           break;
@@ -1165,6 +1165,9 @@
           break;
         case 'message_withdrawn':
           handleMessageWithdrawn(data.msg);
+          break;
+        case 'proxy_update':
+          if (data.proxies) { state.proxies = data.proxies; renderAgents(); }
           break;
       }
     };
@@ -1240,6 +1243,7 @@
     list.querySelectorAll(':scope > :not(.agent-search)').forEach(el => el.remove());
 
     // Collapsible create agent form
+    const hasProxies = state.proxies && state.proxies.length > 0;
     const form = document.createElement('div');
     form.className = `create-form${createFormOpen ? ' open' : ''}`;
     form.innerHTML = `
@@ -1248,18 +1252,19 @@
         <span class="chevron">\u25B8</span>
       </div>
       <div class="create-form-body">
-        <input type="text" id="createName" placeholder="Agent name" value="${esc(prevName)}" />
+        <input type="text" id="createName" placeholder="Agent name" value="${esc(prevName)}" autocomplete="off" />
         <select id="createEngine">
           <option value="claude"${prevEngine === 'claude' ? ' selected' : ''}>claude</option>
           <option value="codex"${prevEngine === 'codex' ? ' selected' : ''}>codex</option>
           <option value="opencode"${prevEngine === 'opencode' ? ' selected' : ''}>opencode</option>
         </select>
-        <input type="text" id="createCwd" placeholder="Working directory" value="${esc(prevCwd)}" />
-        <textarea id="createTask" rows="2" placeholder="Initial task (optional)">${esc(prevTask)}</textarea>
+        <input type="text" id="createCwd" placeholder="Working directory" value="${esc(prevCwd)}" autocomplete="off" />
+        <textarea id="createTask" rows="2" placeholder="Initial task (optional)" autocomplete="off">${esc(prevTask)}</textarea>
         <div class="create-form-actions">
-          <button onclick="document.dispatchEvent(new CustomEvent('create-agent', {detail:{spawn:true}}))">Create & Spawn</button>
+          <button onclick="document.dispatchEvent(new CustomEvent('create-agent', {detail:{spawn:true}}))" ${hasProxies ? '' : 'disabled title="No proxy servers registered"'}>Create & Spawn</button>
           <button class="secondary" onclick="document.dispatchEvent(new CustomEvent('create-agent', {detail:{spawn:false}}))">Create Only</button>
         </div>
+        ${!hasProxies ? '<div style="font-size:11px;color:var(--yellow);margin-top:2px">No proxy servers registered — spawning disabled</div>' : ''}
       </div>
     `;
     form.querySelector('.create-form-toggle').onclick = () => {
@@ -1279,6 +1284,12 @@
       const g = agent.agentGroup || 'General';
       if (!groups.has(g)) groups.set(g, []);
       groups.get(g).push(agent);
+    }
+    // Include empty groups created via "+ New Group"
+    if (state.emptyGroups) {
+      for (const g of state.emptyGroups) {
+        if (!groups.has(g)) groups.set(g, []);
+      }
     }
     // Sort: use saved order from localStorage, then General first, then alphabetical
     const savedOrder = JSON.parse(localStorage.getItem('sectionOrder') || '[]');
@@ -1313,8 +1324,6 @@
       const ctxStr = agent.lastContextPct != null ? `${agent.lastContextPct}%` : '--';
       const unreadCount = state.unread[agent.name] || 0;
       const unreadBadge = unreadCount > 0 ? `<span class="unread-badge">${unreadCount}</span>` : '';
-      const activityTime = agent.lastActivity || agent.createdAt;
-      const timeStr = timeAgo(activityTime);
 
       const activeIdle = agent.state === 'active' || agent.state === 'idle';
       const suspendedFailed = agent.state === 'suspended' || agent.state === 'failed';
@@ -1327,7 +1336,6 @@
       card.innerHTML = `
         <div class="agent-header">
           <span class="agent-name">${esc(agent.name)}${unreadBadge}</span>
-          <span class="agent-time">${timeStr}</span>
           <span class="state-badge ${stateClass}">${agent.state}</span>
         </div>
         <div class="agent-meta">
@@ -1336,10 +1344,7 @@
           ${agent.proxyId ? `<span title="proxy: ${esc(agent.proxyId)}">${esc(agent.proxyId)}</span>` : ''}
         </div>
         ${failureInfo}
-        <div class="reorder-buttons">
-          <button data-reorder="up" title="Move up">\u25B2</button>
-          <button data-reorder="down" title="Move down">\u25BC</button>
-        </div>
+        <div class="drag-handle" title="Drag to reorder or move to group">\u2261</div>
         <div class="agent-actions">
           ${activeIdle ? `
             <button data-action="interrupt">Interrupt</button>
@@ -1363,6 +1368,31 @@
       list.appendChild(card);
     }
     } // end group loop
+
+    // New Group button
+    const newGroupBtn = document.createElement('button');
+    newGroupBtn.className = 'secondary';
+    newGroupBtn.style.cssText = 'margin-top:6px;padding:6px 12px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--text-dim);font-size:11px;cursor:pointer;width:100%;text-align:left';
+    newGroupBtn.textContent = '+ New Group';
+    newGroupBtn.onmouseenter = () => { newGroupBtn.style.borderColor = 'var(--accent)'; newGroupBtn.style.color = 'var(--accent)'; };
+    newGroupBtn.onmouseleave = () => { newGroupBtn.style.borderColor = 'var(--border)'; newGroupBtn.style.color = 'var(--text-dim)'; };
+    newGroupBtn.onclick = () => {
+      const name = prompt('Group name:');
+      if (!name || !name.trim()) return;
+      const groupName = name.trim();
+      // Add to saved section order so it persists
+      const savedOrder = JSON.parse(localStorage.getItem('sectionOrder') || '[]');
+      if (!savedOrder.includes(groupName)) {
+        savedOrder.push(groupName);
+        localStorage.setItem('sectionOrder', JSON.stringify(savedOrder));
+      }
+      // Create a placeholder so the group header renders
+      // The group will appear empty until agents are moved into it
+      if (!state.emptyGroups) state.emptyGroups = [];
+      if (!state.emptyGroups.includes(groupName)) state.emptyGroups.push(groupName);
+      renderAgents();
+    };
+    list.appendChild(newGroupBtn);
 
     // Engine status summary
     const engineSummary = document.createElement('div');
@@ -1844,14 +1874,8 @@
 
   // Event delegation on agent list — handles both card selection and action buttons.
   function handleAgentListEvent(e) {
-    // Reorder buttons (mobile)
-    const reorderBtn = e.target.closest('button[data-reorder]');
-    if (reorderBtn) {
-      e.stopPropagation();
-      const card = reorderBtn.closest('[data-agent]');
-      if (card) moveAgent(card.dataset.agent, reorderBtn.dataset.reorder);
-      return;
-    }
+    // Ignore taps on drag handle (mobile touch-drag)
+    if (e.target.closest('.drag-handle')) return;
 
     const btn = e.target.closest('button[data-action]');
     if (btn) {
@@ -1875,23 +1899,6 @@
       handleAgentListEvent(e);
     }
   });
-
-  // ── Reorder (mobile tap + desktop drag) ──
-  function moveAgent(name, direction) {
-    const idx = state.agents.findIndex(a => a.name === name);
-    if (idx === -1) return;
-    const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
-    if (swapIdx < 0 || swapIdx >= state.agents.length) return;
-    [state.agents[idx], state.agents[swapIdx]] = [state.agents[swapIdx], state.agents[idx]];
-    const orders = state.agents.map((a, i) => ({ name: a.name, sortOrder: i }));
-    state.agents.forEach((a, i) => { a.sortOrder = i; });
-    renderAgents();
-    fetch('/api/agents/reorder', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', ...authHeaders() },
-      body: JSON.stringify({ orders }),
-    }).catch(err => console.error('[reorder] Save failed:', err));
-  }
 
   let draggedAgent = null;
   let draggedGroup = null;
@@ -2023,6 +2030,116 @@
       localStorage.setItem('sectionOrder', JSON.stringify(savedOrder));
       renderAgents();
     }
+  });
+
+  // ── Touch Drag (mobile) ──
+  let touchDragState = null;
+
+  agentListEl.addEventListener('touchstart', (e) => {
+    const handle = e.target.closest('.drag-handle');
+    if (!handle) return;
+    const card = handle.closest('.agent-card[data-agent]');
+    if (!card) return;
+    e.preventDefault();
+    const touch = e.touches[0];
+    const rect = card.getBoundingClientRect();
+    touchDragState = {
+      agentName: card.dataset.agent,
+      offsetY: touch.clientY - rect.top,
+      clone: null,
+      startY: touch.clientY,
+    };
+    // Create floating clone
+    const clone = card.cloneNode(true);
+    clone.style.cssText = `position:fixed;left:${rect.left}px;top:${rect.top}px;width:${rect.width}px;opacity:0.85;z-index:1000;pointer-events:none;box-shadow:0 4px 16px rgba(0,0,0,0.5);border-color:var(--accent)`;
+    document.body.appendChild(clone);
+    touchDragState.clone = clone;
+    card.style.opacity = '0.3';
+  }, { passive: false });
+
+  agentListEl.addEventListener('touchmove', (e) => {
+    if (!touchDragState) return;
+    e.preventDefault();
+    const touch = e.touches[0];
+    if (touchDragState.clone) {
+      touchDragState.clone.style.top = (touch.clientY - touchDragState.offsetY) + 'px';
+    }
+    // Show drop indicators
+    clearDragIndicators();
+    const el = document.elementFromPoint(touch.clientX, touch.clientY);
+    if (!el) return;
+    const header = el.closest('.agent-group-header[data-group]');
+    const targetCard = el.closest('.agent-card[data-agent]');
+    if (header) {
+      header.classList.add('drag-over');
+    } else if (targetCard && targetCard.dataset.agent !== touchDragState.agentName) {
+      const rect = targetCard.getBoundingClientRect();
+      targetCard.classList.add(touch.clientY < rect.top + rect.height / 2 ? 'drag-over-above' : 'drag-over-below');
+    }
+  }, { passive: false });
+
+  function finishTouchDrag(e) {
+    if (!touchDragState) return;
+    const { agentName, clone } = touchDragState;
+    if (clone) clone.remove();
+    // Restore original card opacity
+    const origCard = agentListEl.querySelector(`[data-agent="${agentName}"]`);
+    if (origCard) origCard.style.opacity = '';
+
+    // Find drop target
+    const touch = e.changedTouches[0];
+    clearDragIndicators();
+    const el = document.elementFromPoint(touch.clientX, touch.clientY);
+    if (el) {
+      const header = el.closest('.agent-group-header[data-group]');
+      const targetCard = el.closest('.agent-card[data-agent]');
+
+      if (header) {
+        // Drop on group header → change group
+        const newGroup = header.dataset.group;
+        const agent = state.agents.find(a => a.name === agentName);
+        if (agent && (agent.agentGroup || 'General') !== newGroup) {
+          agent.agentGroup = newGroup === 'General' ? null : newGroup;
+          renderAgents();
+          fetch(`/api/agents/${encodeURIComponent(agentName)}/group`, {
+            method: 'PATCH',
+            headers: { 'content-type': 'application/json', ...authHeaders() },
+            body: JSON.stringify({ group: newGroup === 'General' ? '' : newGroup }),
+          }).catch(err => console.error('[touch-drag] Group change failed:', err));
+        }
+      } else if (targetCard && targetCard.dataset.agent !== agentName) {
+        // Drop on another agent → reorder
+        const rect = targetCard.getBoundingClientRect();
+        const insertBefore = touch.clientY < rect.top + rect.height / 2;
+        const fromIdx = state.agents.findIndex(a => a.name === agentName);
+        const targetName = targetCard.dataset.agent;
+        if (fromIdx !== -1) {
+          const [moved] = state.agents.splice(fromIdx, 1);
+          let toIdx = state.agents.findIndex(a => a.name === targetName);
+          if (!insertBefore) toIdx++;
+          state.agents.splice(toIdx, 0, moved);
+          const orders = state.agents.map((a, i) => ({ name: a.name, sortOrder: i }));
+          state.agents.forEach((a, i) => { a.sortOrder = i; });
+          renderAgents();
+          fetch('/api/agents/reorder', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', ...authHeaders() },
+            body: JSON.stringify({ orders }),
+          }).catch(err => console.error('[touch-drag] Reorder save failed:', err));
+        }
+      }
+    }
+    touchDragState = null;
+  }
+
+  agentListEl.addEventListener('touchend', finishTouchDrag, { passive: false });
+  agentListEl.addEventListener('touchcancel', (e) => {
+    if (!touchDragState) return;
+    if (touchDragState.clone) touchDragState.clone.remove();
+    const origCard = agentListEl.querySelector(`[data-agent="${touchDragState.agentName}"]`);
+    if (origCard) origCard.style.opacity = '';
+    clearDragIndicators();
+    touchDragState = null;
   });
 
   // ── Clear Chat ──
