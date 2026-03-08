@@ -223,6 +223,48 @@ describe('Network', () => {
       assert.ok(!proxyCommands.some(c => c.action === 'paste'));
     });
 
+    it('re-adopts idle agents as idle (not active)', async () => {
+      // Clean up all agents to isolate this test
+      for (const a of db.listAgents()) {
+        if (a.stateBeforeShutdown || a.state === 'active' || a.state === 'idle'
+            || a.state === 'suspending' || a.state === 'resuming') {
+          db.updateAgentState(a.name, 'suspended', a.version, { stateBeforeShutdown: null });
+        }
+      }
+
+      db.createAgent({ name: 'net-readopt-idle', engine: 'claude', cwd: '/tmp', proxyId: 'p1' });
+      const a = db.getAgent('net-readopt-idle')!;
+      db.updateAgentState('net-readopt-idle', 'idle', a.version, {
+        tmuxSession: 'agent-net-readopt-idle',
+        proxyId: 'p1',
+      });
+      // Simulate graceful shutdown while idle
+      const idle = db.getAgent('net-readopt-idle')!;
+      db.updateAgentState('net-readopt-idle', 'suspended', idle.version, {
+        stateBeforeShutdown: 'idle',
+      });
+
+      // Context where has_session returns true — tmux survived
+      const readoptCtx: LifecycleContext = {
+        ...ctx,
+        proxyDispatch: async (_proxyId: string, command: ProxyCommand): Promise<ProxyResponse> => {
+          proxyCommands.push(command);
+          if (command.action === 'has_session') {
+            return { ok: true, data: true };
+          }
+          return { ok: true };
+        },
+      };
+
+      proxyCommands = [];
+      const count = await restoreAllAgents(readoptCtx);
+      assert.equal(count, 1);
+
+      const agent = db.getAgent('net-readopt-idle')!;
+      assert.equal(agent.state, 'idle', 'idle agent should be readopted as idle, not active');
+      assert.equal(agent.stateBeforeShutdown, null);
+    });
+
     it('skips active agents with existing tmux session (no crash)', async () => {
       db.createAgent({ name: 'net-healthy', engine: 'claude', cwd: '/tmp', proxyId: 'p1' });
       const a = db.getAgent('net-healthy')!;
