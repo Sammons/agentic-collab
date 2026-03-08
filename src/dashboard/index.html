@@ -1143,6 +1143,7 @@
     proxies: [],      // registered proxy list from init
     emptyGroups: [],  // groups created via + New Group (no agents yet)
     drafts: {},       // { agentName: draftText }
+    editingPersona: false,
   };
 
   let ws = null;
@@ -1526,6 +1527,9 @@
   }
 
   function renderThread() {
+    // Don't re-render if user is editing a persona — would destroy their work
+    if (state.editingPersona && state.threadView === 'persona') return;
+
     const header = document.getElementById('threadHeader');
     const messages = document.getElementById('threadMessages');
     const personaPanel = document.getElementById('personaPanel');
@@ -1560,7 +1564,7 @@
     document.getElementById('mobileBackBtn').onclick = mobileBack;
     document.getElementById('clearChatBtn').onclick = () => archiveChat(state.selected);
     header.querySelectorAll('.thread-tabs button').forEach(btn => {
-      btn.onclick = () => { state.threadView = btn.dataset.tab; renderThread(); };
+      btn.onclick = () => { state.editingPersona = false; state.threadView = btn.dataset.tab; renderThread(); };
     });
 
     const view = state.threadView;
@@ -1628,6 +1632,7 @@
   }
 
   function selectAgent(name) {
+    state.editingPersona = false;
     // Save draft for previous agent
     const input = document.getElementById('msgInput');
     if (state.selected && input) {
@@ -1825,6 +1830,7 @@
   }
 
   function enterPersonaEdit(agentName, rawContent) {
+    state.editingPersona = true;
     const panel = document.getElementById('personaPanel');
     panel.innerHTML = `
       <div style="display:flex;flex-direction:column;height:100%;padding:0">
@@ -1837,6 +1843,7 @@
       </div>
     `;
     document.getElementById('cancelEditBtn').onclick = () => {
+      state.editingPersona = false;
       delete state.personaCache[agentName];
       renderPersona();
     };
