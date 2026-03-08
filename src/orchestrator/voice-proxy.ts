@@ -35,6 +35,8 @@ type VoiceSession = {
   browser: Duplex;
   upstream: Duplex | null;
   closed: boolean;
+  _audioCount?: number;
+  _audioBytes?: number;
 };
 
 const sessions = new Map<string, VoiceSession>();
@@ -140,6 +142,12 @@ function handleBrowserFrame(session: VoiceSession, opcode: number, payload: Buff
     case OP_BINARY:
       // Raw binary audio — convert to base64 and relay
       if (session.upstream?.writable) {
+        if (!session._audioCount) { session._audioCount = 0; session._audioBytes = 0; }
+        session._audioCount++;
+        session._audioBytes += payload.length;
+        if (session._audioCount % 50 === 1) {
+          console.log(`[voice] ${session.sid} audio: ${session._audioCount} chunks, ${session._audioBytes} bytes total`);
+        }
         const elMsg = JSON.stringify({
           message_type: 'input_audio_chunk',
           audio_base_64: payload.toString('base64'),
@@ -272,6 +280,7 @@ function handleUpstreamFrame(session: VoiceSession, opcode: number, payload: Buf
       try {
         const msg = JSON.parse(text);
         const msgType = msg.message_type;
+        console.log(`[voice] ${session.sid} upstream: ${msgType}${msg.text ? ' "' + msg.text.slice(0, 50) + '"' : ''}`);
 
         if (msgType === 'partial_transcript') {
           sendBrowserText(session, JSON.stringify({
