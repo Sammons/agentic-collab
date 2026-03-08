@@ -81,6 +81,24 @@ describe('Engine Adapters', () => {
       assert.equal(cmd, 'claude');
     });
 
+    it('builds spawn command with pre-set session ID', () => {
+      const cmd = adapter.buildSpawnCommand({
+        name: 'test-agent',
+        cwd: '/tmp/test',
+        sessionId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+      });
+      assert.ok(cmd.includes('--session-id'));
+      assert.ok(cmd.includes('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'));
+    });
+
+    it('omits --session-id when not provided', () => {
+      const cmd = adapter.buildSpawnCommand({
+        name: 'test-agent',
+        cwd: '/tmp/test',
+      });
+      assert.ok(!cmd.includes('--session-id'));
+    });
+
     it('builds resume command with session ID', () => {
       const cmd = adapter.buildResumeCommand({
         name: 'test-agent',
@@ -108,6 +126,10 @@ describe('Engine Adapters', () => {
       const keys = adapter.interruptKeys();
       assert.ok(keys.length > 0);
       assert.ok(keys.every(k => k === 'Escape'));
+    });
+
+    it('extractSessionId returns null (Claude uses --session-id at spawn)', () => {
+      assert.equal(adapter.extractSessionId('any pane output'), null);
     });
 
     it('detects idle state from ASCII > prompt', () => {
@@ -336,6 +358,10 @@ describe('Engine Adapters', () => {
       assert.equal(result.contextPct, null);
       assert.equal(result.confident, false);
     });
+
+    it('extractSessionId returns null (Codex falls back to --last)', () => {
+      assert.equal(adapter.extractSessionId('any codex output'), null);
+    });
   });
 
   describe('OpenCodeAdapter', () => {
@@ -434,6 +460,10 @@ describe('Engine Adapters', () => {
     it('returns null context percent', () => {
       const result = adapter.parseContextPercent('anything');
       assert.equal(result.contextPct, null);
+    });
+
+    it('extractSessionId returns null (OpenCode falls back to -c)', () => {
+      assert.equal(adapter.extractSessionId('any opencode output'), null);
     });
   });
 });
