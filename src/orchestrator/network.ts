@@ -98,10 +98,15 @@ export async function restoreAllAgents(ctx: LifecycleContext): Promise<number> {
   let readopted = 0;
   for (const agent of toReadopt) {
     try {
-      // Restore to active — health monitor will detect idle if needed
+      // Restore to pre-shutdown state (idle or active), not unconditionally active.
+      // Hardcoding 'active' caused agents that were idle before shutdown to get
+      // stuck active if the health monitor didn't correct it in the next poll cycle.
       const current = ctx.db.getAgent(agent.name);
       if (!current) continue;
-      ctx.db.updateAgentState(agent.name, 'active', current.version, {
+      const restoredState = (agent.stateBeforeShutdown === 'idle' || agent.stateBeforeShutdown === 'active')
+        ? agent.stateBeforeShutdown
+        : 'active';
+      ctx.db.updateAgentState(agent.name, restoredState, current.version, {
         stateBeforeShutdown: null,
         lastActivity: new Date().toISOString(),
       });
