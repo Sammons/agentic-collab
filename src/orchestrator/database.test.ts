@@ -356,4 +356,60 @@ describe('Database', () => {
       assert.ok(remaining);
     });
   });
+
+  describe('dashboard_read_cursors', () => {
+    let cursorDb: Database;
+    let cursorTmpDir: string;
+
+    before(() => {
+      cursorTmpDir = mkdtempSync(join(tmpdir(), 'agentic-cursor-test-'));
+      cursorDb = new Database(join(cursorTmpDir, 'cursor.db'));
+      cursorDb.createAgent({ name: 'cursor-agent-a', engine: 'claude', cwd: '/tmp' });
+      cursorDb.createAgent({ name: 'cursor-agent-b', engine: 'claude', cwd: '/tmp' });
+    });
+
+    after(() => {
+      cursorDb.close();
+      rmSync(cursorTmpDir, { recursive: true, force: true });
+    });
+
+    it('returns unread counts for agents with no cursor', () => {
+      cursorDb.addDashboardMessage('cursor-agent-a', 'from_agent', 'msg1');
+      cursorDb.addDashboardMessage('cursor-agent-a', 'from_agent', 'msg2');
+
+      const counts = cursorDb.getUnreadCounts();
+      assert.equal(counts['cursor-agent-a'], 2);
+    });
+
+    it('returns zero unread after updating read cursor', () => {
+      cursorDb.updateReadCursor('cursor-agent-a');
+
+      const counts = cursorDb.getUnreadCounts();
+      assert.equal(counts['cursor-agent-a'] ?? 0, 0);
+    });
+
+    it('counts only messages after last read cursor', () => {
+      cursorDb.updateReadCursor('cursor-agent-a');
+      cursorDb.addDashboardMessage('cursor-agent-a', 'from_agent', 'msg3');
+
+      const counts = cursorDb.getUnreadCounts();
+      assert.equal(counts['cursor-agent-a'], 1);
+    });
+
+    it('excludes archived messages from unread counts', () => {
+      cursorDb.addDashboardMessage('cursor-agent-b', 'from_agent', 'archived-msg');
+      cursorDb.clearDashboardMessages('cursor-agent-b');
+
+      const counts = cursorDb.getUnreadCounts();
+      assert.equal(counts['cursor-agent-b'] ?? 0, 0);
+    });
+
+    it('upserts read cursor idempotently', () => {
+      cursorDb.updateReadCursor('cursor-agent-a');
+      cursorDb.updateReadCursor('cursor-agent-a');
+      // Should not throw — ON CONFLICT handles the upsert
+      const counts = cursorDb.getUnreadCounts();
+      assert.ok(typeof (counts['cursor-agent-a'] ?? 0) === 'number');
+    });
+  });
 });
