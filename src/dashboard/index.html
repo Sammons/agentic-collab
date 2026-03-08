@@ -1009,10 +1009,9 @@
       <div class="voice-controls" id="voiceControls" style="display:none">
         <select class="voice-mode-select" id="voiceModeSelect">
           <option value="off">Voice: Off</option>
-          <option value="vad">Voice: VAD</option>
           <option value="ptt">Voice: Push-to-Talk</option>
         </select>
-        <button class="voice-btn hidden" id="voiceBtn" title="Hold to talk">&#127908;</button>
+        <button class="voice-btn hidden" id="voiceBtn" title="Hold to talk (or hold Spacebar)">&#127908;</button>
         <span class="voice-partial" id="voicePartial"></span>
       </div>
       <button id="sendBtn" disabled>Send</button>
@@ -2601,7 +2600,6 @@
       voiceState.mode = e.target.value;
       if (voiceState.mode === 'off') {
         stopVoice();
-        // Release pre-acquired mic stream
         if (voiceState.pttStream) {
           voiceState.pttStream.getTracks().forEach(t => t.stop());
           voiceState.pttStream = null;
@@ -2622,14 +2620,6 @@
           select.value = 'off';
           voiceState.mode = 'off';
         }
-      } else if (voiceState.mode === 'vad') {
-        // Release PTT stream if switching from PTT
-        if (voiceState.pttStream) {
-          voiceState.pttStream.getTracks().forEach(t => t.stop());
-          voiceState.pttStream = null;
-        }
-        btn.classList.add('hidden');
-        startVoice();
       }
     });
 
