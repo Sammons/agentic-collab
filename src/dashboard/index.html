@@ -94,6 +94,29 @@
     border-radius: 4px;
     transition: background 0.15s;
   }
+  .agent-group-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .group-actions {
+    display: flex;
+    gap: 2px;
+    opacity: 0;
+    transition: opacity 0.15s;
+  }
+  .agent-group-header:hover .group-actions { opacity: 1; }
+  .group-actions button {
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    cursor: pointer;
+    font-size: 11px;
+    padding: 1px 4px;
+    border-radius: 3px;
+  }
+  .group-actions button:hover { color: var(--accent); background: rgba(88,166,255,0.1); }
+  .group-actions .group-delete:hover { color: var(--red); background: rgba(248,81,73,0.1); }
   .agent-group-header.dragging { opacity: 0.4; }
   .agent-group-header.drag-over {
     background: color-mix(in srgb, var(--accent) 15%, transparent);
@@ -1168,6 +1191,16 @@
         case 'proxy_update':
           if (data.proxies) { state.proxies = data.proxies; renderAgents(); }
           break;
+        case 'agent_destroyed':
+          state.agents = state.agents.filter(a => a.name !== data.name);
+          delete state.threads[data.name];
+          delete state.unread[data.name];
+          if (state.selected === data.name) {
+            state.selected = null;
+            renderThread();
+          }
+          renderAgents();
+          break;
       }
     };
   }
@@ -1307,9 +1340,27 @@
       if (sortedGroups.length > 1 || groupName !== 'General') {
         const groupHeader = document.createElement('div');
         groupHeader.className = 'agent-group-header';
-        groupHeader.textContent = groupName;
         groupHeader.setAttribute('draggable', 'true');
         groupHeader.dataset.group = groupName;
+        const label = document.createElement('span');
+        label.textContent = groupName;
+        groupHeader.appendChild(label);
+        if (groupName !== 'General') {
+          const actions = document.createElement('span');
+          actions.className = 'group-actions';
+          actions.innerHTML = '<button class="group-rename" title="Rename group">&#9998;</button><button class="group-delete" title="Delete group">&#10005;</button>';
+          actions.querySelector('.group-rename').onclick = (e) => {
+            e.stopPropagation();
+            const newName = prompt('Rename group:', groupName);
+            if (!newName || !newName.trim() || newName.trim() === groupName) return;
+            renameGroup(groupName, newName.trim());
+          };
+          actions.querySelector('.group-delete').onclick = (e) => {
+            e.stopPropagation();
+            deleteGroup(groupName);
+          };
+          groupHeader.appendChild(actions);
+        }
         list.appendChild(groupHeader);
       }
 
@@ -1871,6 +1922,54 @@
       console.error(`Action ${act} failed:`, err);
       showToast(`Action "${act}" failed — network error`, 'error');
     }
+  }
+
+  // ── Group Management ──
+  async function renameGroup(oldName, newName) {
+    // Update all agents in this group
+    const agents = state.agents.filter(a => (a.agentGroup || 'General') === oldName);
+    for (const agent of agents) {
+      agent.agentGroup = newName;
+      fetch(`/api/agents/${encodeURIComponent(agent.name)}/group`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ group: newName }),
+      }).catch(err => console.error('[group] Rename failed for', agent.name, err));
+    }
+    // Update saved section order
+    const savedOrder = JSON.parse(localStorage.getItem('sectionOrder') || '[]');
+    const idx = savedOrder.indexOf(oldName);
+    if (idx !== -1) savedOrder[idx] = newName;
+    localStorage.setItem('sectionOrder', JSON.stringify(savedOrder));
+    // Update empty groups
+    if (state.emptyGroups) {
+      const ei = state.emptyGroups.indexOf(oldName);
+      if (ei !== -1) state.emptyGroups[ei] = newName;
+    }
+    renderAgents();
+  }
+
+  async function deleteGroup(groupName) {
+    // Move all agents in this group back to General
+    const agents = state.agents.filter(a => (a.agentGroup || 'General') === groupName);
+    for (const agent of agents) {
+      agent.agentGroup = null;
+      fetch(`/api/agents/${encodeURIComponent(agent.name)}/group`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ group: '' }),
+      }).catch(err => console.error('[group] Delete-move failed for', agent.name, err));
+    }
+    // Remove from saved section order
+    const savedOrder = JSON.parse(localStorage.getItem('sectionOrder') || '[]');
+    const idx = savedOrder.indexOf(groupName);
+    if (idx !== -1) savedOrder.splice(idx, 1);
+    localStorage.setItem('sectionOrder', JSON.stringify(savedOrder));
+    // Remove from empty groups
+    if (state.emptyGroups) {
+      state.emptyGroups = state.emptyGroups.filter(g => g !== groupName);
+    }
+    renderAgents();
   }
 
   // Event delegation on agent list — handles both card selection and action buttons.
