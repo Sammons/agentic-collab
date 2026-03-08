@@ -174,7 +174,7 @@ function connectUpstream(
   sampleRate: number,
 ): void {
   const host = 'api.elevenlabs.io';
-  const model = opts.sttModel ?? 'scribe_v2';
+  const model = opts.sttModel ?? 'scribe_v2_realtime';
   const lang = opts.language ?? 'eng';
   const commitStrategy = mode === 'vad' ? 'vad' : 'manual';
   const audioFormat = `pcm_${sampleRate}`;
@@ -280,7 +280,7 @@ function handleUpstreamFrame(session: VoiceSession, opcode: number, payload: Buf
       try {
         const msg = JSON.parse(text);
         const msgType = msg.message_type;
-        console.log(`[voice] ${session.sid} upstream: ${msgType}${msg.text ? ' "' + msg.text.slice(0, 50) + '"' : ''}`);
+        console.log(`[voice] ${session.sid} upstream: ${msgType}${msg.text ? ' "' + msg.text.slice(0, 50) + '"' : ''}${msg.error ? ' error=' + msg.error : ''}${msg.message ? ' msg=' + msg.message : ''}`);
 
         if (msgType === 'partial_transcript') {
           sendBrowserText(session, JSON.stringify({
@@ -294,10 +294,11 @@ function handleUpstreamFrame(session: VoiceSession, opcode: number, payload: Buf
           }));
         } else if (msgType === 'session_started') {
           sendBrowserText(session, JSON.stringify({ type: 'ready' }));
-        } else if (msgType?.endsWith('_error') || msgType === 'error') {
+        } else if (msgType?.endsWith('_error') || msgType === 'error' || msgType === 'invalid_request') {
+          console.error(`[voice] ${session.sid} ElevenLabs error:`, text);
           sendBrowserText(session, JSON.stringify({
             type: 'error',
-            error: msg.error ?? msgType,
+            error: msg.error ?? msg.message ?? msgType,
           }));
         }
       } catch {
