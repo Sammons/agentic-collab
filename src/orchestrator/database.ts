@@ -130,6 +130,12 @@ export class Database {
     if (!dmColumns.some((c) => c['name'] === 'withdrawn')) {
       this.db.exec('ALTER TABLE dashboard_messages ADD COLUMN withdrawn INTEGER NOT NULL DEFAULT 0');
     }
+
+    // Add archived_at column to dashboard_messages
+    const dmColsRefresh = this.db.prepare('PRAGMA table_info(dashboard_messages)').all() as Array<Record<string, unknown>>;
+    if (!dmColsRefresh.some((c) => c['name'] === 'archived_at')) {
+      this.db.exec('ALTER TABLE dashboard_messages ADD COLUMN archived_at TEXT');
+    }
   }
 
   /** Expose raw handle for LockManager (shares same DB connection). */
@@ -318,12 +324,14 @@ export class Database {
     return mapDashboardMessageRow(row);
   }
 
-  getDashboardThreads(agentName?: string): Record<string, DashboardMessage[]> {
+  getDashboardThreads(agentName?: string, opts?: { archived?: boolean }): Record<string, DashboardMessage[]> {
+    const showArchived = opts?.archived ?? false;
+    const archiveFilter = showArchived ? 'dm.archived_at IS NOT NULL' : 'dm.archived_at IS NULL';
     const query = `
       SELECT dm.*, pm.status AS delivery_status
       FROM dashboard_messages dm
       LEFT JOIN pending_messages pm ON dm.queue_id = pm.id
-      ${agentName ? 'WHERE dm.agent = ?' : ''}
+      WHERE ${archiveFilter}${agentName ? ' AND dm.agent = ?' : ''}
       ORDER BY dm.created_at ASC
     `;
     const rows = agentName
@@ -475,7 +483,11 @@ export class Database {
   }
 
   clearDashboardMessages(agentName: string): void {
-    this.db.prepare('DELETE FROM dashboard_messages WHERE agent = ?').run(agentName);
+    this.db.prepare("UPDATE dashboard_messages SET archived_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE agent = ? AND archived_at IS NULL").run(agentName);
+  }
+
+  unarchiveDashboardMessages(agentName: string): void {
+    this.db.prepare('UPDATE dashboard_messages SET archived_at = NULL WHERE agent = ? AND archived_at IS NOT NULL').run(agentName);
   }
 
   clearPendingMessages(agentName: string): void {
@@ -567,6 +579,7 @@ function mapDashboardMessageRow(row: Record<string, unknown>): DashboardMessage 
     deliveryStatus: (row['delivery_status'] as string | null) ?? null,
     withdrawn: (row['withdrawn'] as number) === 1,
     createdAt: row['created_at'] as string,
+    archivedAt: (row['archived_at'] as string | null) ?? null,
   };
 }
 
