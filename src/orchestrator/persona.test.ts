@@ -203,13 +203,13 @@ describe('Persona', () => {
     });
 
     it('handles all persona frontmatter fields', () => {
-      const raw = '---\nengine: claude\nmodel: opus\nthinking: high\ncwd: /project\nproxy_host: crankshaft\npermissions: skip\n---\nBody';
+      const raw = '---\nengine: claude\nmodel: opus\nthinking: high\ncwd: /project\nproxy_host: myhost\npermissions: skip\n---\nBody';
       const { frontmatter } = parseFrontmatter(raw);
       assert.equal(frontmatter['engine'], 'claude');
       assert.equal(frontmatter['model'], 'opus');
       assert.equal(frontmatter['thinking'], 'high');
       assert.equal(frontmatter['cwd'], '/project');
-      assert.equal(frontmatter['proxy_host'], 'crankshaft');
+      assert.equal(frontmatter['proxy_host'], 'myhost');
       assert.equal(frontmatter['permissions'], 'skip');
     });
   });
@@ -251,7 +251,7 @@ describe('Persona', () => {
     it('creates agents from persona files', () => {
       const personasDir = join(syncDir, 'personas');
       mkdirSync(personasDir);
-      writeFileSync(join(personasDir, 'alpha.md'), '---\nengine: claude\nmodel: opus\nthinking: high\ncwd: /alpha\nproxy_host: crankshaft\npermissions: skip\n---\n# Alpha agent');
+      writeFileSync(join(personasDir, 'alpha.md'), '---\nengine: claude\nmodel: opus\nthinking: high\ncwd: /alpha\nproxy_host: myhost\npermissions: skip\n---\n# Alpha agent');
       writeFileSync(join(personasDir, 'beta.md'), '---\nengine: codex\ncwd: /beta\n---\n# Beta agent');
 
       const synced = syncPersonasToDb(db, personasDir);
@@ -264,7 +264,7 @@ describe('Persona', () => {
       assert.equal(alpha.thinking, 'high');
       assert.equal(alpha.cwd, '/alpha');
       assert.equal(alpha.permissions, 'skip');
-      assert.equal(alpha.proxyHost, 'crankshaft');
+      assert.equal(alpha.proxyHost, 'myhost');
       assert.equal(alpha.persona, 'alpha');
       assert.equal(alpha.state, 'void');
 

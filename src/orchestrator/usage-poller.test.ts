@@ -99,7 +99,7 @@ describe('parseCodexStatus', () => {
       '│  >_ OpenAI Codex (v0.111.0)                                                     │',
       '│                                                                                 │',
       '│  Model:                gpt-5.4 (reasoning xhigh, summaries auto)                │',
-      '│  Account:              ben@sammons.io (Plus)                                    │',
+      '│  Account:              user@example.com (Plus)                                    │',
       '│                                                                                 │',
       '│  5h limit:             [████████████████░░░░] 80% left (resets 12:19)           │',
       '│  Weekly limit:         [█████░░░░░░░░░░░░░░░] 26% left (resets 01:44 on 13 Mar) │',
