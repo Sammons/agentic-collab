@@ -134,7 +134,10 @@ function buildRoutes(): Route[] {
 // ── Dashboard ──
 
 route('GET', '/dashboard', async (_req, res, _match, ctx) => {
-  res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+  res.writeHead(200, {
+    'content-type': 'text/html; charset=utf-8',
+    'cache-control': 'no-cache, no-store, must-revalidate',
+  });
   res.end(ctx.getDashboardHtml());
 });
 
