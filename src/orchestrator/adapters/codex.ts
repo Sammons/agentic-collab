@@ -23,6 +23,7 @@ function buildDeveloperInstructionsFlag(prompt: string): string {
 export class CodexAdapter implements EngineAdapter {
   readonly engine = 'codex';
   readonly canDeliverWhileActive = false;
+  readonly supportsResumePrompt = true;
 
   buildSpawnCommand(opts: SpawnOptions): string {
     const parts = ['codex'];
