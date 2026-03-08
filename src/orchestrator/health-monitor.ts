@@ -323,7 +323,10 @@ export class HealthMonitor {
   private async handleIdleTransitions(agent: AgentRecord, idleState: string): Promise<void> {
     const tmuxActivity = await this.fetchPaneActivity(agent);
     const prevActivity = this.lastTmuxActivity.get(agent.name) ?? 0;
-    const tmuxChanged = tmuxActivity > 0 && tmuxActivity !== prevActivity;
+    // When prevActivity is 0 (uninitialized — e.g. after self-heal from failed state),
+    // don't treat the first real timestamp as a "change". This allows idle detection
+    // on the first poll after recovery instead of requiring a wasted cycle.
+    const tmuxChanged = prevActivity > 0 && tmuxActivity > 0 && tmuxActivity !== prevActivity;
 
     // Always track the latest tmux activity
     if (tmuxActivity > 0) {
