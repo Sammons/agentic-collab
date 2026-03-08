@@ -420,6 +420,24 @@ describe('Engine Adapters', () => {
       assert.equal(result.confident, false);
     });
 
+    it('detects idle state from Unicode ❯ prompt', () => {
+      assert.equal(adapter.detectIdleState('output\n❯ '), 'waiting_for_input');
+      assert.equal(adapter.detectIdleState('output\n❯'), 'waiting_for_input');
+    });
+
+    it('detects idle from ❯ prompt with tokens/version status bar', () => {
+      const pane = [
+        '● Status sent to dashboard. Standing by.',
+        '',
+        '────────────────────────────────────────────────────────────────────────── ▪▪▪ ─',
+        '❯ ',
+        '────────────────────────────────────────────────────────────────────────────────',
+        '  ⏵⏵ bypass permissions on (shift+tab to cyc…                     44091 tokens',
+        '                                               current: 2.1.71 · latest: 2.1.…',
+      ].join('\n');
+      assert.equal(adapter.detectIdleState(pane), 'waiting_for_input');
+    });
+
     it('extractSessionId returns null (Codex falls back to --last)', () => {
       assert.equal(adapter.extractSessionId('any codex output'), null);
     });

@@ -76,8 +76,14 @@ export class CodexAdapter implements EngineAdapter {
       if (!line) continue;
 
       // Skip status bar lines (always present at bottom)
-      // e.g. "gpt-5.4 xhigh · 81% left · ~/path" or "tab to queue message ... 83% context left"
+      // e.g. "gpt-5.4 xhigh · 81% left · ~/path" or "83% context left"
       if (/\d+%\s+(?:context\s+)?left/.test(line)) continue;
+      // e.g. "44091 tokens" or "⏵⏵ bypass permissions on" or "current: 2.1.71"
+      if (/^\d+\s+tokens/.test(line)) continue;
+      if (/^[⏵⏴]/.test(line)) continue;
+      if (/^current:\s/.test(line)) continue;
+      // Separator lines: "────────" or "▪▪▪"
+      if (/^[─━═▪]{3,}/.test(line)) continue;
 
       // Working indicator: "◦ Working (32s • esc to interrupt)" or "• Working"
       if (/^[◦•]\s*Working/.test(line)) return 'running_tool';
@@ -85,8 +91,8 @@ export class CodexAdapter implements EngineAdapter {
       // Running indicators (braille spinner)
       if (SPINNER_REGEX.test(line)) return 'running_tool';
 
-      // Codex TUI prompt: › (U+203A) or > followed by placeholder or empty
-      if (/^[›>]\s/.test(line) || /^[›>]\s*$/.test(line)) {
+      // Codex TUI prompt: › (U+203A), ❯ (U+276F), or > followed by placeholder or empty
+      if (/^[›❯>]\s/.test(line) || /^[›❯>]\s*$/.test(line)) {
         foundPrompt = true;
         continue; // keep scanning above for Working indicator
       }
