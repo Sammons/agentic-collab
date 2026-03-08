@@ -12,8 +12,9 @@ import { join } from 'node:path';
 import { hostname } from 'node:os';
 import type { Database } from './database.ts';
 import type { WebSocketServer } from '../shared/websocket-server.ts';
-import type { AgentState, EngineType, ProxyCommand, ProxyResponse } from '../shared/types.ts';
+import type { AgentState, EngineType, ProxyCommand, ProxyResponse, ProxyRegistration } from '../shared/types.ts';
 import { sanitizeMessage, generateMessageId } from '../shared/sanitize.ts';
+import { getVersion } from '../shared/version.ts';
 import type { LockManager } from '../shared/lock.ts';
 import { getPersonasDir, parseFrontmatter, createPersonaAndAgent, syncSinglePersona, updateFrontmatterField, resolvePersonaPath } from './persona.ts';
 import {
@@ -500,9 +501,20 @@ route('POST', '/api/proxy/register', async (req, res, _match, ctx) => {
     return json(res, 400, { error: 'proxyId, token, host required' });
   }
 
-  const proxy = ctx.db.registerProxy(body.proxyId, body.token, body.host);
+  const proxyVersion = typeof body.version === 'string' ? body.version : undefined;
+  const proxy = ctx.db.registerProxy(body.proxyId, body.token, body.host, proxyVersion);
+
+  // Compute version match and enrich the response
+  const orchestratorVersion = getVersion();
+  const versionMatch = !!proxyVersion && proxyVersion === orchestratorVersion;
+  const enriched: ProxyRegistration = { ...proxy, versionMatch };
+
+  if (proxyVersion && !versionMatch) {
+    console.warn(`[proxy-register] Version mismatch: proxy "${body.proxyId}" is ${proxyVersion}, orchestrator is ${orchestratorVersion}`);
+  }
+
   broadcastProxyUpdate(ctx);
-  json(res, 200, proxy);
+  json(res, 200, { ...enriched, orchestratorVersion });
 
   // Self-heal: recover failed agents on this proxy whose tmux sessions survived
   recoverFailedAgents(ctx, body.proxyId).catch((err) => {
@@ -529,7 +541,7 @@ route('DELETE', '/api/proxy/:proxyId', async (_req, res, match, ctx) => {
 });
 
 route('GET', '/api/proxies', async (_req, res, _match, ctx) => {
-  const proxies = ctx.db.listProxies();
+  const proxies = enrichProxiesWithVersionMatch(ctx.db.listProxies());
   json(res, 200, proxies);
 });
 
@@ -1083,8 +1095,16 @@ function validateAgentName(name: string): string | null {
 }
 
 function broadcastProxyUpdate(ctx: RouteContext): void {
-  const proxies = ctx.db.listProxies();
+  const proxies = enrichProxiesWithVersionMatch(ctx.db.listProxies());
   ctx.wss.broadcast(JSON.stringify({ type: 'proxy_update', proxies }));
+}
+
+function enrichProxiesWithVersionMatch(proxies: ProxyRegistration[]): ProxyRegistration[] {
+  const orchestratorVersion = getVersion();
+  return proxies.map(p => ({
+    ...p,
+    versionMatch: !!p.version && p.version === orchestratorVersion,
+  }));
 }
 
 function makeLifecycleCtx(ctx: RouteContext): LifecycleContext {

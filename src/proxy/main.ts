@@ -16,6 +16,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { hostname } from 'node:os';
 import { generateToken } from '../shared/sanitize.ts';
 import { resolveSecret, waitForSecret, discoverOrchestrator, getSecretPath, hasDocker } from '../shared/config.ts';
+import { getVersion } from '../shared/version.ts';
 import * as tmux from './tmux.ts';
 import type { ProxyCommand, ProxyResponse } from '../shared/types.ts';
 
@@ -33,6 +34,7 @@ const PROXY_ID = process.env['PROXY_ID'] ?? hostname();
 let orchestratorUrl = '';
 let orchestratorSecret: string | null = null;
 let token = generateToken();
+const proxyVersion = getVersion();
 let registered = false;
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -51,12 +53,18 @@ async function register(): Promise<void> {
     const resp = await fetch(`${orchestratorUrl}/api/proxy/register`, {
       method: 'POST',
       headers: authHeaders(),
-      body: JSON.stringify({ proxyId: PROXY_ID, token, host: PROXY_HOST }),
+      body: JSON.stringify({ proxyId: PROXY_ID, token, host: PROXY_HOST, version: proxyVersion }),
     });
 
     if (resp.ok) {
       registered = true;
-      console.log(`[proxy] Registered with orchestrator as "${PROXY_ID}"`);
+      const data = await resp.json().catch(() => ({})) as Record<string, unknown>;
+      const versionMatch = data['versionMatch'] as boolean | undefined;
+      if (versionMatch === false) {
+        console.warn(`[proxy] ⚠ Version mismatch: proxy is ${proxyVersion}, orchestrator is ${data['orchestratorVersion'] ?? 'unknown'}. Restart proxy to update.`);
+      } else {
+        console.log(`[proxy] Registered with orchestrator as "${PROXY_ID}" (version: ${proxyVersion})`);
+      }
     } else {
       console.error(`[proxy] Registration failed: ${resp.status} ${await resp.text()}`);
       registered = false;

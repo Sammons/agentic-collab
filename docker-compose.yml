@@ -1,6 +1,9 @@
 services:
   orchestrator:
-    build: .
+    build:
+      context: .
+      args:
+        - COMMIT_SHA=${COMMIT_SHA:-}
     ports:
       - "3000:3000"
     volumes:

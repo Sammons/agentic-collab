@@ -194,6 +194,9 @@ if command -v docker &>/dev/null; then
     # Export UID/GID so docker-compose.yml user: "${UID}:${GID}" runs as the host user.
     # This ensures secret files created inside the container are owned by the host user.
     export UID GID="$(id -g)"
+    # Pass git commit SHA to Docker for version handshake with proxies
+    export COMMIT_SHA
+    COMMIT_SHA="$(git rev-parse --short HEAD 2>/dev/null || echo '')"
     if docker compose ps --status running 2>/dev/null | grep -q orchestrator; then
       info "Orchestrator already running"
     else
