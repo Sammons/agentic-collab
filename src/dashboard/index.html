@@ -102,10 +102,7 @@
   .group-actions {
     display: flex;
     gap: 2px;
-    opacity: 0;
-    transition: opacity 0.15s;
   }
-  .agent-group-header:hover .group-actions { opacity: 1; }
   .group-actions button {
     background: none;
     border: none;
@@ -373,14 +370,31 @@
     gap: 6px;
     order: 3;
   }
-  .voice-mode-select {
-    padding: 4px 6px;
+  .voice-toggle {
+    display: flex;
+    align-items: center;
     border-radius: 4px;
     border: 1px solid var(--border);
     background: var(--bg);
-    color: var(--text);
+    overflow: hidden;
     font-size: 12px;
+  }
+  .voice-toggle button {
+    padding: 4px 8px;
+    border: none;
+    background: transparent;
+    color: var(--text-dim);
     cursor: pointer;
+    font-size: 12px;
+    transition: all 0.15s;
+    white-space: nowrap;
+  }
+  .voice-toggle button.active {
+    background: var(--accent);
+    color: #fff;
+  }
+  .voice-toggle button:not(.active):hover {
+    background: rgba(88,166,255,0.1);
   }
   .voice-btn {
     width: 32px; height: 32px;
@@ -919,7 +933,7 @@
     .thread-input textarea {
       font-size: 16px; /* prevent iOS zoom */
     }
-    .voice-mode-select {
+    .voice-toggle button {
       font-size: 16px; /* prevent iOS zoom */
     }
     .voice-controls {
@@ -1030,10 +1044,10 @@
         <span class="upload-btn" id="uploadBtn">+</span>
       </div>
       <div class="voice-controls" id="voiceControls" style="display:none">
-        <select class="voice-mode-select" id="voiceModeSelect">
-          <option value="off">Voice: Off</option>
-          <option value="ptt">Voice: Push-to-Talk</option>
-        </select>
+        <div class="voice-toggle" id="voiceToggle">
+          <button data-mode="off" class="active">Off</button>
+          <button data-mode="ptt">PTT</button>
+        </div>
         <button class="voice-btn hidden" id="voiceBtn" title="Hold to talk (or hold Spacebar)">&#127908;</button>
         <span class="voice-partial" id="voicePartial"></span>
       </div>
@@ -2673,7 +2687,7 @@
 
   async function initVoice() {
     const controls = document.getElementById('voiceControls');
-    const select = document.getElementById('voiceModeSelect');
+    const toggle = document.getElementById('voiceToggle');
     const btn = document.getElementById('voiceBtn');
 
     // Check if voice is enabled on the server
@@ -2684,9 +2698,8 @@
       const data = await resp.json();
       if (!data.enabled) {
         controls.style.display = 'flex';
-        select.disabled = true;
-        select.style.opacity = '0.4';
-        select.title = 'Voice unavailable — ELEVENLABS_API_KEY not configured on server';
+        toggle.querySelectorAll('button').forEach(b => { b.disabled = true; b.style.opacity = '0.4'; });
+        toggle.title = 'Voice unavailable — ELEVENLABS_API_KEY not configured on server';
         return;
       }
     } catch {
@@ -2695,16 +2708,17 @@
 
     controls.style.display = 'flex';
 
-    select.addEventListener('change', async (e) => {
-      voiceState.mode = e.target.value;
-      if (voiceState.mode === 'off') {
+    async function setVoiceMode(mode) {
+      voiceState.mode = mode;
+      toggle.querySelectorAll('button').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
+      if (mode === 'off') {
         stopVoice();
         if (voiceState.pttStream) {
           voiceState.pttStream.getTracks().forEach(t => t.stop());
           voiceState.pttStream = null;
         }
         btn.classList.add('hidden');
-      } else if (voiceState.mode === 'ptt') {
+      } else if (mode === 'ptt') {
         stopVoice();
         btn.classList.remove('hidden');
         // Pre-acquire mic for instant PTT response
@@ -2716,10 +2730,15 @@
           console.error('[voice] Mic access denied:', err);
           document.getElementById('voicePartial').textContent = 'Mic denied';
           setTimeout(() => { document.getElementById('voicePartial').textContent = ''; }, 3000);
-          select.value = 'off';
-          voiceState.mode = 'off';
+          setVoiceMode('off');
         }
       }
+    }
+
+    toggle.addEventListener('click', (e) => {
+      const b = e.target.closest('button[data-mode]');
+      if (!b || b.classList.contains('active')) return;
+      setVoiceMode(b.dataset.mode);
     });
 
     // Push-to-talk: hold button (pointer + touch events for mobile compatibility)
