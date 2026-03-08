@@ -429,6 +429,15 @@ route('DELETE', '/api/dashboard/messages/:agent', async (_req, res, match, ctx) 
   json(res, 200, { ok: true });
 });
 
+route('PUT', '/api/dashboard/read-cursor', async (req, res, _match, ctx) => {
+  const body = await readJson(req);
+  if (!body.agent || typeof body.agent !== 'string') {
+    return json(res, 400, { error: 'agent (string) required' });
+  }
+  ctx.db.updateReadCursor(body.agent as string);
+  json(res, 200, { ok: true });
+});
+
 route('POST', '/api/dashboard/messages/:agent/unarchive', async (_req, res, match, ctx) => {
   const agentName = match.pathname.groups['agent']!;
   const agent = ctx.db.getAgent(agentName);

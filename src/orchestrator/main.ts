@@ -245,11 +245,13 @@ wss.onConnect((client) => {
   const agents = db.listAgents();
   const threads = db.getDashboardThreads();
   const proxies = db.listProxies();
+  const unreadCounts = db.getUnreadCounts();
   wss.send(client, JSON.stringify({
     type: 'init',
     agents,
     threads,
     proxies,
+    unreadCounts,
   }));
 });
 

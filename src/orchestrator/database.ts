@@ -92,6 +92,11 @@ const SCHEMA = `
   );
 
   CREATE INDEX IF NOT EXISTS idx_pm_agent_status ON pending_messages(target_agent, status);
+
+  CREATE TABLE IF NOT EXISTS dashboard_read_cursors (
+    agent           TEXT PRIMARY KEY,
+    last_read_msg_id INTEGER NOT NULL DEFAULT 0
+  );
 `;
 
 export class Database {
@@ -484,6 +489,34 @@ export class Database {
 
   clearDashboardMessages(agentName: string): void {
     this.db.prepare("UPDATE dashboard_messages SET archived_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE agent = ? AND archived_at IS NULL").run(agentName);
+  }
+
+  // ── Dashboard Read Cursors ──
+
+  updateReadCursor(agent: string): void {
+    // Set cursor to the max message ID for this agent (marks all current messages as read)
+    this.db.prepare(`
+      INSERT INTO dashboard_read_cursors (agent, last_read_msg_id)
+      VALUES (?, COALESCE((SELECT MAX(id) FROM dashboard_messages WHERE agent = ?), 0))
+      ON CONFLICT(agent) DO UPDATE SET last_read_msg_id = excluded.last_read_msg_id
+    `).run(agent, agent);
+  }
+
+  getUnreadCounts(): Record<string, number> {
+    const rows = this.db.prepare(`
+      SELECT dm.agent, COUNT(*) AS cnt
+      FROM dashboard_messages dm
+      LEFT JOIN dashboard_read_cursors rc ON dm.agent = rc.agent
+      WHERE dm.archived_at IS NULL
+        AND dm.id > COALESCE(rc.last_read_msg_id, 0)
+      GROUP BY dm.agent
+    `).all() as Array<Record<string, unknown>>;
+
+    const counts: Record<string, number> = {};
+    for (const row of rows) {
+      counts[row['agent'] as string] = row['cnt'] as number;
+    }
+    return counts;
   }
 
   unarchiveDashboardMessages(agentName: string): void {

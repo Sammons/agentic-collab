@@ -1198,6 +1198,15 @@
           state.agents = data.agents;
           state.threads = data.threads;
           state.proxies = data.proxies || [];
+          // Restore unread counts from server, preserving any live increments
+          if (data.unreadCounts) {
+            for (const [agent, count] of Object.entries(data.unreadCounts)) {
+              // Only set if not already tracked (preserves counts from messages received this session)
+              if (state.unread[agent] === undefined) {
+                state.unread[agent] = count;
+              }
+            }
+          }
           renderAgents();
           renderThread();
           break;
@@ -1658,6 +1667,12 @@
     }
     state.selected = name;
     state.unread[name] = 0;
+    // Persist read cursor on server so unread counts survive refresh
+    fetch('/api/dashboard/read-cursor', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ agent: name }),
+    }).catch(err => console.warn('Read cursor update failed:', err));
     // Preserve current tab (messages/persona/watch) when switching agents
     renderAgents();
     renderThread();
