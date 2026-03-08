@@ -8,8 +8,9 @@
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { createWriteStream, existsSync, realpathSync, unlinkSync } from 'node:fs';
-import { join, relative, isAbsolute } from 'node:path';
+import { createWriteStream, existsSync, realpathSync, unlinkSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { join, relative, isAbsolute, dirname } from 'node:path';
+import { homedir } from 'node:os';
 import { pipeline } from 'node:stream/promises';
 import { Transform } from 'node:stream';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
@@ -111,6 +112,54 @@ async function deregister(): Promise<void> {
   }
 }
 
+// ── Codex Profile Management ──
+
+const CODEX_CONFIG_PATH = join(homedir(), '.codex', 'config.toml');
+
+/**
+ * Write or update a Codex profile in ~/.codex/config.toml.
+ *
+ * Uses TOML triple-quoted strings ("""...""") for developer_instructions,
+ * which handle ALL special characters (backticks, $, !, quotes) with no
+ * shell escaping needed. The only character that needs handling is three
+ * consecutive double quotes in the content itself.
+ */
+function writeCodexProfile(profileName: string, developerInstructions: string): void {
+  // Validate profile name (alphanumeric, hyphens, underscores)
+  if (!/^[a-zA-Z0-9_-]+$/.test(profileName)) {
+    throw new Error(`Invalid profile name: ${profileName}`);
+  }
+
+  // Escape the only problematic sequence in TOML triple-quoted strings: """
+  const safeInstructions = developerInstructions.replace(/"""/g, '""\\u0022');
+
+  const profileHeader = `[profiles.${profileName}]`;
+  const profileBlock = `${profileHeader}\ndeveloper_instructions = """\n${safeInstructions}\n"""\n`;
+
+  // Read existing config (or start with empty)
+  const configDir = dirname(CODEX_CONFIG_PATH);
+  mkdirSync(configDir, { recursive: true });
+
+  let config = '';
+  try {
+    config = readFileSync(CODEX_CONFIG_PATH, 'utf-8');
+  } catch {
+    // File doesn't exist yet
+  }
+
+  // Remove any existing profile section for this agent.
+  // Match from [profiles.<name>] to the next [section] header or end of file.
+  const profileRegex = new RegExp(
+    `\\[profiles\\.${profileName}\\]\\n[\\s\\S]*?(?=\\n\\[|$)`,
+  );
+  config = config.replace(profileRegex, '').replace(/\n{3,}/g, '\n\n');
+
+  // Append new profile
+  config = config.trimEnd() + '\n\n' + profileBlock;
+
+  writeFileSync(CODEX_CONFIG_PATH, config, 'utf-8');
+}
+
 // ── Command Execution ──
 
 async function executeCommand(command: ProxyCommand): Promise<ProxyResponse> {
@@ -150,6 +199,10 @@ async function executeCommand(command: ProxyCommand): Promise<ProxyResponse> {
 
       case 'send_keys':
         tmux.sendKeys(command.sessionName, command.keys);
+        return { ok: true };
+
+      case 'write_codex_profile':
+        writeCodexProfile(command.profileName, command.developerInstructions);
         return { ok: true };
 
       default:

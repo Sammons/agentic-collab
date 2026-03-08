@@ -163,6 +163,15 @@ export async function spawnAgent(
     // 2. Compose system prompt with persona
     const systemPrompt = buildSystemPrompt(ctx, opts.name, peers, opts.persona);
 
+    // 2b. Write config profile for engines that use it (e.g. Codex)
+    if (adapter.usesConfigProfile && systemPrompt) {
+      await ctx.proxyDispatch(opts.proxyId, {
+        action: 'write_codex_profile',
+        profileName: opts.name,
+        developerInstructions: systemPrompt,
+      });
+    }
+
     // 3. Generate session ID for engines that support it (Claude --session-id)
     const generatedSessionId = randomUUID();
 
@@ -308,6 +317,15 @@ export async function resumeAgent(
     // 2. Compose system prompt
     const systemPrompt = buildSystemPrompt(ctx, name, peers, persona);
 
+    // 2b. Write config profile for engines that use it (e.g. Codex)
+    if (adapter.usesConfigProfile && systemPrompt) {
+      await ctx.proxyDispatch(proxyId, {
+        action: 'write_codex_profile',
+        profileName: name,
+        developerInstructions: systemPrompt,
+      });
+    }
+
     // 3. Build and paste resume command (or spawn with new session ID if none)
     let resumeSessionId = currentSessionId;
     let cmd: string;
@@ -316,7 +334,9 @@ export async function resumeAgent(
         name,
         sessionId: currentSessionId,
         cwd,
-        task: opts?.task,
+        // Only pass task inline for engines that support resume prompts (e.g. Codex).
+        // Others (Claude, OpenCode) get the task pasted separately into tmux.
+        task: adapter.supportsResumePrompt ? opts?.task : undefined,
         appendSystemPrompt: systemPrompt,
       });
     } else {
@@ -589,6 +609,15 @@ export async function reloadAgent(
 
     // 5. Build resume command (or fresh spawn with new session ID if none exists)
     const systemPrompt = buildSystemPrompt(ctx, name, peers, persona);
+
+    // 5b. Write config profile for engines that use it (e.g. Codex)
+    if (adapter.usesConfigProfile && systemPrompt) {
+      await ctx.proxyDispatch(proxyId, {
+        action: 'write_codex_profile',
+        profileName: name,
+        developerInstructions: systemPrompt,
+      });
+    }
 
     const taskText = opts?.task ?? reloadTask;
     // For engines that support inline resume prompts (e.g. Codex), pass the task

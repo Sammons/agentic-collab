@@ -231,42 +231,29 @@ describe('Engine Adapters', () => {
       assert.ok(cmd.includes('--dangerously-bypass-approvals-and-sandbox'));
     });
 
-    it('builds spawn command with appendSystemPrompt', () => {
+    it('builds spawn command with -p profile when appendSystemPrompt is set', () => {
       const cmd = adapter.buildSpawnCommand({
         name: 'codex-agent',
         cwd: '/tmp',
         appendSystemPrompt: 'You are a helpful assistant',
       });
-      assert.ok(cmd.includes('-c developer_instructions='));
-      assert.ok(cmd.includes('You are a helpful assistant'));
-    });
-
-    it('escapes double quotes in appendSystemPrompt for TOML', () => {
-      const cmd = adapter.buildSpawnCommand({
-        name: 'codex-agent',
-        cwd: '/tmp',
-        appendSystemPrompt: 'Say "hello" to the user',
-      });
-      assert.ok(cmd.includes('\\"hello\\"'));
-      assert.ok(!cmd.includes('""'));
-    });
-
-    it('escapes newlines in appendSystemPrompt for TOML', () => {
-      const cmd = adapter.buildSpawnCommand({
-        name: 'codex-agent',
-        cwd: '/tmp',
-        appendSystemPrompt: 'Line one\nLine two',
-      });
-      assert.ok(cmd.includes('Line one\\nLine two'));
-    });
-
-    it('omits -c flag when appendSystemPrompt is undefined', () => {
-      const cmd = adapter.buildSpawnCommand({
-        name: 'codex-agent',
-        cwd: '/tmp',
-      });
+      // Profile-based injection: -p <agent-name>, NOT -c developer_instructions
+      assert.ok(cmd.includes('-p codex-agent'));
       assert.ok(!cmd.includes('-c'));
       assert.ok(!cmd.includes('developer_instructions'));
+    });
+
+    it('omits -p flag when appendSystemPrompt is undefined', () => {
+      const cmd = adapter.buildSpawnCommand({
+        name: 'codex-agent',
+        cwd: '/tmp',
+      });
+      assert.ok(!cmd.includes('-p'));
+      assert.ok(!cmd.includes('-c'));
+    });
+
+    it('has usesConfigProfile set to true', () => {
+      assert.equal(adapter.usesConfigProfile, true);
     });
 
     it('omits optional flags when undefined', () => {
@@ -277,7 +264,7 @@ describe('Engine Adapters', () => {
         task: undefined,
         thinking: undefined,
       });
-      assert.equal(cmd, 'codex');
+      assert.equal(cmd, 'codex --no-alt-screen');
     });
 
     it('ignores thinking (codex has no reasoning effort flag)', () => {
@@ -299,7 +286,7 @@ describe('Engine Adapters', () => {
         cwd: '/tmp',
         task: 'continue',
       });
-      assert.ok(cmd.includes('codex resume'));
+      assert.ok(cmd.includes('codex --no-alt-screen resume'));
       assert.ok(cmd.includes('xyz-123'));
     });
 
@@ -311,27 +298,27 @@ describe('Engine Adapters', () => {
       assert.ok(cmd.includes('--last'));
     });
 
-    it('builds resume command with appendSystemPrompt', () => {
+    it('builds resume command with -p profile when appendSystemPrompt is set', () => {
       const cmd = adapter.buildResumeCommand({
         name: 'codex-agent',
         sessionId: 'xyz-123',
         cwd: '/tmp',
         appendSystemPrompt: 'You are a code reviewer',
       });
-      assert.ok(cmd.includes('codex resume'));
+      assert.ok(cmd.includes('codex --no-alt-screen resume'));
       assert.ok(cmd.includes('xyz-123'));
-      assert.ok(cmd.includes('-c developer_instructions='));
-      assert.ok(cmd.includes('You are a code reviewer'));
+      assert.ok(cmd.includes('-p codex-agent'));
+      assert.ok(!cmd.includes('-c'));
     });
 
-    it('omits -c flag on resume when appendSystemPrompt is undefined', () => {
+    it('omits -p flag on resume when appendSystemPrompt is undefined', () => {
       const cmd = adapter.buildResumeCommand({
         name: 'codex-agent',
         sessionId: 'xyz-123',
         cwd: '/tmp',
       });
+      assert.ok(!cmd.includes('-p'));
       assert.ok(!cmd.includes('-c'));
-      assert.ok(!cmd.includes('developer_instructions'));
     });
 
     it('returns null for rename', () => {
