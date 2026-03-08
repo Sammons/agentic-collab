@@ -1,32 +1,30 @@
 /**
  * OpenAI Codex CLI adapter.
+ *
+ * System prompt injection uses Codex config profiles (~/.codex/config.toml)
+ * instead of inline -c flags. The proxy writes a [profiles.<agent-name>]
+ * section with developer_instructions in TOML triple-quoted strings, which
+ * handle ALL special characters (backticks, $, !, quotes) without any
+ * bash shell escaping.
  */
 
 import { SPINNER_REGEX, type EngineAdapter, type SpawnOptions, type ResumeOptions, type IdleState, type ContextResult } from './types.ts';
 import { shellQuote } from '../../shared/utils.ts';
 
-/**
- * Build the `-c 'developer_instructions="..."'` flag for Codex.
- *
- * Codex parses the value as TOML, so internal double quotes and backslashes
- * must be escaped for TOML. The entire `-c` argument is then shell-quoted.
- */
-function buildDeveloperInstructionsFlag(prompt: string): string {
-  // Escape for TOML: backslashes first, then double quotes, then newlines
-  const tomlSafe = prompt
-    .replace(/\\/g, '\\\\')
-    .replace(/"/g, '\\"')
-    .replace(/\n/g, '\\n');
-  return `-c developer_instructions="${tomlSafe}"`;
-}
-
 export class CodexAdapter implements EngineAdapter {
   readonly engine = 'codex';
   readonly canDeliverWhileActive = false;
-  readonly supportsResumePrompt = true;
+  readonly supportsResumePrompt = false;
+
+  /**
+   * Whether this engine uses a config profile for system prompt injection.
+   * When true, the orchestrator must dispatch a write_codex_profile action
+   * to the proxy BEFORE pasting the spawn/resume command.
+   */
+  readonly usesConfigProfile = true;
 
   buildSpawnCommand(opts: SpawnOptions): string {
-    const parts = ['codex'];
+    const parts = ['codex', '--no-alt-screen'];
 
     if (opts.dangerouslySkipPermissions === true) {
       parts.push('--dangerously-bypass-approvals-and-sandbox');
@@ -36,8 +34,10 @@ export class CodexAdapter implements EngineAdapter {
       parts.push('--model', opts.model);
     }
 
+    // System prompt is injected via config profile, not -c flag.
+    // The profile must be written before this command is pasted.
     if (opts.appendSystemPrompt) {
-      parts.push(buildDeveloperInstructionsFlag(opts.appendSystemPrompt));
+      parts.push('-p', opts.name);
     }
 
     if (opts.task) {
@@ -48,7 +48,7 @@ export class CodexAdapter implements EngineAdapter {
   }
 
   buildResumeCommand(opts: ResumeOptions): string {
-    const parts = ['codex', 'resume'];
+    const parts = ['codex', '--no-alt-screen', 'resume'];
 
     if (opts.sessionId) {
       parts.push(opts.sessionId);
@@ -56,8 +56,9 @@ export class CodexAdapter implements EngineAdapter {
       parts.push('--last');
     }
 
+    // System prompt via config profile
     if (opts.appendSystemPrompt) {
-      parts.push(buildDeveloperInstructionsFlag(opts.appendSystemPrompt));
+      parts.push('-p', opts.name);
     }
 
     if (opts.task) {
@@ -139,4 +140,3 @@ export class CodexAdapter implements EngineAdapter {
     return null;
   }
 }
-

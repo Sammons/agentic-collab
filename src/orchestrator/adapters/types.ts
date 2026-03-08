@@ -51,6 +51,14 @@ export interface EngineAdapter {
    */
   readonly supportsResumePrompt: boolean;
 
+  /**
+   * Whether this engine uses a config profile for system prompt injection.
+   * When true, the orchestrator must dispatch a write_codex_profile action
+   * to the proxy BEFORE pasting the spawn/resume command.
+   * Defaults to false when not implemented.
+   */
+  readonly usesConfigProfile?: boolean;
+
   /** Build the shell command to spawn a new agent session */
   buildSpawnCommand(opts: SpawnOptions): string;
 
