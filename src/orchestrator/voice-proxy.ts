@@ -9,7 +9,7 @@
  * and native fetch/WebSocket-like TCP for the upstream ElevenLabs connection.
  */
 
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { connect } from 'node:tls';
@@ -184,8 +184,8 @@ function connectUpstream(
 
   const path = `/v1/speech-to-text/realtime?${params}`;
 
-  // Generate WebSocket key
-  const wsKey = createHash('sha1').update(String(Date.now() + Math.random())).digest('base64');
+  // Generate WebSocket key (RFC 6455: 16 random bytes, base64-encoded)
+  const wsKey = randomBytes(16).toString('base64');
 
   const tlsSocket = connect({
     host,
