@@ -507,6 +507,9 @@
     border: 1px solid var(--border);
     border-radius: var(--radius);
     overflow: hidden;
+    position: sticky;
+    bottom: 0;
+    z-index: 2;
   }
   .create-form-toggle {
     display: flex;
@@ -1287,12 +1290,13 @@
   function renderAgents() {
     const list = document.getElementById('agentList');
 
-    // Preserve create form input values before clearing
+    // Preserve create form input values and focus before clearing
     const prevName = document.getElementById('createName')?.value || '';
     const prevEngine = document.getElementById('createEngine')?.value || 'claude';
     const prevProxy = document.getElementById('createProxy')?.value || '';
     const prevCwd = document.getElementById('createCwd')?.value || '/tmp';
     const prevTask = document.getElementById('createTask')?.value || '';
+    const focusedCreateField = document.activeElement?.id?.startsWith('create') ? document.activeElement.id : null;
 
     // Remove everything except the search box
     list.querySelectorAll(':scope > :not(.agent-search)').forEach(el => el.remove());
@@ -1329,7 +1333,6 @@
       createFormOpen = !createFormOpen;
       form.classList.toggle('open', createFormOpen);
     };
-    list.appendChild(form);
 
     const filter = state.searchFilter.toLowerCase();
     const filtered = filter
@@ -1528,6 +1531,15 @@
     }
     engineSummary.innerHTML = engineHtml;
     list.appendChild(engineSummary);
+
+    // Create form pinned at bottom (sticky) — must be last child
+    list.appendChild(form);
+
+    // Restore focus to create form field if it was focused before re-render
+    if (focusedCreateField) {
+      const el = document.getElementById(focusedCreateField);
+      if (el) el.focus();
+    }
   }
 
   function renderThread() {
