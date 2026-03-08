@@ -1135,6 +1135,7 @@
     engineUsage: {},  // { engine: EngineUsage }
     proxies: [],      // registered proxy list from init
     emptyGroups: [],  // groups created via + New Group (no agents yet)
+    drafts: {},       // { agentName: draftText }
   };
 
   let ws = null;
@@ -1601,15 +1602,28 @@
   }
 
   function selectAgent(name) {
+    // Save draft for previous agent
+    const input = document.getElementById('msgInput');
+    if (state.selected && input) {
+      const text = input.value;
+      if (text) state.drafts[state.selected] = text;
+      else delete state.drafts[state.selected];
+    }
     state.selected = name;
     state.unread[name] = 0;
     // Preserve current tab (messages/persona/watch) when switching agents
     renderAgents();
     renderThread();
+    // Restore draft for new agent
+    if (input) {
+      input.value = state.drafts[name] || '';
+      input.style.height = 'auto';
+      input.style.height = input.scrollHeight + 'px';
+    }
     updateSendability();
     // Mobile: show thread panel
     document.querySelector('.layout').classList.add('mobile-thread');
-    document.getElementById('msgInput').focus();
+    input?.focus();
   }
 
   function mobileBack() {
@@ -2341,6 +2355,7 @@
         if (body && body.msg) {
           input.value = '';
           input.style.height = 'auto';
+          delete state.drafts[state.selected];
           // Delivery status shown inline on the message bubble via queue_update
         } else {
           console.error('Send failed: HTTP', res.status);
@@ -2349,6 +2364,7 @@
       } else {
         input.value = '';
         input.style.height = 'auto';
+        delete state.drafts[state.selected];
       }
     } catch (err) {
       console.error('Send failed:', err);
