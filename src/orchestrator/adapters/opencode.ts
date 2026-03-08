@@ -83,5 +83,11 @@ export class OpenCodeAdapter implements EngineAdapter {
   interruptKeys(): string[] {
     return ['Escape', 'Escape'];
   }
+
+  extractSessionId(_paneOutput: string): string | null {
+    // OpenCode doesn't expose session IDs in terminal output.
+    // Falls back to `opencode run -c` which continues the last session.
+    return null;
+  }
 }
 

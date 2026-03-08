@@ -102,5 +102,11 @@ export class CodexAdapter implements EngineAdapter {
   interruptKeys(): string[] {
     return ['Escape', 'Escape'];
   }
+
+  extractSessionId(_paneOutput: string): string | null {
+    // Codex doesn't print session IDs in terminal output.
+    // Falls back to `codex resume --last` which resumes the most recent session.
+    return null;
+  }
 }
 
