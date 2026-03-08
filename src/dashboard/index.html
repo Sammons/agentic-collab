@@ -1290,6 +1290,7 @@
     // Preserve create form input values before clearing
     const prevName = document.getElementById('createName')?.value || '';
     const prevEngine = document.getElementById('createEngine')?.value || 'claude';
+    const prevProxy = document.getElementById('createProxy')?.value || '';
     const prevCwd = document.getElementById('createCwd')?.value || '/tmp';
     const prevTask = document.getElementById('createTask')?.value || '';
 
@@ -1311,6 +1312,9 @@
           <option value="claude"${prevEngine === 'claude' ? ' selected' : ''}>claude</option>
           <option value="codex"${prevEngine === 'codex' ? ' selected' : ''}>codex</option>
           <option value="opencode"${prevEngine === 'opencode' ? ' selected' : ''}>opencode</option>
+        </select>
+        <select id="createProxy">
+          ${(state.proxies || []).map(p => `<option value="${esc(p.proxyId)}"${prevProxy === p.proxyId ? ' selected' : ''}>${esc(p.proxyId)}</option>`).join('')}
         </select>
         <input type="text" id="createCwd" placeholder="Working directory" value="${esc(prevCwd)}" autocomplete="off" />
         <textarea id="createTask" rows="2" placeholder="Initial task (optional)" autocomplete="off">${esc(prevTask)}</textarea>
@@ -2755,6 +2759,7 @@
     const shouldSpawn = e.detail?.spawn ?? false;
     const name = document.getElementById('createName')?.value.trim();
     const engine = document.getElementById('createEngine')?.value;
+    const proxyHost = document.getElementById('createProxy')?.value;
     const cwd = document.getElementById('createCwd')?.value.trim();
     const task = document.getElementById('createTask')?.value.trim();
     if (!name) { showToast('Agent name is required', 'error'); return; }
@@ -2765,7 +2770,7 @@
       const createRes = await fetch('/api/agents', {
         method: 'POST',
         headers: authHeaders(),
-        body: JSON.stringify({ name, engine, cwd }),
+        body: JSON.stringify({ name, engine, cwd, proxyHost: proxyHost || undefined }),
       });
       if (createRes.status === 401) { handleAuthError(); return; }
       const createBody = await createRes.json();
