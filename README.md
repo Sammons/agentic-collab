@@ -100,7 +100,7 @@ mise run doctor      # check prerequisites
 The recommended pattern is to start with a **team lead agent** that coordinates other agents. Copy the example:
 
 ```bash
-cp persistent-agents/team-lead.example.md persistent-agents/team-lead.md
+cp persistent-agents/team-lead.example.md persistent-agents/my-team-lead.md
 # Edit cwd, proxy_host, and instructions for your project
 ```
 
@@ -148,7 +148,7 @@ engine: claude
 model: sonnet
 thinking: high
 cwd: /home/user/project
-proxy_host: crankshaft
+proxy_host: my-workstation
 permissions: skip
 ---
 # Research Agent
@@ -291,7 +291,7 @@ Supported engines: `claude`, `codex`, `opencode`.
 node --test 'src/**/*.test.ts'
 ```
 
-286 tests across 52 suites covering lifecycle operations, database persistence, networking, locking, health monitoring, adapters, message delivery, crash recovery, file upload, streaming upload, rate limiting, path traversal, persona frontmatter, integration tests, and input validation.
+384 tests across 63 suites covering lifecycle operations, database persistence, networking, locking, health monitoring, adapters, message delivery, crash recovery, file upload, streaming upload, rate limiting, path traversal, persona frontmatter, integration tests, and input validation.
 
 ## Project structure
 
@@ -335,4 +335,4 @@ src/
 
 ## License
 
-ISC
+MIT
