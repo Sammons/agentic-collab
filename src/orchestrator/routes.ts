@@ -178,11 +178,29 @@ route('POST', '/api/agents', async (req, res, _match, ctx) => {
     model: body.model,
     thinking: body.thinking,
     cwd: body.cwd,
-    persona: body.persona,
+    persona: body.name,
     permissions: body.permissions,
     proxyId: body.proxyId,
     proxyHost: body.proxyHost,
   });
+
+  // Write persona file so agent config persists across restarts
+  try {
+    const fmLines: string[] = [];
+    fmLines.push(`engine: ${body.engine}`);
+    if (body.model) fmLines.push(`model: ${body.model}`);
+    if (body.thinking) fmLines.push(`thinking: ${body.thinking}`);
+    fmLines.push(`cwd: ${body.cwd}`);
+    if (body.proxyHost) fmLines.push(`proxy_host: ${body.proxyHost}`);
+    if (body.permissions) fmLines.push(`permissions: ${body.permissions}`);
+    const content = `---\n${fmLines.join('\n')}\n---\n`;
+    const dir = getPersonasDir();
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, `${body.name}.md`), content, 'utf-8');
+  } catch (err) {
+    // Non-fatal — agent is created in DB even if persona file write fails
+    console.warn(`[routes] Failed to write persona file for ${body.name}: ${(err as Error).message}`);
+  }
 
   ctx.db.logEvent(agent.name, 'created');
   broadcastAgentUpdate(ctx, agent.name);
