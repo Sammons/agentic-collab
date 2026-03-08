@@ -99,6 +99,13 @@
     align-items: center;
     justify-content: space-between;
   }
+  .group-chevron {
+    font-size: 10px;
+    margin-right: 4px;
+    transition: transform 0.15s;
+    display: inline-block;
+  }
+  .agent-group-header.collapsed .group-chevron { transform: rotate(-90deg); }
   .group-actions {
     display: flex;
     gap: 2px;
@@ -1350,14 +1357,26 @@
       return a.localeCompare(b);
     });
 
+    const collapsedGroups = JSON.parse(localStorage.getItem('collapsedGroups') || '[]');
     for (const groupName of sortedGroups) {
-      if (sortedGroups.length > 1 || groupName !== 'General') {
+      const isCollapsed = collapsedGroups.includes(groupName);
+      const showHeader = sortedGroups.length > 1 || groupName !== 'General';
+      if (showHeader) {
         const groupHeader = document.createElement('div');
-        groupHeader.className = 'agent-group-header';
+        groupHeader.className = `agent-group-header${isCollapsed ? ' collapsed' : ''}`;
         groupHeader.setAttribute('draggable', 'true');
         groupHeader.dataset.group = groupName;
         const label = document.createElement('span');
-        label.textContent = groupName;
+        label.innerHTML = `<span class="group-chevron">\u25BC</span>${esc(groupName)}`;
+        label.style.cursor = 'pointer';
+        label.onclick = (e) => {
+          e.stopPropagation();
+          const saved = JSON.parse(localStorage.getItem('collapsedGroups') || '[]');
+          const idx = saved.indexOf(groupName);
+          if (idx !== -1) saved.splice(idx, 1); else saved.push(groupName);
+          localStorage.setItem('collapsedGroups', JSON.stringify(saved));
+          renderAgents();
+        };
         groupHeader.appendChild(label);
         if (groupName !== 'General') {
           const actions = document.createElement('span');
@@ -1378,6 +1397,7 @@
         list.appendChild(groupHeader);
       }
 
+    if (showHeader && isCollapsed) continue;
     for (const agent of groups.get(groupName)) {
       const card = document.createElement('div');
       card.className = `agent-card${state.selected === agent.name ? ' selected' : ''}`;

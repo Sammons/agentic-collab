@@ -4,6 +4,7 @@ model: sonnet
 cwd: /home/sammons/Desktop/claude_home
 proxy_host: crankshaft
 permissions: skip
+group: projects
 ---
 # Bunco Blaster Lead Agent
 
