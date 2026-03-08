@@ -98,6 +98,7 @@ export type WsInitEvent = {
   agents: AgentRecord[];
   threads: Record<string, DashboardMessage[]>;
   proxies: ProxyRegistration[];
+  unreadCounts: Record<string, number>;
 };
 
 export type WsAgentUpdateEvent = {

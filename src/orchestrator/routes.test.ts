@@ -202,6 +202,19 @@ describe('API Routes', () => {
     assert.ok(threads['api-agent-1']);
   });
 
+  // ── Read Cursor ──
+
+  it('PUT /api/dashboard/read-cursor updates cursor', async () => {
+    const { status, data } = await api('PUT', '/api/dashboard/read-cursor', { agent: 'api-agent-1' });
+    assert.equal(status, 200);
+    assert.equal((data as Record<string, unknown>).ok, true);
+  });
+
+  it('PUT /api/dashboard/read-cursor rejects missing agent', async () => {
+    const { status } = await api('PUT', '/api/dashboard/read-cursor', {});
+    assert.equal(status, 400);
+  });
+
   // ── Agent Actions ──
 
   it('POST /api/agents/:name/interrupt sends escape keys', async () => {
