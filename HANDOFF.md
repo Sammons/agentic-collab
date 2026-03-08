@@ -1,6 +1,6 @@
 # Agentic-Collab Handoff Brief
 
-> Last updated: 2026-03-06 — 286 tests, all passing, branch `feat/persona-frontmatter`
+> Last updated: 2026-03-08 — 410+ tests, all passing
 
 ---
 
@@ -8,10 +8,7 @@
 
 A zero-dependency orchestrator for managing AI coding agents (Claude, Codex, OpenCode) via tmux sessions. Node 24, no build step, no `npm install`. SQLite persistence via `node:sqlite`. Single-file SPA dashboard.
 
-**Repo**: `git.sammons.io/sammons/agentic-collab`
-**Local**: `/home/sammons/Desktop/agentic-collab`
-**Knowledge**: `knowledge/projects/agentic-collaboration.md` in claude_home
-**Patterns**: `knowledge/patterns/node-streaming-upload.md`, `knowledge/patterns/engine-adapter-testing.md`
+**Repo**: GitHub — `Sammons/agentic-collab`
 
 ---
 
@@ -93,7 +90,7 @@ node src/proxy/main.ts
 
 # 3. Run tests
 node --test 'src/**/*.test.ts'
-# 286 tests, ~3s
+# 410+ tests, ~3s
 ```
 
 **Prereqs**: Node 24+, Docker, tmux, at least one of: `claude`, `codex`, `opencode`
@@ -126,7 +123,7 @@ Chronological feature progression across ~15 commits:
 
 ## Where We Are Now
 
-**Everything works. 286 tests pass. Ready for production use.**
+**Everything works. 410+ tests pass. Production-tested with 15+ concurrent agents.**
 
 ### What's Solid
 
@@ -230,6 +227,16 @@ Each adapter implements: `buildCommand()`, `parseIdleState()`, `parseContextUsag
 4. **Permission skip from frontmatter** — `permissions: skip` in frontmatter instead of hardcoded `dangerouslySkipPermissions: true`.
 5. **Dashboard improvements** — Search/filter agents, mobile responsive layout with back navigation, persona tab shows structured frontmatter table, 6 screenshots (desktop + mobile).
 6. **README update** — Persona docs, desktop/mobile screenshot table, updated env vars.
+
+### Recent additions (post-persona)
+
+7. **Event-driven message delivery** — `MessageDispatcher` delivers messages immediately when agents go idle, replacing the poll-only approach.
+8. **Usage poller** — Tracks token usage across agent sessions via CLI tooling.
+9. **Voice dictation proxy** — WebSocket-based voice input via ElevenLabs STT (optional).
+10. **Dashboard unread persistence** — Server-side read cursors (message ID-based) survive page refresh.
+11. **Proxy version handshake** — Proxies present git SHA during registration; orchestrator compares and warns on mismatch. Dashboard shows amber "stale proxy" badge.
+12. **Idle detection fixes** — Hybrid tmux activity + content regex, handles self-heal recovery and Codex TUI changes.
+13. **`collab` CLI** — Standalone agent CLI (`bin/collab`) for sending messages, managing lifecycle, checking status from within tmux sessions.
 
 ## Onboarding Pattern
 
