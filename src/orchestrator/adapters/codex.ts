@@ -5,6 +5,21 @@
 import { SPINNER_REGEX, type EngineAdapter, type SpawnOptions, type ResumeOptions, type IdleState, type ContextResult } from './types.ts';
 import { shellQuote } from '../../shared/utils.ts';
 
+/**
+ * Build the `-c 'developer_instructions="..."'` flag for Codex.
+ *
+ * Codex parses the value as TOML, so internal double quotes and backslashes
+ * must be escaped for TOML. The entire `-c` argument is then shell-quoted.
+ */
+function buildDeveloperInstructionsFlag(prompt: string): string {
+  // Escape for TOML: backslashes first, then double quotes, then newlines
+  const tomlSafe = prompt
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, '\\n');
+  return `-c developer_instructions="${tomlSafe}"`;
+}
+
 export class CodexAdapter implements EngineAdapter {
   readonly engine = 'codex';
   readonly canDeliverWhileActive = false;
@@ -18,6 +33,10 @@ export class CodexAdapter implements EngineAdapter {
 
     if (opts.model) {
       parts.push('--model', opts.model);
+    }
+
+    if (opts.appendSystemPrompt) {
+      parts.push(buildDeveloperInstructionsFlag(opts.appendSystemPrompt));
     }
 
     if (opts.task) {
@@ -34,6 +53,10 @@ export class CodexAdapter implements EngineAdapter {
       parts.push(opts.sessionId);
     } else {
       parts.push('--last');
+    }
+
+    if (opts.appendSystemPrompt) {
+      parts.push(buildDeveloperInstructionsFlag(opts.appendSystemPrompt));
     }
 
     if (opts.task) {
