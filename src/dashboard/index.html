@@ -2566,7 +2566,8 @@
     ws: null,        // WebSocket to orchestrator /ws/voice
     mode: 'off',     // off | vad | ptt
     recording: false,
-    stream: null,    // MediaStream
+    stream: null,    // MediaStream (active recording)
+    pttStream: null, // MediaStream (pre-acquired for instant PTT)
     audioCtx: null,  // AudioContext
     processor: null,  // ScriptProcessorNode
     sid: null,       // session ID
@@ -2596,15 +2597,37 @@
 
     controls.style.display = 'flex';
 
-    select.addEventListener('change', (e) => {
+    select.addEventListener('change', async (e) => {
       voiceState.mode = e.target.value;
       if (voiceState.mode === 'off') {
         stopVoice();
+        // Release pre-acquired mic stream
+        if (voiceState.pttStream) {
+          voiceState.pttStream.getTracks().forEach(t => t.stop());
+          voiceState.pttStream = null;
+        }
         btn.classList.add('hidden');
       } else if (voiceState.mode === 'ptt') {
         stopVoice();
         btn.classList.remove('hidden');
+        // Pre-acquire mic for instant PTT response
+        try {
+          voiceState.pttStream = await navigator.mediaDevices.getUserMedia({
+            audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+          });
+        } catch (err) {
+          console.error('[voice] Mic access denied:', err);
+          document.getElementById('voicePartial').textContent = 'Mic denied';
+          setTimeout(() => { document.getElementById('voicePartial').textContent = ''; }, 3000);
+          select.value = 'off';
+          voiceState.mode = 'off';
+        }
       } else if (voiceState.mode === 'vad') {
+        // Release PTT stream if switching from PTT
+        if (voiceState.pttStream) {
+          voiceState.pttStream.getTracks().forEach(t => t.stop());
+          voiceState.pttStream = null;
+        }
         btn.classList.add('hidden');
         startVoice();
       }
@@ -2628,6 +2651,24 @@
     btn.addEventListener('touchcancel', pttUp);
     // Prevent context menu on long press
     btn.addEventListener('contextmenu', (e) => e.preventDefault());
+
+    // Spacebar PTT when text input is not focused
+    document.addEventListener('keydown', (e) => {
+      if (e.code !== 'Space' || voiceState.mode !== 'ptt') return;
+      const tag = document.activeElement?.tagName;
+      if (tag === 'TEXTAREA' || tag === 'INPUT' || tag === 'SELECT') return;
+      if (voiceState.recording) return; // already recording
+      e.preventDefault();
+      startVoice();
+    });
+    document.addEventListener('keyup', (e) => {
+      if (e.code !== 'Space' || voiceState.mode !== 'ptt') return;
+      const tag = document.activeElement?.tagName;
+      if (tag === 'TEXTAREA' || tag === 'INPUT' || tag === 'SELECT') return;
+      if (!voiceState.recording) return;
+      e.preventDefault();
+      commitAndStopPtt();
+    });
   }
 
   function commitAndStopPtt() {
@@ -2641,15 +2682,20 @@
   async function startVoice() {
     if (voiceState.recording) return;
 
-    try {
-      voiceState.stream = await navigator.mediaDevices.getUserMedia({
-        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-      });
-    } catch (err) {
-      console.error('[voice] Mic access denied:', err);
-      document.getElementById('voicePartial').textContent = 'Mic denied';
-      setTimeout(() => { document.getElementById('voicePartial').textContent = ''; }, 3000);
-      return;
+    // Use pre-acquired PTT stream if available, otherwise request mic
+    if (voiceState.pttStream) {
+      voiceState.stream = voiceState.pttStream;
+    } else {
+      try {
+        voiceState.stream = await navigator.mediaDevices.getUserMedia({
+          audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        });
+      } catch (err) {
+        console.error('[voice] Mic access denied:', err);
+        document.getElementById('voicePartial').textContent = 'Mic denied';
+        setTimeout(() => { document.getElementById('voicePartial').textContent = ''; }, 3000);
+        return;
+      }
     }
 
     voiceState.sid = crypto.randomUUID();
@@ -2765,7 +2811,10 @@
       voiceState.audioCtx = null;
     }
     if (voiceState.stream) {
-      voiceState.stream.getTracks().forEach(t => t.stop());
+      // Don't close the pre-acquired PTT stream — it's reused across presses
+      if (voiceState.stream !== voiceState.pttStream) {
+        voiceState.stream.getTracks().forEach(t => t.stop());
+      }
       voiceState.stream = null;
     }
     voiceState.ws = null;
