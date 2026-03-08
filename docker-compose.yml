@@ -6,7 +6,7 @@ services:
     volumes:
       - orchestrator-data:/data/.agentic-collab
       - ${HOME}/.config/agentic-collab:/config/agentic-collab
-      - ./persistent-agents:/app/persistent-agents
+      - ${PERSONAS_HOST_DIR:-./persistent-agents}:/app/persistent-personas
     # host.docker.internal resolves to the host on Docker Desktop (macOS/Windows).
     # On Linux, this requires Docker Engine 20.10+ with the host-gateway feature.
     # If host-gateway is unavailable, use --network=host or set
@@ -16,7 +16,7 @@ services:
       - "host.docker.internal:host-gateway"
     environment:
       - AGENTIC_COLLAB_CONFIG_DIR=/config/agentic-collab
-      - PERSONAS_DIR=/app/persistent-agents
+      - PERSONAS_DIR=/app/persistent-personas
       - ORCHESTRATOR_HOST=${ORCHESTRATOR_HOST:-http://localhost:3000}
       - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY:-}
     labels:

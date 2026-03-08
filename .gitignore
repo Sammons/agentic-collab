@@ -4,3 +4,4 @@ node_modules/
 *.db-shm
 dist/
 .env
+persistent-agents/*.md
