@@ -21,6 +21,8 @@ export type SpawnOptions = {
   task?: string;
   appendSystemPrompt?: string;
   dangerouslySkipPermissions?: boolean;
+  /** Pre-generated session ID for engines that support it (e.g. Claude --session-id). */
+  sessionId?: string;
 };
 
 export type ResumeOptions = {
@@ -65,4 +67,11 @@ export interface EngineAdapter {
 
   /** Keys to send to interrupt/cancel the current operation */
   interruptKeys(): string[];
+
+  /**
+   * Extract session ID from pane output after spawn.
+   * Used by engines that don't support pre-set session IDs (e.g. Codex).
+   * Returns the session ID string, or null if not found/not applicable.
+   */
+  extractSessionId(paneOutput: string): string | null;
 }

@@ -16,6 +16,7 @@
  * Short operations (interrupt, compact, kill, deliver) use single-phase locks.
  */
 
+import { randomUUID } from 'node:crypto';
 import type { Database } from './database.ts';
 import type { LockManager } from '../shared/lock.ts';
 import type { ProxyCommand, ProxyResponse, AgentRecord } from '../shared/types.ts';
@@ -162,7 +163,10 @@ export async function spawnAgent(
     // 2. Compose system prompt with persona
     const systemPrompt = buildSystemPrompt(ctx, opts.name, peers, opts.persona);
 
-    // 3. Build and paste spawn command
+    // 3. Generate session ID for engines that support it (Claude --session-id)
+    const generatedSessionId = randomUUID();
+
+    // 4. Build and paste spawn command
     const spawnCmd = adapter.buildSpawnCommand({
       name: opts.name,
       cwd: opts.cwd,
@@ -171,6 +175,7 @@ export async function spawnAgent(
       task: opts.task,
       appendSystemPrompt: systemPrompt,
       dangerouslySkipPermissions: permissions === 'skip',
+      sessionId: generatedSessionId,
     });
 
     await ctx.proxyDispatch(opts.proxyId, {
@@ -180,7 +185,7 @@ export async function spawnAgent(
       pressEnter: true,
     });
 
-    // 4. Wait for CLI init, then inject /rename
+    // 5. Wait for CLI init, then inject /rename
     await sleep(RENAME_DELAY_MS);
     const renameCmd = adapter.buildRenameCommand(opts.name);
     if (renameCmd) {
@@ -194,6 +199,28 @@ export async function spawnAgent(
 
     // Let the CLI fully initialize before finalizing state
     await sleep(POST_SPAWN_ACTIVE_DELAY_MS);
+
+    // 6. Determine session ID to persist.
+    // Claude: pre-generated via --session-id (generatedSessionId is always set).
+    // Codex/OpenCode: try extracting from pane output; fall back to null.
+    let capturedSessionId: string | null = generatedSessionId;
+    if (adapter.engine !== 'claude') {
+      // Non-Claude engines don't accept --session-id, so the generated one wasn't used.
+      // Try extracting from pane output instead.
+      capturedSessionId = null;
+      try {
+        const captureResult = await ctx.proxyDispatch(opts.proxyId, {
+          action: 'capture',
+          sessionName: tmuxSession,
+          lines: 50,
+        });
+        if (captureResult.ok && typeof captureResult.data === 'string') {
+          capturedSessionId = adapter.extractSessionId(captureResult.data);
+        }
+      } catch {
+        // Best-effort — session ID capture failure is non-fatal
+      }
+    }
 
     // ── Phase 3: finalize (lock) ──
     return await ctx.locks.withLock(opts.name, async () => {
@@ -210,8 +237,13 @@ export async function spawnAgent(
         lastActivity: new Date().toISOString(),
         spawnCount: spawnCount + 1,
         lastContextPct: 0,
+        currentSessionId: capturedSessionId,
       });
-      ctx.db.logEvent(opts.name, 'spawned', undefined, { engine, model: opts.model });
+      ctx.db.logEvent(opts.name, 'spawned', undefined, {
+        engine,
+        model: opts.model,
+        sessionId: capturedSessionId,
+      });
       return updated;
     });
   } finally {
@@ -276,7 +308,8 @@ export async function resumeAgent(
     // 2. Compose system prompt
     const systemPrompt = buildSystemPrompt(ctx, name, peers, persona);
 
-    // 3. Build and paste resume command (or spawn if no session ID)
+    // 3. Build and paste resume command (or spawn with new session ID if none)
+    let resumeSessionId = currentSessionId;
     let cmd: string;
     if (currentSessionId) {
       cmd = adapter.buildResumeCommand({
@@ -287,12 +320,14 @@ export async function resumeAgent(
         appendSystemPrompt: systemPrompt,
       });
     } else {
+      resumeSessionId = randomUUID();
       cmd = adapter.buildSpawnCommand({
         name,
         cwd,
         task: opts?.task,
         appendSystemPrompt: systemPrompt,
         dangerouslySkipPermissions: permissions === 'skip',
+        sessionId: resumeSessionId,
       });
     }
 
@@ -341,8 +376,9 @@ export async function resumeAgent(
         lastActivity: new Date().toISOString(),
         stateBeforeShutdown: null,
         lastContextPct: 0,
+        currentSessionId: resumeSessionId,
       });
-      ctx.db.logEvent(name, 'resumed', undefined, { sessionId: currentSessionId });
+      ctx.db.logEvent(name, 'resumed', undefined, { sessionId: resumeSessionId });
       return updated;
     });
   } finally {
@@ -550,9 +586,10 @@ export async function reloadAgent(
       cwd,
     });
 
-    // 5. Build resume command
+    // 5. Build resume command (or fresh spawn with new session ID if none exists)
     const systemPrompt = buildSystemPrompt(ctx, name, peers, persona);
 
+    let reloadSessionId = currentSessionId;
     const resumeCmd = currentSessionId
       ? adapter.buildResumeCommand({
           name,
@@ -560,12 +597,17 @@ export async function reloadAgent(
           cwd,
           appendSystemPrompt: systemPrompt,
         })
-      : adapter.buildSpawnCommand({
-          name,
-          cwd,
-          appendSystemPrompt: systemPrompt,
-          dangerouslySkipPermissions: permissions === 'skip',
-        });
+      : (() => {
+          // No session to resume — spawn fresh with a new session ID
+          reloadSessionId = randomUUID();
+          return adapter.buildSpawnCommand({
+            name,
+            cwd,
+            appendSystemPrompt: systemPrompt,
+            dangerouslySkipPermissions: permissions === 'skip',
+            sessionId: reloadSessionId,
+          });
+        })();
 
     await ctx.proxyDispatch(proxyId, {
       action: 'paste',
@@ -615,11 +657,12 @@ export async function reloadAgent(
         spawnCount: spawnCount + 1,
         lastContextPct: 0,
         lastActivity: new Date().toISOString(),
+        currentSessionId: reloadSessionId,
       });
 
       ctx.db.logEvent(name, 'reloaded', undefined, {
         previousContextPct,
-        sessionId: currentSessionId,
+        sessionId: reloadSessionId,
       });
 
       return updated;
