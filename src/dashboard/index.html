@@ -1363,11 +1363,11 @@
           const actions = document.createElement('span');
           actions.className = 'group-actions';
           actions.innerHTML = '<button class="group-rename" title="Rename group">&#9998;</button><button class="group-delete" title="Delete group">&#10005;</button>';
-          actions.querySelector('.group-rename').onclick = (e) => {
+          actions.querySelector('.group-rename').onclick = async (e) => {
             e.stopPropagation();
-            const newName = prompt('Rename group:', groupName);
-            if (!newName || !newName.trim() || newName.trim() === groupName) return;
-            renameGroup(groupName, newName.trim());
+            const newName = await promptInput('Rename group:', groupName);
+            if (!newName || newName === groupName) return;
+            renameGroup(groupName, newName);
           };
           actions.querySelector('.group-delete').onclick = (e) => {
             e.stopPropagation();
@@ -1440,10 +1440,9 @@
     newGroupBtn.textContent = '+ New Group';
     newGroupBtn.onmouseenter = () => { newGroupBtn.style.borderColor = 'var(--accent)'; newGroupBtn.style.color = 'var(--accent)'; };
     newGroupBtn.onmouseleave = () => { newGroupBtn.style.borderColor = 'var(--border)'; newGroupBtn.style.color = 'var(--text-dim)'; };
-    newGroupBtn.onclick = () => {
-      const name = prompt('Group name:');
-      if (!name || !name.trim()) return;
-      const groupName = name.trim();
+    newGroupBtn.onclick = async () => {
+      const groupName = await promptInput('Group name:');
+      if (!groupName) return;
       // Add to saved section order so it persists
       const savedOrder = JSON.parse(localStorage.getItem('sectionOrder') || '[]');
       if (!savedOrder.includes(groupName)) {
@@ -1880,6 +1879,38 @@
                           message.status === 'failed' ? '\u2717 failed' :
                           '\u2022\u2022\u2022 sending';
     }
+  }
+
+  // ── Prompt Dialog (themed replacement for browser prompt()) ──
+  function promptInput(label, defaultValue) {
+    return new Promise((resolve) => {
+      const overlay = document.createElement('div');
+      overlay.className = 'confirm-overlay';
+      overlay.innerHTML = `
+        <div class="confirm-box">
+          <p>${esc(label)}</p>
+          <input type="text" value="${esc(defaultValue || '')}" style="width:100%;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px;box-sizing:border-box;margin-bottom:16px" autocomplete="off" />
+          <div class="actions">
+            <button class="cancel-btn">Cancel</button>
+            <button class="danger-btn" style="background:var(--accent);border-color:var(--accent)">OK</button>
+          </div>
+        </div>
+      `;
+      const input = overlay.querySelector('input');
+      const submit = () => { const v = input.value.trim(); overlay.remove(); resolve(v || null); };
+      overlay.querySelector('.cancel-btn').onclick = () => { overlay.remove(); resolve(null); };
+      overlay.querySelector('.danger-btn').onclick = submit;
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') submit();
+        if (e.key === 'Escape') { overlay.remove(); resolve(null); }
+      });
+      overlay.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') { overlay.remove(); resolve(null); }
+      });
+      document.body.appendChild(overlay);
+      input.focus();
+      input.select();
+    });
   }
 
   // ── Confirm Dialog ──
@@ -2464,7 +2495,9 @@
     const btn = e.target.closest('.msg-withdraw');
     if (!btn) return;
     const msgId = btn.dataset.msgId;
-    if (!msgId || !confirm('Withdraw this message? The agent will be notified.')) return;
+    if (!msgId) return;
+    const confirmed = await confirmAction('Withdraw this message? The agent will be notified.');
+    if (!confirmed) return;
     btn.textContent = '...';
     btn.style.pointerEvents = 'none';
     try {
