@@ -2688,7 +2688,7 @@
     const proxy = (state.proxies || []).find(p => p.proxyId === proxyId);
     if (!proxy || proxy.versionMatch !== false) return '';
     const ver = proxy.version ? ` (${esc(proxy.version)})` : '';
-    return ` <span class="version-mismatch" title="Proxy version${ver} does not match orchestrator. Restart the proxy.">⚠ stale</span>`;
+    return ` <span class="version-mismatch" title="Proxy version${ver} does not match orchestrator. Restart the proxy.">⚠ stale proxy</span>`;
   }
 
   /**
