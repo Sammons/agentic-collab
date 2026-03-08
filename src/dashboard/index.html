@@ -1712,11 +1712,13 @@
         outputEl.innerHTML = '<div class="watch-status">Agent has no active session</div>';
       } else {
         const now = new Date().toLocaleTimeString();
+        const wasAtBottom = outputEl.scrollTop + outputEl.clientHeight >= outputEl.scrollHeight - 20;
         outputEl.innerHTML = `<div class="watch-status">Last capture: ${now}</div>${esc(output)}`;
+        if (wasAtBottom) outputEl.scrollTop = outputEl.scrollHeight;
       }
     }
 
-    poll();
+    poll().then(() => { outputEl.scrollTop = outputEl.scrollHeight; });
     state.watchTimer = setInterval(poll, 3000);
   }
 
