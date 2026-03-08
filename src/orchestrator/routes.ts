@@ -395,7 +395,8 @@ route('POST', '/api/dashboard/reply', async (req, res, _match, ctx) => {
 route('GET', '/api/dashboard/threads', async (req, res, _match, ctx) => {
   const url = new URL(req.url!, `http://${req.headers.host}`);
   const agent = url.searchParams.get('agent') ?? undefined;
-  const threads = ctx.db.getDashboardThreads(agent);
+  const archived = url.searchParams.get('archived') === '1';
+  const threads = ctx.db.getDashboardThreads(agent, { archived });
   json(res, 200, threads);
 });
 
@@ -406,6 +407,15 @@ route('DELETE', '/api/dashboard/messages/:agent', async (_req, res, match, ctx) 
 
   ctx.db.clearDashboardMessages(agentName);
   ctx.db.clearPendingMessages(agentName);
+  json(res, 200, { ok: true });
+});
+
+route('POST', '/api/dashboard/messages/:agent/unarchive', async (_req, res, match, ctx) => {
+  const agentName = match.pathname.groups['agent']!;
+  const agent = ctx.db.getAgent(agentName);
+  if (!agent) return json(res, 404, { error: 'Agent not found' });
+
+  ctx.db.unarchiveDashboardMessages(agentName);
   json(res, 200, { ok: true });
 });
 

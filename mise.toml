@@ -1,6 +1,7 @@
 min_version = "2024.0.0"
 
 [tools]
+age = "latest"
 node = "24"
 
 [tasks]

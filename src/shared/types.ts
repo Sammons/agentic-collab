@@ -60,6 +60,7 @@ export type DashboardMessage = {
   deliveryStatus: string | null;
   withdrawn: boolean;
   createdAt: string;
+  archivedAt: string | null;
 };
 
 // ── Message Queue ──

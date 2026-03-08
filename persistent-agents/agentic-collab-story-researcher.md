@@ -3,6 +3,7 @@ engine: claude
 cwd: /home/sammons/Desktop/claude_home
 proxy_host: crankshaft
 permissions: skip
+group: Consultants
 ---
 # Agentic Collab Story Researcher
 

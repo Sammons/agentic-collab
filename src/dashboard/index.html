@@ -99,6 +99,13 @@
     align-items: center;
     justify-content: space-between;
   }
+  .group-chevron {
+    font-size: 10px;
+    margin-right: 4px;
+    transition: transform 0.15s;
+    display: inline-block;
+  }
+  .agent-group-header.collapsed .group-chevron { transform: rotate(-90deg); }
   .group-actions {
     display: flex;
     gap: 2px;
@@ -1350,14 +1357,26 @@
       return a.localeCompare(b);
     });
 
+    const collapsedGroups = JSON.parse(localStorage.getItem('collapsedGroups') || '[]');
     for (const groupName of sortedGroups) {
-      if (sortedGroups.length > 1 || groupName !== 'General') {
+      const isCollapsed = collapsedGroups.includes(groupName);
+      const showHeader = sortedGroups.length > 1 || groupName !== 'General';
+      if (showHeader) {
         const groupHeader = document.createElement('div');
-        groupHeader.className = 'agent-group-header';
+        groupHeader.className = `agent-group-header${isCollapsed ? ' collapsed' : ''}`;
         groupHeader.setAttribute('draggable', 'true');
         groupHeader.dataset.group = groupName;
         const label = document.createElement('span');
-        label.textContent = groupName;
+        label.innerHTML = `<span class="group-chevron">\u25BC</span>${esc(groupName)}`;
+        label.style.cursor = 'pointer';
+        label.onclick = (e) => {
+          e.stopPropagation();
+          const saved = JSON.parse(localStorage.getItem('collapsedGroups') || '[]');
+          const idx = saved.indexOf(groupName);
+          if (idx !== -1) saved.splice(idx, 1); else saved.push(groupName);
+          localStorage.setItem('collapsedGroups', JSON.stringify(saved));
+          renderAgents();
+        };
         groupHeader.appendChild(label);
         if (groupName !== 'General') {
           const actions = document.createElement('span');
@@ -1378,6 +1397,7 @@
         list.appendChild(groupHeader);
       }
 
+    if (showHeader && isCollapsed) continue;
     for (const agent of groups.get(groupName)) {
       const card = document.createElement('div');
       card.className = `agent-card${state.selected === agent.name ? ' selected' : ''}`;
@@ -1533,17 +1553,18 @@
       <button class="${state.threadView === 'messages' ? 'active' : ''}" data-tab="messages">Messages</button>
       <button class="${state.threadView === 'persona' ? 'active' : ''}" data-tab="persona">Persona</button>
       <button class="${state.threadView === 'watch' ? 'active' : ''}" data-tab="watch">Watch</button>
+      <button class="${state.threadView === 'archive' ? 'active' : ''}" data-tab="archive">Archive</button>
     </div>`;
-    const clearBtn = `<button class="clear-chat-btn" id="clearChatBtn" title="Clear chat history">\u2715</button>`;
+    const clearBtn = `<button class="clear-chat-btn" id="clearChatBtn" title="Archive chat">\u2715</button>`;
     header.innerHTML = `<button class="mobile-back" id="mobileBackBtn">\u2190</button><span>${esc(state.selected)}</span>${headerBadge}${tabs}${clearBtn}`;
     document.getElementById('mobileBackBtn').onclick = mobileBack;
-    document.getElementById('clearChatBtn').onclick = () => clearChat(state.selected);
+    document.getElementById('clearChatBtn').onclick = () => archiveChat(state.selected);
     header.querySelectorAll('.thread-tabs button').forEach(btn => {
       btn.onclick = () => { state.threadView = btn.dataset.tab; renderThread(); };
     });
 
     const view = state.threadView;
-    messages.style.display = view === 'messages' ? 'flex' : 'none';
+    messages.style.display = (view === 'messages' || view === 'archive') ? 'flex' : 'none';
     personaPanel.style.display = view === 'persona' ? 'block' : 'none';
     watchPanel.style.display = view === 'watch' ? 'flex' : 'none';
     input.style.display = view === 'messages' ? 'flex' : 'none';
@@ -1555,6 +1576,11 @@
 
     if (view === 'watch') {
       startWatchPolling();
+      return;
+    }
+
+    if (view === 'archive') {
+      renderArchive();
       return;
     }
 
@@ -2300,8 +2326,8 @@
     touchDragState = null;
   });
 
-  // ── Clear Chat ──
-  async function clearChat(agentName) {
+  // ── Archive / Restore Chat ──
+  async function archiveChat(agentName) {
     if (!agentName) return;
     try {
       const res = await fetch(`/api/dashboard/messages/${encodeURIComponent(agentName)}`, {
@@ -2314,9 +2340,78 @@
         renderThread();
       }
     } catch (err) {
-      console.error('Clear chat failed:', err);
+      console.error('Archive chat failed:', err);
     }
   }
+
+  async function unarchiveChat(agentName) {
+    if (!agentName) return;
+    try {
+      const res = await fetch(`/api/dashboard/messages/${encodeURIComponent(agentName)}/unarchive`, {
+        method: 'POST',
+        headers: authHeaders(),
+      });
+      if (res.status === 401) { handleAuthError(); return; }
+      if (res.ok) {
+        // Reload threads to get restored messages
+        const threadsRes = await fetch(`/api/dashboard/threads?agent=${encodeURIComponent(agentName)}`, {
+          headers: authHeaders(),
+        });
+        if (threadsRes.ok) {
+          const threads = await threadsRes.json();
+          state.threads[agentName] = threads[agentName] || [];
+        }
+        state.threadView = 'messages';
+        renderThread();
+      }
+    } catch (err) {
+      console.error('Unarchive failed:', err);
+    }
+  }
+
+  async function renderArchive() {
+    const messages = document.getElementById('threadMessages');
+    if (!state.selected) return;
+    messages.innerHTML = '<div class="thread-empty">Loading archive...</div>';
+    try {
+      const res = await fetch(`/api/dashboard/threads?agent=${encodeURIComponent(state.selected)}&archived=1`, {
+        headers: authHeaders(),
+      });
+      if (!res.ok) { messages.innerHTML = '<div class="thread-empty">Failed to load archive</div>'; return; }
+      const threads = await res.json();
+      const thread = threads[state.selected] || [];
+      if (thread.length === 0) {
+        messages.innerHTML = '<div class="thread-empty">No archived messages</div>';
+        return;
+      }
+      messages.innerHTML = '';
+      // Restore button
+      const restoreBar = document.createElement('div');
+      restoreBar.style.cssText = 'padding:8px 12px;text-align:center';
+      restoreBar.innerHTML = `<button onclick="document.dispatchEvent(new CustomEvent('unarchive-chat'))" style="padding:6px 16px;border-radius:6px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:13px;cursor:pointer">Restore to Messages</button>`;
+      messages.appendChild(restoreBar);
+      for (const msg of thread) {
+        const div = document.createElement('div');
+        const isSystem = msg.direction === 'from_agent' && msg.message.startsWith('[system]');
+        const sender = isSystem ? 'system' : (msg.direction === 'to_agent' ? 'you' : state.selected);
+        div.className = `msg msg-${sender === 'you' ? 'out' : 'in'}${isSystem ? ' msg-system' : ''}${msg.withdrawn ? ' msg-withdrawn' : ''}`;
+        const time = new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        let text = esc(msg.message);
+        text = text.replace(/`([^`]+)`/g, '<code>$1</code>');
+        div.innerHTML = `<span class="msg-sender">${esc(sender)}</span><span class="msg-text">${text}</span><span class="msg-time">${time}</span>`;
+        messages.appendChild(div);
+      }
+      // Scroll to bottom
+      messages.scrollTop = messages.scrollHeight;
+    } catch (err) {
+      console.error('Archive load failed:', err);
+      messages.innerHTML = '<div class="thread-empty">Failed to load archive</div>';
+    }
+  }
+
+  document.addEventListener('unarchive-chat', () => {
+    if (state.selected) unarchiveChat(state.selected);
+  });
 
   // ── Send Message ──
   function showSendError(input, sendBtn) {
