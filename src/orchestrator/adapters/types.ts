@@ -44,6 +44,13 @@ export interface EngineAdapter {
    */
   readonly canDeliverWhileActive: boolean;
 
+  /**
+   * Whether the CLI accepts a prompt as a positional argument to the resume command.
+   * If true, reload tasks are passed inline (e.g. `codex resume <id> "task"`)
+   * instead of being pasted separately into the tmux pane.
+   */
+  readonly supportsResumePrompt: boolean;
+
   /** Build the shell command to spawn a new agent session */
   buildSpawnCommand(opts: SpawnOptions): string;
 

@@ -350,8 +350,9 @@ export async function resumeAgent(
       });
     }
 
-    // 5. Paste task if provided (and resuming existing session)
-    if (opts?.task && currentSessionId) {
+    // 5. Paste task if provided (and resuming existing session).
+    // Skip if the engine consumed the task inline via buildResumeCommand.
+    if (opts?.task && currentSessionId && !adapter.supportsResumePrompt) {
       await sleep(POST_RENAME_TASK_DELAY_MS);
       await ctx.proxyDispatch(proxyId, {
         action: 'paste',
@@ -589,12 +590,21 @@ export async function reloadAgent(
     // 5. Build resume command (or fresh spawn with new session ID if none exists)
     const systemPrompt = buildSystemPrompt(ctx, name, peers, persona);
 
+    const taskText = opts?.task ?? reloadTask;
+    // For engines that support inline resume prompts (e.g. Codex), pass the task
+    // as a positional CLI argument instead of pasting it separately into tmux.
+    // This avoids Codex's unreliable multiline paste handling.
+    const inlineTask = adapter.supportsResumePrompt && taskText
+      ? `[orchestrator → ${name}] ${taskText}`
+      : undefined;
+
     let reloadSessionId = currentSessionId;
     const resumeCmd = currentSessionId
       ? adapter.buildResumeCommand({
           name,
           sessionId: currentSessionId,
           cwd,
+          task: inlineTask,
           appendSystemPrompt: systemPrompt,
         })
       : (() => {
@@ -603,6 +613,7 @@ export async function reloadAgent(
           return adapter.buildSpawnCommand({
             name,
             cwd,
+            task: inlineTask,
             appendSystemPrompt: systemPrompt,
             dangerouslySkipPermissions: permissions === 'skip',
             sessionId: reloadSessionId,
@@ -628,9 +639,8 @@ export async function reloadAgent(
       });
     }
 
-    // 7. Paste reload task if provided
-    const taskText = opts?.task ?? reloadTask;
-    if (taskText) {
+    // 7. Paste reload task if provided (skip if already passed as inline CLI prompt)
+    if (taskText && !inlineTask) {
       await sleep(POST_RENAME_TASK_DELAY_MS);
       await ctx.proxyDispatch(proxyId, {
         action: 'paste',
