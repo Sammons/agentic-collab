@@ -25,6 +25,11 @@ export class ClaudeAdapter implements EngineAdapter {
       parts.push('--effort', opts.thinking);
     }
 
+    // Pre-set session ID so we can resume later without parsing output
+    if (opts.sessionId) {
+      parts.push('--session-id', opts.sessionId);
+    }
+
     if (opts.appendSystemPrompt) {
       parts.push('--append-system-prompt', shellQuote(opts.appendSystemPrompt));
     }
@@ -131,6 +136,11 @@ export class ClaudeAdapter implements EngineAdapter {
 
   interruptKeys(): string[] {
     return ['Escape', 'Escape', 'Escape'];
+  }
+
+  extractSessionId(_paneOutput: string): string | null {
+    // Claude uses --session-id at spawn time, so we don't need to parse output.
+    return null;
   }
 }
 
