@@ -369,6 +369,10 @@
     justify-content: center;
     transition: all 0.15s;
     padding: 0;
+    touch-action: none;
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
   }
   .voice-btn:hover { border-color: var(--accent); color: var(--accent); }
   .voice-btn.recording {
@@ -2487,20 +2491,24 @@
       }
     });
 
-    // Push-to-talk: hold button
-    btn.addEventListener('pointerdown', (e) => {
+    // Push-to-talk: hold button (pointer + touch events for mobile compatibility)
+    function pttDown(e) {
       e.preventDefault();
       if (voiceState.mode !== 'ptt') return;
       startVoice();
-    });
-    btn.addEventListener('pointerup', () => {
+    }
+    function pttUp() {
       if (voiceState.mode !== 'ptt' || !voiceState.recording) return;
       commitAndStopPtt();
-    });
-    btn.addEventListener('pointerleave', () => {
-      if (voiceState.mode !== 'ptt' || !voiceState.recording) return;
-      commitAndStopPtt();
-    });
+    }
+    btn.addEventListener('pointerdown', pttDown);
+    btn.addEventListener('pointerup', pttUp);
+    btn.addEventListener('pointerleave', pttUp);
+    btn.addEventListener('touchstart', pttDown, { passive: false });
+    btn.addEventListener('touchend', pttUp);
+    btn.addEventListener('touchcancel', pttUp);
+    // Prevent context menu on long press
+    btn.addEventListener('contextmenu', (e) => e.preventDefault());
   }
 
   function commitAndStopPtt() {
