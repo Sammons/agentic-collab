@@ -686,6 +686,8 @@ route('POST', '/api/agents/:name/reload', async (req, res, match, ctx) => {
 
   try {
     const lifecycleCtx = makeLifecycleCtx(ctx);
+    // Re-sync persona from disk to pick up config changes (engine, model, etc.)
+    syncSinglePersona(ctx.db, name);
     const result = await reloadAgent(lifecycleCtx, name, {
       immediate: body.immediate as boolean | undefined,
       task: body.task as string | undefined,

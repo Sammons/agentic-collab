@@ -744,4 +744,28 @@ describe('API Routes — Personas', () => {
     assert.equal(status, 400);
     assert.ok((data as { error: string }).error.includes('engine and cwd are required'));
   });
+
+  it('POST /api/agents/:name/reload syncs persona from disk before reloading', async () => {
+    // Create agent via persona with engine: claude
+    const initial = '---\nengine: claude\ncwd: /tmp/sync-test\n---\n# Sync Agent\nOriginal.';
+    await api('POST', '/api/personas', { name: 'sync-test-agent', content: initial });
+
+    // Verify agent was created with engine=claude
+    const { data: before } = await api('GET', '/api/agents/sync-test-agent');
+    assert.equal((before as Record<string, unknown>).engine, 'claude');
+
+    // Update persona file on disk to engine: codex
+    writeFileSync(
+      join(personasDir, 'sync-test-agent.md'),
+      '---\nengine: codex\ncwd: /tmp/sync-test\n---\n# Sync Agent\nUpdated to codex.',
+    );
+
+    // Reload — this should sync persona from disk first, updating engine in DB
+    // Agent is in void state so reload will fail, but syncSinglePersona runs before the lifecycle call
+    await api('POST', '/api/agents/sync-test-agent/reload', {});
+
+    // Verify engine was updated in DB regardless of reload outcome
+    const { data: after } = await api('GET', '/api/agents/sync-test-agent');
+    assert.equal((after as Record<string, unknown>).engine, 'codex');
+  });
 });
