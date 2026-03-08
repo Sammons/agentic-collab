@@ -487,6 +487,44 @@ describe('HealthMonitor', () => {
     drainDispatcher.stop();
   });
 
+  it('detects idle on first poll after self-heal (uninitialized activity)', async () => {
+    // Simulate an agent that was self-healed from 'failed' back to 'active'.
+    // The health monitor has no prior tmux activity for this agent.
+    db.createAgent({ name: 'health-selfheal', engine: 'codex', cwd: '/tmp', proxyId: 'p1' });
+    const a = db.getAgent('health-selfheal')!;
+    db.updateAgentState('health-selfheal', 'active', a.version, {
+      tmuxSession: 'agent-health-selfheal',
+      proxyId: 'p1',
+    });
+
+    // Pane shows Codex idle prompt. pane_activity returns a real timestamp
+    // (simulating first contact after recovery).
+    let activityTs = 1700000000;
+    const healDispatch = async (_proxyId: string, command: ProxyCommand): Promise<ProxyResponse> => {
+      if (command.action === 'capture') return { ok: true, data: 'some output\n› ' };
+      if (command.action === 'pane_activity') return { ok: true, data: activityTs };
+      return { ok: true };
+    };
+
+    const healLocks = new LockManager(db.rawDb);
+    const healDispatcher = new MessageDispatcher({
+      db, locks: healLocks, proxyDispatch: healDispatch, orchestratorHost: 'http://localhost:3000',
+    });
+    const healMonitor = new HealthMonitor({
+      db, locks: healLocks, proxyDispatch: healDispatch,
+      orchestratorHost: 'http://localhost:3000',
+      messageDispatcher: healDispatcher, pollIntervalMs: 100,
+    });
+
+    // First poll after self-heal — should detect idle despite no prior activity data
+    await healMonitor.pollAll();
+
+    const agent = db.getAgent('health-selfheal');
+    assert.equal(agent?.state, 'idle', 'should transition to idle on first poll after self-heal');
+
+    healMonitor.stop();
+  });
+
   it('stop() clears drain timers', async () => {
     db.createAgent({ name: 'health-drain-stop', engine: 'claude', cwd: '/tmp', proxyId: 'p1' });
     const a = db.getAgent('health-drain-stop')!;
