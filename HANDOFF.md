@@ -195,7 +195,7 @@ All transitions use **3-phase locking** with **optimistic concurrency** (version
 
 ### Message Delivery
 
-Messages are enqueued in `pending_messages` table. The health monitor delivers one message per poll cycle when an agent is idle. Messages are pasted into the tmux session via the proxy. Format: `[from: <source>, reply with /collaboration reply]: '<message>'`.
+Messages are enqueued in `pending_messages` table. The health monitor delivers one message per poll cycle when an agent is idle. Messages are pasted into the tmux session via the proxy. Format: `[from: <source>, reply with collab reply]: '<message>'`.
 
 ### Crash Recovery (`network.ts`)
 

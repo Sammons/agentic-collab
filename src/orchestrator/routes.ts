@@ -248,7 +248,7 @@ route('POST', '/api/agents/send', async (req, res, _match, ctx) => {
 
   // Format envelope
   const topic = body.re ? ` (re: ${body.re})` : '';
-  const envelope = `[from: ${body.from}, reply with /collaboration reply]:${topic} '${sanitized}'`;
+  const envelope = `[from: ${body.from}, reply with collab reply]:${topic} '${sanitized}'`;
 
   // Enqueue for async delivery
   const pending = ctx.db.enqueueMessage({
@@ -287,7 +287,7 @@ route('POST', '/api/dashboard/send', async (req, res, _match, ctx) => {
 
   // Format envelope
   const topic = body.topic ? ` (re: ${body.topic})` : '';
-  const envelope = `[from: dashboard, reply with /collaboration reply]:${topic} '${sanitized}'`;
+  const envelope = `[from: dashboard, reply with collab reply]:${topic} '${sanitized}'`;
 
   // Store in dashboard messages
   const msg = ctx.db.addDashboardMessage(body.agent as string, 'to_agent', sanitized, body.topic as string | undefined);
@@ -389,7 +389,7 @@ route('POST', '/api/dashboard/upload', async (req, res, _match, ctx) => {
 
   // Enqueue agent notification through existing pipeline
   const agentMessage = `I uploaded ${writtenPath}`;
-  const envelope = `[from: dashboard, reply with /collaboration reply]: '${sanitizeMessage(agentMessage)}'`;
+  const envelope = `[from: dashboard, reply with collab reply]: '${sanitizeMessage(agentMessage)}'`;
   const displayMessage = `Uploaded ${filename} (${formatBytes(fileSize)})`;
 
   const msg = ctx.db.addDashboardMessage(agentName, 'to_agent', displayMessage, 'file-upload');
@@ -483,7 +483,7 @@ route('POST', '/api/dashboard/messages/:id/withdraw', async (_req, res, match, c
   const withdrawalText = `[system] the user withdrew this message: "${msg.message}"`;
   const withdrawMsg = ctx.db.addDashboardMessage(msg.agent, 'to_agent', withdrawalText);
 
-  const envelope = `[from: dashboard, reply with /collaboration reply]: '${sanitizeMessage(withdrawalText)}'`;
+  const envelope = `[from: dashboard, reply with collab reply]: '${sanitizeMessage(withdrawalText)}'`;
   const pending = ctx.db.enqueueMessage({
     sourceAgent: null,
     targetAgent: msg.agent,
