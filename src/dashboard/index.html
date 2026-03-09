@@ -1455,7 +1455,7 @@
         <div class="agent-actions">
           ${activeIdle ? `
             <button data-action="interrupt">Interrupt</button>
-            <button data-action="compact">Compact</button>
+            ${agent.engine !== 'codex' ? '<button data-action="compact">Compact</button>' : ''}
             <button data-action="suspend">Suspend</button>
             <button class="danger" data-action="kill">Kill</button>
           ` : ''}
