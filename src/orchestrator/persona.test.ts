@@ -212,6 +212,22 @@ describe('Persona', () => {
       assert.equal(frontmatter['proxy_host'], 'myhost');
       assert.equal(frontmatter['permissions'], 'skip');
     });
+
+    it('parses lifecycle hook fields (spawn, resume, compact)', () => {
+      const raw = '---\nengine: codex\ncwd: /tmp\nspawn: codex --model o4-mini -a never -s danger-full-access\nresume: codex resume --last\ncompact: echo no-op\n---\nBody';
+      const { frontmatter } = parseFrontmatter(raw);
+      assert.equal(frontmatter['spawn'], 'codex --model o4-mini -a never -s danger-full-access');
+      assert.equal(frontmatter['resume'], 'codex resume --last');
+      assert.equal(frontmatter['compact'], 'echo no-op');
+    });
+
+    it('returns undefined for missing hook fields', () => {
+      const raw = '---\nengine: claude\ncwd: /tmp\n---\nBody';
+      const { frontmatter } = parseFrontmatter(raw);
+      assert.equal(frontmatter['spawn'], undefined);
+      assert.equal(frontmatter['resume'], undefined);
+      assert.equal(frontmatter['compact'], undefined);
+    });
   });
 
   describe('scanPersonas', () => {
@@ -298,6 +314,33 @@ describe('Persona', () => {
       assert.equal(updated.proxyId, 'proxy-1'); // runtime state preserved
     });
 
+    it('syncs lifecycle hook fields to database', () => {
+      const personasDir = join(syncDir, 'personas');
+      writeFileSync(join(personasDir, 'gamma.md'), '---\nengine: claude\ncwd: /gamma\nspawn: claude --model sonnet\nresume: claude --resume $SESSION_ID\ncompact: /compact\n---\n# Gamma');
+
+      syncPersonasToDb(db, personasDir);
+
+      const gamma = db.getAgent('gamma');
+      assert.ok(gamma);
+      assert.equal(gamma.hookSpawn, 'claude --model sonnet');
+      assert.equal(gamma.hookResume, 'claude --resume $SESSION_ID');
+      assert.equal(gamma.hookCompact, '/compact');
+    });
+
+    it('clears hook fields when removed from frontmatter', () => {
+      const personasDir = join(syncDir, 'personas');
+      // Re-write gamma without hooks
+      writeFileSync(join(personasDir, 'gamma.md'), '---\nengine: claude\ncwd: /gamma\n---\n# Gamma no hooks');
+
+      syncPersonasToDb(db, personasDir);
+
+      const gamma = db.getAgent('gamma');
+      assert.ok(gamma);
+      assert.equal(gamma.hookSpawn, null);
+      assert.equal(gamma.hookResume, null);
+      assert.equal(gamma.hookCompact, null);
+    });
+
     it('skips persona files missing required fields', () => {
       const personasDir = join(syncDir, 'personas');
       writeFileSync(join(personasDir, 'invalid.md'), '---\nmodel: opus\n---\n# No engine or cwd');
@@ -382,6 +425,18 @@ describe('Persona', () => {
         () => createPersonaAndAgent(createDb, 'bad-agent', '---\nengine: claude\n---\nBody', personasDir),
         /engine and cwd are required/,
       );
+    });
+
+    it('persists lifecycle hooks from frontmatter', () => {
+      const personasDir = join(createDir, 'personas');
+      const content = '---\nengine: codex\ncwd: /project\nspawn: codex --model o4-mini -a never\ncompact: echo noop\n---\n# Hooked Agent';
+      createPersonaAndAgent(createDb, 'hooked-agent', content, personasDir);
+
+      const agent = createDb.getAgent('hooked-agent');
+      assert.ok(agent);
+      assert.equal(agent.hookSpawn, 'codex --model o4-mini -a never');
+      assert.equal(agent.hookResume, null);
+      assert.equal(agent.hookCompact, 'echo noop');
     });
 
     it('throws for invalid engine', () => {
