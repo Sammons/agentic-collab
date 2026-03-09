@@ -188,12 +188,14 @@ cmd('create', 'create <name> <engine> <cwd>', 'Create a new agent', async (args)
   console.log(`created ${data.name} (${data.engine})`);
 });
 
-cmd('suspend', 'suspend <name>', 'Suspend an agent', async (args) => {
+cmd('exit', 'exit <name>', 'Exit an agent (suspend)', async (args) => {
   const name = args[0];
-  if (!name) { console.error('usage: collab suspend <name>'); process.exit(1); }
-  await api('POST', `/api/agents/${encodeURIComponent(name)}/suspend`);
-  console.log(`${name} suspended`);
+  if (!name) { console.error('usage: collab exit <name>'); process.exit(1); }
+  await api('POST', `/api/agents/${encodeURIComponent(name)}/exit`);
+  console.log(`${name} exited`);
 });
+// Hidden backward-compat alias
+COMMANDS['suspend'] = { ...COMMANDS['exit'], hidden: true };
 
 cmd('resume', 'resume <name> [task...]', 'Resume a suspended agent', async (args) => {
   const name = args[0];
@@ -287,8 +289,9 @@ function showHelp() {
   console.log('collab — CLI for agentic-collab orchestrator\n');
   console.log('Usage: collab <command> [args...]\n');
   console.log('Commands:');
-  const maxUsage = Math.max(...Object.values(COMMANDS).map(c => c.usage.length));
-  for (const [, c] of Object.entries(COMMANDS)) {
+  const visible = Object.values(COMMANDS).filter(c => !c.hidden);
+  const maxUsage = Math.max(...visible.map(c => c.usage.length));
+  for (const c of visible) {
     console.log(`  ${c.usage.padEnd(maxUsage + 2)}  ${c.desc}`);
   }
   console.log('\nEnvironment:');

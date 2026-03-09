@@ -270,7 +270,7 @@ Spawn a new agent:
   collab spawn <name> [task...]
 
 Agent lifecycle:
-  collab suspend <name>
+  collab exit <name>
   collab resume <name> [task...]
   collab interrupt <name>
   collab compact <name>
