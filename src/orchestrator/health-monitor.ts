@@ -1,11 +1,17 @@
 /**
  * Health monitor: polls agents every 30s.
  * Priority chain: reload > compact > suspend > ping.
- * Uses engine adapters for idle-state and context-% detection.
+ *
+ * Idle detection uses screen-diff: captures the last N lines of tmux pane
+ * output each poll cycle and compares to the previous capture. If the output
+ * is unchanged across consecutive polls, the agent is considered idle.
+ * This is engine-agnostic — no regex prompt detection needed.
+ *
+ * Context % parsing still uses engine adapters (each CLI reports usage differently).
  *
  * Message delivery is handled by MessageDispatcher (event-driven).
  * The health monitor calls dispatcher.deliverIfReady() as a fallback
- * during each poll cycle for agents that are waiting_for_input.
+ * during each poll cycle for agents detected as idle via screen-diff.
  */
 
 import type { Database } from './database.ts';
@@ -44,16 +50,23 @@ export class HealthMonitor {
   /** Consecutive health check failure count per agent. */
   private readonly consecutiveFailures = new Map<string, number>();
   private static readonly FAILURE_THRESHOLD = 3; // failures before marking agent as failed
-  /** Last known tmux pane activity timestamp (Unix seconds) per agent. */
-  private readonly lastTmuxActivity = new Map<string, number>();
-  /** Consecutive 'unknown' idle state polls per agent (for auto-nudge). */
-  private readonly consecutiveUnknowns = new Map<string, number>();
   /**
-   * After this many consecutive 'unknown' fast-polls (5s each), send a bare
-   * Enter keystroke to unstick agents that may be waiting for input but whose
-   * TUI state isn't recognized by the idle detector.
+   * Last captured pane snapshot (ANSI-stripped, last N lines) per agent.
+   * Used for screen-diff idle detection.
    */
-  private static readonly UNKNOWN_NUDGE_THRESHOLD = 3;
+  private readonly lastPaneSnapshot = new Map<string, string>();
+  /**
+   * Count of consecutive polls where pane output was unchanged.
+   * When >= IDLE_THRESHOLD, the agent is considered idle.
+   */
+  private readonly unchangedCount = new Map<string, number>();
+  /**
+   * Number of consecutive unchanged polls required before marking idle.
+   * With 5s fast-poll, 1 consecutive (after baseline) = 10s to detect idle.
+   */
+  static readonly IDLE_THRESHOLD = 1;
+  /** Number of trailing pane lines to capture for screen-diff. */
+  static readonly SNAPSHOT_LINES = 5;
   private static readonly COMPACT_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes between compacts
   private readonly db: Database;
   private readonly locks: LockManager;
@@ -82,6 +95,56 @@ export class HealthMonitor {
     this.autoCompactThreshold = opts.autoCompactThreshold ?? DEFAULT_COMPACT_THRESHOLD;
     this.autoReloadThreshold = opts.autoReloadThreshold ?? DEFAULT_RELOAD_THRESHOLD;
     this.idleSuspendMs = opts.idleSuspendMs ?? DEFAULT_IDLE_SUSPEND_MS;
+  }
+
+  /**
+   * Strip ANSI escape sequences from a string.
+   * Handles CSI sequences (colors, cursor), OSC sequences (hyperlinks, titles),
+   * and single-character escapes.
+   */
+  static stripAnsi(text: string): string {
+    // CSI: \x1b[ ... final byte (letter)
+    // OSC: \x1b] ... ST (\x1b\\ or \x07)
+    // Single-char: \x1b followed by a non-[ non-] byte
+    return text.replace(/\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[^[\]]/g, '');
+  }
+
+  /**
+   * Take a snapshot of the last N lines of pane output for screen-diff.
+   * Strips ANSI codes and trailing whitespace for stable comparison.
+   */
+  static takeSnapshot(paneOutput: string, lines: number = HealthMonitor.SNAPSHOT_LINES): string {
+    const stripped = HealthMonitor.stripAnsi(paneOutput);
+    const allLines = stripped.split('\n');
+    return allLines
+      .slice(-lines)
+      .map(l => l.trimEnd())
+      .join('\n');
+  }
+
+  /**
+   * Screen-diff idle detection: compare current pane snapshot to previous.
+   * Returns true if the agent appears idle (screen unchanged).
+   */
+  private checkScreenDiff(agentName: string, paneOutput: string): boolean {
+    const snapshot = HealthMonitor.takeSnapshot(paneOutput);
+    const prev = this.lastPaneSnapshot.get(agentName);
+    this.lastPaneSnapshot.set(agentName, snapshot);
+
+    if (prev === undefined) {
+      // First capture — no comparison possible, assume active
+      this.unchangedCount.set(agentName, 0);
+      return false;
+    }
+
+    if (snapshot === prev) {
+      const count = (this.unchangedCount.get(agentName) ?? 0) + 1;
+      this.unchangedCount.set(agentName, count);
+      return count >= HealthMonitor.IDLE_THRESHOLD;
+    } else {
+      this.unchangedCount.set(agentName, 0);
+      return false;
+    }
   }
 
   start(): void {
@@ -136,9 +199,8 @@ export class HealthMonitor {
 
   /**
    * Fast-poll only active agents (every 5s) for near real-time state detection.
-   * Only captures pane output and handles idle transitions — skips the heavy
-   * operations (context thresholds, reload, compact, suspend timeout) which
-   * are handled by the full 30s pollAll.
+   * Uses screen-diff: captures last N lines of pane, compares to previous capture.
+   * Unchanged across IDLE_THRESHOLD consecutive polls → idle.
    */
   async pollActiveAgents(): Promise<void> {
     const agents = this.db.listAgents().filter(
@@ -148,17 +210,10 @@ export class HealthMonitor {
       try {
         const paneOutput = await this.capturePaneOutput(agent);
         if (paneOutput === null) continue;
-        const adapter = getAdapter(agent.engine);
-        const idleState = adapter.detectIdleState(paneOutput);
-        await this.handleIdleTransitions(agent, idleState);
-        if (idleState === 'waiting_for_input') {
-          this.consecutiveUnknowns.delete(agent.name);
+        const isIdle = this.checkScreenDiff(agent.name, paneOutput);
+        this.handleIdleTransitions(agent, isIdle);
+        if (isIdle) {
           await this.messageDispatcher.deliverIfReady(agent.name);
-        } else if (idleState === 'unknown') {
-          await this.handleUnknownNudge(agent);
-        } else {
-          // running_tool — agent is actively working, reset counter
-          this.consecutiveUnknowns.delete(agent.name);
         }
       } catch (err) {
         console.error(`[health] Fast poll error for ${agent.name}:`, err);
@@ -202,17 +257,17 @@ export class HealthMonitor {
     const adapter = getAdapter(agent.engine);
     if (await this.handleContextThresholds(agent, adapter, paneOutput)) return;
 
-    const idleState = adapter.detectIdleState(paneOutput);
-    await this.handleIdleTransitions(agent, idleState);
+    const isIdle = this.checkScreenDiff(agent.name, paneOutput);
+    this.handleIdleTransitions(agent, isIdle);
 
-    if (idleState === 'waiting_for_input') {
+    if (isIdle) {
       // Fallback delivery — primary delivery is event-driven via MessageDispatcher
       await this.messageDispatcher.deliverIfReady(agent.name);
     }
 
     this.checkIdleSuspendTimeout(agent.name);
 
-    if (idleState === 'waiting_for_input') {
+    if (isIdle) {
       await this.handleQueuedReload(agent.name);
     }
 
@@ -310,99 +365,32 @@ export class HealthMonitor {
   }
 
   /**
-   * Fetch tmux pane activity timestamp for an agent.
-   * Returns Unix seconds, or 0 if unavailable.
-   */
-  private async fetchPaneActivity(agent: AgentRecord): Promise<number> {
-    try {
-      const result = await this.proxyDispatch(agent.proxyId!, {
-        action: 'pane_activity',
-        sessionName: sessionName(agent),
-      });
-      return result.ok ? (result.data as number) : 0;
-    } catch {
-      return 0;
-    }
-  }
-
-  /**
-   * Hybrid idle detection: tmux activity timestamp (primary) + content regex (confirmation).
+   * Screen-diff idle transitions.
    *
-   * - active → idle: requires BOTH tmux activity unchanged AND content shows waiting_for_input
-   * - idle → active: triggers if EITHER tmux activity changed OR content shows not waiting_for_input
+   * - active → idle: screen unchanged for IDLE_THRESHOLD consecutive polls
+   * - idle → active: screen changed (any content diff)
    *
-   * This eliminates false idle transitions from regex-only detection (e.g. during
-   * compaction, elicitation dialogs, or CLI version changes).
+   * No regex, no engine-specific patterns, no tmux activity timestamps.
    */
-  private async handleIdleTransitions(agent: AgentRecord, idleState: string): Promise<void> {
-    const tmuxActivity = await this.fetchPaneActivity(agent);
-    const prevActivity = this.lastTmuxActivity.get(agent.name) ?? 0;
-    // When prevActivity is 0 (uninitialized — e.g. after self-heal from failed state),
-    // don't treat the first real timestamp as a "change". This allows idle detection
-    // on the first poll after recovery instead of requiring a wasted cycle.
-    const tmuxChanged = prevActivity > 0 && tmuxActivity > 0 && tmuxActivity !== prevActivity;
-
-    // Always track the latest tmux activity
-    if (tmuxActivity > 0) {
-      this.lastTmuxActivity.set(agent.name, tmuxActivity);
-    }
-
-    if (agent.state === 'active') {
-      // active → idle: require BOTH signals to agree
-      // tmux must show no new activity AND content must show prompt
-      if (!tmuxChanged && idleState === 'waiting_for_input') {
-        const current = this.db.getAgent(agent.name);
-        if (current && current.state === 'active') {
-          this.db.updateAgentState(agent.name, 'idle', current.version, {
-            lastActivity: new Date().toISOString(),
-          });
-          this.db.logEvent(agent.name, 'idle_detected');
-          this.onAgentUpdate(agent.name);
-        }
-      }
-    } else if (agent.state === 'idle') {
-      // idle → active: EITHER signal is enough
-      // tmux activity changed OR content no longer shows prompt
-      if (tmuxChanged || idleState !== 'waiting_for_input') {
-        const current = this.db.getAgent(agent.name);
-        if (current && current.state === 'idle') {
-          this.db.updateAgentState(agent.name, 'active', current.version, {
-            lastActivity: new Date().toISOString(),
-          });
-          this.db.logEvent(agent.name, 'activity_detected');
-          this.onAgentUpdate(agent.name);
-        }
-      }
-    }
-  }
-
-  /**
-   * Send a bare Enter keystroke to nudge an agent stuck in 'unknown' idle state.
-   * Codex sometimes finishes a response but the TUI prompt hasn't re-rendered,
-   * leaving the agent in limbo where neither 'Working' nor the input prompt is
-   * visible. A bare Enter is safe: if the agent is truly idle, it submits an
-   * empty line (which engines ignore); if it's mid-response, Enter is harmless.
-   */
-  private async handleUnknownNudge(agent: AgentRecord): Promise<void> {
-    const count = (this.consecutiveUnknowns.get(agent.name) ?? 0) + 1;
-    this.consecutiveUnknowns.set(agent.name, count);
-
-    if (count >= HealthMonitor.UNKNOWN_NUDGE_THRESHOLD) {
-      console.log(`[health] ${agent.name} stuck in 'unknown' for ${count} polls — sending Enter nudge`);
-      try {
-        await this.proxyDispatch(agent.proxyId!, {
-          action: 'send_keys',
-          sessionName: sessionName(agent),
-          keys: 'Enter',
+  private handleIdleTransitions(agent: AgentRecord, isIdle: boolean): void {
+    if (agent.state === 'active' && isIdle) {
+      const current = this.db.getAgent(agent.name);
+      if (current && current.state === 'active') {
+        this.db.updateAgentState(agent.name, 'idle', current.version, {
+          lastActivity: new Date().toISOString(),
         });
-        this.db.logEvent(agent.name, 'unknown_nudge', undefined, {
-          consecutiveUnknowns: count,
-        });
-      } catch (err) {
-        console.error(`[health] Enter nudge failed for ${agent.name}:`, err);
+        this.db.logEvent(agent.name, 'idle_detected');
+        this.onAgentUpdate(agent.name);
       }
-      // Reset so we don't spam Enter every 5s — wait for another threshold
-      this.consecutiveUnknowns.delete(agent.name);
+    } else if (agent.state === 'idle' && !isIdle) {
+      const current = this.db.getAgent(agent.name);
+      if (current && current.state === 'idle') {
+        this.db.updateAgentState(agent.name, 'active', current.version, {
+          lastActivity: new Date().toISOString(),
+        });
+        this.db.logEvent(agent.name, 'activity_detected');
+        this.onAgentUpdate(agent.name);
+      }
     }
   }
 
