@@ -488,4 +488,116 @@ describe('Lifecycle', () => {
       assert.ok(proxyCommands.some(c => c.action === 'kill_session'));
     });
   });
+
+  describe('frontmatter hooks', () => {
+    it('spawnAgent uses hookSpawn instead of adapter command', async () => {
+      db.createAgent({ name: 'hook-spawn', engine: 'claude', cwd: '/tmp', proxyId: 'p1', hookSpawn: 'my-custom-spawn-cmd --flag' });
+      proxyCommands = [];
+
+      await spawnAgent(ctx, {
+        name: 'hook-spawn',
+        engine: 'claude',
+        cwd: '/tmp',
+        proxyId: 'p1',
+      });
+
+      const paste = proxyCommands.find(c => c.action === 'paste') as Extract<ProxyCommand, { action: 'paste' }>;
+      assert.ok(paste, 'should have paste command');
+      assert.ok(paste.text.includes('my-custom-spawn-cmd --flag'), 'should use hookSpawn');
+      assert.ok(!paste.text.includes('claude'), 'should not contain adapter command');
+      assert.ok(paste.text.includes('COLLAB_AGENT=hook-spawn'), 'should have COLLAB_AGENT');
+      assert.ok(paste.text.includes('COLLAB_PERSONA_FILE='), 'should export COLLAB_PERSONA_FILE');
+    });
+
+    it('spawnAgent falls back to adapter when hookSpawn is null', async () => {
+      db.createAgent({ name: 'hook-spawn-null', engine: 'claude', cwd: '/tmp', proxyId: 'p1' });
+      proxyCommands = [];
+
+      await spawnAgent(ctx, {
+        name: 'hook-spawn-null',
+        engine: 'claude',
+        cwd: '/tmp',
+        proxyId: 'p1',
+      });
+
+      const paste = proxyCommands.find(c => c.action === 'paste') as Extract<ProxyCommand, { action: 'paste' }>;
+      assert.ok(paste, 'should have paste command');
+      assert.ok(paste.text.includes('claude'), 'should use adapter command');
+      assert.ok(!paste.text.includes('COLLAB_PERSONA_FILE='), 'should not export COLLAB_PERSONA_FILE');
+    });
+
+    it('resumeAgent uses hookResume for existing session', async () => {
+      db.createAgent({ name: 'hook-resume', engine: 'claude', cwd: '/tmp', proxyId: 'p1', hookResume: 'my-resume-cmd --session' });
+      const a = db.getAgent('hook-resume')!;
+      db.updateAgentState('hook-resume', 'active', a.version, {
+        tmuxSession: 'agent-hook-resume',
+        proxyId: 'p1',
+        currentSessionId: 'test-session-123',
+      });
+      // Suspend it first
+      const b = db.getAgent('hook-resume')!;
+      db.updateAgentState('hook-resume', 'suspended', b.version, {});
+
+      proxyCommands = [];
+      await resumeAgent(ctx, 'hook-resume');
+
+      const paste = proxyCommands.find(c => c.action === 'paste') as Extract<ProxyCommand, { action: 'paste' }>;
+      assert.ok(paste, 'should have paste command');
+      assert.ok(paste.text.includes('my-resume-cmd --session'), 'should use hookResume');
+      assert.ok(!paste.text.includes('--resume'), 'should not contain adapter resume flag');
+      assert.ok(paste.text.includes('COLLAB_PERSONA_FILE='), 'should export COLLAB_PERSONA_FILE');
+    });
+
+    it('resumeAgent uses hookSpawn when no session exists', async () => {
+      db.createAgent({ name: 'hook-resume-nosess', engine: 'claude', cwd: '/tmp', proxyId: 'p1', hookSpawn: 'my-spawn-for-resume', hookResume: 'my-resume-cmd' });
+      const a = db.getAgent('hook-resume-nosess')!;
+      db.updateAgentState('hook-resume-nosess', 'suspended', a.version, {
+        tmuxSession: 'agent-hook-resume-nosess',
+        proxyId: 'p1',
+        currentSessionId: null,
+      });
+
+      proxyCommands = [];
+      await resumeAgent(ctx, 'hook-resume-nosess');
+
+      const paste = proxyCommands.find(c => c.action === 'paste') as Extract<ProxyCommand, { action: 'paste' }>;
+      assert.ok(paste, 'should have paste command');
+      assert.ok(paste.text.includes('my-spawn-for-resume'), 'should use hookSpawn when no session');
+      assert.ok(!paste.text.includes('my-resume-cmd'), 'should not use hookResume');
+    });
+
+    it('compactAgent uses hookCompact instead of adapter', async () => {
+      db.createAgent({ name: 'hook-compact', engine: 'claude', cwd: '/tmp', proxyId: 'p1', hookCompact: 'my-compact-cmd' });
+      const a = db.getAgent('hook-compact')!;
+      db.updateAgentState('hook-compact', 'active', a.version, {
+        tmuxSession: 'agent-hook-compact',
+        proxyId: 'p1',
+      });
+
+      proxyCommands = [];
+      await compactAgent(ctx, 'hook-compact');
+
+      const paste = proxyCommands.find(c => c.action === 'paste') as Extract<ProxyCommand, { action: 'paste' }>;
+      assert.ok(paste, 'should have paste command');
+      assert.ok(paste.text.includes('my-compact-cmd'), 'should use hookCompact');
+      assert.ok(paste.text.includes('COLLAB_PERSONA_FILE='), 'should export COLLAB_PERSONA_FILE');
+    });
+
+    it('compactAgent falls back to adapter compactKeys when hookCompact is null', async () => {
+      db.createAgent({ name: 'hook-compact-null', engine: 'claude', cwd: '/tmp', proxyId: 'p1' });
+      const a = db.getAgent('hook-compact-null')!;
+      db.updateAgentState('hook-compact-null', 'active', a.version, {
+        tmuxSession: 'agent-hook-compact-null',
+        proxyId: 'p1',
+      });
+
+      proxyCommands = [];
+      await compactAgent(ctx, 'hook-compact-null');
+
+      // Claude adapter uses compactKeys (paste /compact), not hookCompact
+      const paste = proxyCommands.find(c => c.action === 'paste') as Extract<ProxyCommand, { action: 'paste' }>;
+      assert.ok(paste, 'should fall back to adapter compact');
+      assert.ok(!paste.text.includes('COLLAB_PERSONA_FILE='), 'should not export COLLAB_PERSONA_FILE');
+    });
+  });
 });
