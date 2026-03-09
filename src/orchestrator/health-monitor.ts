@@ -46,6 +46,14 @@ export class HealthMonitor {
   private static readonly FAILURE_THRESHOLD = 3; // failures before marking agent as failed
   /** Last known tmux pane activity timestamp (Unix seconds) per agent. */
   private readonly lastTmuxActivity = new Map<string, number>();
+  /** Consecutive 'unknown' idle state polls per agent (for auto-nudge). */
+  private readonly consecutiveUnknowns = new Map<string, number>();
+  /**
+   * After this many consecutive 'unknown' fast-polls (5s each), send a bare
+   * Enter keystroke to unstick agents that may be waiting for input but whose
+   * TUI state isn't recognized by the idle detector.
+   */
+  private static readonly UNKNOWN_NUDGE_THRESHOLD = 3;
   private static readonly COMPACT_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes between compacts
   private readonly db: Database;
   private readonly locks: LockManager;
@@ -144,7 +152,13 @@ export class HealthMonitor {
         const idleState = adapter.detectIdleState(paneOutput);
         await this.handleIdleTransitions(agent, idleState);
         if (idleState === 'waiting_for_input') {
+          this.consecutiveUnknowns.delete(agent.name);
           await this.messageDispatcher.deliverIfReady(agent.name);
+        } else if (idleState === 'unknown') {
+          await this.handleUnknownNudge(agent);
+        } else {
+          // running_tool — agent is actively working, reset counter
+          this.consecutiveUnknowns.delete(agent.name);
         }
       } catch (err) {
         console.error(`[health] Fast poll error for ${agent.name}:`, err);
@@ -359,6 +373,36 @@ export class HealthMonitor {
           this.onAgentUpdate(agent.name);
         }
       }
+    }
+  }
+
+  /**
+   * Send a bare Enter keystroke to nudge an agent stuck in 'unknown' idle state.
+   * Codex sometimes finishes a response but the TUI prompt hasn't re-rendered,
+   * leaving the agent in limbo where neither 'Working' nor the input prompt is
+   * visible. A bare Enter is safe: if the agent is truly idle, it submits an
+   * empty line (which engines ignore); if it's mid-response, Enter is harmless.
+   */
+  private async handleUnknownNudge(agent: AgentRecord): Promise<void> {
+    const count = (this.consecutiveUnknowns.get(agent.name) ?? 0) + 1;
+    this.consecutiveUnknowns.set(agent.name, count);
+
+    if (count >= HealthMonitor.UNKNOWN_NUDGE_THRESHOLD) {
+      console.log(`[health] ${agent.name} stuck in 'unknown' for ${count} polls — sending Enter nudge`);
+      try {
+        await this.proxyDispatch(agent.proxyId!, {
+          action: 'send_keys',
+          sessionName: sessionName(agent),
+          keys: 'Enter',
+        });
+        this.db.logEvent(agent.name, 'unknown_nudge', undefined, {
+          consecutiveUnknowns: count,
+        });
+      } catch (err) {
+        console.error(`[health] Enter nudge failed for ${agent.name}:`, err);
+      }
+      // Reset so we don't spam Enter every 5s — wait for another threshold
+      this.consecutiveUnknowns.delete(agent.name);
     }
   }
 
