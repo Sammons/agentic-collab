@@ -792,7 +792,8 @@ export async function compactAgent(
 
     const adapter = getAdapter(agent.engine);
 
-    // Send compact command — prefer keystroke delivery for TUI-based engines
+    // Send compact command — prefer keystroke delivery for TUI-based engines.
+    // If the adapter supports neither compactKeys nor buildCompactCommand, skip.
     if (adapter.compactKeys) {
       for (const key of adapter.compactKeys()) {
         await ctx.proxyDispatch(proxyId, {
@@ -802,10 +803,16 @@ export async function compactAgent(
         });
       }
     } else {
+      const compactCmd = adapter.buildCompactCommand();
+      if (!compactCmd) {
+        console.log(`[lifecycle] ${name}: engine "${agent.engine}" does not support compaction — skipping`);
+        ctx.db.logEvent(name, 'compact_skipped', undefined, { reason: 'unsupported_engine' });
+        return;
+      }
       await ctx.proxyDispatch(proxyId, {
         action: 'paste',
         sessionName: sessionName(agent),
-        text: adapter.buildCompactCommand(),
+        text: compactCmd,
         pressEnter: true,
       });
     }

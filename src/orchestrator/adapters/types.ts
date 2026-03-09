@@ -74,8 +74,8 @@ export interface EngineAdapter {
   /** Build the engine-specific exit command */
   buildExitCommand(): string;
 
-  /** Build the engine-specific compact command */
-  buildCompactCommand(): string;
+  /** Build the engine-specific compact command. Returns null if the engine doesn't support compaction. */
+  buildCompactCommand(): string | null;
 
   /** Build the rename command (if supported) */
   buildRenameCommand(name: string): string | null;
