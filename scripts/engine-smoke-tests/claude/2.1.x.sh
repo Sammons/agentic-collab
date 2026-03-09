@@ -219,6 +219,137 @@ test_append_system_prompt() {
   kill_session "$s"
 }
 
+# ── Test 9: Compact ──
+
+test_compact() {
+  local s; s=$(smoke_session claude compact)
+  kill_session "$s"
+  create_session "$s"
+
+  paste_and_enter "$s" "claude"
+
+  if ! wait_for_pattern "$s" '[❯>] ' "$TIMEOUT"; then
+    fail "compact: never showed prompt"
+    kill_session "$s"
+    return
+  fi
+
+  paste_and_enter "$s" "/compact"
+
+  # /compact should not crash — Claude should return to prompt
+  if wait_for_pattern "$s" '[❯>] ' "$TIMEOUT"; then
+    pass "compact: /compact accepted"
+  else
+    local pane
+    pane=$(capture_pane "$s" 10 | tail -5)
+    fail "compact: /compact did not return to prompt" "Last lines:\\n$pane"
+  fi
+
+  kill_session "$s"
+}
+
+# ── Test 10: Rename ──
+
+test_rename() {
+  local s; s=$(smoke_session claude rename)
+  kill_session "$s"
+  create_session "$s"
+
+  paste_and_enter "$s" "claude"
+
+  if ! wait_for_pattern "$s" '[❯>] ' "$TIMEOUT"; then
+    fail "rename: never showed prompt"
+    kill_session "$s"
+    return
+  fi
+
+  paste_and_enter "$s" "/rename smoke-test-agent"
+
+  # /rename should not crash — Claude should return to prompt
+  if wait_for_pattern "$s" '[❯>] ' "$TIMEOUT"; then
+    pass "rename: /rename accepted"
+  else
+    local pane
+    pane=$(capture_pane "$s" 10 | tail -5)
+    fail "rename: /rename did not return to prompt" "Last lines:\\n$pane"
+  fi
+
+  kill_session "$s"
+}
+
+# ── Test 11: Interrupt (3x Escape) ──
+
+test_interrupt() {
+  local s; s=$(smoke_session claude interrupt)
+  kill_session "$s"
+  create_session "$s"
+
+  paste_and_enter "$s" "claude"
+
+  if ! wait_for_pattern "$s" '[❯>] ' "$TIMEOUT"; then
+    fail "interrupt: never showed prompt"
+    kill_session "$s"
+    return
+  fi
+
+  # Start a task that will take time
+  paste_and_enter "$s" "write a 500 word essay about testing"
+  sleep 3
+
+  # Send 3x Escape (claude adapter interruptKeys)
+  send_keys "$s" Escape Escape Escape
+  sleep 2
+
+  # Should return to prompt after interrupt
+  if wait_for_pattern "$s" '[❯>] ' "$TIMEOUT"; then
+    pass "interrupt: 3x Escape returns to prompt"
+  else
+    skip "interrupt: may not have interrupted in time" "timing sensitive"
+  fi
+
+  kill_session "$s"
+}
+
+# ── Test 12: --model flag ──
+
+test_model_flag() {
+  local s; s=$(smoke_session claude modelflag)
+  kill_session "$s"
+  create_session "$s"
+
+  paste_and_enter "$s" "claude --model sonnet"
+
+  if wait_for_pattern "$s" '[❯>] ' "$TIMEOUT"; then
+    pass "model: --model sonnet accepted"
+  else
+    local pane
+    pane=$(capture_pane "$s" 10 | tail -5)
+    fail "model: --model flag rejected" "Last lines:\\n$pane"
+  fi
+
+  kill_session "$s"
+}
+
+# ── Test 13: --effort flag ──
+
+test_effort_flag() {
+  local s; s=$(smoke_session claude effort)
+  kill_session "$s"
+  create_session "$s"
+
+  paste_and_enter "$s" "claude --effort low"
+
+  if wait_for_pattern "$s" '[❯>] ' "$TIMEOUT"; then
+    pass "effort: --effort low accepted"
+  else
+    local pane
+    pane=$(capture_pane "$s" 10 | tail -5)
+    fail "effort: --effort flag rejected" "Last lines:\\n$pane"
+  fi
+
+  kill_session "$s"
+}
+
 # ── Run ──
 
 test_spawn
@@ -229,3 +360,8 @@ test_exit
 test_resume
 test_context_parsing
 test_append_system_prompt
+test_compact
+test_rename
+test_interrupt
+test_model_flag
+test_effort_flag

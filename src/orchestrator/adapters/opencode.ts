@@ -1,5 +1,17 @@
 /**
  * OpenCode CLI adapter.
+ *
+ * OpenCode v1.2.x behavior (validated 2026-03-08):
+ *   - `opencode run "message"` — headless mode, processes message and exits
+ *   - `opencode run -c "message"` — continues last session, headless
+ *   - `opencode run -s <id> "message"` — continues specific session, headless
+ *   - `opencode run --command /compact` — runs a slash command headlessly
+ *   - `opencode` (no subcommand) — full-screen TUI, not used by orchestrator
+ *   - `opencode session list` — lists session IDs (ses_xxx format)
+ *
+ * The orchestrator uses headless `run` mode exclusively. A task/message is
+ * required — `opencode run` without a message errors. Idle detection looks
+ * for the shell prompt ($) after the run completes, not an OpenCode prompt.
  */
 
 import { SPINNER_REGEX, type EngineAdapter, type SpawnOptions, type ResumeOptions, type IdleState, type ContextResult } from './types.ts';
@@ -11,22 +23,21 @@ export class OpenCodeAdapter implements EngineAdapter {
   readonly supportsResumePrompt = false;
 
   buildSpawnCommand(opts: SpawnOptions): string {
-    // opencode TUI mode for interactive sessions; 'run' subcommand for headless
-    // We use the default TUI subcommand with flags from 'run' since they share them
     const parts = ['opencode', 'run'];
 
     if (opts.model) {
       parts.push('-m', opts.model);
     }
 
-    // --variant controls reasoning effort in opencode (e.g., high, max, minimal)
     if (opts.thinking) {
       parts.push('--variant', opts.thinking);
     }
 
     if (opts.task) {
-      // Task is a positional argument to 'opencode run'
       parts.push(shellQuote(opts.task));
+    } else {
+      // opencode run requires a message — provide a no-op if none given
+      parts.push(shellQuote('You are ready. Wait for instructions.'));
     }
 
     return parts.join(' ');
@@ -43,6 +54,8 @@ export class OpenCodeAdapter implements EngineAdapter {
 
     if (opts.task) {
       parts.push(shellQuote(opts.task));
+    } else {
+      parts.push(shellQuote('Session resumed. Continue where you left off.'));
     }
 
     return parts.join(' ');
@@ -51,11 +64,17 @@ export class OpenCodeAdapter implements EngineAdapter {
   detectIdleState(paneOutput: string): IdleState {
     const lines = paneOutput.split('\n');
 
+    // In headless mode, opencode runs and returns to shell.
+    // Scan bottom-up for shell prompt or opencode activity.
     for (let i = lines.length - 1; i >= 0; i--) {
       const line = lines[i]!.trim();
       if (!line) continue;
 
-      if (/^>\s*$/.test(line) || /opencode.*>\s*$/.test(line)) return 'waiting_for_input';
+      // Shell prompt — opencode finished, back at shell
+      if (/[\$%#]\s*$/.test(line)) return 'waiting_for_input';
+      // OpenCode output header ("> model · agent")
+      if (/^>\s+\S+/.test(line)) return 'running_tool';
+      // Spinner
       if (SPINNER_REGEX.test(line)) return 'running_tool';
 
       break;
@@ -65,16 +84,20 @@ export class OpenCodeAdapter implements EngineAdapter {
   }
 
   parseContextPercent(_paneOutput: string): ContextResult {
-    // OpenCode doesn't expose context percentage
+    // OpenCode doesn't expose context percentage in headless mode
     return { contextPct: null, confident: false };
   }
 
   buildExitCommand(): string {
+    // In headless mode, opencode exits on its own. This is a no-op fallback
+    // for the orchestrator's suspend flow which pastes /exit into the pane.
+    // Ctrl-C (sent as interrupt keys) is the real abort mechanism.
     return '/exit';
   }
 
   buildCompactCommand(): string {
-    return '/compact';
+    // Use --command flag for headless slash command execution
+    return 'opencode run -c --command /compact';
   }
 
   buildRenameCommand(_name: string): string | null {
@@ -85,10 +108,10 @@ export class OpenCodeAdapter implements EngineAdapter {
     return ['Escape', 'Escape'];
   }
 
-  extractSessionId(_paneOutput: string): string | null {
-    // OpenCode doesn't expose session IDs in terminal output.
-    // Falls back to `opencode run -c` which continues the last session.
-    return null;
+  extractSessionId(paneOutput: string): string | null {
+    // Try to extract session ID from `opencode session list` output or run output.
+    // Session IDs look like: ses_32f5f6d58ffe3nGmWrOCaQVOEZ
+    const match = paneOutput.match(/\b(ses_[a-zA-Z0-9]{20,})\b/);
+    return match ? match[1]! : null;
   }
 }
-
