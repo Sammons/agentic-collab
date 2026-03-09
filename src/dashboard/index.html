@@ -2443,13 +2443,33 @@
       messages.appendChild(restoreBar);
       for (const msg of thread) {
         const div = document.createElement('div');
-        const isSystem = msg.direction === 'from_agent' && msg.message.startsWith('[system]');
+        const isSystem = msg.message && msg.message.startsWith('[system]');
+        const isUpload = msg.topic === 'file-upload' && msg.direction === 'to_agent';
+        if (isSystem) {
+          div.className = 'msg system-msg';
+        } else if (isUpload) {
+          div.className = 'msg to-agent file-upload';
+        } else {
+          div.className = `msg ${msg.direction === 'to_agent' ? 'to-agent' : 'from-agent'}`;
+        }
+        if (msg.withdrawn) div.classList.add('withdrawn');
         const sender = isSystem ? 'system' : (msg.direction === 'to_agent' ? 'you' : state.selected);
-        div.className = `msg msg-${sender === 'you' ? 'out' : 'in'}${isSystem ? ' msg-system' : ''}${msg.withdrawn ? ' msg-withdrawn' : ''}`;
         const time = new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        let text = esc(msg.message);
-        text = text.replace(/`([^`]+)`/g, '<code>$1</code>');
-        div.innerHTML = `<span class="msg-sender">${esc(sender)}</span><span class="msg-text">${text}</span><span class="msg-time">${time}</span>`;
+        const topicStr = (!isUpload && msg.topic) ? ` (re: ${esc(msg.topic)})` : '';
+        const displayMsg = isSystem ? msg.message.replace(/^\[system\]\s*/, '') : msg.message;
+        const statusHtml = (msg.direction === 'to_agent' && msg.queueId)
+          ? `<span class="msg-status ${msg.deliveryStatus || 'pending'}" data-queue-id="${msg.queueId}">${
+              msg.deliveryStatus === 'delivered' ? '\u2713 delivered' :
+              msg.deliveryStatus === 'failed' ? '\u2717 failed' :
+              '\u2022\u2022\u2022 sending'
+            }</span>`
+          : '';
+        const headerHtml = `<div class="msg-header"><span class="msg-sender">${esc(sender)}${topicStr}</span><span class="msg-meta"><span class="msg-time">${time}</span>${statusHtml}</span></div>`;
+        if (isUpload) {
+          div.innerHTML = `${headerHtml}<div class="file-info"><span class="file-icon">&#128206;</span> ${esc(displayMsg)}</div>`;
+        } else {
+          div.innerHTML = `${headerHtml}<div class="msg-body">${renderMarkdown(esc(displayMsg))}</div>`;
+        }
         messages.appendChild(div);
       }
       // Scroll to bottom
