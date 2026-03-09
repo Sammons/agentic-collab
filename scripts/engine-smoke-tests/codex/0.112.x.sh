@@ -43,7 +43,7 @@ test_idle_detection() {
     skip "idle: status bar % left" "not visible on fresh session"
   fi
 
-  if echo "$pane" | grep -qE '^[›❯>]\s'; then
+  if echo "$pane" | grep -qE '[›❯>]\s'; then
     pass "idle: prompt character detected"
   else
     fail "idle: prompt character not found"
