@@ -17,13 +17,14 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { join } from 'node:path';
 import type { Database } from './database.ts';
 import type { LockManager } from '../shared/lock.ts';
 import type { ProxyCommand, ProxyResponse, AgentRecord } from '../shared/types.ts';
 import { sessionName, requireProxy, canSuspend, canResume } from '../shared/agent-entity.ts';
 import { sleep } from '../shared/utils.ts';
 import { getAdapter } from './adapters/index.ts';
-import { resolvePersonaPath, loadPersona, composeSystemPrompt } from './persona.ts';
+import { resolvePersonaPath, loadPersona, composeSystemPrompt, getPersonasDir, toHostPath } from './persona.ts';
 
 export type LifecycleContext = {
   db: Database;
@@ -43,9 +44,11 @@ const POST_SPAWN_ACTIVE_DELAY_MS = parseInt(process.env['POST_SPAWN_ACTIVE_DELAY
 const POST_RENAME_TASK_DELAY_MS = parseInt(process.env['POST_RENAME_TASK_DELAY_MS'] ?? '1000', 10);
 const INTERRUPT_KEY_DELAY_MS = parseInt(process.env['INTERRUPT_KEY_DELAY_MS'] ?? '300', 10);
 
-/** Wrap a CLI command with `export COLLAB_AGENT=<name>` so the agent identity is available. */
-function withAgentEnv(name: string, cmd: string): string {
-  return `export COLLAB_AGENT=${name} && ${cmd}`;
+/** Wrap a CLI command with agent env vars (COLLAB_AGENT, optionally COLLAB_PERSONA_FILE). */
+function withAgentEnv(name: string, cmd: string, personaFile?: string | null): string {
+  let env = `export COLLAB_AGENT=${name}`;
+  if (personaFile) env += ` COLLAB_PERSONA_FILE=${personaFile}`;
+  return `${env} && ${cmd}`;
 }
 
 // ── Watchdog helper ──
@@ -129,10 +132,10 @@ export async function spawnAgent(
       lastActivity: new Date().toISOString(),
     });
 
-    return { current, tmuxSession, engine: agent.engine, spawnCount: agent.spawnCount, permissions: agent.permissions };
+    return { current, tmuxSession, engine: agent.engine, spawnCount: agent.spawnCount, permissions: agent.permissions, hookSpawn: agent.hookSpawn };
   });
 
-  const { tmuxSession, engine, spawnCount, permissions } = phase1;
+  const { tmuxSession, engine, spawnCount, permissions, hookSpawn } = phase1;
   const watchdog = startWatchdog(ctx, opts.name, 'spawning', SPAWN_TIMEOUT_MS, opts.proxyId, tmuxSession);
 
   try {
@@ -175,8 +178,9 @@ export async function spawnAgent(
     // 3. Generate session ID for engines that support it (Claude --session-id)
     const generatedSessionId = randomUUID();
 
-    // 4. Build and paste spawn command
-    const spawnCmd = adapter.buildSpawnCommand({
+    // 4. Build and paste spawn command — use hookSpawn if present
+    const personaFile = resolvePersonaFilePath(opts.name, opts.persona);
+    const spawnCmd = hookSpawn ?? adapter.buildSpawnCommand({
       name: opts.name,
       cwd: opts.cwd,
       model: opts.model,
@@ -190,7 +194,7 @@ export async function spawnAgent(
     await ctx.proxyDispatch(opts.proxyId, {
       action: 'paste',
       sessionName: tmuxSession,
-      text: withAgentEnv(opts.name, spawnCmd),
+      text: withAgentEnv(opts.name, spawnCmd, hookSpawn ? personaFile : null),
       pressEnter: true,
     });
 
@@ -297,10 +301,12 @@ export async function resumeAgent(
       persona: agent.persona,
       permissions: agent.permissions,
       currentSessionId: agent.currentSessionId,
+      hookSpawn: agent.hookSpawn,
+      hookResume: agent.hookResume,
     };
   });
 
-  const { proxyId, tmuxSession, engine, cwd, persona, permissions, currentSessionId } = phase1;
+  const { proxyId, tmuxSession, engine, cwd, persona, permissions, currentSessionId, hookSpawn, hookResume } = phase1;
   const watchdog = startWatchdog(ctx, name, 'resuming', RESUME_TIMEOUT_MS, proxyId, tmuxSession);
 
   try {
@@ -327,9 +333,14 @@ export async function resumeAgent(
     }
 
     // 3. Build and paste resume command (or spawn with new session ID if none)
+    //    Use hookResume/hookSpawn if present, falling back to adapter methods.
+    const personaFile = resolvePersonaFilePath(name, persona);
     let resumeSessionId = currentSessionId;
     let cmd: string;
-    if (currentSessionId) {
+    const useHook = currentSessionId ? hookResume : hookSpawn;
+    if (useHook) {
+      cmd = useHook;
+    } else if (currentSessionId) {
       cmd = adapter.buildResumeCommand({
         name,
         sessionId: currentSessionId,
@@ -358,7 +369,7 @@ export async function resumeAgent(
     await ctx.proxyDispatch(proxyId, {
       action: 'paste',
       sessionName: tmuxSession,
-      text: withAgentEnv(name, cmd),
+      text: withAgentEnv(name, cmd, useHook ? personaFile : null),
       pressEnter: true,
     });
 
@@ -594,12 +605,14 @@ export async function reloadAgent(
       spawnCount: agent.spawnCount,
       reloadTask: agent.reloadTask,
       oldTmuxSession: sessionName(agent),
+      hookSpawn: agent.hookSpawn,
+      hookResume: agent.hookResume,
     };
   });
 
   const {
     proxyId, engine, cwd, persona, permissions, previousContextPct,
-    currentSessionId, spawnCount, reloadTask, oldTmuxSession,
+    currentSessionId, spawnCount, reloadTask, oldTmuxSession, hookSpawn, hookResume,
   } = phase1;
   const watchdog = startWatchdog(ctx, name, 'suspending', RELOAD_TIMEOUT_MS, proxyId, oldTmuxSession);
 
@@ -662,8 +675,10 @@ export async function reloadAgent(
       ? `[orchestrator → ${name}] ${taskText}`
       : undefined;
 
+    const personaFile = resolvePersonaFilePath(name, persona);
     let reloadSessionId = currentSessionId;
-    const resumeCmd = currentSessionId
+    const useHook = currentSessionId ? hookResume : hookSpawn;
+    const resumeCmd = useHook ?? (currentSessionId
       ? adapter.buildResumeCommand({
           name,
           sessionId: currentSessionId,
@@ -684,12 +699,12 @@ export async function reloadAgent(
             dangerouslySkipPermissions: permissions === 'skip',
             sessionId: reloadSessionId,
           });
-        })();
+        })());
 
     await ctx.proxyDispatch(proxyId, {
       action: 'paste',
       sessionName: tmuxSession,
-      text: withAgentEnv(name, resumeCmd),
+      text: withAgentEnv(name, resumeCmd, useHook ? personaFile : null),
       pressEnter: true,
     });
 
@@ -792,9 +807,16 @@ export async function compactAgent(
 
     const adapter = getAdapter(agent.engine);
 
-    // Send compact command — prefer keystroke delivery for TUI-based engines.
-    // If the adapter supports neither compactKeys nor buildCompactCommand, skip.
-    if (adapter.compactKeys) {
+    // Send compact command — use hookCompact if present, then adapter keys, then adapter command.
+    if (agent.hookCompact) {
+      const personaFile = resolvePersonaFilePath(name, agent.persona);
+      await ctx.proxyDispatch(proxyId, {
+        action: 'paste',
+        sessionName: sessionName(agent),
+        text: withAgentEnv(name, agent.hookCompact, personaFile),
+        pressEnter: true,
+      });
+    } else if (adapter.compactKeys) {
       for (const key of adapter.compactKeys()) {
         await ctx.proxyDispatch(proxyId, {
           action: 'send_keys',
@@ -895,6 +917,16 @@ function computePeers(ctx: LifecycleContext, agentName: string): string[] {
   return ctx.db.listAgents()
     .filter((a) => a.name !== agentName && a.state !== 'void' && a.state !== 'failed')
     .map((a) => a.name);
+}
+
+/**
+ * Resolve the host-side persona file path for an agent.
+ * Used to export COLLAB_PERSONA_FILE when custom hooks are active.
+ */
+function resolvePersonaFilePath(name: string, persona?: string | null): string | null {
+  const dir = getPersonasDir();
+  const filename = persona ?? name;
+  return toHostPath(join(dir, `${filename}.md`));
 }
 
 function buildSystemPrompt(
