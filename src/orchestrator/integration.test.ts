@@ -113,7 +113,7 @@ describe('Integration: full lifecycle via HTTP', () => {
     }));
   }
 
-  it('full lifecycle: create → spawn → suspend → resume → kill → destroy', async () => {
+  it('full lifecycle: create → spawn → exit → resume → kill → destroy', async () => {
     // 1. Create agent
     const create = await api('POST', '/api/agents', {
       name: 'int-agent',
@@ -135,8 +135,8 @@ describe('Integration: full lifecycle via HTTP', () => {
     assert.equal((spawn.data as Record<string, unknown>).state, 'active');
     assert.ok(sessions.has('agent-int-agent'), 'tmux session should exist');
 
-    // 3. Suspend agent
-    const suspend = await api('POST', '/api/agents/int-agent/suspend');
+    // 3. Exit agent
+    const suspend = await api('POST', '/api/agents/int-agent/exit');
     assert.equal(suspend.status, 200);
     assert.equal((suspend.data as Record<string, unknown>).state, 'suspended');
 
@@ -252,7 +252,7 @@ describe('Integration: full lifecycle via HTTP', () => {
   it('event log tracks lifecycle operations', async () => {
     await api('POST', '/api/agents', { name: 'event-agent', engine: 'claude', cwd: '/tmp' });
     await api('POST', '/api/agents/event-agent/spawn', { proxyId: 'int-proxy' });
-    await api('POST', '/api/agents/event-agent/suspend');
+    await api('POST', '/api/agents/event-agent/exit');
 
     const events = await api('GET', '/api/events/event-agent');
     assert.equal(events.status, 200);
