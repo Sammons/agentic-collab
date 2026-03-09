@@ -235,7 +235,7 @@ All `POST`/`DELETE` endpoints require `Authorization: Bearer <secret>` when `ORC
 | Method | Path | Description |
 |--------|------|-------------|
 | `POST` | `/api/agents/:name/spawn` | Start agent session |
-| `POST` | `/api/agents/:name/suspend` | Suspend (saves tmux state) |
+| `POST` | `/api/agents/:name/exit` | Exit agent (suspend tmux state) |
 | `POST` | `/api/agents/:name/resume` | Resume suspended agent |
 | `POST` | `/api/agents/:name/reload` | Reload session (immediate or queued) |
 | `POST` | `/api/agents/:name/interrupt` | Send interrupt keys |

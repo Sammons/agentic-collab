@@ -1509,7 +1509,7 @@
           ${activeIdle ? `
             <button data-action="interrupt">Interrupt</button>
             ${agent.engine !== 'codex' ? '<button data-action="compact">Compact</button>' : ''}
-            <button data-action="suspend">Suspend</button>
+            <button data-action="exit">Exit</button>
             <button class="danger" data-action="kill">Kill</button>
           ` : ''}
           ${suspendedFailed ? `
@@ -2109,7 +2109,7 @@
   }
 
   const DESTRUCTIVE_ACTIONS = new Set(['kill', 'destroy']);
-  const ACTION_LABELS = { kill: 'Kill', destroy: 'Destroy', suspend: 'Suspend', resume: 'Resume', interrupt: 'Interrupt', compact: 'Compact', spawn: 'Spawn' };
+  const ACTION_LABELS = { kill: 'Kill', destroy: 'Destroy', exit: 'Exit', resume: 'Resume', interrupt: 'Interrupt', compact: 'Compact', spawn: 'Spawn' };
 
   // ── Actions ──
   async function agentAction(name, act) {
