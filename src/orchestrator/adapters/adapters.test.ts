@@ -463,7 +463,7 @@ describe('Engine Adapters', () => {
       assert.ok(cmd.includes('--variant high'));
     });
 
-    it('omits optional flags when undefined', () => {
+    it('provides default message when no task given', () => {
       const cmd = adapter.buildSpawnCommand({
         name: 'oc-agent',
         cwd: '/tmp',
@@ -471,7 +471,9 @@ describe('Engine Adapters', () => {
         task: undefined,
         thinking: undefined,
       });
-      assert.equal(cmd, 'opencode run');
+      assert.ok(cmd.startsWith('opencode run'));
+      // v1.2.x requires a message — adapter provides a default
+      assert.ok(cmd.includes("'You are ready."));
     });
 
     it('builds resume with -s for session ID', () => {
@@ -501,8 +503,8 @@ describe('Engine Adapters', () => {
       assert.equal(adapter.buildExitCommand(), '/exit');
     });
 
-    it('builds compact command', () => {
-      assert.equal(adapter.buildCompactCommand(), '/compact');
+    it('builds compact command via headless --command', () => {
+      assert.equal(adapter.buildCompactCommand(), 'opencode run -c --command /compact');
     });
 
     it('returns interrupt keys', () => {
@@ -511,8 +513,9 @@ describe('Engine Adapters', () => {
       assert.ok(keys.every(k => k === 'Escape'));
     });
 
-    it('detects idle state from prompt', () => {
-      assert.equal(adapter.detectIdleState('output\n> '), 'waiting_for_input');
+    it('detects idle state from shell prompt', () => {
+      // In headless mode, opencode returns to shell after completion
+      assert.equal(adapter.detectIdleState('output\nsammons@host:/tmp$ '), 'waiting_for_input');
     });
 
     it('detects running state from spinner', () => {

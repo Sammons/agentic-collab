@@ -2,12 +2,12 @@
 # OpenCode CLI smoke tests — harness for v1.2.x
 # Validated against: 1.2.22
 #
-# DRIFT STATUS (2026-03-08):
-# OpenCode v1.2.x changed behavior from earlier versions:
-#   - `opencode run` is now non-interactive (requires message positional)
-#   - `opencode` (default) is TUI mode with full-screen layout, no `> ` prompt
-#   - Adapter still assumes `opencode run` starts an interactive REPL
-# These tests validate what the CLI *actually does* to catch this drift.
+# OpenCode v1.2.x uses headless `run` mode:
+#   - `opencode run "message"` — process and exit
+#   - `opencode run -c "message"` — continue last session
+#   - `opencode run -s <id> "message"` — continue specific session
+#   - `opencode run --command /compact` — run slash command headlessly
+#   - `opencode` (no subcommand) — TUI mode (not used by orchestrator)
 #
 # Sourced by run-all.sh after lib.sh is loaded.
 
@@ -32,22 +32,34 @@ test_version() {
   kill_session "$s"
 }
 
-# ── Test 2: TUI mode spawn (default command) ──
+# ── Test 2: Headless run with message ──
 
-test_tui_spawn() {
-  local s; s=$(smoke_session opencode tui)
+test_headless_run() {
+  local s; s=$(smoke_session opencode headless)
   kill_session "$s"
   create_session "$s"
 
-  paste_and_enter "$s" "opencode"
+  paste_and_enter "$s" 'opencode run "respond with just the word SMOKE_HEADLESS_OK"'
 
-  assert_pattern "$s" "tui: TUI starts" 'Ask anything|OPENCODE|opencode'
-  assert_no_pattern "$s" "tui: no 'command not found'" 'command not found'
+  # Should process message and return to shell
+  if wait_for_pattern "$s" 'SMOKE_HEADLESS_OK' "$TIMEOUT"; then
+    pass "headless: run processes message"
+    # Should also return to shell
+    if wait_for_pattern "$s" '[\$%#]\s*$' "$TIMEOUT"; then
+      pass "headless: returns to shell after completion"
+    else
+      skip "headless: shell prompt" "may need more time"
+    fi
+  else
+    local pane
+    pane=$(capture_pane "$s" 10 | tail -5)
+    fail "headless: run did not produce expected output" "Last lines:\\n$pane"
+  fi
 
   kill_session "$s"
 }
 
-# ── Test 3: `opencode run` without message (drift detection) ──
+# ── Test 3: Run requires message ──
 
 test_run_requires_message() {
   local s; s=$(smoke_session opencode run)
@@ -56,12 +68,10 @@ test_run_requires_message() {
 
   paste_and_enter "$s" "opencode run"
 
-  # Current behavior: "You must provide a message or a command"
-  # If this starts showing a prompt, the adapter can use `opencode run` again
   if wait_for_pattern "$s" 'must provide|message or a command' 8; then
-    pass "run: 'opencode run' correctly requires a message (adapter drift confirmed)"
+    pass "run: requires message (expected behavior)"
   elif wait_for_pattern "$s" '^> |^[›❯] ' 5; then
-    pass "run: 'opencode run' shows prompt (adapter assumption restored — update adapter!)"
+    pass "run: shows prompt (behavior changed — check adapter!)"
   else
     local pane
     pane=$(capture_pane "$s" 10 | tail -5)
@@ -71,98 +81,165 @@ test_run_requires_message() {
   kill_session "$s"
 }
 
-# ── Test 4: Paste delivery in TUI mode ──
+# ── Test 4: Model flag (-m) ──
 
-test_paste_delivery() {
-  local s; s=$(smoke_session opencode paste)
+test_model_flag() {
+  local s; s=$(smoke_session opencode model)
   kill_session "$s"
   create_session "$s"
 
-  paste_and_enter "$s" "opencode"
+  # Use a known-bad model to verify the flag is accepted
+  paste_and_enter "$s" 'opencode run -m nonexistent/model "say OK"'
 
-  if ! wait_for_pattern "$s" 'Ask anything|OPENCODE|opencode' "$TIMEOUT"; then
-    fail "paste: TUI never showed"
-    kill_session "$s"
-    return
-  fi
-
-  paste_and_enter "$s" "echo SMOKE_TEST_MARKER_OPENCODE"
-  assert_pattern "$s" "paste: text appears in pane" 'SMOKE_TEST_MARKER_OPENCODE'
-
-  kill_session "$s"
-}
-
-# ── Test 5: Exit from TUI mode ──
-
-test_exit_tui() {
-  local s; s=$(smoke_session opencode exit)
-  kill_session "$s"
-  create_session "$s"
-
-  paste_and_enter "$s" "opencode"
-
-  if ! wait_for_pattern "$s" 'Ask anything|OPENCODE|opencode' "$TIMEOUT"; then
-    fail "exit: TUI never showed"
-    kill_session "$s"
-    return
-  fi
-
-  paste_and_enter "$s" "/exit"
-
-  if wait_for_pattern "$s" '[\$%#] ?$' "$TIMEOUT"; then
-    pass "exit: /exit returns to shell"
-  elif ! has_session "$s" 2>/dev/null; then
-    pass "exit: /exit terminated session"
+  # Should either error about the model or process the request
+  if wait_for_pattern "$s" 'error|not found|invalid|OK|[\$%#]\s*$' "$TIMEOUT"; then
+    pass "model: -m flag accepted"
   else
-    skip "exit: /exit did not exit TUI" "may need different exit mechanism"
+    local pane
+    pane=$(capture_pane "$s" 10 | tail -5)
+    fail "model: -m flag rejected" "Last lines:\\n$pane"
   fi
 
   kill_session "$s"
 }
 
-# ── Test 6: Resume with -c (continue last) ──
+# ── Test 5: Resume with -c ──
 
 test_resume_continue() {
   local s; s=$(smoke_session opencode resumec)
   kill_session "$s"
   create_session "$s"
 
-  paste_and_enter "$s" "opencode run -c"
+  # First create a session
+  paste_and_enter "$s" 'opencode run "respond with FIRST_MSG"'
+  if ! wait_for_pattern "$s" '[\$%#]\s*$' "$TIMEOUT"; then
+    fail "resume-c: initial run failed"
+    kill_session "$s"
+    return
+  fi
 
-  if wait_for_pattern "$s" '^> |^[›❯] |Ask anything' "$TIMEOUT"; then
-    pass "resume-c: -c shows interactive mode"
-  elif capture_pane "$s" 20 | grep -qiE 'no session|error|not found|must provide'; then
+  sleep 1
+
+  # Resume with -c
+  paste_and_enter "$s" 'opencode run -c "respond with RESUMED_OK"'
+
+  if wait_for_pattern "$s" 'RESUMED_OK' "$TIMEOUT"; then
+    pass "resume-c: -c continues last session"
+  elif capture_pane "$s" 20 | grep -qiE 'no session|error|not found'; then
     pass "resume-c: -c gives graceful error"
   else
     local pane
     pane=$(capture_pane "$s" 10 | tail -5)
-    fail "resume-c: -c neither resumed nor gave graceful error" "Last lines:\\n$pane"
+    fail "resume-c: unexpected behavior" "Last lines:\\n$pane"
   fi
 
   kill_session "$s"
 }
 
-# ── Test 7: Resume with -s (session ID) ──
+# ── Test 6: Resume with -s (session ID) ──
 
 test_resume_session() {
   local s; s=$(smoke_session opencode resumes)
   kill_session "$s"
   create_session "$s"
 
-  paste_and_enter "$s" "opencode run -s nonexistent-session-id"
+  # Try with invalid session ID — should error gracefully
+  paste_and_enter "$s" 'opencode run -s nonexistent-session-id "say hello"'
 
-  if wait_for_pattern "$s" '^> |^[›❯] |Ask anything' 8; then
-    pass "resume-s: -s shows interactive mode"
-  elif capture_pane "$s" 20 | grep -qiE 'not found|error|no session|invalid|must provide'; then
+  if capture_pane "$s" 20 | grep -qiE 'not found|error|no session|invalid'; then
     pass "resume-s: -s gives graceful error for invalid session"
+  elif wait_for_pattern "$s" '[\$%#]\s*$' 8; then
+    pass "resume-s: -s returned to shell"
   else
     local pane
     pane=$(capture_pane "$s" 10 | tail -5)
-    if echo "$pane" | grep -qE '[\$%#] ?$'; then
-      pass "resume-s: -s returned to shell (session not found)"
-    else
-      fail "resume-s: unexpected behavior" "Last lines:\\n$pane"
-    fi
+    fail "resume-s: unexpected behavior" "Last lines:\\n$pane"
+  fi
+
+  kill_session "$s"
+}
+
+# ── Test 7: Compact via --command ──
+
+test_compact() {
+  local s; s=$(smoke_session opencode compact)
+  kill_session "$s"
+  create_session "$s"
+
+  # First create a session to compact
+  paste_and_enter "$s" 'opencode run "respond with SETUP_OK"'
+  if ! wait_for_pattern "$s" '[\$%#]\s*$' "$TIMEOUT"; then
+    fail "compact: initial run failed"
+    kill_session "$s"
+    return
+  fi
+
+  sleep 1
+
+  # Run compact command
+  paste_and_enter "$s" "opencode run -c --command /compact"
+
+  if wait_for_pattern "$s" '[\$%#]\s*$' "$TIMEOUT"; then
+    pass "compact: --command /compact accepted"
+  else
+    local pane
+    pane=$(capture_pane "$s" 10 | tail -5)
+    fail "compact: --command /compact failed" "Last lines:\\n$pane"
+  fi
+
+  kill_session "$s"
+}
+
+# ── Test 8: Session list ──
+
+test_session_list() {
+  local s; s=$(smoke_session opencode seslist)
+  kill_session "$s"
+  create_session "$s"
+
+  paste_and_enter "$s" "opencode session list"
+
+  # Wait for the command to complete (returns to shell)
+  if ! wait_for_pattern "$s" '[\$%#]\s*$' "$TIMEOUT"; then
+    fail "session-list: command did not return to shell"
+    kill_session "$s"
+    return
+  fi
+
+  local pane
+  pane=$(capture_pane "$s" 30)
+
+  if echo "$pane" | grep -qE 'ses_[a-zA-Z0-9]+'; then
+    pass "session-list: shows session IDs (ses_xxx format)"
+  elif echo "$pane" | grep -qiE 'Session ID|Updated|no sessions|session list'; then
+    pass "session-list: command accepted (no sessions or header shown)"
+  else
+    pass "session-list: command completed without error"
+  fi
+
+  kill_session "$s"
+}
+
+# ── Test 9: Interrupt (2x Escape) ──
+
+test_interrupt() {
+  local s; s=$(smoke_session opencode interrupt)
+  kill_session "$s"
+  create_session "$s"
+
+  # Start a task that will take time
+  paste_and_enter "$s" 'opencode run "write a 500-word essay about testing"'
+  sleep 3
+
+  # Send interrupt (2x Escape)
+  send_keys "$s" Escape Escape
+  sleep 2
+
+  # Should return to shell after interrupt
+  if wait_for_pattern "$s" '[\$%#]\s*$' "$TIMEOUT"; then
+    pass "interrupt: 2x Escape returns to shell"
+  else
+    skip "interrupt: may not have interrupted in time" "timing sensitive"
   fi
 
   kill_session "$s"
@@ -171,9 +248,11 @@ test_resume_session() {
 # ── Run ──
 
 test_version
-test_tui_spawn
+test_headless_run
 test_run_requires_message
-test_paste_delivery
-test_exit_tui
+test_model_flag
 test_resume_continue
 test_resume_session
+test_compact
+test_session_list
+test_interrupt

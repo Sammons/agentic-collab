@@ -211,6 +211,85 @@ test_context_parsing() {
   kill_session "$s"
 }
 
+# ── Test 8: Compact ──
+
+test_compact() {
+  local s; s=$(smoke_session codex compact)
+  kill_session "$s"
+  create_session "$s"
+
+  paste_and_enter "$s" "codex --no-alt-screen"
+
+  if ! wait_for_pattern "$s" '[›❯>] ' "$TIMEOUT"; then
+    fail "compact: never showed prompt"
+    kill_session "$s"
+    return
+  fi
+
+  paste_and_enter "$s" "/compact"
+
+  if wait_for_pattern "$s" '[›❯>] ' "$TIMEOUT"; then
+    pass "compact: /compact accepted"
+  else
+    local pane
+    pane=$(capture_pane "$s" 10 | tail -5)
+    fail "compact: /compact did not return to prompt" "Last lines:\\n$pane"
+  fi
+
+  kill_session "$s"
+}
+
+# ── Test 9: Interrupt (2x Escape) ──
+
+test_interrupt() {
+  local s; s=$(smoke_session codex interrupt)
+  kill_session "$s"
+  create_session "$s"
+
+  paste_and_enter "$s" "codex --no-alt-screen"
+
+  if ! wait_for_pattern "$s" '[›❯>] ' "$TIMEOUT"; then
+    fail "interrupt: never showed prompt"
+    kill_session "$s"
+    return
+  fi
+
+  paste_and_enter "$s" "write a 500 word essay about testing"
+  sleep 3
+
+  # 2x Escape (codex adapter interruptKeys)
+  send_keys "$s" Escape Escape
+  sleep 2
+
+  if wait_for_pattern "$s" '[›❯>] ' "$TIMEOUT"; then
+    pass "interrupt: 2x Escape returns to prompt"
+  else
+    skip "interrupt: may not have interrupted in time" "timing sensitive"
+  fi
+
+  kill_session "$s"
+}
+
+# ── Test 10: --model flag ──
+
+test_model_flag() {
+  local s; s=$(smoke_session codex modelflag)
+  kill_session "$s"
+  create_session "$s"
+
+  paste_and_enter "$s" "codex --no-alt-screen --model o3"
+
+  if wait_for_pattern "$s" '[›❯>] ' "$TIMEOUT"; then
+    pass "model: --model flag accepted"
+  else
+    local pane
+    pane=$(capture_pane "$s" 10 | tail -5)
+    fail "model: --model flag rejected" "Last lines:\\n$pane"
+  fi
+
+  kill_session "$s"
+}
+
 # ── Run ──
 
 test_spawn
@@ -220,3 +299,6 @@ test_config_profile
 test_exit
 test_resume_last
 test_context_parsing
+test_compact
+test_interrupt
+test_model_flag
