@@ -103,40 +103,57 @@ test_model_flag() {
   kill_session "$s"
 }
 
-# ── Test 5: Resume with -c ──
+# ── Test 5: Resume with -c (context validation) ──
 
 test_resume_continue() {
   local s; s=$(smoke_session opencode resumec)
   kill_session "$s"
   create_session "$s"
 
-  # First create a session
-  paste_and_enter "$s" 'opencode run "respond with FIRST_MSG"'
+  local canary; canary=$(gen_canary)
+
+  # Phase 1: plant canary in a new session
+  paste_and_enter "$s" "opencode run \"Remember this exact code: $canary — confirm by repeating it back.\""
+  if ! wait_for_pattern "$s" "$canary" 30; then
+    if ! wait_for_pattern "$s" '[\$%#]\s*$' "$TIMEOUT"; then
+      fail "resume-c: initial run never returned to shell"
+      kill_session "$s"
+      return
+    fi
+    # Model ran but didn't echo canary — still try resume
+    skip "resume-c: model did not echo canary in initial run" "will still attempt resume"
+  fi
+
+  # Wait for shell prompt (headless mode returns to shell after completion)
   if ! wait_for_pattern "$s" '[\$%#]\s*$' "$TIMEOUT"; then
-    fail "resume-c: initial run failed"
+    fail "resume-c: initial run did not return to shell"
     kill_session "$s"
     return
   fi
 
   sleep 1
 
-  # Resume with -c
-  paste_and_enter "$s" 'opencode run -c "respond with RESUMED_OK"'
+  # Phase 2: resume with -c and ask for canary
+  paste_and_enter "$s" "opencode run -c \"What was the exact canary code I asked you to remember? Reply with just the code.\""
 
-  if wait_for_pattern "$s" 'RESUMED_OK' "$TIMEOUT"; then
-    pass "resume-c: -c continues last session"
+  if wait_for_pattern "$s" "$canary" 30; then
+    pass "resume-c: context preserved — canary recalled after -c resume"
   elif capture_pane "$s" 20 | grep -qiE 'no session|error|not found'; then
-    pass "resume-c: -c gives graceful error"
+    skip "resume-c: session not persisted (graceful error)" "server may not persist short sessions"
   else
     local pane
-    pane=$(capture_pane "$s" 10 | tail -5)
-    fail "resume-c: unexpected behavior" "Last lines:\\n$pane"
+    pane=$(capture_pane "$s" 30)
+    if echo "$pane" | grep -qi "canary\|remember\|code"; then
+      fail "resume-c: model responded but did not recall canary $canary" "Pane excerpt:\\n$(echo "$pane" | tail -10)"
+    else
+      fail "resume-c: no response to canary recall request" "Pane excerpt:\\n$(echo "$pane" | tail -10)"
+    fi
   fi
 
   kill_session "$s"
 }
 
-# ── Test 6: Resume with -s (session ID) ──
+# ── Test 6: Resume with -s (session ID — error handling) ──
 
 test_resume_session() {
   local s; s=$(smoke_session opencode resumes)
