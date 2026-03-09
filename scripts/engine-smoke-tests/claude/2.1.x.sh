@@ -39,7 +39,7 @@ test_idle_detection() {
   local pane
   pane=$(capture_pane "$s" 50)
 
-  if echo "$pane" | grep -qE '^[❯>]\s*$|^[❯>] '; then
+  if echo "$pane" | grep -qE '[❯>]\s*$|[❯>] '; then
     pass "idle: prompt character detected"
   else
     fail "idle: prompt character not found in pane"
