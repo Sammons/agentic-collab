@@ -315,6 +315,21 @@ describe('Lifecycle', () => {
       await compactAgent(ctx, 'compact-test');
       assert.ok(proxyCommands.some(c => c.action === 'paste'));
     });
+
+    it('skips compaction for engines that do not support it', async () => {
+      db.createAgent({ name: 'compact-codex', engine: 'codex', cwd: '/tmp', proxyId: 'p1' });
+      const a = db.getAgent('compact-codex')!;
+      db.updateAgentState('compact-codex', 'active', a.version, {
+        tmuxSession: 'agent-compact-codex',
+        proxyId: 'p1',
+      });
+
+      proxyCommands = [];
+      await compactAgent(ctx, 'compact-codex');
+      assert.ok(!proxyCommands.some(c => c.action === 'paste'), 'should not paste when engine has no compact');
+      const events = db.getEvents('compact-codex', 5);
+      assert.ok(events.some((e: { event: string }) => e.event === 'compact_skipped'), 'should log compact_skipped event');
+    });
   });
 
   describe('killAgent', () => {
