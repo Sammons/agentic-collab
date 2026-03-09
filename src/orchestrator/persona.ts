@@ -226,7 +226,7 @@ export function composeSystemPrompt(opts: {
 
   // Messaging instructions — collab CLI (standalone binary, not a pnpm script)
   parts.push(`Messages from other agents arrive as text in your tmux pane
-formatted as: [from: <sender>, reply with /collaboration reply]: '<message>'
+formatted as: [from: <sender>, reply with collab reply]: '<message>'
 
 You have the \`collab\` CLI on your PATH. It is a standalone binary — run it directly (e.g. \`collab send ...\`), NOT via pnpm or any repo skill.
 IMPORTANT: Do NOT use \`pnpm collaboration\` or any other wrapper. Always use the bare \`collab\` command.
