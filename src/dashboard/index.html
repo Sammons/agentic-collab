@@ -909,6 +909,41 @@
   }
   .persona-body ul, .persona-body ol { margin: 4px 0; padding-left: 20px; }
   .persona-body li { margin: 2px 0; }
+  .persona-cheatsheet {
+    margin-top: 8px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    font-size: 11px;
+  }
+  .persona-cheatsheet summary {
+    padding: 6px 10px;
+    cursor: pointer;
+    color: var(--text-dim);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    user-select: none;
+  }
+  .persona-cheatsheet summary:hover { color: var(--accent); }
+  .persona-cheatsheet-body { padding: 0 10px 10px; }
+  .persona-cheatsheet-section { margin-bottom: 8px; }
+  .persona-cheatsheet-section strong { font-size: 11px; }
+  .persona-cheatsheet-section dl {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 2px 10px;
+    margin: 4px 0 0;
+  }
+  .persona-cheatsheet-section dt {
+    font-family: 'SFMono-Regular', Consolas, monospace;
+    color: var(--accent);
+    padding: 1px 0;
+  }
+  .persona-cheatsheet-section dd {
+    color: var(--text-dim);
+    padding: 1px 0;
+  }
+  .persona-cheatsheet-section em { font-style: normal; color: var(--yellow); }
 
   /* ── Mobile back button ── */
   .mobile-back {
@@ -1310,6 +1345,10 @@
     const prevEngine = document.getElementById('createEngine')?.value || 'claude';
     const prevProxy = document.getElementById('createProxy')?.value || '';
     const prevCwd = document.getElementById('createCwd')?.value || '/tmp';
+    const prevModel = document.getElementById('createModel')?.value || '';
+    const prevThinking = document.getElementById('createThinking')?.value || '';
+    const prevPermissions = document.getElementById('createPermissions')?.value || '';
+    const prevGroup = document.getElementById('createGroup')?.value || '';
     const prevTask = document.getElementById('createTask')?.value || '';
     const focusedCreateField = document.activeElement?.id?.startsWith('create') ? document.activeElement.id : null;
 
@@ -1336,6 +1375,20 @@
           ${(state.proxies || []).map(p => `<option value="${esc(p.proxyId)}"${prevProxy === p.proxyId ? ' selected' : ''}>${esc(p.proxyId)}</option>`).join('')}
         </select>
         <input type="text" id="createCwd" placeholder="Working directory" value="${esc(prevCwd)}" autocomplete="off" />
+        <input type="text" id="createModel" placeholder="Model (optional)" value="${esc(prevModel)}" autocomplete="off" />
+        <div style="display:flex;gap:6px">
+          <select id="createThinking" style="flex:1" title="Thinking effort">
+            <option value=""${prevThinking === '' ? ' selected' : ''}>Thinking (default)</option>
+            <option value="low"${prevThinking === 'low' ? ' selected' : ''}>low</option>
+            <option value="medium"${prevThinking === 'medium' ? ' selected' : ''}>medium</option>
+            <option value="high"${prevThinking === 'high' ? ' selected' : ''}>high</option>
+          </select>
+          <select id="createPermissions" style="flex:1" title="Permission mode">
+            <option value=""${prevPermissions === '' ? ' selected' : ''}>Permissions (default)</option>
+            <option value="skip"${prevPermissions === 'skip' ? ' selected' : ''}>skip</option>
+          </select>
+        </div>
+        <input type="text" id="createGroup" placeholder="Group (optional)" value="${esc(prevGroup)}" autocomplete="off" />
         <textarea id="createTask" rows="2" placeholder="Initial task (optional)" autocomplete="off">${esc(prevTask)}</textarea>
         <div class="create-form-actions">
           <button onclick="document.dispatchEvent(new CustomEvent('create-agent', {detail:{spawn:true}}))" ${hasProxies ? '' : 'disabled title="No proxy servers registered"'}>Create & Spawn</button>
@@ -1722,6 +1775,7 @@
   const FM_LABELS = {
     engine: 'Engine', model: 'Model', thinking: 'Thinking',
     cwd: 'Working Dir', proxy_host: 'Proxy Host', permissions: 'Permissions',
+    group: 'Group', spawn: 'Hook: Spawn', resume: 'Hook: Resume', compact: 'Hook: Compact',
   };
 
   async function renderPersona() {
@@ -1884,6 +1938,33 @@
           <span id="personaSaveStatus" style="font-size:11px;color:var(--text-dim)"></span>
         </div>
         <textarea id="personaEditor" style="flex:1;width:100%;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:12px;font-family:monospace;font-size:12px;resize:none;outline:none;box-sizing:border-box">${esc(rawContent || '')}</textarea>
+        <details class="persona-cheatsheet">
+          <summary>Frontmatter &amp; env reference</summary>
+          <div class="persona-cheatsheet-body">
+            <div class="persona-cheatsheet-section">
+              <strong>Frontmatter fields</strong> <span style="color:var(--text-dim)">(YAML between --- delimiters)</span>
+              <dl>
+                <dt>engine</dt><dd>claude | codex | opencode <em>(required)</em></dd>
+                <dt>cwd</dt><dd>Working directory <em>(required)</em></dd>
+                <dt>model</dt><dd>Model name (e.g. opus, sonnet, o3)</dd>
+                <dt>thinking</dt><dd>low | medium | high</dd>
+                <dt>permissions</dt><dd>skip (bypass permission prompts)</dd>
+                <dt>proxy_host</dt><dd>Pin agent to a specific proxy hostname</dd>
+                <dt>group</dt><dd>Group label for sidebar organization</dd>
+                <dt>spawn</dt><dd>Custom shell command for spawning</dd>
+                <dt>resume</dt><dd>Custom shell command for resuming</dd>
+                <dt>compact</dt><dd>Custom shell command for compacting</dd>
+              </dl>
+            </div>
+            <div class="persona-cheatsheet-section">
+              <strong>Environment variables</strong> <span style="color:var(--text-dim)">(available in agent sessions)</span>
+              <dl>
+                <dt>COLLAB_AGENT</dt><dd>Agent name (always set)</dd>
+                <dt>COLLAB_PERSONA_FILE</dt><dd>Host path to this .md file (set when custom hooks are active)</dd>
+              </dl>
+            </div>
+          </div>
+        </details>
       </div>
     `;
     document.getElementById('cancelEditBtn').onclick = () => {
@@ -2828,6 +2909,10 @@
     const engine = document.getElementById('createEngine')?.value;
     const proxyHost = document.getElementById('createProxy')?.value;
     const cwd = document.getElementById('createCwd')?.value.trim();
+    const model = document.getElementById('createModel')?.value.trim();
+    const thinking = document.getElementById('createThinking')?.value;
+    const permissions = document.getElementById('createPermissions')?.value;
+    const group = document.getElementById('createGroup')?.value.trim();
     const task = document.getElementById('createTask')?.value.trim();
     if (!name) { showToast('Agent name is required', 'error'); return; }
     if (!cwd) { showToast('Working directory is required', 'error'); return; }
@@ -2837,7 +2922,14 @@
       const createRes = await fetch('/api/agents', {
         method: 'POST',
         headers: authHeaders(),
-        body: JSON.stringify({ name, engine, cwd, proxyHost: proxyHost || undefined }),
+        body: JSON.stringify({
+          name, engine, cwd,
+          proxyHost: proxyHost || undefined,
+          model: model || undefined,
+          thinking: thinking || undefined,
+          permissions: permissions || undefined,
+          group: group || undefined,
+        }),
       });
       if (createRes.status === 401) { handleAuthError(); return; }
       const createBody = await createRes.json();

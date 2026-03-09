@@ -185,6 +185,7 @@ route('POST', '/api/agents', async (req, res, _match, ctx) => {
     permissions: body.permissions,
     proxyId: body.proxyId,
     proxyHost: body.proxyHost,
+    agentGroup: body.group,
   });
 
   // Write persona file so agent config persists across restarts
@@ -196,6 +197,7 @@ route('POST', '/api/agents', async (req, res, _match, ctx) => {
     fmLines.push(`cwd: ${body.cwd}`);
     if (body.proxyHost) fmLines.push(`proxy_host: ${body.proxyHost}`);
     if (body.permissions) fmLines.push(`permissions: ${body.permissions}`);
+    if (body.group) fmLines.push(`group: ${body.group}`);
     const content = `---\n${fmLines.join('\n')}\n---\n`;
     const dir = getPersonasDir();
     mkdirSync(dir, { recursive: true });
