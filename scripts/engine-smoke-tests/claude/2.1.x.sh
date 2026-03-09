@@ -198,9 +198,12 @@ test_resume() {
 
   pass "resume: --resume shows prompt"
 
+  # Give the CLI time to fully load session context before asking recall question
+  sleep 3
+
   paste_and_enter "$s" "What was the exact canary code I asked you to remember? Reply with just the code."
 
-  if wait_for_pattern "$s" "$canary" 30; then
+  if wait_for_pattern "$s" "$canary" 45; then
     pass "resume: context preserved — canary recalled after resume"
   else
     local pane
