@@ -441,13 +441,23 @@ export async function suspendAgent(
     // ── Phase 2: slow proxy work (no lock) ──
     const adapter = getAdapter(engine);
 
-    // Send exit command
-    await ctx.proxyDispatch(proxyId, {
-      action: 'paste',
-      sessionName: tmuxSession,
-      text: adapter.buildExitCommand(),
-      pressEnter: true,
-    });
+    // Send exit command — prefer keystroke delivery for TUI-based engines
+    if (adapter.exitKeys) {
+      for (const key of adapter.exitKeys()) {
+        await ctx.proxyDispatch(proxyId, {
+          action: 'send_keys',
+          sessionName: tmuxSession,
+          keys: key,
+        });
+      }
+    } else {
+      await ctx.proxyDispatch(proxyId, {
+        action: 'paste',
+        sessionName: tmuxSession,
+        text: adapter.buildExitCommand(),
+        pressEnter: true,
+      });
+    }
 
     // Wait for process to exit, then verify
     await sleep(EXIT_WAIT_MS);
@@ -593,13 +603,23 @@ export async function reloadAgent(
     // ── Phase 2: slow proxy work (no lock) ──
     const adapter = getAdapter(engine);
 
-    // 1. Send exit command
-    await ctx.proxyDispatch(proxyId, {
-      action: 'paste',
-      sessionName: oldTmuxSession,
-      text: adapter.buildExitCommand(),
-      pressEnter: true,
-    });
+    // 1. Send exit command — prefer keystroke delivery for TUI-based engines
+    if (adapter.exitKeys) {
+      for (const key of adapter.exitKeys()) {
+        await ctx.proxyDispatch(proxyId, {
+          action: 'send_keys',
+          sessionName: oldTmuxSession,
+          keys: key,
+        });
+      }
+    } else {
+      await ctx.proxyDispatch(proxyId, {
+        action: 'paste',
+        sessionName: oldTmuxSession,
+        text: adapter.buildExitCommand(),
+        pressEnter: true,
+      });
+    }
 
     // 2. Wait for exit
     await sleep(EXIT_WAIT_MS);
@@ -766,12 +786,23 @@ export async function compactAgent(
 
     const adapter = getAdapter(agent.engine);
 
-    await ctx.proxyDispatch(proxyId, {
-      action: 'paste',
-      sessionName: sessionName(agent),
-      text: adapter.buildCompactCommand(),
-      pressEnter: true,
-    });
+    // Send compact command — prefer keystroke delivery for TUI-based engines
+    if (adapter.compactKeys) {
+      for (const key of adapter.compactKeys()) {
+        await ctx.proxyDispatch(proxyId, {
+          action: 'send_keys',
+          sessionName: sessionName(agent),
+          keys: key,
+        });
+      }
+    } else {
+      await ctx.proxyDispatch(proxyId, {
+        action: 'paste',
+        sessionName: sessionName(agent),
+        text: adapter.buildCompactCommand(),
+        pressEnter: true,
+      });
+    }
 
     // Transition to active so the agent doesn't appear idle during compaction.
     // The health monitor will detect idle again once compaction finishes.

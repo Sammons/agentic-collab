@@ -84,6 +84,20 @@ export interface EngineAdapter {
   interruptKeys(): string[];
 
   /**
+   * Keys to send for exiting the session (alternative to buildExitCommand paste).
+   * When defined, the lifecycle sends these keys instead of pasting buildExitCommand().
+   * Used by TUI-based engines where exit is a keystroke (e.g. Ctrl-C) not a typed command.
+   */
+  exitKeys?(): string[];
+
+  /**
+   * Keys to send for compacting context (alternative to buildCompactCommand paste).
+   * When defined, the lifecycle sends these keys instead of pasting buildCompactCommand().
+   * Used by TUI-based engines where compact is a key chord (e.g. Ctrl-X C).
+   */
+  compactKeys?(): string[];
+
+  /**
    * Extract session ID from pane output after spawn.
    * Used by engines that don't support pre-set session IDs (e.g. Codex).
    * Returns the session ID string, or null if not found/not applicable.

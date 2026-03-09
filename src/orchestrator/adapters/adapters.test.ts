@@ -433,25 +433,22 @@ describe('Engine Adapters', () => {
   describe('OpenCodeAdapter', () => {
     const adapter = new OpenCodeAdapter();
 
-    it('builds spawn command with run subcommand', () => {
+    it('builds spawn command for TUI mode (no run subcommand)', () => {
       const cmd = adapter.buildSpawnCommand({
         name: 'oc-agent',
         cwd: '/tmp',
         model: 'claude-3.5',
       });
-      assert.ok(cmd.startsWith('opencode run'));
-      assert.ok(cmd.includes('-m claude-3.5'));
+      assert.equal(cmd, 'opencode -m claude-3.5');
+      assert.ok(!cmd.includes('run'));
     });
 
-    it('builds spawn command with task as positional arg', () => {
+    it('builds spawn command without task (TUI launches empty)', () => {
       const cmd = adapter.buildSpawnCommand({
         name: 'oc-agent',
         cwd: '/tmp',
-        task: 'fix the bug',
       });
-      assert.ok(cmd.startsWith('opencode run'));
-      assert.ok(cmd.includes('fix the bug'));
-      assert.ok(!cmd.includes('--prompt'));
+      assert.equal(cmd, 'opencode');
     });
 
     it('builds spawn command with variant for thinking', () => {
@@ -460,62 +457,59 @@ describe('Engine Adapters', () => {
         cwd: '/tmp',
         thinking: 'high',
       });
-      assert.ok(cmd.includes('--variant high'));
-    });
-
-    it('provides default message when no task given', () => {
-      const cmd = adapter.buildSpawnCommand({
-        name: 'oc-agent',
-        cwd: '/tmp',
-        model: undefined,
-        task: undefined,
-        thinking: undefined,
-      });
-      assert.ok(cmd.startsWith('opencode run'));
-      // v1.2.x requires a message — adapter provides a default
-      assert.ok(cmd.includes("'You are ready."));
+      assert.equal(cmd, 'opencode --variant high');
     });
 
     it('builds resume with -s for session ID', () => {
       const cmd = adapter.buildResumeCommand({
         name: 'oc-agent',
-        sessionId: 'sess-1',
+        sessionId: 'ses_abc123',
         cwd: '/tmp',
       });
-      assert.ok(cmd.includes('opencode run'));
-      assert.ok(cmd.includes('-s sess-1'));
+      assert.equal(cmd, 'opencode -s ses_abc123');
     });
 
-    it('builds resume with -c when no session ID', () => {
+    it('falls back to plain opencode when no session ID (no -c in TUI mode)', () => {
       const cmd = adapter.buildResumeCommand({
         name: 'oc-agent',
         cwd: '/tmp',
       });
-      assert.ok(cmd.includes('-c'));
-      assert.ok(!cmd.includes('--continue'));
+      assert.equal(cmd, 'opencode');
+      assert.ok(!cmd.includes('-c'));
     });
 
     it('returns null for rename', () => {
       assert.equal(adapter.buildRenameCommand('test'), null);
     });
 
-    it('builds exit command', () => {
-      assert.equal(adapter.buildExitCommand(), '/exit');
+    it('provides exit keys (Ctrl-C)', () => {
+      const keys = adapter.exitKeys!();
+      assert.deepStrictEqual(keys, ['C-c']);
     });
 
-    it('builds compact command via headless --command', () => {
-      assert.equal(adapter.buildCompactCommand(), 'opencode run -c --command /compact');
+    it('provides compact keys (Ctrl-X C)', () => {
+      const keys = adapter.compactKeys!();
+      assert.deepStrictEqual(keys, ['C-x', 'c']);
     });
 
-    it('returns interrupt keys', () => {
+    it('returns interrupt keys (single Escape)', () => {
       const keys = adapter.interruptKeys();
-      assert.ok(keys.length > 0);
-      assert.ok(keys.every(k => k === 'Escape'));
+      assert.deepStrictEqual(keys, ['Escape']);
     });
 
-    it('detects idle state from shell prompt', () => {
-      // In headless mode, opencode returns to shell after completion
-      assert.equal(adapter.detectIdleState('output\nsammons@host:/tmp$ '), 'waiting_for_input');
+    it('detects idle from TUI status bar', () => {
+      const pane = 'some output\n  ctrl+t variants  tab agents  ctrl+p commands';
+      assert.equal(adapter.detectIdleState(pane), 'waiting_for_input');
+    });
+
+    it('detects idle from Ask anything placeholder', () => {
+      const pane = 'output\n  Ask anything... "Fix a TODO in the codebase"';
+      assert.equal(adapter.detectIdleState(pane), 'waiting_for_input');
+    });
+
+    it('detects running from esc interrupt indicator', () => {
+      const pane = 'output\n  esc interrupt                    ctrl+t variants';
+      assert.equal(adapter.detectIdleState(pane), 'running_tool');
     });
 
     it('detects running state from spinner', () => {
@@ -526,12 +520,24 @@ describe('Engine Adapters', () => {
       assert.equal(adapter.detectIdleState('random text'), 'unknown');
     });
 
-    it('returns null context percent', () => {
+    it('parses context percent from TUI sidebar', () => {
+      const pane = 'Context\n  11,371 tokens\n  6% used\n  $0.00 spent';
+      const result = adapter.parseContextPercent(pane);
+      assert.equal(result.contextPct, 6);
+      assert.equal(result.confident, true);
+    });
+
+    it('returns null context when no percentage visible', () => {
       const result = adapter.parseContextPercent('anything');
       assert.equal(result.contextPct, null);
     });
 
-    it('extractSessionId returns null (OpenCode falls back to -c)', () => {
+    it('extracts session ID from exit output', () => {
+      const pane = 'Session   TUICHECK\n  Continue  opencode -s ses_32f35bf21ffeHDy7IvecACDwDY\nsammons@host:~$';
+      assert.equal(adapter.extractSessionId(pane), 'ses_32f35bf21ffeHDy7IvecACDwDY');
+    });
+
+    it('returns null session ID when not present', () => {
       assert.equal(adapter.extractSessionId('any opencode output'), null);
     });
   });
