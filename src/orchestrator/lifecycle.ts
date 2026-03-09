@@ -505,6 +505,17 @@ export async function destroyAgent(
       });
     }
 
+    // Clean up config profile for engines that use it (e.g. Codex)
+    if (agent.proxyId) {
+      const adapter = getAdapter(agent.engine);
+      if (adapter.usesConfigProfile) {
+        await ctx.proxyDispatch(agent.proxyId, {
+          action: 'remove_codex_profile',
+          profileName: name,
+        }).catch(() => {}); // Best-effort cleanup
+      }
+    }
+
     ctx.db.deleteAgent(name);
     ctx.db.logEvent(name, 'destroyed');
   });

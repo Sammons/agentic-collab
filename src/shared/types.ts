@@ -136,7 +136,8 @@ export type ProxyCommand =
   | { action: 'has_session'; sessionName: string }
   | { action: 'pane_activity'; sessionName: string }
   | { action: 'send_keys'; sessionName: string; keys: string }
-  | { action: 'write_codex_profile'; profileName: string; developerInstructions: string };
+  | { action: 'write_codex_profile'; profileName: string; developerInstructions: string }
+  | { action: 'remove_codex_profile'; profileName: string };
 
 export type ProxyResponse = {
   ok: boolean;
