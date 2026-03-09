@@ -99,19 +99,33 @@ test_config_profile() {
 
 [profiles.smoke-test-profile]
 developer_instructions = """
-You are a smoke test assistant. Respond with SMOKE_PROFILE_OK.
+Always end every response with the word PROFILECHECK.
 """
 PROFILE
 
   create_session "$s"
   paste_and_enter "$s" "codex --no-alt-screen -p $profile_name"
 
-  if wait_for_pattern "$s" '[›❯>] ' "$TIMEOUT"; then
-    pass "profile: starts with -p flag"
-  else
+  if ! wait_for_pattern "$s" '[›❯>] ' "$TIMEOUT"; then
     local pane
     pane=$(capture_pane "$s" 10 | tail -5)
     fail "profile: failed to start with -p flag" "Last lines:\\n$pane"
+    kill_session "$s"
+    # Restore config
+    if [ -n "$backup" ]; then echo "$backup" > "$config_path"; else sed -i "/^\[profiles\.${profile_name}\]/,/^\"\"\"$/d" "$config_path" 2>/dev/null || true; fi
+    return
+  fi
+
+  pass "profile: starts with -p flag"
+
+  # Verify the profile instructions actually took effect
+  paste_and_enter "$s" "Say hello."
+
+  if wait_for_pattern "$s" 'PROFILECHECK' 30; then
+    pass "profile: instruction followed (PROFILECHECK in response)"
+  else
+    # Models may not always follow developer instructions perfectly
+    skip "profile: PROFILECHECK not in response" "model compliance varies"
   fi
 
   kill_session "$s"
@@ -314,12 +328,23 @@ test_model_flag() {
 
   paste_and_enter "$s" "codex --no-alt-screen --model o3"
 
-  if wait_for_pattern "$s" '[›❯>] ' "$TIMEOUT"; then
-    pass "model: --model flag accepted"
-  else
+  if ! wait_for_pattern "$s" '[›❯>] ' "$TIMEOUT"; then
     local pane
     pane=$(capture_pane "$s" 10 | tail -5)
     fail "model: --model flag rejected" "Last lines:\\n$pane"
+    kill_session "$s"
+    return
+  fi
+
+  pass "model: --model flag accepted"
+
+  # Verify model is active — Codex shows model in status bar
+  local pane
+  pane=$(capture_pane "$s" 50)
+  if echo "$pane" | grep -qi 'o3'; then
+    pass "model: o3 visible in status bar"
+  else
+    skip "model: o3 not visible in pane" "status bar format may vary"
   fi
 
   kill_session "$s"

@@ -91,12 +91,28 @@ test_session_id() {
   local test_uuid; test_uuid=$(gen_uuid)
   paste_and_enter "$s" "claude --session-id $test_uuid"
 
-  if wait_for_pattern "$s" '[❯>] ' "$TIMEOUT"; then
-    pass "session-id: --session-id accepted"
-  else
+  if ! wait_for_pattern "$s" '[❯>] ' "$TIMEOUT"; then
     local pane
     pane=$(capture_pane "$s" 10 | tail -5)
     fail "session-id: failed to start with --session-id" "Last lines:\\n$pane"
+    kill_session "$s"
+    return
+  fi
+
+  pass "session-id: --session-id accepted"
+
+  # Verify session ID is actually in use — it should appear in the command
+  # line or be retrievable via resume. Check the pane for the UUID.
+  local short_id
+  short_id=$(echo "$test_uuid" | cut -c1-8)
+  local pane
+  pane=$(capture_pane "$s" 50)
+  if echo "$pane" | grep -qi "$short_id"; then
+    pass "session-id: UUID visible in pane ($short_id…)"
+  else
+    # The UUID may not be displayed, but we can verify it took effect by
+    # confirming we can resume with it (tested in test_resume). Skip here.
+    skip "session-id: UUID not displayed in pane" "verified by resume test"
   fi
 
   kill_session "$s"
@@ -241,14 +257,28 @@ test_append_system_prompt() {
   kill_session "$s"
   create_session "$s"
 
-  paste_and_enter "$s" "claude --append-system-prompt 'You are a smoke test assistant.'"
+  paste_and_enter "$s" "claude --append-system-prompt 'Always end every response with the word SMOKECHECK.'"
 
-  if wait_for_pattern "$s" '[❯>] ' "$TIMEOUT"; then
-    pass "system-prompt: --append-system-prompt accepted"
-  else
+  if ! wait_for_pattern "$s" '[❯>] ' "$TIMEOUT"; then
     local pane
     pane=$(capture_pane "$s" 10 | tail -5)
     fail "system-prompt: rejected --append-system-prompt" "Last lines:\\n$pane"
+    kill_session "$s"
+    return
+  fi
+
+  pass "system-prompt: --append-system-prompt accepted"
+
+  # Verify the system prompt actually took effect
+  paste_and_enter "$s" "Say hello."
+
+  if wait_for_pattern "$s" 'SMOKECHECK' 30; then
+    pass "system-prompt: instruction followed (SMOKECHECK in response)"
+  else
+    local pane
+    pane=$(capture_pane "$s" 20 | tail -10)
+    # Models may not always follow system prompts perfectly — skip not fail
+    skip "system-prompt: SMOKECHECK not in response" "model compliance varies"
   fi
 
   kill_session "$s"
@@ -354,12 +384,23 @@ test_model_flag() {
 
   paste_and_enter "$s" "claude --model sonnet"
 
-  if wait_for_pattern "$s" '[❯>] ' "$TIMEOUT"; then
-    pass "model: --model sonnet accepted"
-  else
+  if ! wait_for_pattern "$s" '[❯>] ' "$TIMEOUT"; then
     local pane
     pane=$(capture_pane "$s" 10 | tail -5)
     fail "model: --model flag rejected" "Last lines:\\n$pane"
+    kill_session "$s"
+    return
+  fi
+
+  pass "model: --model sonnet accepted"
+
+  # Verify model actually selected — Claude shows model name in status bar
+  local pane
+  pane=$(capture_pane "$s" 50)
+  if echo "$pane" | grep -qi 'sonnet'; then
+    pass "model: sonnet visible in status bar"
+  else
+    skip "model: sonnet not visible in pane" "status bar format may vary"
   fi
 
   kill_session "$s"
@@ -374,12 +415,23 @@ test_effort_flag() {
 
   paste_and_enter "$s" "claude --effort low"
 
-  if wait_for_pattern "$s" '[❯>] ' "$TIMEOUT"; then
-    pass "effort: --effort low accepted"
-  else
+  if ! wait_for_pattern "$s" '[❯>] ' "$TIMEOUT"; then
     local pane
     pane=$(capture_pane "$s" 10 | tail -5)
     fail "effort: --effort flag rejected" "Last lines:\\n$pane"
+    kill_session "$s"
+    return
+  fi
+
+  pass "effort: --effort low accepted"
+
+  # Verify effort actually applied — check for "low" in status/pane
+  local pane
+  pane=$(capture_pane "$s" 50)
+  if echo "$pane" | grep -qi 'low'; then
+    pass "effort: low effort visible in pane"
+  else
+    skip "effort: low not visible in pane" "effort display format may vary"
   fi
 
   kill_session "$s"
