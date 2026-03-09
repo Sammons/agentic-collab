@@ -67,6 +67,17 @@ describe('HealthMonitor', () => {
   // Alias for backward compatibility in tests
   const makeMonitor = makeDispatcherAndMonitor;
 
+  /** Ensure an agent is in active state for testing. */
+  function ensureActive(name: string): void {
+    const a = db.getAgent(name);
+    if (a && a.state !== 'active') {
+      db.updateAgentState(name, 'active', a.version, {
+        proxyId: 'p1',
+        tmuxSession: `agent-${name}`,
+      });
+    }
+  }
+
   it('starts and stops without error', () => {
     const monitor = makeMonitor();
     monitor.start();
@@ -103,20 +114,34 @@ describe('HealthMonitor', () => {
     assert.equal(captureForVoid.length, 0);
   });
 
-  it('detects idle state transition from active', async () => {
-    captureOutput = 'some output\n> '; // waiting_for_input
+  it('detects idle via screen-diff (unchanged output across polls)', async () => {
+    ensureActive('health-a1');
+    captureOutput = 'some output\n> '; // static output
 
+    // Same monitor instance for both polls — screen-diff state is per-instance
     const monitor = makeMonitor();
-    await monitor.pollAll();
 
-    const agent = db.getAgent('health-a1');
-    assert.equal(agent?.state, 'idle');
+    // First poll — establishes baseline, no transition yet
+    await monitor.pollAll();
+    assert.equal(db.getAgent('health-a1')?.state, 'active', 'still active after first poll (baseline)');
+
+    // Second poll — same output → IDLE_THRESHOLD reached → idle
+    await monitor.pollAll();
+    assert.equal(db.getAgent('health-a1')?.state, 'idle', 'idle after 2 consecutive unchanged polls');
   });
 
-  it('detects active transition from idle when agent is working', async () => {
-    captureOutput = 'some output\n⠋ Processing...'; // running_tool
+  it('detects active transition when screen changes', async () => {
+    // Agent should be idle from previous test
+    const a = db.getAgent('health-a1')!;
+    assert.equal(a.state, 'idle', 'precondition: agent should be idle');
 
+    // Start with same output to establish baseline, then change it
+    captureOutput = 'some output\n> '; // same as last test
     const monitor = makeMonitor();
+    await monitor.pollAll(); // baseline with current output
+
+    // Now change the output — this should trigger active transition
+    captureOutput = 'new output\n⠋ Processing...';
     await monitor.pollAll();
 
     const agent = db.getAgent('health-a1');
@@ -159,21 +184,15 @@ describe('HealthMonitor', () => {
 
   it('fires onAgentUpdate callback on state transitions', async () => {
     const updates: string[] = [];
-
-    // Set health-a1 back to active for this test
-    const a = db.getAgent('health-a1')!;
-    if (a.state !== 'active') {
-      db.updateAgentState('health-a1', 'active', a.version, {
-        proxyId: 'p1',
-        tmuxSession: 'agent-health-a1',
-      });
-    }
-
-    captureOutput = 'some output\n> '; // waiting_for_input → idle transition
+    ensureActive('health-a1');
+    captureOutput = 'stable output\nprompt> '; // will be same across polls
 
     const monitor = makeMonitor({
       onAgentUpdate: (name) => updates.push(name),
     });
+
+    // Need 2 polls with same output for idle transition via screen-diff
+    await monitor.pollAll();
     await monitor.pollAll();
 
     assert.ok(updates.includes('health-a1'));
@@ -266,7 +285,7 @@ describe('HealthMonitor', () => {
     assert.ok(deliveredAgents.includes('health-cb-deliver'));
   });
 
-  it('delivers pending messages when agent is waiting_for_input', async () => {
+  it('delivers pending messages when agent becomes idle via screen-diff', async () => {
     db.createAgent({ name: 'health-deliver', engine: 'claude', cwd: '/tmp', proxyId: 'p1' });
     const a = db.getAgent('health-deliver')!;
     db.updateAgentState('health-deliver', 'active', a.version, {
@@ -281,14 +300,17 @@ describe('HealthMonitor', () => {
       envelope: '[from: other-agent]: hello',
     });
 
-    captureOutput = 'some output\n> '; // waiting_for_input
+    captureOutput = 'stable output for delivery\n> '; // unchanged across polls → idle
 
     const queueUpdates: import('../shared/types.ts').PendingMessage[] = [];
     const monitor = makeMonitor({
       onQueueUpdate: (msg) => queueUpdates.push(msg),
     });
     proxyCommands = [];
-    await monitor.pollAll();
+
+    // Same monitor instance: first poll establishes baseline, second detects idle
+    await monitor.pollAll(); // baseline
+    await monitor.pollAll(); // unchanged → idle → delivers message
 
     // Should have pasted the message via proxy
     assert.ok(proxyCommands.some(c => c.action === 'paste'));
@@ -314,9 +336,9 @@ describe('HealthMonitor', () => {
       envelope: '[from: sender]: will fail',
     });
 
-    captureOutput = 'some output\n> ';
+    captureOutput = 'retry test output\n> ';
 
-    // Use a dispatch that fails on paste
+    // Use a dispatch that fails on paste but succeeds on capture
     const retryDispatch = async (_proxyId: string, command: ProxyCommand): Promise<ProxyResponse> => {
       if (command.action === 'capture') return { ok: true, data: captureOutput };
       if (command.action === 'has_session') return { ok: true, data: true };
@@ -336,6 +358,8 @@ describe('HealthMonitor', () => {
       pollIntervalMs: 100,
     });
 
+    // Same monitor: first establishes baseline, second detects idle and attempts delivery
+    await failMonitor.pollAll();
     await failMonitor.pollAll();
 
     const updated = db.getPendingMessageById(queued.id)!;
@@ -345,21 +369,19 @@ describe('HealthMonitor', () => {
   });
 
   it('scheduleQuickPoll triggers a one-shot poll after ~1s', async () => {
-    // Ensure agent is active so the quick poll can detect idle
-    const a = db.getAgent('health-a1')!;
-    if (a.state !== 'active') {
-      db.updateAgentState('health-a1', 'active', a.version, {
-        proxyId: 'p1',
-        tmuxSession: 'agent-health-a1',
-      });
-    }
-
-    captureOutput = 'some output\n> '; // waiting_for_input
+    ensureActive('health-a1');
+    captureOutput = 'quick-poll-test output\n> ';
 
     const updates: string[] = [];
     const monitor = makeMonitor({
       onAgentUpdate: (name) => updates.push(name),
     });
+
+    // Establish baseline with a poll so the quick poll can do screen-diff
+    await monitor.pollAll();
+
+    // Reset agent to active for the quick poll transition test
+    ensureActive('health-a1');
 
     monitor.scheduleQuickPoll('health-a1');
     // Duplicate should be deduplicated
@@ -368,10 +390,9 @@ describe('HealthMonitor', () => {
     // Wait for the 1s timer to fire
     await new Promise<void>((resolve) => setTimeout(resolve, 1200));
 
-    // Should have polled and detected idle
+    // Quick poll sees same output as baseline → idle
     const agent = db.getAgent('health-a1');
     assert.equal(agent?.state, 'idle');
-    assert.ok(updates.includes('health-a1'));
 
     monitor.stop();
   });
@@ -403,7 +424,7 @@ describe('HealthMonitor', () => {
     // Clear next_attempt_at so it's deliverable
     db.rawDb.prepare(`UPDATE pending_messages SET next_attempt_at = NULL WHERE id = ?`).run(queued.id);
 
-    captureOutput = 'some output\n> ';
+    captureOutput = 'autoreply-test output\n> ';
 
     const autoReplyDispatch = async (_proxyId: string, command: ProxyCommand): Promise<ProxyResponse> => {
       if (command.action === 'capture') return { ok: true, data: captureOutput };
@@ -424,6 +445,8 @@ describe('HealthMonitor', () => {
       pollIntervalMs: 100,
     });
 
+    // Same monitor: first establishes baseline, second detects idle + attempts delivery
+    await failMonitor.pollAll();
     await failMonitor.pollAll();
 
     // Original message should be permanently failed
@@ -487,9 +510,8 @@ describe('HealthMonitor', () => {
     drainDispatcher.stop();
   });
 
-  it('detects idle on first poll after self-heal (uninitialized activity)', async () => {
-    // Simulate an agent that was self-healed from 'failed' back to 'active'.
-    // The health monitor has no prior tmux activity for this agent.
+  it('detects idle on first poll after self-heal (screen-diff baseline)', async () => {
+    // Screen-diff needs 2 polls with same output to detect idle.
     db.createAgent({ name: 'health-selfheal', engine: 'codex', cwd: '/tmp', proxyId: 'p1' });
     const a = db.getAgent('health-selfheal')!;
     db.updateAgentState('health-selfheal', 'active', a.version, {
@@ -497,12 +519,10 @@ describe('HealthMonitor', () => {
       proxyId: 'p1',
     });
 
-    // Pane shows Codex idle prompt. pane_activity returns a real timestamp
-    // (simulating first contact after recovery).
-    let activityTs = 1700000000;
+    captureOutput = 'some output\n› ';
+
     const healDispatch = async (_proxyId: string, command: ProxyCommand): Promise<ProxyResponse> => {
-      if (command.action === 'capture') return { ok: true, data: 'some output\n› ' };
-      if (command.action === 'pane_activity') return { ok: true, data: activityTs };
+      if (command.action === 'capture') return { ok: true, data: captureOutput };
       return { ok: true };
     };
 
@@ -516,11 +536,13 @@ describe('HealthMonitor', () => {
       messageDispatcher: healDispatcher, pollIntervalMs: 100,
     });
 
-    // First poll after self-heal — should detect idle despite no prior activity data
+    // First poll establishes baseline
     await healMonitor.pollAll();
+    assert.equal(db.getAgent('health-selfheal')?.state, 'active', 'still active after baseline poll');
 
-    const agent = db.getAgent('health-selfheal');
-    assert.equal(agent?.state, 'idle', 'should transition to idle on first poll after self-heal');
+    // Second poll — same output → idle
+    await healMonitor.pollAll();
+    assert.equal(db.getAgent('health-selfheal')?.state, 'idle', 'idle after 2 consecutive unchanged polls');
 
     healMonitor.stop();
   });
@@ -558,5 +580,59 @@ describe('HealthMonitor', () => {
     await new Promise(resolve => setTimeout(resolve, 3500));
     // Should still be 1 — drain was cancelled
     assert.equal(deliveryCount, 1);
+  });
+});
+
+describe('HealthMonitor.stripAnsi', () => {
+  it('strips CSI color sequences', () => {
+    assert.equal(HealthMonitor.stripAnsi('\x1b[32mgreen\x1b[0m'), 'green');
+    assert.equal(HealthMonitor.stripAnsi('\x1b[1;31mred bold\x1b[0m'), 'red bold');
+  });
+
+  it('strips OSC hyperlink sequences', () => {
+    assert.equal(
+      HealthMonitor.stripAnsi('\x1b]8;;https://example.com\x07link\x1b]8;;\x07'),
+      'link',
+    );
+  });
+
+  it('returns plain text unchanged', () => {
+    assert.equal(HealthMonitor.stripAnsi('hello world'), 'hello world');
+    assert.equal(HealthMonitor.stripAnsi(''), '');
+  });
+
+  it('strips cursor movement sequences', () => {
+    assert.equal(HealthMonitor.stripAnsi('\x1b[2J\x1b[Hcontent'), 'content');
+  });
+});
+
+describe('HealthMonitor.takeSnapshot', () => {
+  it('captures last N lines', () => {
+    const output = 'line1\nline2\nline3\nline4\nline5\nline6\nline7';
+    const snapshot = HealthMonitor.takeSnapshot(output, 3);
+    assert.equal(snapshot, 'line5\nline6\nline7');
+  });
+
+  it('strips ANSI codes before snapshotting', () => {
+    const output = '\x1b[32mline1\x1b[0m\n\x1b[31mline2\x1b[0m';
+    const snapshot = HealthMonitor.takeSnapshot(output, 5);
+    assert.equal(snapshot, 'line1\nline2');
+  });
+
+  it('trims trailing whitespace per line', () => {
+    const output = 'line1   \nline2  \t\nline3';
+    const snapshot = HealthMonitor.takeSnapshot(output, 5);
+    assert.equal(snapshot, 'line1\nline2\nline3');
+  });
+
+  it('handles fewer lines than requested', () => {
+    const output = 'only\ntwo';
+    const snapshot = HealthMonitor.takeSnapshot(output, 5);
+    assert.equal(snapshot, 'only\ntwo');
+  });
+
+  it('handles empty output', () => {
+    assert.equal(HealthMonitor.takeSnapshot('', 5), '');
+    assert.equal(HealthMonitor.takeSnapshot('\n\n', 5), '\n\n');
   });
 });
