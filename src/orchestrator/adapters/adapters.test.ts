@@ -335,8 +335,8 @@ describe('Engine Adapters', () => {
       assert.equal(adapter.buildExitCommand(), '/exit');
     });
 
-    it('builds compact command', () => {
-      assert.equal(adapter.buildCompactCommand(), '/compact');
+    it('returns null for compact (Codex has no compaction support)', () => {
+      assert.equal(adapter.buildCompactCommand(), null);
     });
 
     it('returns interrupt keys', () => {

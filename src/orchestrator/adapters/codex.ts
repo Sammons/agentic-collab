@@ -124,8 +124,9 @@ export class CodexAdapter implements EngineAdapter {
     return '/exit';
   }
 
-  buildCompactCommand(): string {
-    return '/compact';
+  buildCompactCommand(): string | null {
+    // Codex CLI has no /compact equivalent — compaction is not supported.
+    return null;
   }
 
   buildRenameCommand(_name: string): string | null {
