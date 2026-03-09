@@ -109,6 +109,17 @@ describe('API Routes', () => {
     assert.equal((data as Record<string, unknown>).state, 'void');
   });
 
+  it('POST /api/agents accepts optional group field', async () => {
+    const { status, data } = await api('POST', '/api/agents', {
+      name: 'api-agent-grouped',
+      engine: 'claude',
+      cwd: '/tmp/test',
+      group: 'infra',
+    });
+    assert.equal(status, 201);
+    assert.equal((data as Record<string, unknown>).agentGroup, 'infra');
+  });
+
   it('POST /api/agents rejects duplicate', async () => {
     const { status } = await api('POST', '/api/agents', {
       name: 'api-agent-1',
