@@ -153,7 +153,7 @@ describe('Lifecycle', () => {
       assert.ok(paste.text.includes('--dangerously-bypass-approvals-and-sandbox'), 'should include codex permissions flag');
     });
 
-    it('opencode spawn includes -m and run subcommand', async () => {
+    it('opencode spawn launches TUI with -m flag (no run subcommand)', async () => {
       db.createAgent({ name: 'cmd-opencode', engine: 'opencode', cwd: '/tmp', proxyId: 'p1' });
       proxyCommands = [];
 
@@ -169,10 +169,12 @@ describe('Lifecycle', () => {
 
       const paste = proxyCommands.find(c => c.action === 'paste') as Extract<ProxyCommand, { action: 'paste' }>;
       assert.ok(paste, 'should have paste command');
-      assert.ok(paste.text.includes('opencode run'), 'should use run subcommand');
+      // TUI mode: spawn command is `opencode -m <model> --variant <thinking>`
+      // Task is NOT in the spawn command — it's delivered separately via paste
+      assert.ok(paste.text.includes('opencode'), 'should include opencode');
+      assert.ok(!paste.text.includes('opencode run'), 'should NOT use run subcommand (TUI mode)');
       assert.ok(paste.text.includes('-m claude-3.5'), 'should include -m flag');
       assert.ok(paste.text.includes('--variant high'), 'should include --variant for thinking');
-      assert.ok(paste.text.includes('write tests'), 'should include task');
     });
 
     it('claude spawn omits optional flags when not provided', async () => {

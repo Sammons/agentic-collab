@@ -90,8 +90,12 @@ for engine in "${ENGINES[@]}"; do
   FAIL=0
   SKIP=0
 
-  # Source and run the harness (it defines and calls test functions)
+  # Source and run the harness (it defines and calls test functions).
+  # Temporarily disable set -e so that non-zero returns from grep/wait helpers
+  # inside test functions don't abort the entire runner.
+  set +e
   source "$harness"
+  set -e
 
   print_summary "${engine}" || true
 
