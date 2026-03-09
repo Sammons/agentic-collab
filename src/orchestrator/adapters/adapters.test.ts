@@ -222,13 +222,19 @@ describe('Engine Adapters', () => {
       assert.ok(cmd.includes('hello world'));
     });
 
-    it('builds spawn command with skip-permissions', () => {
+    it('builds spawn command with skip-permissions using granular flags', () => {
       const cmd = adapter.buildSpawnCommand({
         name: 'codex-agent',
         cwd: '/tmp',
         dangerouslySkipPermissions: true,
       });
-      assert.ok(cmd.includes('--dangerously-bypass-approvals-and-sandbox'));
+      assert.ok(cmd.includes('-a never'), 'should include -a never');
+      assert.ok(cmd.includes('-s danger-full-access'), 'should include -s danger-full-access');
+      assert.ok(!cmd.includes('--dangerously-bypass-approvals-and-sandbox'), 'should not use monolithic bypass flag');
+    });
+
+    it('supports resume prompt', () => {
+      assert.equal(adapter.supportsResumePrompt, true);
     });
 
     it('builds spawn command with -p profile when appendSystemPrompt is set', () => {

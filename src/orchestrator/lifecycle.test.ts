@@ -150,7 +150,8 @@ describe('Lifecycle', () => {
       assert.ok(paste.text.includes('codex'), 'should start with codex');
       assert.ok(paste.text.includes('--model o3'), 'should include --model');
       assert.ok(paste.text.includes('refactor auth'), 'should include task');
-      assert.ok(paste.text.includes('--dangerously-bypass-approvals-and-sandbox'), 'should include codex permissions flag');
+      assert.ok(paste.text.includes('-a never'), 'should include -a never for unattended operation');
+      assert.ok(paste.text.includes('-s danger-full-access'), 'should include -s danger-full-access sandbox mode');
     });
 
     it('opencode spawn launches TUI with -m flag (no run subcommand)', async () => {
