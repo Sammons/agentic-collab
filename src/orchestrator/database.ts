@@ -130,6 +130,15 @@ export class Database {
     if (!agentColNames.has('sort_order')) {
       this.db.exec('ALTER TABLE agents ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0');
     }
+    if (!agentColNames.has('hook_spawn')) {
+      this.db.exec('ALTER TABLE agents ADD COLUMN hook_spawn TEXT');
+    }
+    if (!agentColNames.has('hook_resume')) {
+      this.db.exec('ALTER TABLE agents ADD COLUMN hook_resume TEXT');
+    }
+    if (!agentColNames.has('hook_compact')) {
+      this.db.exec('ALTER TABLE agents ADD COLUMN hook_compact TEXT');
+    }
 
     // Add withdrawn column to dashboard_messages
     if (!dmColumns.some((c) => c['name'] === 'withdrawn')) {
@@ -171,10 +180,13 @@ export class Database {
     proxyHost?: string;
     proxyId?: string;
     agentGroup?: string;
+    hookSpawn?: string;
+    hookResume?: string;
+    hookCompact?: string;
   }): AgentRecord {
     this.db.prepare(`
-      INSERT INTO agents (name, engine, model, thinking, cwd, persona, permissions, proxy_host, proxy_id, agent_group, state)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'void')
+      INSERT INTO agents (name, engine, model, thinking, cwd, persona, permissions, proxy_host, proxy_id, agent_group, hook_spawn, hook_resume, hook_compact, state)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'void')
     `).run(
       opts.name,
       opts.engine,
@@ -186,6 +198,9 @@ export class Database {
       opts.proxyHost ?? null,
       opts.proxyId ?? null,
       opts.agentGroup ?? null,
+      opts.hookSpawn ?? null,
+      opts.hookResume ?? null,
+      opts.hookCompact ?? null,
     );
     return this.getAgent(opts.name)!;
   }
@@ -204,6 +219,9 @@ export class Database {
     permissions?: string;
     proxyHost?: string;
     agentGroup?: string;
+    hookSpawn?: string;
+    hookResume?: string;
+    hookCompact?: string;
   }): AgentRecord {
     const existing = this.getAgent(opts.name);
     if (!existing) {
@@ -212,7 +230,8 @@ export class Database {
     // Update config fields only — preserve runtime state
     this.db.prepare(`
       UPDATE agents SET engine = ?, model = ?, thinking = ?, cwd = ?,
-        persona = ?, permissions = ?, proxy_host = ?, agent_group = ?
+        persona = ?, permissions = ?, proxy_host = ?, agent_group = ?,
+        hook_spawn = ?, hook_resume = ?, hook_compact = ?
       WHERE name = ?
     `).run(
       opts.engine,
@@ -223,6 +242,9 @@ export class Database {
       opts.permissions ?? null,
       opts.proxyHost ?? null,
       opts.agentGroup ?? null,
+      opts.hookSpawn ?? null,
+      opts.hookResume ?? null,
+      opts.hookCompact ?? null,
       opts.name,
     );
     return this.getAgent(opts.name)!;
@@ -579,6 +601,9 @@ function mapAgentRow(row: Record<string, unknown>): AgentRecord {
     proxyHost: row['proxy_host'] as string | null,
     agentGroup: row['agent_group'] as string | null,
     sortOrder: (row['sort_order'] as number) ?? 0,
+    hookSpawn: row['hook_spawn'] as string | null,
+    hookResume: row['hook_resume'] as string | null,
+    hookCompact: row['hook_compact'] as string | null,
     state: row['state'] as AgentState,
     stateBeforeShutdown: row['state_before_shutdown'] as string | null,
     currentSessionId: row['current_session_id'] as string | null,
@@ -663,6 +688,9 @@ const COLUMN_MAP: Record<string, string> = {
   stateBeforeShutdown: 'state_before_shutdown',
   spawnCount: 'spawn_count',
   agentGroup: 'agent_group',
+  hookSpawn: 'hook_spawn',
+  hookResume: 'hook_resume',
+  hookCompact: 'hook_compact',
 };
 
 function toColumnName(key: string): string {

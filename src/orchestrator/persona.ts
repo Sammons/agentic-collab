@@ -39,6 +39,12 @@ export type PersonaFrontmatter = {
   proxy_host?: string;
   permissions?: string;
   group?: string;
+  /** Custom shell command to spawn the agent (overrides adapter.buildSpawnCommand). */
+  spawn?: string;
+  /** Custom shell command to resume the agent (overrides adapter.buildResumeCommand). */
+  resume?: string;
+  /** Custom shell command to compact the agent (overrides adapter.buildCompactCommand). */
+  compact?: string;
 };
 
 export type ParsedPersona = {
@@ -331,6 +337,9 @@ export function syncSinglePersona(db: Database, name: string, personasDir?: stri
     permissions: fm.permissions,
     proxyHost: fm.proxy_host,
     agentGroup: fm.group,
+    hookSpawn: fm.spawn,
+    hookResume: fm.resume,
+    hookCompact: fm.compact,
   });
   return true;
 }
@@ -366,6 +375,9 @@ export function syncPersonasToDb(db: Database, personasDir?: string): number {
       permissions: frontmatter.permissions,
       proxyHost: frontmatter.proxy_host,
       agentGroup: frontmatter.group,
+      hookSpawn: frontmatter.spawn,
+      hookResume: frontmatter.resume,
+      hookCompact: frontmatter.compact,
     });
 
     synced++;
@@ -412,6 +424,9 @@ export function createPersonaAndAgent(
     permissions: fm.permissions,
     proxyHost: fm.proxy_host,
     agentGroup: fm.group,
+    hookSpawn: fm.spawn,
+    hookResume: fm.resume,
+    hookCompact: fm.compact,
   });
 
   return { name, frontmatter: fm, body };
