@@ -14,7 +14,7 @@ import { shellQuote } from '../../shared/utils.ts';
 export class CodexAdapter implements EngineAdapter {
   readonly engine = 'codex';
   readonly canDeliverWhileActive = false;
-  readonly supportsResumePrompt = false;
+  readonly supportsResumePrompt = true;
 
   /**
    * Whether this engine uses a config profile for system prompt injection.
@@ -27,7 +27,10 @@ export class CodexAdapter implements EngineAdapter {
     const parts = ['codex', '--no-alt-screen'];
 
     if (opts.dangerouslySkipPermissions === true) {
-      parts.push('--dangerously-bypass-approvals-and-sandbox');
+      // Granular flags instead of monolithic --dangerously-bypass-approvals-and-sandbox.
+      // -a never: never prompt for approval (prevents TUI hangs in unattended tmux sessions).
+      // -s danger-full-access: full filesystem access (matches persona permissions: skip).
+      parts.push('-a', 'never', '-s', 'danger-full-access');
     }
 
     if (opts.model) {
