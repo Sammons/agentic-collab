@@ -340,7 +340,11 @@ export async function resumeAgent(
         appendSystemPrompt: systemPrompt,
       });
     } else {
-      resumeSessionId = randomUUID();
+      // No stored session ID — spawn fresh.
+      // Only Claude uses --session-id; other engines ignore it. Generate a UUID
+      // for Claude but set null for others so we don't persist a phantom ID that
+      // the engine can't resume from later (e.g. Codex resume <uuid> fails).
+      resumeSessionId = adapter.engine === 'claude' ? randomUUID() : null;
       cmd = adapter.buildSpawnCommand({
         name,
         cwd,
@@ -668,8 +672,10 @@ export async function reloadAgent(
           appendSystemPrompt: systemPrompt,
         })
       : (() => {
-          // No session to resume — spawn fresh with a new session ID
-          reloadSessionId = randomUUID();
+          // No session to resume — spawn fresh.
+          // Only Claude uses --session-id; other engines ignore it. Avoid persisting
+          // a phantom UUID that the engine can't resume from later.
+          reloadSessionId = adapter.engine === 'claude' ? randomUUID() : null;
           return adapter.buildSpawnCommand({
             name,
             cwd,
