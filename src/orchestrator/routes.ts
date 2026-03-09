@@ -706,7 +706,8 @@ route('POST', '/api/agents/:name/resume', async (req, res, match, ctx) => {
   }
 });
 
-route('POST', '/api/agents/:name/suspend', async (_req, res, match, ctx) => {
+// Primary "exit" endpoint + backward-compat "suspend" alias
+const handleExit: RouteHandler = async (_req, res, match, ctx) => {
   const name = match.pathname.groups['name']!;
 
   try {
@@ -717,7 +718,9 @@ route('POST', '/api/agents/:name/suspend', async (_req, res, match, ctx) => {
   } catch (err) {
     json(res, 400, { error: (err as Error).message });
   }
-});
+};
+route('POST', '/api/agents/:name/exit', handleExit);
+route('POST', '/api/agents/:name/suspend', handleExit);
 
 route('POST', '/api/agents/:name/reload', async (req, res, match, ctx) => {
   const name = match.pathname.groups['name']!;

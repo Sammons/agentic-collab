@@ -372,7 +372,7 @@ describe('API Routes', () => {
 
   // ── Lifecycle Routes ──
 
-  it('POST /api/agents/:name/suspend suspends active agent', async () => {
+  it('POST /api/agents/:name/exit exits (suspends) active agent', async () => {
     // Ensure agent is active
     const a = db.getAgent('api-agent-1');
     if (a && a.state !== 'active') {
@@ -382,7 +382,7 @@ describe('API Routes', () => {
       });
     }
 
-    const { status, data } = await api('POST', '/api/agents/api-agent-1/suspend');
+    const { status, data } = await api('POST', '/api/agents/api-agent-1/exit');
     assert.equal(status, 200);
     assert.equal((data as Record<string, unknown>).state, 'suspended');
   });
