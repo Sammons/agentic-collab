@@ -185,6 +185,12 @@ gen_uuid() {
   fi
 }
 
+gen_canary() {
+  # Generate a unique canary string for resume context validation.
+  # Uses od (POSIX) instead of xxd which may not be installed in minimal containers.
+  echo "CANARY_$(head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+}
+
 # ── Engine check ──
 
 require_engine() {

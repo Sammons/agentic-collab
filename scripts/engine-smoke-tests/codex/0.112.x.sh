@@ -150,13 +150,16 @@ test_exit() {
   kill_session "$s"
 }
 
-# ── Test 6: Resume with --last ──
+# ── Test 6: Resume with --last (context validation) ──
 
 test_resume_last() {
   local s; s=$(smoke_session codex resume)
   kill_session "$s"
   create_session "$s"
 
+  local canary; canary=$(gen_canary)
+
+  # Phase 1: spawn, plant canary, exit
   paste_and_enter "$s" "codex --no-alt-screen"
   if ! wait_for_pattern "$s" '[›❯>] ' "$TIMEOUT"; then
     fail "resume: initial spawn failed"
@@ -164,19 +167,51 @@ test_resume_last() {
     return
   fi
 
+  paste_and_enter "$s" "Remember this exact code: $canary — confirm by repeating it back."
+  if ! wait_for_pattern "$s" "$canary" 30; then
+    fail "resume: model did not echo canary in initial session"
+    kill_session "$s"
+    return
+  fi
+
+  if ! wait_for_pattern "$s" '[›❯>] ' "$TIMEOUT"; then
+    fail "resume: prompt never returned after canary response"
+    kill_session "$s"
+    return
+  fi
+
   paste_and_enter "$s" "/exit"
   sleep 2
 
+  # Phase 2: resume and ask for canary
   paste_and_enter "$s" "codex --no-alt-screen resume --last"
 
-  if wait_for_pattern "$s" '[›❯>] ' "$TIMEOUT"; then
-    pass "resume: --last shows prompt"
-  elif capture_pane "$s" 20 | grep -qiE 'no saved session|no session'; then
-    pass "resume: --last gives graceful error (no saved session)"
+  if ! wait_for_pattern "$s" '[›❯>] ' "$TIMEOUT"; then
+    if capture_pane "$s" 20 | grep -qiE 'no saved session|no session'; then
+      skip "resume: session not persisted (graceful error)" "server may not persist short sessions"
+    else
+      local pane
+      pane=$(capture_pane "$s" 10 | tail -5)
+      fail "resume: --last did not show prompt" "Last lines:\\n$pane"
+    fi
+    kill_session "$s"
+    return
+  fi
+
+  pass "resume: --last shows prompt"
+
+  paste_and_enter "$s" "What was the exact canary code I asked you to remember? Reply with just the code."
+
+  if wait_for_pattern "$s" "$canary" 30; then
+    pass "resume: context preserved — canary recalled after resume"
   else
     local pane
-    pane=$(capture_pane "$s" 10 | tail -5)
-    fail "resume: --last neither resumed nor gave graceful error" "Last lines:\\n$pane"
+    pane=$(capture_pane "$s" 30)
+    if echo "$pane" | grep -qi "canary\|remember\|code"; then
+      fail "resume: model responded but did not recall canary $canary" "Pane excerpt:\\n$(echo "$pane" | tail -10)"
+    else
+      fail "resume: no response to canary recall request" "Pane excerpt:\\n$(echo "$pane" | tail -10)"
+    fi
   fi
 
   kill_session "$s"
