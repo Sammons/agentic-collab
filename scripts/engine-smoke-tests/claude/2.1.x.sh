@@ -1,15 +1,10 @@
 #!/usr/bin/env bash
-# Smoke tests for Claude CLI — validates adapter assumptions match reality.
-set -euo pipefail
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/lib.sh"
-
-require_engine claude || exit 0
-
-echo ""
-echo "══════════════════════════════════════"
-echo "  Claude CLI Smoke Tests"
-echo "══════════════════════════════════════"
+# Claude CLI smoke tests — harness for v2.1.x
+# Validated against: 2.1.71
+#
+# Sourced by run-all.sh after lib.sh is loaded. Defines and runs tests.
+# All lib.sh helpers (smoke_session, create_session, paste_and_enter,
+# assert_pattern, pass, fail, skip, gen_uuid, etc.) are available.
 
 # ── Test 1: Spawn ──
 
@@ -20,10 +15,7 @@ test_spawn() {
 
   paste_and_enter "$s" "claude"
 
-  # Claude shows ❯ or > prompt after init (claude.ts:73-75)
-  # Also skip status bar lines: tokens, bypass permissions, current/latest
-  assert_pattern "$s" "spawn: Claude starts and shows prompt" '[❯>] '
-
+  assert_pattern "$s" "spawn: shows prompt" '[❯>] '
   assert_no_pattern "$s" "spawn: no 'command not found'" 'command not found'
 
   kill_session "$s"
@@ -39,7 +31,7 @@ test_idle_detection() {
   paste_and_enter "$s" "claude"
 
   if ! wait_for_pattern "$s" '[❯>] ' "$TIMEOUT"; then
-    fail "idle: Claude never showed prompt"
+    fail "idle: never showed prompt"
     kill_session "$s"
     return
   fi
@@ -47,21 +39,18 @@ test_idle_detection() {
   local pane
   pane=$(capture_pane "$s" 50)
 
-  # Prompt character (claude.ts:73-75)
   if echo "$pane" | grep -qE '^[❯>]\s*$|^[❯>] '; then
     pass "idle: prompt character detected"
   else
     fail "idle: prompt character not found in pane"
   fi
 
-  # Status bar: token count (claude.ts:113-119)
   if echo "$pane" | grep -qE '[0-9]+\s+tokens'; then
     pass "idle: token count in status bar"
   else
     skip "idle: token count" "may not appear immediately"
   fi
 
-  # Separator lines (claude.ts:68): ── or ▪▪▪
   if echo "$pane" | grep -qE '^[─━═▪]{3,}'; then
     pass "idle: separator line detected"
   else
@@ -81,13 +70,12 @@ test_paste_delivery() {
   paste_and_enter "$s" "claude"
 
   if ! wait_for_pattern "$s" '[❯>] ' "$TIMEOUT"; then
-    fail "paste: Claude never showed prompt"
+    fail "paste: never showed prompt"
     kill_session "$s"
     return
   fi
 
   paste_and_enter "$s" "echo SMOKE_TEST_MARKER_67890"
-
   assert_pattern "$s" "paste: text appears in pane" 'SMOKE_TEST_MARKER_67890'
 
   kill_session "$s"
@@ -104,11 +92,11 @@ test_session_id() {
   paste_and_enter "$s" "claude --session-id $test_uuid"
 
   if wait_for_pattern "$s" '[❯>] ' "$TIMEOUT"; then
-    pass "session-id: Claude accepts --session-id flag"
+    pass "session-id: --session-id accepted"
   else
     local pane
     pane=$(capture_pane "$s" 10 | tail -5)
-    fail "session-id: Claude failed to start with --session-id" "Last lines:\\n$pane"
+    fail "session-id: failed to start with --session-id" "Last lines:\\n$pane"
   fi
 
   kill_session "$s"
@@ -124,7 +112,7 @@ test_exit() {
   paste_and_enter "$s" "claude"
 
   if ! wait_for_pattern "$s" '[❯>] ' "$TIMEOUT"; then
-    fail "exit: Claude never showed prompt"
+    fail "exit: never showed prompt"
     kill_session "$s"
     return
   fi
@@ -151,7 +139,6 @@ test_resume() {
 
   local test_uuid; test_uuid=$(gen_uuid)
 
-  # Spawn with session ID
   paste_and_enter "$s" "claude --session-id $test_uuid"
   if ! wait_for_pattern "$s" '[❯>] ' "$TIMEOUT"; then
     fail "resume: initial spawn failed"
@@ -159,11 +146,9 @@ test_resume() {
     return
   fi
 
-  # Exit
   paste_and_enter "$s" "/exit"
   sleep 2
 
-  # Resume (claude.ts:47-55)
   paste_and_enter "$s" "claude --resume $test_uuid"
 
   if wait_for_pattern "$s" '[❯>] ' "$TIMEOUT"; then
@@ -173,7 +158,7 @@ test_resume() {
   else
     local pane
     pane=$(capture_pane "$s" 10 | tail -5)
-    fail "resume: --resume neither resumed nor gave graceful error" "Last lines:\\n$pane"
+    fail "resume: neither resumed nor gave graceful error" "Last lines:\\n$pane"
   fi
 
   kill_session "$s"
@@ -189,7 +174,7 @@ test_context_parsing() {
   paste_and_enter "$s" "claude"
 
   if ! wait_for_pattern "$s" '[❯>] ' "$TIMEOUT"; then
-    fail "context: Claude never showed prompt"
+    fail "context: never showed prompt"
     kill_session "$s"
     return
   fi
@@ -197,7 +182,6 @@ test_context_parsing() {
   local pane
   pane=$(capture_pane "$s" 50)
 
-  # Token count format (claude.ts:113-119): "15048 tokens"
   if echo "$pane" | grep -qE '[0-9]+\s+tokens'; then
     local tokens
     tokens=$(echo "$pane" | grep -oE '[0-9]+\s+tokens' | head -1 | grep -oE '^[0-9]+')
@@ -206,7 +190,6 @@ test_context_parsing() {
     skip "context: token count not visible" "may need active conversation"
   fi
 
-  # Percentage format (claude.ts:106-112): "45% context remaining"
   if echo "$pane" | grep -qE '[0-9]+%\s+context\s+remaining'; then
     pass "context: percentage format detected"
   else
@@ -223,7 +206,6 @@ test_append_system_prompt() {
   kill_session "$s"
   create_session "$s"
 
-  # This is how the orchestrator injects persona system prompts for Claude
   paste_and_enter "$s" "claude --append-system-prompt 'You are a smoke test assistant.'"
 
   if wait_for_pattern "$s" '[❯>] ' "$TIMEOUT"; then
@@ -231,7 +213,7 @@ test_append_system_prompt() {
   else
     local pane
     pane=$(capture_pane "$s" 10 | tail -5)
-    fail "system-prompt: Claude rejected --append-system-prompt" "Last lines:\\n$pane"
+    fail "system-prompt: rejected --append-system-prompt" "Last lines:\\n$pane"
   fi
 
   kill_session "$s"
@@ -247,5 +229,3 @@ test_exit
 test_resume
 test_context_parsing
 test_append_system_prompt
-
-print_summary "Claude"
