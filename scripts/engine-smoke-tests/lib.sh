@@ -194,3 +194,81 @@ require_engine() {
   fi
   return 0
 }
+
+# ── Version detection ──
+
+detect_version() {
+  # Usage: detect_version <engine>
+  # Prints the installed CLI version (major.minor.patch) to stdout.
+  local engine="$1"
+  case "$engine" in
+    claude)
+      # "2.1.71 (Claude Code)" → "2.1.71"
+      claude --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1
+      ;;
+    codex)
+      # "codex-cli 0.112.0" → "0.112.0"
+      codex --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1
+      ;;
+    opencode)
+      # "1.2.22" → "1.2.22"
+      opencode --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1
+      ;;
+    *)
+      echo ""
+      ;;
+  esac
+}
+
+version_major_minor() {
+  # "2.1.71" → "2.1"
+  echo "$1" | grep -oE '^[0-9]+\.[0-9]+' | head -1
+}
+
+# ── Harness resolution ──
+
+resolve_harness() {
+  # Usage: resolve_harness <engine_dir> <version>
+  # Finds the best matching harness for the given version.
+  #
+  # Matching strategy (in order):
+  #   1. Exact: <major>.<minor>.<patch>.sh  (e.g., 2.1.71.sh)
+  #   2. Minor: <major>.<minor>.x.sh        (e.g., 2.1.x.sh)
+  #   3. Major: <major>.x.sh                (e.g., 2.x.sh)
+  #
+  # Returns the path to the harness file, or empty string if none found.
+  local dir="$1" version="$2"
+  local major minor patch
+  major=$(echo "$version" | cut -d. -f1)
+  minor=$(echo "$version" | cut -d. -f2)
+  patch=$(echo "$version" | cut -d. -f3)
+
+  # Exact match
+  if [ -f "$dir/${major}.${minor}.${patch}.sh" ]; then
+    echo "$dir/${major}.${minor}.${patch}.sh"
+    return 0
+  fi
+
+  # Minor wildcard
+  if [ -f "$dir/${major}.${minor}.x.sh" ]; then
+    echo "$dir/${major}.${minor}.x.sh"
+    return 0
+  fi
+
+  # Major wildcard
+  if [ -f "$dir/${major}.x.sh" ]; then
+    echo "$dir/${major}.x.sh"
+    return 0
+  fi
+
+  return 1
+}
+
+list_available_harnesses() {
+  # Usage: list_available_harnesses <engine_dir>
+  # Lists all .sh files in the engine directory (for error messages).
+  local dir="$1"
+  ls "$dir"/*.sh 2>/dev/null | while read -r f; do
+    basename "$f" .sh
+  done
+}
