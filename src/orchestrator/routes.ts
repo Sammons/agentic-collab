@@ -16,7 +16,7 @@ import type { AgentState, EngineType, ProxyCommand, ProxyResponse, ProxyRegistra
 import { sanitizeMessage, generateMessageId } from '../shared/sanitize.ts';
 import { getVersion } from '../shared/version.ts';
 import type { LockManager } from '../shared/lock.ts';
-import { getPersonasDir, parseFrontmatter, createPersonaAndAgent, syncSinglePersona, updateFrontmatterField, resolvePersonaPath } from './persona.ts';
+import { getPersonasDir, parseFrontmatter, createPersonaAndAgent, syncSinglePersona, updateFrontmatterField, resolvePersonaPath, toHostPath } from './persona.ts';
 import {
   spawnAgent, resumeAgent, suspendAgent, destroyAgent,
   reloadAgent, interruptAgent, compactAgent, killAgent,
@@ -602,7 +602,7 @@ route('GET', '/api/personas/:name', async (_req, res, match) => {
     const filePath = join(getPersonasDir(), `${name}.md`);
     const raw = readFileSync(filePath, 'utf-8');
     const { frontmatter, body } = parseFrontmatter(raw);
-    json(res, 200, { name, content: raw, frontmatter, body, filePath, hostname: hostname() });
+    json(res, 200, { name, content: raw, frontmatter, body, filePath: toHostPath(filePath), hostname: hostname() });
   } catch {
     json(res, 404, { error: 'Persona not found' });
   }

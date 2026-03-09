@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync, mkdirSync, symlinkSync, rmSync } from 'node
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { readFileSync } from 'node:fs';
-import { resolvePersonaPath, loadPersona, composeSystemPrompt, parseFrontmatter, scanPersonas, syncPersonasToDb, createPersonaAndAgent } from './persona.ts';
+import { resolvePersonaPath, loadPersona, composeSystemPrompt, parseFrontmatter, scanPersonas, syncPersonasToDb, createPersonaAndAgent, toHostPath } from './persona.ts';
 import { Database } from './database.ts';
 
 describe('Persona', () => {
@@ -390,6 +390,57 @@ describe('Persona', () => {
         () => createPersonaAndAgent(createDb, 'bad-agent', '---\nengine: gpt\ncwd: /tmp\n---\nBody', personasDir),
         /engine and cwd are required/,
       );
+    });
+  });
+
+  describe('toHostPath', () => {
+    it('maps container path to host path when PERSONAS_HOST_DIR is set', () => {
+      const prev = process.env['PERSONAS_HOST_DIR'];
+      const prevDir = process.env['PERSONAS_DIR'];
+      try {
+        process.env['PERSONAS_DIR'] = '/app/persistent-personas';
+        process.env['PERSONAS_HOST_DIR'] = '/home/user/persistent-agents';
+        assert.equal(
+          toHostPath('/app/persistent-personas/agent.md'),
+          '/home/user/persistent-agents/agent.md',
+        );
+      } finally {
+        if (prev === undefined) delete process.env['PERSONAS_HOST_DIR'];
+        else process.env['PERSONAS_HOST_DIR'] = prev;
+        if (prevDir === undefined) delete process.env['PERSONAS_DIR'];
+        else process.env['PERSONAS_DIR'] = prevDir;
+      }
+    });
+
+    it('returns original path when PERSONAS_HOST_DIR is not set', () => {
+      const prev = process.env['PERSONAS_HOST_DIR'];
+      try {
+        delete process.env['PERSONAS_HOST_DIR'];
+        assert.equal(
+          toHostPath('/app/persistent-personas/agent.md'),
+          '/app/persistent-personas/agent.md',
+        );
+      } finally {
+        if (prev !== undefined) process.env['PERSONAS_HOST_DIR'] = prev;
+      }
+    });
+
+    it('returns original path when it does not match PERSONAS_DIR prefix', () => {
+      const prev = process.env['PERSONAS_HOST_DIR'];
+      const prevDir = process.env['PERSONAS_DIR'];
+      try {
+        process.env['PERSONAS_DIR'] = '/app/persistent-personas';
+        process.env['PERSONAS_HOST_DIR'] = '/home/user/persistent-agents';
+        assert.equal(
+          toHostPath('/some/other/path/agent.md'),
+          '/some/other/path/agent.md',
+        );
+      } finally {
+        if (prev === undefined) delete process.env['PERSONAS_HOST_DIR'];
+        else process.env['PERSONAS_HOST_DIR'] = prev;
+        if (prevDir === undefined) delete process.env['PERSONAS_DIR'];
+        else process.env['PERSONAS_DIR'] = prevDir;
+      }
     });
   });
 });

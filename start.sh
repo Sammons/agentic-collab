@@ -197,6 +197,9 @@ if command -v docker &>/dev/null; then
     # Pass git commit SHA to Docker for version handshake with proxies
     export COMMIT_SHA
     COMMIT_SHA="$(git rev-parse --short HEAD 2>/dev/null || echo '')"
+    # Pass host-side personas directory so the API can show real file paths
+    export PERSONAS_HOST_DIR
+    PERSONAS_HOST_DIR="${PERSONAS_HOST_DIR:-$(cd ./persistent-agents 2>/dev/null && pwd || echo '')}"
     if docker compose ps --status running 2>/dev/null | grep -q orchestrator; then
       info "Orchestrator already running"
     else

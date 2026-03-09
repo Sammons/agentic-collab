@@ -20,6 +20,7 @@ services:
     environment:
       - AGENTIC_COLLAB_CONFIG_DIR=/config/agentic-collab
       - PERSONAS_DIR=/app/persistent-personas
+      - PERSONAS_HOST_DIR=${PERSONAS_HOST_DIR:-}
       - ORCHESTRATOR_HOST=${ORCHESTRATOR_HOST:-http://localhost:3000}
       - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY:-}
     labels:
