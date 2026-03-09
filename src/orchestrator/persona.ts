@@ -14,6 +14,21 @@ export function getPersonasDir(): string {
   return process.env['PERSONAS_DIR'] ?? PERSONAS_DIR;
 }
 
+/**
+ * Map a container-side persona file path to the host-side path.
+ * When PERSONAS_HOST_DIR is set, replaces the PERSONAS_DIR prefix with it.
+ * Falls back to the original path if the env var is unset or the path doesn't match.
+ */
+export function toHostPath(containerPath: string): string {
+  const hostDir = process.env['PERSONAS_HOST_DIR'];
+  if (!hostDir) return containerPath;
+  const personasDir = getPersonasDir();
+  if (containerPath.startsWith(personasDir)) {
+    return hostDir + containerPath.slice(personasDir.length);
+  }
+  return containerPath;
+}
+
 // ── Frontmatter ──
 
 export type PersonaFrontmatter = {
