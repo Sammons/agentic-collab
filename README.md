@@ -75,8 +75,11 @@ This checks prerequisites, starts the orchestrator via Docker, waits for it to b
 ### 1. Start the orchestrator
 
 ```bash
-docker compose up -d
+export COMMIT_SHA="$(git rev-parse --short HEAD)"
+docker compose up -d --build
 ```
+
+> **Note:** `COMMIT_SHA` is passed as a Docker build arg so the orchestrator knows its version. Without it, the dashboard will show a "stale proxy" warning even when versions match. `start.sh` handles this automatically.
 
 The orchestrator auto-generates a shared secret at `~/.config/agentic-collab/secret` (mounted from the host). Dashboard at `http://localhost:3000/dashboard`.
 
