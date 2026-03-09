@@ -160,6 +160,30 @@ function writeCodexProfile(profileName: string, developerInstructions: string): 
   writeFileSync(CODEX_CONFIG_PATH, config, 'utf-8');
 }
 
+/**
+ * Remove a Codex profile from ~/.codex/config.toml.
+ * Called on agent destroy to prevent stale profiles accumulating.
+ */
+function removeCodexProfile(profileName: string): void {
+  if (!/^[a-zA-Z0-9_-]+$/.test(profileName)) {
+    throw new Error(`Invalid profile name: ${profileName}`);
+  }
+
+  let config = '';
+  try {
+    config = readFileSync(CODEX_CONFIG_PATH, 'utf-8');
+  } catch {
+    return; // No config file — nothing to remove
+  }
+
+  const profileRegex = new RegExp(
+    `\\[profiles\\.${profileName}\\]\\n[\\s\\S]*?(?=\\n\\[|$)`,
+  );
+  const cleaned = config.replace(profileRegex, '').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
+
+  writeFileSync(CODEX_CONFIG_PATH, cleaned, 'utf-8');
+}
+
 // ── Command Execution ──
 
 async function executeCommand(command: ProxyCommand): Promise<ProxyResponse> {
@@ -203,6 +227,10 @@ async function executeCommand(command: ProxyCommand): Promise<ProxyResponse> {
 
       case 'write_codex_profile':
         writeCodexProfile(command.profileName, command.developerInstructions);
+        return { ok: true };
+
+      case 'remove_codex_profile':
+        removeCodexProfile(command.profileName);
         return { ok: true };
 
       default:

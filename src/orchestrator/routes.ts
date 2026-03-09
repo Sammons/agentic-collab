@@ -22,6 +22,7 @@ import {
   reloadAgent, interruptAgent, compactAgent, killAgent,
   type LifecycleContext,
 } from './lifecycle.ts';
+import { getAdapter } from './adapters/index.ts';
 import { shutdownAgents, restoreAllAgents } from './network.ts';
 import { sessionName } from '../shared/agent-entity.ts';
 import type { MessageDispatcher } from './message-dispatcher.ts';
@@ -211,8 +212,21 @@ route('POST', '/api/agents', async (req, res, _match, ctx) => {
 
 route('DELETE', '/api/agents/:name', async (_req, res, match, ctx) => {
   const name = match.pathname.groups['name']!;
-  const deleted = ctx.db.deleteAgent(name);
-  if (!deleted) return json(res, 404, { error: 'Agent not found' });
+  const agent = ctx.db.getAgent(name);
+  if (!agent) return json(res, 404, { error: 'Agent not found' });
+
+  // Clean up config profile for engines that use it (e.g. Codex)
+  if (agent.proxyId) {
+    const adapter = getAdapter(agent.engine);
+    if (adapter.usesConfigProfile) {
+      await ctx.proxyDispatch(agent.proxyId, {
+        action: 'remove_codex_profile',
+        profileName: name,
+      }).catch(() => {}); // Best-effort cleanup
+    }
+  }
+
+  ctx.db.deleteAgent(name);
   ctx.db.logEvent(name, 'destroyed');
   ctx.wss.broadcast(JSON.stringify({ type: 'agent_destroyed', name }));
   json(res, 200, { ok: true });
