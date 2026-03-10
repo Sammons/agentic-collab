@@ -7,6 +7,7 @@
 
 import { readFileSync, readdirSync, realpathSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, resolve, relative, isAbsolute } from 'node:path';
+import type { StructuredHook, HookValue, SendAction } from '../shared/types.ts';
 
 export const PERSONAS_DIR = process.env['PERSONAS_DIR'] ?? join(process.env['HOME'] ?? '/data', 'persistent-agents');
 
@@ -39,18 +40,20 @@ export type PersonaFrontmatter = {
   proxy_host?: string;
   permissions?: string;
   group?: string;
-  /** Hook value for starting the agent (preset:<engine>, file:<path>, or inline command). */
-  start?: string;
+  /** Hook value for starting the agent. String (legacy) or structured object. */
+  start?: HookValue;
   /** Hook value for resuming the agent. */
-  resume?: string;
+  resume?: HookValue;
   /** Hook value for compacting the agent. */
-  compact?: string;
+  compact?: HookValue;
   /** Hook value for exiting the agent. */
-  exit?: string;
+  exit?: HookValue;
   /** Hook value for interrupting the agent. */
-  interrupt?: string;
+  interrupt?: HookValue;
   /** Hook value for submitting messages to the agent. */
-  submit?: string;
+  submit?: HookValue;
+  /** Legacy alias for start (backward compat). */
+  spawn?: HookValue;
 };
 
 export type ParsedPersona = {
@@ -59,11 +62,21 @@ export type ParsedPersona = {
   body: string;
 };
 
+/** Hook field names that support structured (nested) values. */
+const HOOK_FIELDS = new Set(['start', 'resume', 'compact', 'exit', 'interrupt', 'submit', 'spawn']);
+
 /**
  * Parse YAML-like frontmatter from a markdown string.
- * Expects `---` delimiters. Values are trimmed strings; no nested objects.
+ * Expects `---` delimiters. Supports:
+ *   - Flat scalar values: `key: value`
+ *   - One level of nested objects: `key:\n  sub: val`
+ *   - Arrays of objects (for send hooks): `key:\n  send:\n    - keystroke: Escape`
+ *   - Block scalars: `key: |` or `key: >` (multiline strings)
+ *
+ * Only hook fields (start, resume, compact, exit, interrupt, submit, spawn)
+ * receive structured parsing. All other fields remain flat strings.
  */
-export function parseFrontmatter(raw: string): { frontmatter: Record<string, string>; body: string } {
+export function parseFrontmatter(raw: string): { frontmatter: Record<string, unknown>; body: string } {
   const trimmed = raw.trimStart();
   if (!trimmed.startsWith('---')) {
     return { frontmatter: {}, body: raw };
@@ -77,16 +90,274 @@ export function parseFrontmatter(raw: string): { frontmatter: Record<string, str
   const fmBlock = trimmed.slice(4, endIdx); // skip opening ---\n
   const body = trimmed.slice(endIdx + 4).replace(/^\n/, ''); // skip closing ---\n
 
-  const frontmatter: Record<string, string> = {};
-  for (const line of fmBlock.split('\n')) {
+  const frontmatter: Record<string, unknown> = {};
+  const lines = fmBlock.split('\n');
+  let i = 0;
+
+  while (i < lines.length) {
+    const line = lines[i]!;
+
+    // Skip blank lines and comments
+    if (!line.trim() || line.trim().startsWith('#')) {
+      i++;
+      continue;
+    }
+
+    // Must be a top-level key (no leading whitespace for top-level)
     const colonIdx = line.indexOf(':');
-    if (colonIdx === -1) continue;
+    if (colonIdx === -1) {
+      i++;
+      continue;
+    }
+
     const key = line.slice(0, colonIdx).trim();
-    const val = line.slice(colonIdx + 1).trim();
-    if (key) frontmatter[key] = val;
+    const rawVal = line.slice(colonIdx + 1);
+
+    if (!key) {
+      i++;
+      continue;
+    }
+
+    // Check for block scalar indicators (| or >)
+    const trimmedVal = rawVal.trim();
+    if (trimmedVal === '|' || trimmedVal === '>') {
+      const { value, nextLine } = parseBlockScalar(lines, i + 1);
+      frontmatter[key] = value;
+      i = nextLine;
+      continue;
+    }
+
+    // Check if next line is indented (nested object or array)
+    if (trimmedVal === '' && HOOK_FIELDS.has(key) && i + 1 < lines.length) {
+      const nextLine = lines[i + 1]!;
+      const nextIndent = nextLine.length - nextLine.trimStart().length;
+      if (nextIndent > 0) {
+        const { value, nextLine: endLine } = parseNestedValue(lines, i + 1, nextIndent);
+        frontmatter[key] = value;
+        i = endLine;
+        continue;
+      }
+    }
+
+    // Flat scalar value
+    frontmatter[key] = trimmedVal;
+    i++;
   }
 
   return { frontmatter, body };
+}
+
+/**
+ * Parse a block scalar (| or >) starting from the given line.
+ * Collects all indented lines until a non-indented line or EOF.
+ */
+function parseBlockScalar(lines: string[], startLine: number): { value: string; nextLine: number } {
+  if (startLine >= lines.length) return { value: '', nextLine: startLine };
+
+  // Detect indent from first content line
+  const firstLine = lines[startLine]!;
+  const indent = firstLine.length - firstLine.trimStart().length;
+  if (indent === 0) return { value: '', nextLine: startLine };
+
+  const collected: string[] = [];
+  let i = startLine;
+  while (i < lines.length) {
+    const line = lines[i]!;
+    // Empty lines are preserved in block scalars
+    if (line.trim() === '') {
+      collected.push('');
+      i++;
+      continue;
+    }
+    const lineIndent = line.length - line.trimStart().length;
+    if (lineIndent < indent) break;
+    collected.push(line.slice(indent));
+    i++;
+  }
+
+  return { value: collected.join('\n').trim(), nextLine: i };
+}
+
+/**
+ * Parse a nested YAML value (object or array) starting from the given line.
+ * Handles one level of nesting with optional arrays.
+ */
+function parseNestedValue(
+  lines: string[],
+  startLine: number,
+  baseIndent: number,
+): { value: StructuredHook | Record<string, unknown>; nextLine: number } {
+  const result: Record<string, unknown> = {};
+  let i = startLine;
+
+  while (i < lines.length) {
+    const line = lines[i]!;
+
+    // Blank line — skip
+    if (line.trim() === '') {
+      i++;
+      continue;
+    }
+
+    // If less indented than base, we're done with this block
+    const lineIndent = line.length - line.trimStart().length;
+    if (lineIndent < baseIndent) break;
+
+    const content = line.trim();
+
+    // Array item at this indent level (e.g. "- keystroke: Escape")
+    if (content.startsWith('- ')) {
+      // This shouldn't appear at top level of a hook — arrays are nested under "send:"
+      i++;
+      continue;
+    }
+
+    const colonIdx = content.indexOf(':');
+    if (colonIdx === -1) {
+      i++;
+      continue;
+    }
+
+    const subKey = content.slice(0, colonIdx).trim();
+    const subRawVal = content.slice(colonIdx + 1).trim();
+
+    // Check if next line is further indented (sub-object or array)
+    if (subRawVal === '' && i + 1 < lines.length) {
+      const nextLine = lines[i + 1]!;
+      const nextContent = nextLine.trim();
+      const nextIndent = nextLine.length - nextLine.trimStart().length;
+
+      if (nextIndent > lineIndent) {
+        // Array of objects (send actions)
+        if (nextContent.startsWith('- ')) {
+          const { value: arr, nextLine: endLine } = parseArray(lines, i + 1, nextIndent);
+          result[subKey] = arr;
+          i = endLine;
+          continue;
+        }
+        // Sub-object (options, env)
+        const { value: subObj, nextLine: endLine } = parseSubObject(lines, i + 1, nextIndent);
+        result[subKey] = subObj;
+        i = endLine;
+        continue;
+      }
+    }
+
+    // Scalar sub-value
+    result[subKey] = subRawVal;
+    i++;
+  }
+
+  return { value: result as StructuredHook, nextLine: i };
+}
+
+/**
+ * Parse an array of objects (used for send actions).
+ * Each item starts with "- " and may have sub-keys on the same or next lines.
+ */
+function parseArray(
+  lines: string[],
+  startLine: number,
+  baseIndent: number,
+): { value: Record<string, unknown>[]; nextLine: number } {
+  const items: Record<string, unknown>[] = [];
+  let i = startLine;
+
+  while (i < lines.length) {
+    const line = lines[i]!;
+
+    if (line.trim() === '') {
+      i++;
+      continue;
+    }
+
+    const lineIndent = line.length - line.trimStart().length;
+    if (lineIndent < baseIndent) break;
+
+    const content = line.trim();
+    if (!content.startsWith('- ')) break;
+
+    // Parse "- key: value" on the same line
+    const itemContent = content.slice(2); // remove "- "
+    const item: Record<string, unknown> = {};
+
+    const colonIdx = itemContent.indexOf(':');
+    if (colonIdx !== -1) {
+      const k = itemContent.slice(0, colonIdx).trim();
+      const v = itemContent.slice(colonIdx + 1).trim();
+      if (k) item[k] = coerceScalar(v);
+    }
+    i++;
+
+    // Check for continuation lines (same array item, further indented)
+    const itemIndent = baseIndent + 2; // "- " adds 2 chars of content indent
+    while (i < lines.length) {
+      const nextLine = lines[i]!;
+      if (nextLine.trim() === '') { i++; continue; }
+      const nextIndent = nextLine.length - nextLine.trimStart().length;
+      if (nextIndent < itemIndent) break;
+      const nc = nextLine.trim();
+      if (nc.startsWith('- ')) break; // next array item
+      const ci = nc.indexOf(':');
+      if (ci !== -1) {
+        const k = nc.slice(0, ci).trim();
+        const v = nc.slice(ci + 1).trim();
+        if (k) item[k] = coerceScalar(v);
+      }
+      i++;
+    }
+
+    items.push(item);
+  }
+
+  return { value: items, nextLine: i };
+}
+
+/**
+ * Parse a simple sub-object (one level of key: value pairs).
+ * Used for options and env blocks.
+ */
+function parseSubObject(
+  lines: string[],
+  startLine: number,
+  baseIndent: number,
+): { value: Record<string, string>; nextLine: number } {
+  const result: Record<string, string> = {};
+  let i = startLine;
+
+  while (i < lines.length) {
+    const line = lines[i]!;
+
+    if (line.trim() === '') {
+      i++;
+      continue;
+    }
+
+    const lineIndent = line.length - line.trimStart().length;
+    if (lineIndent < baseIndent) break;
+
+    const content = line.trim();
+    const colonIdx = content.indexOf(':');
+    if (colonIdx !== -1) {
+      const k = content.slice(0, colonIdx).trim();
+      const v = content.slice(colonIdx + 1).trim();
+      if (k) result[k] = v;
+    }
+    i++;
+  }
+
+  return { value: result, nextLine: i };
+}
+
+/** Coerce YAML scalar strings to appropriate JS types. */
+function coerceScalar(val: string): string | number | boolean {
+  // Numbers
+  if (/^\d+$/.test(val)) return parseInt(val, 10);
+  if (/^\d+\.\d+$/.test(val)) return parseFloat(val);
+  // Booleans
+  if (val === 'true') return true;
+  if (val === 'false') return false;
+  return val;
 }
 
 /**
@@ -304,6 +575,35 @@ When you finish a task or have results, report back to the orchestrator.`);
   return parts.join('\n');
 }
 
+// ── Hook Serialization ──
+
+/**
+ * Serialize a hook value for database storage.
+ * Strings pass through as-is. Structured objects become JSON.
+ * null/undefined → null.
+ */
+export function serializeHookValue(value: HookValue | undefined): string | null {
+  if (value == null) return null;
+  if (typeof value === 'string') return value;
+  return JSON.stringify(value);
+}
+
+/**
+ * Deserialize a hook value from database storage.
+ * Attempts JSON parse; falls back to plain string.
+ */
+export function deserializeHookValue(value: string | null): HookValue {
+  if (value == null) return null;
+  if (value.startsWith('{') || value.startsWith('[')) {
+    try {
+      return JSON.parse(value) as StructuredHook;
+    } catch {
+      return value;
+    }
+  }
+  return value;
+}
+
 // ── Startup Sync ──
 
 import type { Database } from './database.ts';
@@ -336,19 +636,19 @@ export function syncSinglePersona(db: Database, name: string, personasDir?: stri
   db.upsertAgentFromPersona({
     name,
     engine: engine as EngineType,
-    model: fm.model,
-    thinking: fm.thinking,
+    model: fm.model as string | undefined,
+    thinking: fm.thinking as string | undefined,
     cwd,
     persona: name,
-    permissions: fm.permissions,
-    proxyHost: fm.proxy_host,
-    agentGroup: fm.group,
-    hookStart: fm.start ?? fm.spawn,
-    hookResume: fm.resume,
-    hookCompact: fm.compact,
-    hookExit: fm.exit,
-    hookInterrupt: fm.interrupt,
-    hookSubmit: fm.submit,
+    permissions: fm.permissions as string | undefined,
+    proxyHost: fm.proxy_host as string | undefined,
+    agentGroup: fm.group as string | undefined,
+    hookStart: serializeHookValue(fm.start ?? fm.spawn),
+    hookResume: serializeHookValue(fm.resume),
+    hookCompact: serializeHookValue(fm.compact),
+    hookExit: serializeHookValue(fm.exit),
+    hookInterrupt: serializeHookValue(fm.interrupt),
+    hookSubmit: serializeHookValue(fm.submit),
   });
   return true;
 }
@@ -377,19 +677,19 @@ export function syncPersonasToDb(db: Database, personasDir?: string): number {
     db.upsertAgentFromPersona({
       name,
       engine: engine as EngineType,
-      model: frontmatter.model,
-      thinking: frontmatter.thinking,
+      model: frontmatter.model as string | undefined,
+      thinking: frontmatter.thinking as string | undefined,
       cwd,
       persona: name,
-      permissions: frontmatter.permissions,
-      proxyHost: frontmatter.proxy_host,
-      agentGroup: frontmatter.group,
-      hookStart: frontmatter.start ?? frontmatter.spawn,
-      hookResume: frontmatter.resume,
-      hookCompact: frontmatter.compact,
-      hookExit: frontmatter.exit,
-      hookInterrupt: frontmatter.interrupt,
-      hookSubmit: frontmatter.submit,
+      permissions: frontmatter.permissions as string | undefined,
+      proxyHost: frontmatter.proxy_host as string | undefined,
+      agentGroup: frontmatter.group as string | undefined,
+      hookStart: serializeHookValue(frontmatter.start ?? frontmatter.spawn),
+      hookResume: serializeHookValue(frontmatter.resume),
+      hookCompact: serializeHookValue(frontmatter.compact),
+      hookExit: serializeHookValue(frontmatter.exit),
+      hookInterrupt: serializeHookValue(frontmatter.interrupt),
+      hookSubmit: serializeHookValue(frontmatter.submit),
     });
 
     synced++;
@@ -429,19 +729,19 @@ export function createPersonaAndAgent(
   db.upsertAgentFromPersona({
     name,
     engine: engine as EngineType,
-    model: fm.model,
-    thinking: fm.thinking,
+    model: fm.model as string | undefined,
+    thinking: fm.thinking as string | undefined,
     cwd,
     persona: name,
-    permissions: fm.permissions,
-    proxyHost: fm.proxy_host,
-    agentGroup: fm.group,
-    hookStart: fm.start ?? fm.spawn,
-    hookResume: fm.resume,
-    hookCompact: fm.compact,
-    hookExit: fm.exit,
-    hookInterrupt: fm.interrupt,
-    hookSubmit: fm.submit,
+    permissions: fm.permissions as string | undefined,
+    proxyHost: fm.proxy_host as string | undefined,
+    agentGroup: fm.group as string | undefined,
+    hookStart: serializeHookValue(fm.start ?? fm.spawn),
+    hookResume: serializeHookValue(fm.resume),
+    hookCompact: serializeHookValue(fm.compact),
+    hookExit: serializeHookValue(fm.exit),
+    hookInterrupt: serializeHookValue(fm.interrupt),
+    hookSubmit: serializeHookValue(fm.submit),
   });
 
   return { name, frontmatter: fm, body };

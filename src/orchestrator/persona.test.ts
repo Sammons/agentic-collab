@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync, mkdirSync, symlinkSync, rmSync } from 'node
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { readFileSync } from 'node:fs';
-import { resolvePersonaPath, loadPersona, composeSystemPrompt, parseFrontmatter, scanPersonas, syncPersonasToDb, createPersonaAndAgent, toHostPath } from './persona.ts';
+import { resolvePersonaPath, loadPersona, composeSystemPrompt, parseFrontmatter, scanPersonas, syncPersonasToDb, createPersonaAndAgent, toHostPath, serializeHookValue, deserializeHookValue } from './persona.ts';
 import { Database } from './database.ts';
 
 describe('Persona', () => {
@@ -445,6 +445,145 @@ describe('Persona', () => {
         () => createPersonaAndAgent(createDb, 'bad-agent', '---\nengine: gpt\ncwd: /tmp\n---\nBody', personasDir),
         /engine and cwd are required/,
       );
+    });
+  });
+
+  describe('parseFrontmatter nested YAML', () => {
+    it('parses nested preset hook with no options', () => {
+      const raw = '---\nengine: claude\ncwd: /tmp\nstart:\n  preset: claude\n---\nBody';
+      const { frontmatter } = parseFrontmatter(raw);
+      const start = frontmatter.start as { preset: string };
+      assert.equal(start.preset, 'claude');
+    });
+
+    it('parses nested preset hook with options', () => {
+      const raw = [
+        '---', 'engine: claude', 'cwd: /tmp',
+        'start:', '  preset: claude', '  options:', '    model: opus', '    thinking: high',
+        '---', 'Body',
+      ].join('\n');
+      const { frontmatter } = parseFrontmatter(raw);
+      const start = frontmatter.start as { preset: string; options: Record<string, string> };
+      assert.equal(start.preset, 'claude');
+      assert.equal(start.options.model, 'opus');
+      assert.equal(start.options.thinking, 'high');
+    });
+
+    it('parses nested shell hook with env', () => {
+      const raw = [
+        '---', 'engine: claude', 'cwd: /tmp',
+        'start:', '  shell: ./run.sh', '  env:', '    MY_VAR: hello', '    OTHER: world',
+        '---', 'Body',
+      ].join('\n');
+      const { frontmatter } = parseFrontmatter(raw);
+      const start = frontmatter.start as { shell: string; env: Record<string, string> };
+      assert.equal(start.shell, './run.sh');
+      assert.equal(start.env.MY_VAR, 'hello');
+      assert.equal(start.env.OTHER, 'world');
+    });
+
+    it('parses nested send hook with keystroke actions', () => {
+      const raw = [
+        '---', 'engine: claude', 'cwd: /tmp',
+        'exit:', '  send:', '    - keystroke: Escape', '    - keystroke: C-c',
+        '---', 'Body',
+      ].join('\n');
+      const { frontmatter } = parseFrontmatter(raw);
+      const exit = frontmatter.exit as { send: Array<{ keystroke: string }> };
+      assert.equal(exit.send.length, 2);
+      assert.equal(exit.send[0]!.keystroke, 'Escape');
+      assert.equal(exit.send[1]!.keystroke, 'C-c');
+    });
+
+    it('parses send hook with mixed action types and post_wait_ms', () => {
+      const raw = [
+        '---', 'engine: claude', 'cwd: /tmp',
+        'submit:', '  send:',
+        '    - keystroke: Escape', '      post_wait_ms: 100',
+        '    - paste: hello world',
+        '    - keystroke: Enter',
+        '---', 'Body',
+      ].join('\n');
+      const { frontmatter } = parseFrontmatter(raw);
+      const submit = frontmatter.submit as { send: Array<Record<string, unknown>> };
+      assert.equal(submit.send.length, 3);
+      assert.equal(submit.send[0]!.keystroke, 'Escape');
+      assert.equal(submit.send[0]!.post_wait_ms, 100);
+      assert.equal(submit.send[1]!.paste, 'hello world');
+      assert.equal(submit.send[2]!.keystroke, 'Enter');
+    });
+
+    it('handles flat and nested hooks in same frontmatter', () => {
+      const raw = [
+        '---', 'engine: claude', 'model: opus', 'cwd: /tmp', 'proxy_host: crankshaft',
+        'start:', '  preset: claude', '  options:', '    model: sonnet',
+        'resume:', '  preset: claude',
+        'exit: /exit',
+        '---', '# Body',
+      ].join('\n');
+      const { frontmatter, body } = parseFrontmatter(raw);
+      assert.equal(frontmatter.engine, 'claude');
+      assert.equal(frontmatter.model, 'opus');
+      const start = frontmatter.start as { preset: string; options: Record<string, string> };
+      assert.equal(start.preset, 'claude');
+      assert.equal(start.options.model, 'sonnet');
+      const resume = frontmatter.resume as { preset: string };
+      assert.equal(resume.preset, 'claude');
+      assert.equal(frontmatter.exit, '/exit');
+      assert.equal(body, '# Body');
+    });
+
+    it('parses block scalar with pipe', () => {
+      const raw = '---\nengine: claude\ncwd: /tmp\nstart: |\n  line one\n  line two\n---\nBody';
+      const { frontmatter } = parseFrontmatter(raw);
+      assert.equal(frontmatter.start, 'line one\nline two');
+    });
+
+    it('non-hook fields with empty value stay as empty string', () => {
+      const raw = '---\nengine: claude\nmodel:\ncwd: /tmp\n---\nBody';
+      const { frontmatter } = parseFrontmatter(raw);
+      assert.equal(frontmatter.model, '');
+    });
+  });
+
+  describe('serializeHookValue', () => {
+    it('returns null for null/undefined', () => {
+      assert.equal(serializeHookValue(null), null);
+      assert.equal(serializeHookValue(undefined), null);
+    });
+
+    it('returns strings as-is', () => {
+      assert.equal(serializeHookValue('preset:claude'), 'preset:claude');
+    });
+
+    it('serializes structured objects to JSON', () => {
+      const hook = { preset: 'claude', options: { model: 'opus' } };
+      assert.equal(serializeHookValue(hook), JSON.stringify(hook));
+    });
+
+    it('serializes send hooks to JSON', () => {
+      const hook = { send: [{ keystroke: 'Escape' }, { paste: 'hello' }] };
+      const parsed = JSON.parse(serializeHookValue(hook)!);
+      assert.equal(parsed.send.length, 2);
+    });
+  });
+
+  describe('deserializeHookValue', () => {
+    it('returns null for null', () => {
+      assert.equal(deserializeHookValue(null), null);
+    });
+
+    it('returns plain strings as-is', () => {
+      assert.equal(deserializeHookValue('preset:claude'), 'preset:claude');
+    });
+
+    it('deserializes JSON objects', () => {
+      const hook = { preset: 'claude', options: { model: 'opus' } };
+      assert.deepEqual(deserializeHookValue(JSON.stringify(hook)), hook);
+    });
+
+    it('returns invalid JSON starting with { as string', () => {
+      assert.equal(deserializeHookValue('{not json'), '{not json');
     });
   });
 
