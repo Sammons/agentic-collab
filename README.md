@@ -188,7 +188,9 @@ You are a research specialist focused on codebase exploration.
 | `interrupt` | Cancel current operation | Escape keys (Claude), Ctrl-C (Codex/OpenCode) |
 | `submit` | Deliver a message to the agent | Plain paste into tmux |
 
-Each hook field accepts one of three value modes:
+Hook fields support **flat strings** (legacy) or **nested YAML objects** (structured):
+
+**Flat string modes** (legacy, still supported):
 
 | Mode | Syntax | Description |
 |------|--------|-------------|
@@ -197,7 +199,62 @@ Each hook field accepts one of three value modes:
 | **Preset** | `preset:<engine>` | Use the named engine's default behavior |
 | _(omitted)_ | | Uses the agent's own engine preset |
 
-When a custom hook (inline or file) is active, the command is wrapped with `COLLAB_AGENT` and `COLLAB_PERSONA_FILE` environment variables. Preset hooks are typed directly into the agent CLI and do not receive env wrapping.
+**Structured hook modes** (nested YAML):
+
+| Mode | Description | Supported hooks |
+|------|-------------|-----------------|
+| **preset** | Engine adapter default with optional overrides | All hooks |
+| **shell** | Paste command with auto-injected env vars | start, resume, exit, compact, interrupt, submit |
+| **send** | Ordered keystroke/text/paste action sequence | exit, compact, interrupt, submit |
+
+**Preset mode** — use engine defaults with optional overrides:
+
+```yaml
+start:
+  preset: claude
+  options:              # optional overrides (start/resume only)
+    model: opus
+    thinking: high
+    permissions: skip
+```
+
+**Shell mode** — paste a command with auto-injected `COLLAB_AGENT` + custom env vars:
+
+```yaml
+start:
+  shell: ./my-startup-script.sh
+  env:                  # optional extra env vars
+    PROJECT: my-project
+    DEBUG: "true"
+```
+
+**Send mode** — ordered sequence of tmux actions with per-action timing:
+
+```yaml
+exit:
+  send:
+    - keystroke: Escape
+      post_wait_ms: 100   # wait 100ms after this action
+    - paste: /exit
+    - keystroke: Enter
+```
+
+Each send action is one of: `keystroke` (tmux send-keys), `text` (tmux send-keys), or `paste` (tmux paste-buffer). Optional `post_wait_ms` controls delay before the next action.
+
+**Mode applicability matrix:**
+
+| Hook | preset | shell | send |
+|------|--------|-------|------|
+| start | ✅ | ✅ | ❌ |
+| resume | ✅ | ✅ | ❌ |
+| exit | ✅ | ✅ | ✅ |
+| compact | ✅ | ✅ | ✅ |
+| interrupt | ✅ | ✅ | ✅ |
+| submit | ✅ | ✅ | ✅ |
+
+**Environment variables:**
+
+When a custom hook (inline, file, or shell mode) is active, the command is wrapped with `COLLAB_AGENT` and `COLLAB_PERSONA_FILE` environment variables. Shell mode additionally injects any custom `env` vars. Preset hooks are typed directly into the agent CLI and do not receive env wrapping.
 
 ### How it works
 
