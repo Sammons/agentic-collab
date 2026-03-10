@@ -231,7 +231,7 @@ describe('HealthMonitor', () => {
     assert.ok(updates.includes('health-cb-fail'), 'should fail after 3 attempts');
   });
 
-  it('triggers compact at threshold', async () => {
+  it('records context % without triggering compact or reload', async () => {
     db.createAgent({ name: 'health-compact', engine: 'claude', cwd: '/tmp', proxyId: 'p1' });
     const a = db.getAgent('health-compact')!;
     db.updateAgentState('health-compact', 'active', a.version, {
@@ -239,14 +239,19 @@ describe('HealthMonitor', () => {
       proxyId: 'p1',
     });
 
-    captureOutput = 'some output\n82% context remaining\n> ';
+    captureOutput = 'some output\n95% context remaining\n> ';
 
-    const monitor = makeMonitor({ autoCompactThreshold: 80 });
+    const monitor = makeMonitor();
     proxyCommands = [];
     await monitor.pollAll();
 
-    // Should have sent a compact command (paste action)
-    assert.ok(proxyCommands.some(c => c.action === 'paste'));
+    // Context % should be recorded in DB
+    const updated = db.getAgent('health-compact')!;
+    assert.equal(updated.lastContextPct, 95);
+
+    // No compact or reload actions — only capture commands
+    const nonCapture = proxyCommands.filter(c => c.action !== 'capture');
+    assert.equal(nonCapture.length, 0, 'should not send any compact/reload commands');
   });
 
   it('fires onMessageDelivered callback after successful delivery', async () => {
