@@ -55,7 +55,7 @@ function withAgentEnv(name: string, cmd: string, personaFile?: string | null): s
 
 /**
  * Dispatch a resolved hook result to the proxy.
- * Handles paste, keys, and skip modes uniformly.
+ * Handles paste, keys, send sequences, and skip modes uniformly.
  */
 async function dispatchHookResult(
   ctx: LifecycleContext,
@@ -74,6 +74,34 @@ async function dispatchHookResult(
         keys: key,
       });
       if (opts?.keyDelay) await sleep(opts.keyDelay);
+    }
+    return;
+  }
+
+  if (result.mode === 'send') {
+    for (const action of result.actions) {
+      if ('keystroke' in action) {
+        await ctx.proxyDispatch(proxyId, {
+          action: 'send_keys',
+          sessionName: tmuxSession,
+          keys: action.keystroke,
+        });
+      } else if ('text' in action) {
+        await ctx.proxyDispatch(proxyId, {
+          action: 'send_keys',
+          sessionName: tmuxSession,
+          keys: action.text,
+        });
+      } else if ('paste' in action) {
+        await ctx.proxyDispatch(proxyId, {
+          action: 'paste',
+          sessionName: tmuxSession,
+          text: action.paste,
+          pressEnter: false,
+        });
+      }
+      const waitMs = action.post_wait_ms;
+      if (waitMs && waitMs > 0) await sleep(waitMs);
     }
     return;
   }

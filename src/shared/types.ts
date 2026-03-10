@@ -8,6 +8,41 @@ export type AgentState = 'void' | 'spawning' | 'resuming' | 'suspending' | 'acti
 
 export type EngineType = 'claude' | 'codex' | 'opencode';
 
+// ── Hook Schema ──
+
+/** A single action in a send sequence. Exactly one of keystroke/text/paste must be set. */
+export type SendAction =
+  | { keystroke: string; post_wait_ms?: number }
+  | { text: string; post_wait_ms?: number }
+  | { paste: string; post_wait_ms?: number };
+
+/** Preset hook: use engine adapter default with optional overrides. */
+export type PresetHook = {
+  preset: string;
+  options?: {
+    model?: string;
+    thinking?: string;
+    permissions?: string;
+  };
+};
+
+/** Shell hook: paste a command, auto-prefixed with env vars. */
+export type ShellHook = {
+  shell: string;
+  env?: Record<string, string>;
+};
+
+/** Send hook: ordered sequence of tmux send-keys/paste actions. */
+export type SendHook = {
+  send: SendAction[];
+};
+
+/** Structured hook value — discriminated by which key is present. */
+export type StructuredHook = PresetHook | ShellHook | SendHook;
+
+/** A hook field value: flat string (legacy) or structured object. */
+export type HookValue = string | StructuredHook | null;
+
 export type AgentRecord = {
   name: string;
   engine: EngineType;
