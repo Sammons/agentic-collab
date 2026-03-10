@@ -322,7 +322,7 @@ describe('Persona', () => {
 
       const gamma = db.getAgent('gamma');
       assert.ok(gamma);
-      assert.equal(gamma.hookSpawn, 'claude --model sonnet');
+      assert.equal(gamma.hookStart, 'claude --model sonnet');
       assert.equal(gamma.hookResume, 'claude --resume $SESSION_ID');
       assert.equal(gamma.hookCompact, '/compact');
     });
@@ -336,7 +336,7 @@ describe('Persona', () => {
 
       const gamma = db.getAgent('gamma');
       assert.ok(gamma);
-      assert.equal(gamma.hookSpawn, null);
+      assert.equal(gamma.hookStart, null);
       assert.equal(gamma.hookResume, null);
       assert.equal(gamma.hookCompact, null);
     });
@@ -434,7 +434,7 @@ describe('Persona', () => {
 
       const agent = createDb.getAgent('hooked-agent');
       assert.ok(agent);
-      assert.equal(agent.hookSpawn, 'codex --model o4-mini -a never');
+      assert.equal(agent.hookStart, 'codex --model o4-mini -a never');
       assert.equal(agent.hookResume, null);
       assert.equal(agent.hookCompact, 'echo noop');
     });

@@ -39,12 +39,18 @@ export type PersonaFrontmatter = {
   proxy_host?: string;
   permissions?: string;
   group?: string;
-  /** Custom shell command to spawn the agent (overrides adapter.buildSpawnCommand). */
-  spawn?: string;
-  /** Custom shell command to resume the agent (overrides adapter.buildResumeCommand). */
+  /** Hook value for starting the agent (preset:<engine>, file:<path>, or inline command). */
+  start?: string;
+  /** Hook value for resuming the agent. */
   resume?: string;
-  /** Custom shell command to compact the agent (overrides adapter.buildCompactCommand). */
+  /** Hook value for compacting the agent. */
   compact?: string;
+  /** Hook value for exiting the agent. */
+  exit?: string;
+  /** Hook value for interrupting the agent. */
+  interrupt?: string;
+  /** Hook value for submitting messages to the agent. */
+  submit?: string;
 };
 
 export type ParsedPersona = {
@@ -337,9 +343,12 @@ export function syncSinglePersona(db: Database, name: string, personasDir?: stri
     permissions: fm.permissions,
     proxyHost: fm.proxy_host,
     agentGroup: fm.group,
-    hookSpawn: fm.spawn,
+    hookStart: fm.start ?? fm.spawn,
     hookResume: fm.resume,
     hookCompact: fm.compact,
+    hookExit: fm.exit,
+    hookInterrupt: fm.interrupt,
+    hookSubmit: fm.submit,
   });
   return true;
 }
@@ -375,9 +384,12 @@ export function syncPersonasToDb(db: Database, personasDir?: string): number {
       permissions: frontmatter.permissions,
       proxyHost: frontmatter.proxy_host,
       agentGroup: frontmatter.group,
-      hookSpawn: frontmatter.spawn,
+      hookStart: frontmatter.start ?? frontmatter.spawn,
       hookResume: frontmatter.resume,
       hookCompact: frontmatter.compact,
+      hookExit: frontmatter.exit,
+      hookInterrupt: frontmatter.interrupt,
+      hookSubmit: frontmatter.submit,
     });
 
     synced++;
@@ -424,9 +436,12 @@ export function createPersonaAndAgent(
     permissions: fm.permissions,
     proxyHost: fm.proxy_host,
     agentGroup: fm.group,
-    hookSpawn: fm.spawn,
+    hookStart: fm.start ?? fm.spawn,
     hookResume: fm.resume,
     hookCompact: fm.compact,
+    hookExit: fm.exit,
+    hookInterrupt: fm.interrupt,
+    hookSubmit: fm.submit,
   });
 
   return { name, frontmatter: fm, body };
