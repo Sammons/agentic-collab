@@ -221,7 +221,7 @@ Each adapter implements: `buildCommand()`, `parseIdleState()`, `parseContextUsag
 
 ## What Was Built This Session
 
-1. **Persona frontmatter system** — `persistent-agents/*.md` files with YAML-like frontmatter (engine, model, thinking, cwd, proxy_host, permissions). Idempotent startup sync to SQLite. Persona API (GET list, GET detail, PUT write).
+1. **Persona frontmatter system** — `persistent-agents/*.md` files with YAML-like frontmatter (engine, model, thinking, cwd, proxy_host, permissions, group, and lifecycle hooks: start, resume, exit, compact, interrupt, submit). Idempotent startup sync to SQLite. Persona API (GET list, GET detail, PUT write). Hook values support three modes: inline command, `file:<path>`, or `preset:<engine>` — resolved uniformly via `src/orchestrator/hook-resolver.ts`.
 2. **Workstream removal** — Removed workstream feature (use Notion instead). Cleaned up database, routes, types, tests.
 3. **Proxy hostname identification** — Proxies self-identify via `os.hostname()` instead of random IDs. Persona `proxy_host` field pins agents to specific machines.
 4. **Permission skip from frontmatter** — `permissions: skip` in frontmatter instead of hardcoded `dangerouslySkipPermissions: true`.
