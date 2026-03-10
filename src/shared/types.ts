@@ -19,12 +19,18 @@ export type AgentRecord = {
   proxyHost: string | null; // hostname for proxy pinning
   agentGroup: string | null; // grouping label from persona frontmatter
   sortOrder: number; // manual ordering within group
-  /** Custom spawn command from persona frontmatter (overrides adapter). */
-  hookSpawn: string | null;
-  /** Custom resume command from persona frontmatter (overrides adapter). */
+  /** Hook value for starting the agent (preset/file/inline). */
+  hookStart: string | null;
+  /** Hook value for resuming the agent. */
   hookResume: string | null;
-  /** Custom compact command from persona frontmatter (overrides adapter). */
+  /** Hook value for compacting the agent. */
   hookCompact: string | null;
+  /** Hook value for exiting the agent. */
+  hookExit: string | null;
+  /** Hook value for interrupting the agent. */
+  hookInterrupt: string | null;
+  /** Hook value for submitting messages to the agent. */
+  hookSubmit: string | null;
   state: AgentState;
   stateBeforeShutdown: string | null;
   currentSessionId: string | null;
