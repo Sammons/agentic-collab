@@ -1775,8 +1775,36 @@
   const FM_LABELS = {
     engine: 'Engine', model: 'Model', thinking: 'Thinking',
     cwd: 'Working Dir', proxy_host: 'Proxy Host', permissions: 'Permissions',
-    group: 'Group', spawn: 'Hook: Spawn', resume: 'Hook: Resume', compact: 'Hook: Compact',
+    group: 'Group', start: 'Start', resume: 'Resume', compact: 'Compact',
+    exit: 'Exit', interrupt: 'Interrupt', submit: 'Submit',
   };
+
+  /** Format a frontmatter value for display. Handles structured hook objects. */
+  function fmtFmValue(val) {
+    if (val == null) return '';
+    if (typeof val === 'string') return val;
+    if (typeof val === 'object') {
+      if ('preset' in val) {
+        let s = 'preset: ' + val.preset;
+        if (val.options) s += ' (' + Object.entries(val.options).map(([k,v]) => k + '=' + v).join(', ') + ')';
+        return s;
+      }
+      if ('shell' in val) {
+        let s = 'shell: ' + val.shell;
+        if (val.env) s += ' [env: ' + Object.entries(val.env).map(([k,v]) => k + '=' + v).join(', ') + ']';
+        return s;
+      }
+      if ('send' in val && Array.isArray(val.send)) {
+        return 'send: ' + val.send.map(a => {
+          const type = 'keystroke' in a ? 'keystroke' : 'text' in a ? 'text' : 'paste';
+          const v = a[type];
+          return type + ':' + v + (a.post_wait_ms ? ' (+' + a.post_wait_ms + 'ms)' : '');
+        }).join(' → ');
+      }
+      return JSON.stringify(val);
+    }
+    return String(val);
+  }
 
   async function renderPersona() {
     const panel = document.getElementById('personaPanel');
@@ -1799,10 +1827,10 @@
     if (fm && Object.keys(fm).length > 0) {
       html += '<dl class="persona-meta">';
       for (const [key, label] of Object.entries(FM_LABELS)) {
-        if (fm[key]) html += '<dt>' + label + '</dt><dd>' + esc(fm[key]) + '</dd>';
+        if (fm[key]) html += '<dt>' + label + '</dt><dd>' + esc(fmtFmValue(fm[key])) + '</dd>';
       }
       for (const key of Object.keys(fm)) {
-        if (!FM_LABELS[key] && fm[key]) html += '<dt>' + esc(key) + '</dt><dd>' + esc(fm[key]) + '</dd>';
+        if (!FM_LABELS[key] && fm[key]) html += '<dt>' + esc(key) + '</dt><dd>' + esc(fmtFmValue(fm[key])) + '</dd>';
       }
       html += '</dl>';
     }
