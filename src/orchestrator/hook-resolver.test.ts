@@ -225,6 +225,113 @@ describe('hook-resolver', () => {
     });
   });
 
+  describe('structured preset hook', () => {
+    it('resolves { preset: "claude" } same as "preset:claude"', () => {
+      const agent = makeAgent({ engine: 'codex' });
+      const result = resolveHook('exit', { preset: 'claude' }, agent);
+      assert.equal(result.mode, 'paste');
+      assert.equal((result as { text: string }).text, '/exit');
+    });
+
+    it('applies preset options to spawnOpts', () => {
+      const agent = makeAgent();
+      const result = resolveHook('start', { preset: 'claude', options: { model: 'opus' } }, agent, {
+        spawnOpts: { name: 'test-agent', cwd: '/tmp', model: 'sonnet' },
+      });
+      assert.equal(result.mode, 'paste');
+      // The options.model should override spawnOpts.model
+      assert.ok((result as { text: string }).text.includes('opus'));
+    });
+
+    it('applies permissions skip from preset options', () => {
+      const agent = makeAgent();
+      const result = resolveHook('start', { preset: 'claude', options: { permissions: 'skip' } }, agent, {
+        spawnOpts: { name: 'test-agent', cwd: '/tmp' },
+      });
+      assert.equal(result.mode, 'paste');
+      // Skip permissions should add the --dangerously-skip-permissions flag
+      assert.ok((result as { text: string }).text.includes('--dangerously-skip-permissions'));
+    });
+  });
+
+  describe('structured shell hook', () => {
+    it('returns paste with env prefix and command', () => {
+      const agent = makeAgent({ name: 'my-agent' });
+      const result = resolveHook('start', { shell: './run.sh' }, agent);
+      assert.equal(result.mode, 'paste');
+      const text = (result as { text: string }).text;
+      assert.ok(text.includes('COLLAB_AGENT=my-agent'));
+      assert.ok(text.includes('./run.sh'));
+    });
+
+    it('includes custom env vars', () => {
+      const agent = makeAgent({ name: 'my-agent' });
+      const result = resolveHook('start', { shell: './run.sh', env: { FOO: 'bar', BAZ: 'qux' } }, agent);
+      const text = (result as { text: string }).text;
+      assert.ok(text.includes('FOO=bar'));
+      assert.ok(text.includes('BAZ=qux'));
+    });
+  });
+
+  describe('structured send hook', () => {
+    it('returns send mode with actions', () => {
+      const agent = makeAgent();
+      const result = resolveHook('exit', { send: [{ keystroke: 'Escape' }, { keystroke: 'C-c' }] }, agent);
+      assert.equal(result.mode, 'send');
+      const actions = (result as { actions: Array<{ keystroke: string }> }).actions;
+      assert.equal(actions.length, 2);
+      assert.equal(actions[0]!.keystroke, 'Escape');
+      assert.equal(actions[1]!.keystroke, 'C-c');
+    });
+
+    it('preserves post_wait_ms on actions', () => {
+      const agent = makeAgent();
+      const result = resolveHook('submit', {
+        send: [
+          { keystroke: 'Escape', post_wait_ms: 100 },
+          { paste: 'hello' },
+          { keystroke: 'Enter' },
+        ],
+      }, agent);
+      assert.equal(result.mode, 'send');
+      const actions = (result as { actions: Array<Record<string, unknown>> }).actions;
+      assert.equal(actions[0]!.post_wait_ms, 100);
+    });
+
+    it('returns skip for empty send array', () => {
+      const agent = makeAgent();
+      const result = resolveHook('exit', { send: [] }, agent);
+      assert.equal(result.mode, 'skip');
+    });
+  });
+
+  describe('JSON-serialized structured hooks (from DB)', () => {
+    it('deserializes JSON preset hook from string', () => {
+      const agent = makeAgent({ engine: 'codex' });
+      const jsonValue = JSON.stringify({ preset: 'claude' });
+      const result = resolveHook('exit', jsonValue, agent);
+      assert.equal(result.mode, 'paste');
+      assert.equal((result as { text: string }).text, '/exit');
+    });
+
+    it('deserializes JSON shell hook from string', () => {
+      const agent = makeAgent({ name: 'db-agent' });
+      const jsonValue = JSON.stringify({ shell: './run.sh' });
+      const result = resolveHook('start', jsonValue, agent);
+      assert.equal(result.mode, 'paste');
+      const text = (result as { text: string }).text;
+      assert.ok(text.includes('COLLAB_AGENT=db-agent'));
+      assert.ok(text.includes('./run.sh'));
+    });
+
+    it('deserializes JSON send hook from string', () => {
+      const agent = makeAgent();
+      const jsonValue = JSON.stringify({ send: [{ keystroke: 'Escape' }] });
+      const result = resolveHook('exit', jsonValue, agent);
+      assert.equal(result.mode, 'send');
+    });
+  });
+
   describe('resolveAgentHook convenience', () => {
     it('reads hookStart from agent record', () => {
       const agent = makeAgent({ hookStart: 'my-start-cmd' });
