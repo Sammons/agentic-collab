@@ -1951,21 +1951,29 @@
                 <dt>permissions</dt><dd>skip (bypass permission prompts)</dd>
                 <dt>proxy_host</dt><dd>Pin agent to a specific proxy hostname</dd>
                 <dt>group</dt><dd>Group label for sidebar organization</dd>
-                <dt>start</dt><dd>Hook for spawning (inline cmd, file:&lt;path&gt;, or preset:&lt;engine&gt;)</dd>
-                <dt>resume</dt><dd>Hook for resuming</dd>
-                <dt>compact</dt><dd>Hook for compacting</dd>
-                <dt>exit</dt><dd>Hook for exiting/suspending</dd>
-                <dt>interrupt</dt><dd>Hook for interrupting</dd>
-                <dt>submit</dt><dd>Hook for message delivery</dd>
+                <dt>start</dt><dd>Hook for spawning (flat string or nested preset/shell)</dd>
+                <dt>resume</dt><dd>Hook for resuming (flat string or nested preset/shell)</dd>
+                <dt>compact</dt><dd>Hook for compacting (flat string or nested preset/shell/send)</dd>
+                <dt>exit</dt><dd>Hook for exiting/suspending (flat string or nested preset/shell/send)</dd>
+                <dt>interrupt</dt><dd>Hook for interrupting (flat string or nested preset/shell/send)</dd>
+                <dt>submit</dt><dd>Hook for message delivery (flat string or nested preset/shell/send)</dd>
               </dl>
             </div>
             <div class="persona-cheatsheet-section">
-              <strong>Hook value modes</strong> <span style="color:var(--text-dim)">(for start/resume/compact/exit/interrupt/submit)</span>
+              <strong>Hook value modes</strong> <span style="color:var(--text-dim)">(flat strings — legacy, still supported)</span>
               <dl>
                 <dt><em>bare string</em></dt><dd>Inline command pasted into tmux</dd>
                 <dt>file:/path/to/script</dt><dd>Read file contents and paste (must be absolute path)</dd>
                 <dt>preset:claude</dt><dd>Use the named engine's default behavior</dd>
                 <dt><em>(omitted)</em></dt><dd>Uses agent's own engine preset</dd>
+              </dl>
+            </div>
+            <div class="persona-cheatsheet-section">
+              <strong>Structured hook modes</strong> <span style="color:var(--text-dim)">(nested YAML objects)</span>
+              <dl>
+                <dt>preset:</dt><dd>Engine default + optional options: (model, thinking, permissions)</dd>
+                <dt>shell:</dt><dd>Paste command with auto-injected COLLAB_AGENT + custom env:</dd>
+                <dt>send:</dt><dd>Ordered action sequence: keystroke:/text:/paste: with post_wait_ms</dd>
               </dl>
             </div>
             <div class="persona-cheatsheet-section">
