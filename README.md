@@ -153,6 +153,10 @@ thinking: high
 cwd: /home/user/project
 proxy_host: my-workstation
 permissions: skip
+group: research
+start: preset:claude
+exit: /quit
+compact: file:/home/user/hooks/compact.sh
 ---
 # Research Agent
 
@@ -160,6 +164,8 @@ You are a research specialist focused on codebase exploration.
 ```
 
 ### Frontmatter fields
+
+**Core fields:**
 
 | Field | Required | Description |
 |-------|----------|-------------|
@@ -169,15 +175,39 @@ You are a research specialist focused on codebase exploration.
 | `thinking` | no | Thinking mode (`high`, `low`) |
 | `proxy_host` | no | Pin agent to a specific machine hostname |
 | `permissions` | no | `skip` to bypass permission prompts |
+| `group` | no | Group label for dashboard sidebar organization |
+
+**Lifecycle hooks:**
+
+| Field | Operation | Default behavior |
+|-------|-----------|-----------------|
+| `start` | Spawn a new agent session | Engine-specific CLI command (e.g., `claude --model ...`) |
+| `resume` | Resume a suspended session | Engine-specific resume command |
+| `exit` | Exit/suspend the agent | `/exit` (Claude), keystroke exit (Codex/OpenCode) |
+| `compact` | Compact context window | `/compact` (Claude), keystroke compact (OpenCode) |
+| `interrupt` | Cancel current operation | Escape keys (Claude), Ctrl-C (Codex/OpenCode) |
+| `submit` | Deliver a message to the agent | Plain paste into tmux |
+
+Each hook field accepts one of three value modes:
+
+| Mode | Syntax | Description |
+|------|--------|-------------|
+| **Inline** | bare string | Command pasted directly into tmux (e.g., `claude --model opus`) |
+| **File** | `file:/absolute/path` | Read script file contents and paste into tmux |
+| **Preset** | `preset:<engine>` | Use the named engine's default behavior |
+| _(omitted)_ | | Uses the agent's own engine preset |
+
+When a custom hook (inline or file) is active, the command is wrapped with `COLLAB_AGENT` and `COLLAB_PERSONA_FILE` environment variables. Preset hooks are typed directly into the agent CLI and do not receive env wrapping.
 
 ### How it works
 
 On startup, the orchestrator scans `persistent-agents/*.md` and merges them into SQLite:
 - **New personas** create agents in `void` state
-- **Existing personas** update config fields (engine, model, cwd, etc.) but preserve runtime state (active sessions, proxy assignments)
+- **Existing personas** update config fields (engine, model, hooks, etc.) but preserve runtime state (active sessions, proxy assignments)
 - **Body content** (after frontmatter) is injected as the agent's system prompt via `--append-system-prompt`
+- **Hook resolution** runs through `src/orchestrator/hook-resolver.ts` — every lifecycle operation funnels through `resolveHook()` which returns paste, keys, or skip actions
 
-Persona files are readonly in the dashboard UI. Agents can edit their own persona files and handle git workflows.
+Persona files are editable in the dashboard UI. Agents can also edit their own persona files and handle git workflows.
 
 ### API
 
