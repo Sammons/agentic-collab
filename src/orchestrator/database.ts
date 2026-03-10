@@ -133,11 +133,25 @@ export class Database {
     if (!agentColNames.has('hook_spawn')) {
       this.db.exec('ALTER TABLE agents ADD COLUMN hook_spawn TEXT');
     }
+    // Rename hook_spawn → hook_start (migrate data, keep old column for safety)
+    if (!agentColNames.has('hook_start')) {
+      this.db.exec('ALTER TABLE agents ADD COLUMN hook_start TEXT');
+      this.db.exec('UPDATE agents SET hook_start = hook_spawn WHERE hook_spawn IS NOT NULL');
+    }
     if (!agentColNames.has('hook_resume')) {
       this.db.exec('ALTER TABLE agents ADD COLUMN hook_resume TEXT');
     }
     if (!agentColNames.has('hook_compact')) {
       this.db.exec('ALTER TABLE agents ADD COLUMN hook_compact TEXT');
+    }
+    if (!agentColNames.has('hook_exit')) {
+      this.db.exec('ALTER TABLE agents ADD COLUMN hook_exit TEXT');
+    }
+    if (!agentColNames.has('hook_interrupt')) {
+      this.db.exec('ALTER TABLE agents ADD COLUMN hook_interrupt TEXT');
+    }
+    if (!agentColNames.has('hook_submit')) {
+      this.db.exec('ALTER TABLE agents ADD COLUMN hook_submit TEXT');
     }
 
     // Add withdrawn column to dashboard_messages
@@ -180,13 +194,16 @@ export class Database {
     proxyHost?: string;
     proxyId?: string;
     agentGroup?: string;
-    hookSpawn?: string;
+    hookStart?: string;
     hookResume?: string;
     hookCompact?: string;
+    hookExit?: string;
+    hookInterrupt?: string;
+    hookSubmit?: string;
   }): AgentRecord {
     this.db.prepare(`
-      INSERT INTO agents (name, engine, model, thinking, cwd, persona, permissions, proxy_host, proxy_id, agent_group, hook_spawn, hook_resume, hook_compact, state)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'void')
+      INSERT INTO agents (name, engine, model, thinking, cwd, persona, permissions, proxy_host, proxy_id, agent_group, hook_start, hook_resume, hook_compact, hook_exit, hook_interrupt, hook_submit, state)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'void')
     `).run(
       opts.name,
       opts.engine,
@@ -198,9 +215,12 @@ export class Database {
       opts.proxyHost ?? null,
       opts.proxyId ?? null,
       opts.agentGroup ?? null,
-      opts.hookSpawn ?? null,
+      opts.hookStart ?? null,
       opts.hookResume ?? null,
       opts.hookCompact ?? null,
+      opts.hookExit ?? null,
+      opts.hookInterrupt ?? null,
+      opts.hookSubmit ?? null,
     );
     return this.getAgent(opts.name)!;
   }
@@ -219,9 +239,12 @@ export class Database {
     permissions?: string;
     proxyHost?: string;
     agentGroup?: string;
-    hookSpawn?: string;
+    hookStart?: string;
     hookResume?: string;
     hookCompact?: string;
+    hookExit?: string;
+    hookInterrupt?: string;
+    hookSubmit?: string;
   }): AgentRecord {
     const existing = this.getAgent(opts.name);
     if (!existing) {
@@ -231,7 +254,8 @@ export class Database {
     this.db.prepare(`
       UPDATE agents SET engine = ?, model = ?, thinking = ?, cwd = ?,
         persona = ?, permissions = ?, proxy_host = ?, agent_group = ?,
-        hook_spawn = ?, hook_resume = ?, hook_compact = ?
+        hook_start = ?, hook_resume = ?, hook_compact = ?,
+        hook_exit = ?, hook_interrupt = ?, hook_submit = ?
       WHERE name = ?
     `).run(
       opts.engine,
@@ -242,9 +266,12 @@ export class Database {
       opts.permissions ?? null,
       opts.proxyHost ?? null,
       opts.agentGroup ?? null,
-      opts.hookSpawn ?? null,
+      opts.hookStart ?? null,
       opts.hookResume ?? null,
       opts.hookCompact ?? null,
+      opts.hookExit ?? null,
+      opts.hookInterrupt ?? null,
+      opts.hookSubmit ?? null,
       opts.name,
     );
     return this.getAgent(opts.name)!;
@@ -601,9 +628,12 @@ function mapAgentRow(row: Record<string, unknown>): AgentRecord {
     proxyHost: row['proxy_host'] as string | null,
     agentGroup: row['agent_group'] as string | null,
     sortOrder: (row['sort_order'] as number) ?? 0,
-    hookSpawn: row['hook_spawn'] as string | null,
+    hookStart: row['hook_start'] as string | null,
     hookResume: row['hook_resume'] as string | null,
     hookCompact: row['hook_compact'] as string | null,
+    hookExit: row['hook_exit'] as string | null,
+    hookInterrupt: row['hook_interrupt'] as string | null,
+    hookSubmit: row['hook_submit'] as string | null,
     state: row['state'] as AgentState,
     stateBeforeShutdown: row['state_before_shutdown'] as string | null,
     currentSessionId: row['current_session_id'] as string | null,
@@ -688,9 +718,12 @@ const COLUMN_MAP: Record<string, string> = {
   stateBeforeShutdown: 'state_before_shutdown',
   spawnCount: 'spawn_count',
   agentGroup: 'agent_group',
-  hookSpawn: 'hook_spawn',
+  hookStart: 'hook_start',
   hookResume: 'hook_resume',
   hookCompact: 'hook_compact',
+  hookExit: 'hook_exit',
+  hookInterrupt: 'hook_interrupt',
+  hookSubmit: 'hook_submit',
 };
 
 function toColumnName(key: string): string {

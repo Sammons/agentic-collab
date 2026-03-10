@@ -25,6 +25,8 @@ import { sessionName, requireProxy, canSuspend, canResume } from '../shared/agen
 import { sleep } from '../shared/utils.ts';
 import { getAdapter } from './adapters/index.ts';
 import { resolvePersonaPath, loadPersona, composeSystemPrompt, getPersonasDir, toHostPath } from './persona.ts';
+import { resolveHook } from './hook-resolver.ts';
+import type { HookResult } from './hook-resolver.ts';
 
 export type LifecycleContext = {
   db: Database;
@@ -49,6 +51,40 @@ function withAgentEnv(name: string, cmd: string, personaFile?: string | null): s
   let env = `export COLLAB_AGENT=${name}`;
   if (personaFile) env += ` COLLAB_PERSONA_FILE=${personaFile}`;
   return `${env} && ${cmd}`;
+}
+
+/**
+ * Dispatch a resolved hook result to the proxy.
+ * Handles paste, keys, and skip modes uniformly.
+ */
+async function dispatchHookResult(
+  ctx: LifecycleContext,
+  proxyId: string,
+  tmuxSession: string,
+  result: HookResult,
+  opts?: { pressEnter?: boolean; keyDelay?: number },
+): Promise<void> {
+  if (result.mode === 'skip') return;
+
+  if (result.mode === 'keys') {
+    for (const key of result.keys) {
+      await ctx.proxyDispatch(proxyId, {
+        action: 'send_keys',
+        sessionName: tmuxSession,
+        keys: key,
+      });
+      if (opts?.keyDelay) await sleep(opts.keyDelay);
+    }
+    return;
+  }
+
+  // mode === 'paste'
+  await ctx.proxyDispatch(proxyId, {
+    action: 'paste',
+    sessionName: tmuxSession,
+    text: result.text,
+    pressEnter: opts?.pressEnter ?? true,
+  });
 }
 
 // ── Watchdog helper ──
@@ -132,10 +168,10 @@ export async function spawnAgent(
       lastActivity: new Date().toISOString(),
     });
 
-    return { current, tmuxSession, engine: agent.engine, spawnCount: agent.spawnCount, permissions: agent.permissions, hookSpawn: agent.hookSpawn };
+    return { current, tmuxSession, engine: agent.engine, spawnCount: agent.spawnCount, permissions: agent.permissions, hookStart: agent.hookStart };
   });
 
-  const { tmuxSession, engine, spawnCount, permissions, hookSpawn } = phase1;
+  const { tmuxSession, engine, spawnCount, permissions, hookStart } = phase1;
   const watchdog = startWatchdog(ctx, opts.name, 'spawning', SPAWN_TIMEOUT_MS, opts.proxyId, tmuxSession);
 
   try {
@@ -178,25 +214,27 @@ export async function spawnAgent(
     // 3. Generate session ID for engines that support it (Claude --session-id)
     const generatedSessionId = randomUUID();
 
-    // 4. Build and paste spawn command — use hookSpawn if present
+    // 4. Build and paste spawn command via hook resolver
     const personaFile = resolvePersonaFilePath(opts.name, opts.persona);
-    const spawnCmd = hookSpawn ?? adapter.buildSpawnCommand({
-      name: opts.name,
-      cwd: opts.cwd,
-      model: opts.model,
-      thinking: opts.thinking,
-      task: opts.task,
-      appendSystemPrompt: systemPrompt,
-      dangerouslySkipPermissions: permissions === 'skip',
-      sessionId: generatedSessionId,
+    const startResult = resolveHook('start', hookStart, phase1.current, {
+      spawnOpts: {
+        name: opts.name,
+        cwd: opts.cwd,
+        model: opts.model,
+        thinking: opts.thinking,
+        task: opts.task,
+        appendSystemPrompt: systemPrompt,
+        dangerouslySkipPermissions: permissions === 'skip',
+        sessionId: generatedSessionId,
+      },
     });
 
-    await ctx.proxyDispatch(opts.proxyId, {
-      action: 'paste',
-      sessionName: tmuxSession,
-      text: withAgentEnv(opts.name, spawnCmd, hookSpawn ? personaFile : null),
-      pressEnter: true,
-    });
+    // Wrap paste commands with agent env vars
+    const wrappedStart = startResult.mode === 'paste'
+      ? { mode: 'paste' as const, text: withAgentEnv(opts.name, startResult.text, hookStart ? personaFile : null) }
+      : startResult;
+
+    await dispatchHookResult(ctx, opts.proxyId, tmuxSession, wrappedStart);
 
     // 5. Wait for CLI init, then inject /rename
     await sleep(RENAME_DELAY_MS);
@@ -301,12 +339,12 @@ export async function resumeAgent(
       persona: agent.persona,
       permissions: agent.permissions,
       currentSessionId: agent.currentSessionId,
-      hookSpawn: agent.hookSpawn,
+      hookStart: agent.hookStart,
       hookResume: agent.hookResume,
     };
   });
 
-  const { proxyId, tmuxSession, engine, cwd, persona, permissions, currentSessionId, hookSpawn, hookResume } = phase1;
+  const { proxyId, tmuxSession, engine, cwd, persona, permissions, currentSessionId, hookStart, hookResume } = phase1;
   const watchdog = startWatchdog(ctx, name, 'resuming', RESUME_TIMEOUT_MS, proxyId, tmuxSession);
 
   try {
@@ -333,45 +371,44 @@ export async function resumeAgent(
     }
 
     // 3. Build and paste resume command (or spawn with new session ID if none)
-    //    Use hookResume/hookSpawn if present, falling back to adapter methods.
+    //    Use hook resolver: hookResume for existing session, hookStart for fresh spawn.
     const personaFile = resolvePersonaFilePath(name, persona);
     let resumeSessionId = currentSessionId;
-    let cmd: string;
-    const useHook = currentSessionId ? hookResume : hookSpawn;
-    if (useHook) {
-      cmd = useHook;
-    } else if (currentSessionId) {
-      cmd = adapter.buildResumeCommand({
-        name,
-        sessionId: currentSessionId,
-        cwd,
-        // Only pass task inline for engines that support resume prompts (e.g. Codex).
-        // Others (Claude, OpenCode) get the task pasted separately into tmux.
-        task: adapter.supportsResumePrompt ? opts?.task : undefined,
-        appendSystemPrompt: systemPrompt,
+    const useHookField = currentSessionId ? hookResume : hookStart;
+    let resumeResult: HookResult;
+
+    if (currentSessionId) {
+      resumeResult = resolveHook('resume', hookResume, phase1.current, {
+        resumeOpts: {
+          name,
+          sessionId: currentSessionId,
+          cwd,
+          task: adapter.supportsResumePrompt ? opts?.task : undefined,
+          appendSystemPrompt: systemPrompt,
+        },
       });
     } else {
       // No stored session ID — spawn fresh.
-      // Only Claude uses --session-id; other engines ignore it. Generate a UUID
-      // for Claude but set null for others so we don't persist a phantom ID that
-      // the engine can't resume from later (e.g. Codex resume <uuid> fails).
+      // Only Claude uses --session-id; other engines ignore it.
       resumeSessionId = adapter.engine === 'claude' ? randomUUID() : null;
-      cmd = adapter.buildSpawnCommand({
-        name,
-        cwd,
-        task: opts?.task,
-        appendSystemPrompt: systemPrompt,
-        dangerouslySkipPermissions: permissions === 'skip',
-        sessionId: resumeSessionId,
+      resumeResult = resolveHook('start', hookStart, phase1.current, {
+        spawnOpts: {
+          name,
+          cwd,
+          task: opts?.task,
+          appendSystemPrompt: systemPrompt,
+          dangerouslySkipPermissions: permissions === 'skip',
+          sessionId: resumeSessionId,
+        },
       });
     }
 
-    await ctx.proxyDispatch(proxyId, {
-      action: 'paste',
-      sessionName: tmuxSession,
-      text: withAgentEnv(name, cmd, useHook ? personaFile : null),
-      pressEnter: true,
-    });
+    // Wrap paste commands with agent env vars
+    const wrappedResume = resumeResult.mode === 'paste'
+      ? { mode: 'paste' as const, text: withAgentEnv(name, resumeResult.text, useHookField ? personaFile : null) }
+      : resumeResult;
+
+    await dispatchHookResult(ctx, proxyId, tmuxSession, wrappedResume);
 
     // 4. /rename injection
     await sleep(RENAME_DELAY_MS);
@@ -446,33 +483,18 @@ export async function suspendAgent(
       lastActivity: new Date().toISOString(),
     });
 
-    return { current, proxyId, engine: agent.engine, tmuxSession: sessionName(agent) };
+    return { current, proxyId, engine: agent.engine, hookExit: agent.hookExit, tmuxSession: sessionName(agent) };
   });
 
-  const { proxyId, engine, tmuxSession } = phase1;
+  const { proxyId, engine, hookExit, tmuxSession } = phase1;
   const watchdog = startWatchdog(ctx, name, 'suspending', SUSPEND_TIMEOUT_MS, proxyId, tmuxSession);
 
   try {
     // ── Phase 2: slow proxy work (no lock) ──
-    const adapter = getAdapter(engine);
 
-    // Send exit command — prefer keystroke delivery for TUI-based engines
-    if (adapter.exitKeys) {
-      for (const key of adapter.exitKeys()) {
-        await ctx.proxyDispatch(proxyId, {
-          action: 'send_keys',
-          sessionName: tmuxSession,
-          keys: key,
-        });
-      }
-    } else {
-      await ctx.proxyDispatch(proxyId, {
-        action: 'paste',
-        sessionName: tmuxSession,
-        text: adapter.buildExitCommand(),
-        pressEnter: true,
-      });
-    }
+    // Send exit command via hook resolver
+    const exitResult = resolveHook('exit', hookExit, phase1.current);
+    await dispatchHookResult(ctx, proxyId, tmuxSession, exitResult);
 
     // Wait for process to exit, then verify
     await sleep(EXIT_WAIT_MS);
@@ -605,14 +627,15 @@ export async function reloadAgent(
       spawnCount: agent.spawnCount,
       reloadTask: agent.reloadTask,
       oldTmuxSession: sessionName(agent),
-      hookSpawn: agent.hookSpawn,
+      hookStart: agent.hookStart,
       hookResume: agent.hookResume,
+      hookExit: agent.hookExit,
     };
   });
 
   const {
     proxyId, engine, cwd, persona, permissions, previousContextPct,
-    currentSessionId, spawnCount, reloadTask, oldTmuxSession, hookSpawn, hookResume,
+    currentSessionId, spawnCount, reloadTask, oldTmuxSession, hookStart, hookResume, hookExit,
   } = phase1;
   const watchdog = startWatchdog(ctx, name, 'suspending', RELOAD_TIMEOUT_MS, proxyId, oldTmuxSession);
 
@@ -620,23 +643,9 @@ export async function reloadAgent(
     // ── Phase 2: slow proxy work (no lock) ──
     const adapter = getAdapter(engine);
 
-    // 1. Send exit command — prefer keystroke delivery for TUI-based engines
-    if (adapter.exitKeys) {
-      for (const key of adapter.exitKeys()) {
-        await ctx.proxyDispatch(proxyId, {
-          action: 'send_keys',
-          sessionName: oldTmuxSession,
-          keys: key,
-        });
-      }
-    } else {
-      await ctx.proxyDispatch(proxyId, {
-        action: 'paste',
-        sessionName: oldTmuxSession,
-        text: adapter.buildExitCommand(),
-        pressEnter: true,
-      });
-    }
+    // 1. Send exit command via hook resolver
+    const exitResult = resolveHook('exit', hookExit, phase1.current);
+    await dispatchHookResult(ctx, proxyId, oldTmuxSession, exitResult);
 
     // 2. Wait for exit
     await sleep(EXIT_WAIT_MS);
@@ -677,36 +686,40 @@ export async function reloadAgent(
 
     const personaFile = resolvePersonaFilePath(name, persona);
     let reloadSessionId = currentSessionId;
-    const useHook = currentSessionId ? hookResume : hookSpawn;
-    const resumeCmd = useHook ?? (currentSessionId
-      ? adapter.buildResumeCommand({
+    const useHookField = currentSessionId ? hookResume : hookStart;
+    let reloadResult: HookResult;
+
+    if (currentSessionId) {
+      reloadResult = resolveHook('resume', hookResume, phase1.current, {
+        resumeOpts: {
           name,
           sessionId: currentSessionId,
           cwd,
           task: inlineTask,
           appendSystemPrompt: systemPrompt,
-        })
-      : (() => {
-          // No session to resume — spawn fresh.
-          // Only Claude uses --session-id; other engines ignore it. Avoid persisting
-          // a phantom UUID that the engine can't resume from later.
-          reloadSessionId = adapter.engine === 'claude' ? randomUUID() : null;
-          return adapter.buildSpawnCommand({
-            name,
-            cwd,
-            task: inlineTask,
-            appendSystemPrompt: systemPrompt,
-            dangerouslySkipPermissions: permissions === 'skip',
-            sessionId: reloadSessionId,
-          });
-        })());
+        },
+      });
+    } else {
+      // No session to resume — spawn fresh.
+      reloadSessionId = adapter.engine === 'claude' ? randomUUID() : null;
+      reloadResult = resolveHook('start', hookStart, phase1.current, {
+        spawnOpts: {
+          name,
+          cwd,
+          task: inlineTask,
+          appendSystemPrompt: systemPrompt,
+          dangerouslySkipPermissions: permissions === 'skip',
+          sessionId: reloadSessionId,
+        },
+      });
+    }
 
-    await ctx.proxyDispatch(proxyId, {
-      action: 'paste',
-      sessionName: tmuxSession,
-      text: withAgentEnv(name, resumeCmd, useHook ? personaFile : null),
-      pressEnter: true,
-    });
+    // Wrap paste commands with agent env vars
+    const wrappedReload = reloadResult.mode === 'paste'
+      ? { mode: 'paste' as const, text: withAgentEnv(name, reloadResult.text, useHookField ? personaFile : null) }
+      : reloadResult;
+
+    await dispatchHookResult(ctx, proxyId, tmuxSession, wrappedReload);
 
     // 6. /rename injection
     await sleep(RENAME_DELAY_MS);
@@ -776,17 +789,9 @@ export async function interruptAgent(
     if (!agent) throw new Error(`Agent "${name}" not found`);
     const proxyId = requireProxy(agent);
 
-    const adapter = getAdapter(agent.engine);
-    const keys = adapter.interruptKeys();
-
-    for (const key of keys) {
-      await ctx.proxyDispatch(proxyId, {
-        action: 'send_keys',
-        sessionName: sessionName(agent),
-        keys: key,
-      });
-      await sleep(INTERRUPT_KEY_DELAY_MS);
-    }
+    // Send interrupt via hook resolver
+    const interruptResult = resolveHook('interrupt', agent.hookInterrupt, agent);
+    await dispatchHookResult(ctx, proxyId, sessionName(agent), interruptResult, { keyDelay: INTERRUPT_KEY_DELAY_MS });
 
     ctx.db.logEvent(name, 'interrupted');
   });
@@ -805,39 +810,21 @@ export async function compactAgent(
     if (!agent) throw new Error(`Agent "${name}" not found`);
     const proxyId = requireProxy(agent);
 
-    const adapter = getAdapter(agent.engine);
-
-    // Send compact command — use hookCompact if present, then adapter keys, then adapter command.
-    if (agent.hookCompact) {
-      const personaFile = resolvePersonaFilePath(name, agent.persona);
-      await ctx.proxyDispatch(proxyId, {
-        action: 'paste',
-        sessionName: sessionName(agent),
-        text: withAgentEnv(name, agent.hookCompact, personaFile),
-        pressEnter: true,
-      });
-    } else if (adapter.compactKeys) {
-      for (const key of adapter.compactKeys()) {
-        await ctx.proxyDispatch(proxyId, {
-          action: 'send_keys',
-          sessionName: sessionName(agent),
-          keys: key,
-        });
-      }
-    } else {
-      const compactCmd = adapter.buildCompactCommand();
-      if (!compactCmd) {
-        console.log(`[lifecycle] ${name}: engine "${agent.engine}" does not support compaction — skipping`);
-        ctx.db.logEvent(name, 'compact_skipped', undefined, { reason: 'unsupported_engine' });
-        return;
-      }
-      await ctx.proxyDispatch(proxyId, {
-        action: 'paste',
-        sessionName: sessionName(agent),
-        text: compactCmd,
-        pressEnter: true,
-      });
+    // Send compact command via hook resolver
+    const compactResult = resolveHook('compact', agent.hookCompact, agent);
+    if (compactResult.mode === 'skip') {
+      console.log(`[lifecycle] ${name}: engine "${agent.engine}" does not support compaction — skipping`);
+      ctx.db.logEvent(name, 'compact_skipped', undefined, { reason: 'unsupported_engine' });
+      return;
     }
+
+    // Wrap custom hook paste commands with agent env vars
+    let wrappedCompact = compactResult;
+    if (agent.hookCompact && compactResult.mode === 'paste') {
+      const personaFile = resolvePersonaFilePath(name, agent.persona);
+      wrappedCompact = { mode: 'paste', text: withAgentEnv(name, compactResult.text, personaFile) };
+    }
+    await dispatchHookResult(ctx, proxyId, sessionName(agent), wrappedCompact);
 
     // Transition to active so the agent doesn't appear idle during compaction.
     // The health monitor will detect idle again once compaction finishes.
