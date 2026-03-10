@@ -1,6 +1,5 @@
 /**
- * Health monitor: polls agents every 30s.
- * Priority chain: reload > compact > suspend > ping.
+ * Health monitor: polls agents every 30s (read-only observation).
  *
  * Idle detection uses screen-diff: captures the last N lines of tmux pane
  * output each poll cycle and compares to the previous capture. If the output
@@ -8,6 +7,8 @@
  * This is engine-agnostic — no regex prompt detection needed.
  *
  * Context % parsing still uses engine adapters (each CLI reports usage differently).
+ * Context percentages are recorded to the DB for dashboard display but do NOT
+ * trigger automatic compact or reload actions.
  *
  * Message delivery is handled by MessageDispatcher (event-driven).
  * The health monitor calls dispatcher.deliverIfReady() as a fallback
@@ -19,7 +20,7 @@ import type { LockManager } from '../shared/lock.ts';
 import type { ProxyCommand, ProxyResponse, AgentRecord, PendingMessage, DashboardMessage } from '../shared/types.ts';
 import { sessionName, canSuspend } from '../shared/agent-entity.ts';
 import { getAdapter } from './adapters/index.ts';
-import { reloadAgent, compactAgent, type LifecycleContext } from './lifecycle.ts';
+import { reloadAgent, type LifecycleContext } from './lifecycle.ts';
 import type { MessageDispatcher } from './message-dispatcher.ts';
 
 export type HealthMonitorOptions = {
@@ -32,21 +33,16 @@ export type HealthMonitorOptions = {
   onQueueUpdate?: (message: PendingMessage) => void;
   onDashboardMessage?: (message: DashboardMessage) => void;
   pollIntervalMs?: number;
-  autoCompactThreshold?: number; // context % to trigger compact (default 80)
-  autoReloadThreshold?: number;  // context % to trigger reload (default 90)
   idleSuspendMs?: number;        // ms of idle before suspend (default 5 minutes)
 };
 
 const DEFAULT_POLL_MS = 30_000;
-const DEFAULT_COMPACT_THRESHOLD = 80;
-const DEFAULT_RELOAD_THRESHOLD = 90;
 const DEFAULT_IDLE_SUSPEND_MS = 5 * 60 * 1000;
 
 export class HealthMonitor {
   private timer: ReturnType<typeof setInterval> | null = null;
   private fastTimer: ReturnType<typeof setInterval> | null = null;
   private readonly quickPollTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  private readonly lastCompactAt = new Map<string, number>();
   /** Consecutive health check failure count per agent. */
   private readonly consecutiveFailures = new Map<string, number>();
   private static readonly FAILURE_THRESHOLD = 3; // failures before marking agent as failed
@@ -67,15 +63,12 @@ export class HealthMonitor {
   static readonly IDLE_THRESHOLD = 1;
   /** Number of trailing pane lines to capture for screen-diff. */
   static readonly SNAPSHOT_LINES = 5;
-  private static readonly COMPACT_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes between compacts
   private readonly db: Database;
   private readonly locks: LockManager;
   private readonly proxyDispatch: (proxyId: string, command: ProxyCommand) => Promise<ProxyResponse>;
   private readonly orchestratorHost: string;
   private readonly messageDispatcher: MessageDispatcher;
   private readonly pollIntervalMs: number;
-  private readonly autoCompactThreshold: number;
-  private readonly autoReloadThreshold: number;
   private readonly idleSuspendMs: number;
   static readonly FAST_POLL_MS = 5_000;
   private readonly onAgentUpdate: (agentName: string) => void;
@@ -92,8 +85,6 @@ export class HealthMonitor {
     this.onQueueUpdate = opts.onQueueUpdate ?? (() => {});
     this.onDashboardMessage = opts.onDashboardMessage ?? (() => {});
     this.pollIntervalMs = opts.pollIntervalMs ?? DEFAULT_POLL_MS;
-    this.autoCompactThreshold = opts.autoCompactThreshold ?? DEFAULT_COMPACT_THRESHOLD;
-    this.autoReloadThreshold = opts.autoReloadThreshold ?? DEFAULT_RELOAD_THRESHOLD;
     this.idleSuspendMs = opts.idleSuspendMs ?? DEFAULT_IDLE_SUSPEND_MS;
   }
 
@@ -245,7 +236,7 @@ export class HealthMonitor {
   }
 
   /**
-   * Poll a single agent. Priority: reload > compact > idle detection > delivery > suspend timeout.
+   * Poll a single agent. Read-only observation + idle detection + message delivery.
    */
   async pollAgent(agentSnapshot: AgentRecord): Promise<void> {
     const agent = this.db.getAgent(agentSnapshot.name);
@@ -254,8 +245,7 @@ export class HealthMonitor {
     const paneOutput = await this.capturePaneOutput(agent);
     if (paneOutput === null) return;
 
-    const adapter = getAdapter(agent.engine);
-    if (await this.handleContextThresholds(agent, adapter, paneOutput)) return;
+    this.recordContextPercent(agent, paneOutput);
 
     const isIdle = this.checkScreenDiff(agent.name, paneOutput);
     this.handleIdleTransitions(agent, isIdle);
@@ -318,50 +308,18 @@ export class HealthMonitor {
   }
 
   /**
-   * Check context thresholds and trigger reload/compact if needed.
-   * Returns true if a threshold action was taken (caller should short-circuit).
+   * Parse context % from pane output and record to DB (read-only — no actions taken).
    */
-  private async handleContextThresholds(
-    agent: AgentRecord,
-    adapter: ReturnType<typeof getAdapter>,
-    paneOutput: string,
-  ): Promise<boolean> {
+  private recordContextPercent(agent: AgentRecord, paneOutput: string): void {
+    const adapter = getAdapter(agent.engine);
     const contextResult = adapter.parseContextPercent(paneOutput);
-    if (contextResult.contextPct === null) return false;
+    if (contextResult.contextPct === null) return;
 
     this.db.updateAgentState(agent.name, agent.state, agent.version, {
       lastContextPct: contextResult.contextPct,
       lastActivity: new Date().toISOString(),
     });
     this.onAgentUpdate(agent.name);
-
-    const fresh = this.db.getAgent(agent.name);
-    if (!fresh) return true;
-
-    if (fresh.reloadQueued) {
-      await this.handleReload(fresh);
-      return true;
-    }
-
-    if (contextResult.contextPct >= this.autoReloadThreshold) {
-      console.log(`[health] ${agent.name} context at ${contextResult.contextPct}% — triggering reload`);
-      await this.handleReload(fresh);
-      return true;
-    }
-
-    if (contextResult.contextPct >= this.autoCompactThreshold) {
-      const lastCompact = this.lastCompactAt.get(agent.name) ?? 0;
-      if (Date.now() - lastCompact < HealthMonitor.COMPACT_COOLDOWN_MS) {
-        return false; // cooldown active, skip
-      }
-      console.log(`[health] ${agent.name} context at ${contextResult.contextPct}% — sending compact`);
-      const lifecycleCtx = this.makeLifecycleCtx();
-      await compactAgent(lifecycleCtx, agent.name);
-      this.lastCompactAt.set(agent.name, Date.now());
-      return true;
-    }
-
-    return false;
   }
 
   /**
