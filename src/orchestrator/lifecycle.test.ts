@@ -490,8 +490,8 @@ describe('Lifecycle', () => {
   });
 
   describe('frontmatter hooks', () => {
-    it('spawnAgent uses hookSpawn instead of adapter command', async () => {
-      db.createAgent({ name: 'hook-spawn', engine: 'claude', cwd: '/tmp', proxyId: 'p1', hookSpawn: 'my-custom-spawn-cmd --flag' });
+    it('spawnAgent uses hookStart instead of adapter command', async () => {
+      db.createAgent({ name: 'hook-spawn', engine: 'claude', cwd: '/tmp', proxyId: 'p1', hookStart: 'my-custom-spawn-cmd --flag' });
       proxyCommands = [];
 
       await spawnAgent(ctx, {
@@ -503,13 +503,13 @@ describe('Lifecycle', () => {
 
       const paste = proxyCommands.find(c => c.action === 'paste') as Extract<ProxyCommand, { action: 'paste' }>;
       assert.ok(paste, 'should have paste command');
-      assert.ok(paste.text.includes('my-custom-spawn-cmd --flag'), 'should use hookSpawn');
+      assert.ok(paste.text.includes('my-custom-spawn-cmd --flag'), 'should use hookStart');
       assert.ok(!paste.text.includes('claude'), 'should not contain adapter command');
       assert.ok(paste.text.includes('COLLAB_AGENT=hook-spawn'), 'should have COLLAB_AGENT');
       assert.ok(paste.text.includes('COLLAB_PERSONA_FILE='), 'should export COLLAB_PERSONA_FILE');
     });
 
-    it('spawnAgent falls back to adapter when hookSpawn is null', async () => {
+    it('spawnAgent falls back to adapter when hookStart is null', async () => {
       db.createAgent({ name: 'hook-spawn-null', engine: 'claude', cwd: '/tmp', proxyId: 'p1' });
       proxyCommands = [];
 
@@ -548,8 +548,8 @@ describe('Lifecycle', () => {
       assert.ok(paste.text.includes('COLLAB_PERSONA_FILE='), 'should export COLLAB_PERSONA_FILE');
     });
 
-    it('resumeAgent uses hookSpawn when no session exists', async () => {
-      db.createAgent({ name: 'hook-resume-nosess', engine: 'claude', cwd: '/tmp', proxyId: 'p1', hookSpawn: 'my-spawn-for-resume', hookResume: 'my-resume-cmd' });
+    it('resumeAgent uses hookStart when no session exists', async () => {
+      db.createAgent({ name: 'hook-resume-nosess', engine: 'claude', cwd: '/tmp', proxyId: 'p1', hookStart: 'my-spawn-for-resume', hookResume: 'my-resume-cmd' });
       const a = db.getAgent('hook-resume-nosess')!;
       db.updateAgentState('hook-resume-nosess', 'suspended', a.version, {
         tmuxSession: 'agent-hook-resume-nosess',
@@ -562,7 +562,7 @@ describe('Lifecycle', () => {
 
       const paste = proxyCommands.find(c => c.action === 'paste') as Extract<ProxyCommand, { action: 'paste' }>;
       assert.ok(paste, 'should have paste command');
-      assert.ok(paste.text.includes('my-spawn-for-resume'), 'should use hookSpawn when no session');
+      assert.ok(paste.text.includes('my-spawn-for-resume'), 'should use hookStart when no session');
       assert.ok(!paste.text.includes('my-resume-cmd'), 'should not use hookResume');
     });
 
