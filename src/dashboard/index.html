@@ -900,6 +900,20 @@
     font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
     font-size: 12px;
   }
+  .persona-yaml {
+    font-size: 12px;
+    padding: 12px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 16px;
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    color: var(--text);
+    white-space: pre-wrap;
+    word-break: break-word;
+    line-height: 1.5;
+    margin-top: 0;
+  }
   .persona-body {
     white-space: normal;
     word-wrap: break-word;
@@ -1772,12 +1786,13 @@
     }
   }
 
-  const FM_LABELS = {
+  const FM_CONFIG_LABELS = {
     engine: 'Engine', model: 'Model', thinking: 'Thinking',
     cwd: 'Working Dir', proxy_host: 'Proxy Host', permissions: 'Permissions',
-    group: 'Group', start: 'Start', resume: 'Resume', compact: 'Compact',
-    exit: 'Exit', interrupt: 'Interrupt', submit: 'Submit',
+    group: 'Group',
   };
+  const FM_HOOK_FIELDS = ['start', 'resume', 'exit', 'compact', 'interrupt', 'submit'];
+  const FM_ALL_KNOWN = new Set([...Object.keys(FM_CONFIG_LABELS), ...FM_HOOK_FIELDS]);
 
   /** Format a frontmatter value for display. Handles structured hook objects. */
   function fmtFmValue(val) {
@@ -1806,6 +1821,46 @@
     return String(val);
   }
 
+  /** Render a frontmatter object as YAML text. Handles nested objects and arrays. */
+  function fmToYaml(fm) {
+    const lines = [];
+    for (const [key, val] of Object.entries(fm)) {
+      if (val == null || val === '') continue;
+      if (typeof val === 'string' || typeof val === 'number' || typeof val === 'boolean') {
+        lines.push(key + ': ' + val);
+      } else if (typeof val === 'object' && !Array.isArray(val)) {
+        lines.push(key + ':');
+        for (const [sk, sv] of Object.entries(val)) {
+          if (sv == null) continue;
+          if (typeof sv === 'object' && !Array.isArray(sv)) {
+            lines.push('  ' + sk + ':');
+            for (const [ssk, ssv] of Object.entries(sv)) {
+              lines.push('    ' + ssk + ': ' + ssv);
+            }
+          } else if (Array.isArray(sv)) {
+            lines.push('  ' + sk + ':');
+            for (const item of sv) {
+              if (typeof item === 'object') {
+                const entries = Object.entries(item);
+                if (entries.length > 0) {
+                  lines.push('    - ' + entries[0][0] + ': ' + entries[0][1]);
+                  for (let i = 1; i < entries.length; i++) {
+                    lines.push('      ' + entries[i][0] + ': ' + entries[i][1]);
+                  }
+                }
+              } else {
+                lines.push('    - ' + item);
+              }
+            }
+          } else {
+            lines.push('  ' + sk + ': ' + sv);
+          }
+        }
+      }
+    }
+    return lines.join('\n');
+  }
+
   async function renderPersona() {
     const panel = document.getElementById('personaPanel');
     if (!state.selected) return;
@@ -1825,14 +1880,7 @@
     }
     const fm = data.frontmatter;
     if (fm && Object.keys(fm).length > 0) {
-      html += '<dl class="persona-meta">';
-      for (const [key, label] of Object.entries(FM_LABELS)) {
-        if (fm[key]) html += '<dt>' + label + '</dt><dd>' + esc(fmtFmValue(fm[key])) + '</dd>';
-      }
-      for (const key of Object.keys(fm)) {
-        if (!FM_LABELS[key] && fm[key]) html += '<dt>' + esc(key) + '</dt><dd>' + esc(fmtFmValue(fm[key])) + '</dd>';
-      }
-      html += '</dl>';
+      html += '<pre class="persona-yaml">' + esc(fmToYaml(fm)) + '</pre>';
     }
     if (data.body) {
       html += '<div class="persona-body">' + renderMarkdown(esc(data.body)) + '</div>';
