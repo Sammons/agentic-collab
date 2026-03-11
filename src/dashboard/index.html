@@ -3643,6 +3643,16 @@
     const toggle = document.getElementById('voiceToggle');
     const btn = document.getElementById('voiceBtn');
 
+    // Check browser capabilities first — getUserMedia requires HTTPS (or localhost)
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      controls.style.display = 'flex';
+      toggle.querySelectorAll('button').forEach(b => { b.disabled = true; b.style.opacity = '0.4'; });
+      toggle.title = window.isSecureContext
+        ? 'Voice unavailable — browser does not support getUserMedia'
+        : 'Voice requires HTTPS — connect via https:// or localhost';
+      return;
+    }
+
     // Check if voice is enabled on the server
     try {
       const resp = await fetch('/api/voice/status', {
@@ -3670,15 +3680,27 @@
           voiceState.pttStream.getTracks().forEach(t => t.stop());
           voiceState.pttStream = null;
         }
+        if (voiceState.audioCtx) {
+          voiceState.audioCtx.close().catch(() => {});
+          voiceState.audioCtx = null;
+        }
         btn.classList.add('inactive');
       } else if (mode === 'ptt') {
         stopVoice();
         btn.classList.remove('inactive');
-        // Pre-acquire mic for instant PTT response
+        // Pre-acquire mic and AudioContext within user gesture (required for iOS Safari)
         try {
           voiceState.pttStream = await navigator.mediaDevices.getUserMedia({
             audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
           });
+          // Create AudioContext in user gesture so iOS Safari doesn't block it
+          if (!voiceState.audioCtx || voiceState.audioCtx.state === 'closed') {
+            voiceState.audioCtx = new AudioContext({ sampleRate: 16000 });
+          }
+          if (voiceState.audioCtx.state === 'suspended') {
+            await voiceState.audioCtx.resume();
+          }
+          console.log('[voice] PTT ready — mic acquired, AudioContext state:', voiceState.audioCtx.state, 'rate:', voiceState.audioCtx.sampleRate);
         } catch (err) {
           console.error('[voice] Mic access denied:', err);
           document.getElementById('voicePartial').textContent = 'Mic denied';
@@ -3770,9 +3792,10 @@
     const btn = document.getElementById('voiceBtn');
     btn.classList.add('recording');
 
-    // Determine sample rate — use 16kHz if possible, else native
-    voiceState.audioCtx = new AudioContext({ sampleRate: 16000 });
-    // Ensure AudioContext is running (browsers may suspend it without user gesture)
+    // Reuse pre-created AudioContext (from PTT mode activation) or create new one
+    if (!voiceState.audioCtx || voiceState.audioCtx.state === 'closed') {
+      voiceState.audioCtx = new AudioContext({ sampleRate: 16000 });
+    }
     if (voiceState.audioCtx.state === 'suspended') {
       await voiceState.audioCtx.resume();
     }
@@ -3881,7 +3904,9 @@
       voiceState.processor.disconnect();
       voiceState.processor = null;
     }
-    if (voiceState.audioCtx) {
+    // Keep AudioContext alive in PTT mode — reuse across presses (iOS Safari
+    // requires it to be created within a user gesture, so re-creating per press fails)
+    if (voiceState.audioCtx && voiceState.mode !== 'ptt') {
       voiceState.audioCtx.close().catch(() => {});
       voiceState.audioCtx = null;
     }
