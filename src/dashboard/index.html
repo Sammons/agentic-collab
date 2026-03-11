@@ -889,7 +889,8 @@
     text-transform: uppercase;
     letter-spacing: 0.5px;
   }
-  .reminder-badge.pending { background: rgba(88,166,255,0.15); color: var(--accent); }
+  .reminder-badge.active { background: rgba(88,166,255,0.15); color: var(--accent); }
+  .reminder-badge.pending { background: rgba(139,148,158,0.15); color: var(--text-dim); }
   .reminder-badge.completed { background: rgba(63,185,80,0.15); color: var(--green); }
   .reminder-actions {
     display: flex;
@@ -2115,7 +2116,7 @@
               <div class="reminder-prompt">${isActive ? '\u25b6 ' : ''}${esc(r.prompt)}</div>
               <div class="reminder-meta">
                 <span>${cadenceLabel}</span>
-                <span class="reminder-badge ${r.status}">${r.status}</span>
+                <span class="reminder-badge ${isActive ? 'active' : r.status}">${isActive ? 'active' : r.status === 'pending' ? 'queued' : r.status}</span>
                 ${createdByHtml}
               </div>
             </div>
