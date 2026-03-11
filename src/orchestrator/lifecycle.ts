@@ -26,7 +26,7 @@ import { sleep } from '../shared/utils.ts';
 import { getAdapter } from './adapters/index.ts';
 import { resolvePersonaPath, loadPersona, composeSystemPrompt, getPersonasDir, toHostPath } from './persona.ts';
 import { resolveHook } from './hook-resolver.ts';
-import type { HookResult } from './hook-resolver.ts';
+import type { HookResult, TemplateVars } from './hook-resolver.ts';
 
 export type LifecycleContext = {
   db: Database;
@@ -303,6 +303,13 @@ export async function spawnAgent(
 
     // 4. Build and paste spawn command via hook resolver
     const personaFile = resolvePersonaFilePath(opts.name, opts.persona);
+    const templateVars: TemplateVars = {
+      AGENT_NAME: opts.name,
+      AGENT_CWD: opts.cwd,
+      SESSION_ID: generatedSessionId,
+      PERSONA_PROMPT: systemPrompt,
+      PERSONA_PROMPT_FILEPATH: personaFile ?? undefined,
+    };
     const startResult = resolveHook('start', hookStart, phase1.current, {
       spawnOpts: {
         name: opts.name,
@@ -314,6 +321,7 @@ export async function spawnAgent(
         dangerouslySkipPermissions: permissions === 'skip',
         sessionId: generatedSessionId,
       },
+      templateVars,
     });
 
     // Wrap paste commands with agent env vars
@@ -455,6 +463,14 @@ export async function resumeAgent(
     const useHookField = currentSessionId ? hookResume : hookStart;
     let resumeResult: HookResult;
 
+    const resumeTemplateVars: TemplateVars = {
+      AGENT_NAME: name,
+      AGENT_CWD: cwd,
+      SESSION_ID: currentSessionId ?? undefined,
+      PERSONA_PROMPT: systemPrompt,
+      PERSONA_PROMPT_FILEPATH: personaFile ?? undefined,
+    };
+
     if (currentSessionId) {
       resumeResult = resolveHook('resume', hookResume, phase1.current, {
         resumeOpts: {
@@ -464,11 +480,13 @@ export async function resumeAgent(
           task: adapter.supportsResumePrompt ? opts?.task : undefined,
           appendSystemPrompt: systemPrompt,
         },
+        templateVars: resumeTemplateVars,
       });
     } else {
       // No stored session ID — spawn fresh.
       // Only Claude uses --session-id; other engines ignore it.
       resumeSessionId = adapter.engine === 'claude' ? randomUUID() : null;
+      resumeTemplateVars.SESSION_ID = resumeSessionId ?? undefined;
       resumeResult = resolveHook('start', hookStart, phase1.current, {
         spawnOpts: {
           name,
@@ -478,6 +496,7 @@ export async function resumeAgent(
           dangerouslySkipPermissions: permissions === 'skip',
           sessionId: resumeSessionId,
         },
+        templateVars: resumeTemplateVars,
       });
     }
 
@@ -776,6 +795,14 @@ export async function reloadAgent(
     const useHookField = currentSessionId ? hookResume : hookStart;
     let reloadResult: HookResult;
 
+    const reloadTemplateVars: TemplateVars = {
+      AGENT_NAME: name,
+      AGENT_CWD: cwd,
+      SESSION_ID: currentSessionId ?? undefined,
+      PERSONA_PROMPT: systemPrompt,
+      PERSONA_PROMPT_FILEPATH: personaFile ?? undefined,
+    };
+
     if (currentSessionId) {
       reloadResult = resolveHook('resume', hookResume, phase1.current, {
         resumeOpts: {
@@ -785,10 +812,12 @@ export async function reloadAgent(
           task: inlineTask,
           appendSystemPrompt: systemPrompt,
         },
+        templateVars: reloadTemplateVars,
       });
     } else {
       // No session to resume — spawn fresh.
       reloadSessionId = adapter.engine === 'claude' ? randomUUID() : null;
+      reloadTemplateVars.SESSION_ID = reloadSessionId ?? undefined;
       reloadResult = resolveHook('start', hookStart, phase1.current, {
         spawnOpts: {
           name,
@@ -798,6 +827,7 @@ export async function reloadAgent(
           dangerouslySkipPermissions: permissions === 'skip',
           sessionId: reloadSessionId,
         },
+        templateVars: reloadTemplateVars,
       });
     }
 
