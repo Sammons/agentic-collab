@@ -104,6 +104,14 @@ export interface EngineAdapter {
   buildSubmitCommand(task: string): string;
 
   /**
+   * Build a structured send action sequence for submitting a message/task.
+   * When defined and returning non-null, the submit hook uses this instead of
+   * buildSubmitCommand + automatic Enter. Used by engines that need extra
+   * keystrokes or delays after the initial submit (e.g. Codex extra Enter).
+   */
+  submitActions?(task: string): import('../../shared/types.ts').SendAction[] | null;
+
+  /**
    * Extract session ID from pane output after spawn.
    * Used by engines that don't support pre-set session IDs (e.g. Codex).
    * Returns the session ID string, or null if not found/not applicable.
