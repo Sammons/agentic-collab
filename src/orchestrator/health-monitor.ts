@@ -10,9 +10,8 @@
  * Context percentages are recorded to the DB for dashboard display but do NOT
  * trigger automatic compact or reload actions.
  *
- * Message delivery is handled by MessageDispatcher (event-driven).
- * The health monitor calls dispatcher.deliverIfReady() as a fallback
- * during each poll cycle for agents detected as idle via screen-diff.
+ * Message delivery is entirely owned by MessageDispatcher (event-driven).
+ * The health monitor does NOT participate in message delivery.
  */
 
 import type { Database } from './database.ts';
@@ -21,14 +20,12 @@ import type { ProxyCommand, ProxyResponse, AgentRecord, PendingMessage, Dashboar
 import { sessionName, canSuspend } from '../shared/agent-entity.ts';
 import { getAdapter } from './adapters/index.ts';
 import { reloadAgent, type LifecycleContext } from './lifecycle.ts';
-import type { MessageDispatcher } from './message-dispatcher.ts';
 
 export type HealthMonitorOptions = {
   db: Database;
   locks: LockManager;
   proxyDispatch: (proxyId: string, command: ProxyCommand) => Promise<ProxyResponse>;
   orchestratorHost: string;
-  messageDispatcher: MessageDispatcher;
   onAgentUpdate?: (agentName: string) => void;
   onQueueUpdate?: (message: PendingMessage) => void;
   onDashboardMessage?: (message: DashboardMessage) => void;
@@ -67,7 +64,6 @@ export class HealthMonitor {
   private readonly locks: LockManager;
   private readonly proxyDispatch: (proxyId: string, command: ProxyCommand) => Promise<ProxyResponse>;
   private readonly orchestratorHost: string;
-  private readonly messageDispatcher: MessageDispatcher;
   private readonly pollIntervalMs: number;
   private readonly idleSuspendMs: number;
   static readonly FAST_POLL_MS = 5_000;
@@ -80,7 +76,6 @@ export class HealthMonitor {
     this.locks = opts.locks;
     this.proxyDispatch = opts.proxyDispatch;
     this.orchestratorHost = opts.orchestratorHost;
-    this.messageDispatcher = opts.messageDispatcher;
     this.onAgentUpdate = opts.onAgentUpdate ?? (() => {});
     this.onQueueUpdate = opts.onQueueUpdate ?? (() => {});
     this.onDashboardMessage = opts.onDashboardMessage ?? (() => {});
@@ -203,9 +198,6 @@ export class HealthMonitor {
         if (paneOutput === null) continue;
         const isIdle = this.checkScreenDiff(agent.name, paneOutput);
         this.handleIdleTransitions(agent, isIdle);
-        if (isIdle) {
-          await this.messageDispatcher.deliverIfReady(agent.name);
-        }
       } catch (err) {
         console.error(`[health] Fast poll error for ${agent.name}:`, err);
       }
@@ -216,12 +208,6 @@ export class HealthMonitor {
    * Poll all active/idle agents.
    */
   async pollAll(): Promise<void> {
-    // Recover hung delivery attempts (>60s without completion)
-    const staleReset = this.db.resetStaleAttempts(60);
-    if (staleReset > 0) {
-      console.log(`[health] Reset ${staleReset} stale delivery attempts`);
-    }
-
     const agents = this.db.listAgents().filter(
       (a) => canSuspend(a) && a.proxyId,
     );
@@ -236,7 +222,7 @@ export class HealthMonitor {
   }
 
   /**
-   * Poll a single agent. Read-only observation + idle detection + message delivery.
+   * Poll a single agent. Read-only observation + idle detection.
    */
   async pollAgent(agentSnapshot: AgentRecord): Promise<void> {
     const agent = this.db.getAgent(agentSnapshot.name);
@@ -249,11 +235,6 @@ export class HealthMonitor {
 
     const isIdle = this.checkScreenDiff(agent.name, paneOutput);
     this.handleIdleTransitions(agent, isIdle);
-
-    if (isIdle) {
-      // Fallback delivery — primary delivery is event-driven via MessageDispatcher
-      await this.messageDispatcher.deliverIfReady(agent.name);
-    }
 
     this.checkIdleSuspendTimeout(agent.name);
 
