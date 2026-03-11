@@ -204,7 +204,8 @@ export type ProxyCommand =
   | { action: 'send_keys'; sessionName: string; keys: string }
   | { action: 'write_codex_profile'; profileName: string; developerInstructions: string }
   | { action: 'remove_codex_profile'; profileName: string }
-  | { action: 'exec'; command: string; cwd?: string; timeoutMs?: number };
+  | { action: 'exec'; command: string; cwd?: string; timeoutMs?: number }
+  | { action: 'resize_pane'; sessionName: string; width: number; height: number };
 
 export type ProxyResponse = {
   ok: boolean;
