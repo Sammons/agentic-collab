@@ -130,7 +130,6 @@ const healthMonitor = new HealthMonitor({
   locks,
   proxyDispatch,
   orchestratorHost: ORCHESTRATOR_HOST,
-  messageDispatcher,
   onAgentUpdate: (agentName) => {
     const agent = db.getAgent(agentName);
     if (agent) {

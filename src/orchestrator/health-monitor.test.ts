@@ -31,7 +31,7 @@ describe('HealthMonitor', () => {
     captureOutput = '> \n';
   });
 
-  function makeDispatcherAndMonitor(overrides?: Partial<ConstructorParameters<typeof HealthMonitor>[0]>): HealthMonitor {
+  function makeMonitor(overrides?: Partial<ConstructorParameters<typeof HealthMonitor>[0]>): HealthMonitor {
     const dispatch = overrides?.proxyDispatch ?? (async (_proxyId: string, command: ProxyCommand): Promise<ProxyResponse> => {
       proxyCommands.push(command);
       if (command.action === 'capture') {
@@ -44,28 +44,16 @@ describe('HealthMonitor', () => {
     });
 
     const locks = new LockManager(db.rawDb);
-    const dispatcher = new MessageDispatcher({
-      db,
-      locks,
-      proxyDispatch: dispatch,
-      orchestratorHost: 'http://localhost:3000',
-      onQueueUpdate: overrides?.onQueueUpdate,
-      onDashboardMessage: overrides?.onDashboardMessage,
-    });
 
     return new HealthMonitor({
       db,
       locks,
       proxyDispatch: dispatch,
       orchestratorHost: 'http://localhost:3000',
-      messageDispatcher: dispatcher,
       pollIntervalMs: 100,
       ...overrides,
     });
   }
-
-  // Alias for backward compatibility in tests
-  const makeMonitor = makeDispatcherAndMonitor;
 
   /** Ensure an agent is in active state for testing. */
   function ensureActive(name: string): void {
@@ -158,15 +146,11 @@ describe('HealthMonitor', () => {
 
     const failDispatch = async () => ({ ok: false as const, error: 'Session not found' });
     const failLocks = new LockManager(db.rawDb);
-    const failDispatcher = new MessageDispatcher({
-      db, locks: failLocks, proxyDispatch: failDispatch, orchestratorHost: 'http://localhost:3000',
-    });
     const failMonitor = new HealthMonitor({
       db,
       locks: failLocks,
       proxyDispatch: failDispatch,
       orchestratorHost: 'http://localhost:3000',
-      messageDispatcher: failDispatcher,
       pollIntervalMs: 100,
     });
 
@@ -209,15 +193,11 @@ describe('HealthMonitor', () => {
     const updates: string[] = [];
     const cbFailDispatch = async () => ({ ok: false as const, error: 'Session not found' });
     const cbFailLocks = new LockManager(db.rawDb);
-    const cbFailDispatcher = new MessageDispatcher({
-      db, locks: cbFailLocks, proxyDispatch: cbFailDispatch, orchestratorHost: 'http://localhost:3000',
-    });
     const failMonitor = new HealthMonitor({
       db,
       locks: cbFailLocks,
       proxyDispatch: cbFailDispatch,
       orchestratorHost: 'http://localhost:3000',
-      messageDispatcher: cbFailDispatcher,
       pollIntervalMs: 100,
       onAgentUpdate: (name) => updates.push(name),
     });
@@ -290,7 +270,7 @@ describe('HealthMonitor', () => {
     assert.ok(deliveredAgents.includes('health-cb-deliver'));
   });
 
-  it('delivers pending messages when agent becomes idle via screen-diff', async () => {
+  it('does not deliver messages during poll (delivery is dispatcher-only)', async () => {
     db.createAgent({ name: 'health-deliver', engine: 'claude', cwd: '/tmp', proxyId: 'p1' });
     const a = db.getAgent('health-deliver')!;
     db.updateAgentState('health-deliver', 'active', a.version, {
@@ -299,34 +279,27 @@ describe('HealthMonitor', () => {
     });
 
     // Enqueue a message
-    const queued = db.enqueueMessage({
+    db.enqueueMessage({
       sourceAgent: 'other-agent',
       targetAgent: 'health-deliver',
       envelope: '[from: other-agent]: hello',
     });
 
-    captureOutput = 'stable output for delivery\n> '; // unchanged across polls → idle
+    captureOutput = 'stable output for delivery\n> ';
 
-    const queueUpdates: import('../shared/types.ts').PendingMessage[] = [];
-    const monitor = makeMonitor({
-      onQueueUpdate: (msg) => queueUpdates.push(msg),
-    });
+    const monitor = makeMonitor();
     proxyCommands = [];
 
-    // Same monitor instance: first poll establishes baseline, second detects idle
-    await monitor.pollAll(); // baseline
-    await monitor.pollAll(); // unchanged → idle → delivers message
+    // Two polls: baseline + idle detection
+    await monitor.pollAll();
+    await monitor.pollAll();
 
-    // Should have pasted the message via proxy
-    assert.ok(proxyCommands.some(c => c.action === 'paste'));
-
-    // Queue update callback should have fired
-    assert.ok(queueUpdates.length >= 1);
-    const delivered = queueUpdates.find(m => m.id === queued.id);
-    assert.equal(delivered?.status, 'delivered');
+    // Health monitor should NOT have pasted anything — only capture commands
+    const nonCapture = proxyCommands.filter(c => c.action !== 'capture');
+    assert.equal(nonCapture.length, 0, 'health monitor should not deliver messages');
   });
 
-  it('retries failed delivery with backoff', async () => {
+  it('retries failed delivery with backoff (via dispatcher)', async () => {
     db.createAgent({ name: 'health-retry', engine: 'claude', cwd: '/tmp', proxyId: 'p1' });
     const a = db.getAgent('health-retry')!;
     db.updateAgentState('health-retry', 'active', a.version, {
@@ -334,7 +307,6 @@ describe('HealthMonitor', () => {
       proxyId: 'p1',
     });
 
-    // Enqueue a message
     const queued = db.enqueueMessage({
       sourceAgent: 'sender',
       targetAgent: 'health-retry',
@@ -343,7 +315,6 @@ describe('HealthMonitor', () => {
 
     captureOutput = 'retry test output\n> ';
 
-    // Use a dispatch that fails on paste but succeeds on capture
     const retryDispatch = async (_proxyId: string, command: ProxyCommand): Promise<ProxyResponse> => {
       if (command.action === 'capture') return { ok: true, data: captureOutput };
       if (command.action === 'has_session') return { ok: true, data: true };
@@ -354,23 +325,16 @@ describe('HealthMonitor', () => {
     const retryDispatcher = new MessageDispatcher({
       db, locks: retryLocks, proxyDispatch: retryDispatch, orchestratorHost: 'http://localhost:3000',
     });
-    const failMonitor = new HealthMonitor({
-      db,
-      locks: retryLocks,
-      proxyDispatch: retryDispatch,
-      orchestratorHost: 'http://localhost:3000',
-      messageDispatcher: retryDispatcher,
-      pollIntervalMs: 100,
-    });
 
-    // Same monitor: first establishes baseline, second detects idle and attempts delivery
-    await failMonitor.pollAll();
-    await failMonitor.pollAll();
+    // Delivery via dispatcher (not health monitor)
+    await retryDispatcher.tryDeliver('health-retry');
 
     const updated = db.getPendingMessageById(queued.id)!;
     assert.equal(updated.retryCount, 1);
-    assert.equal(updated.status, 'pending'); // still pending, will retry
+    assert.equal(updated.status, 'pending');
     assert.ok(updated.nextAttemptAt !== null);
+
+    retryDispatcher.stop();
   });
 
   it('scheduleQuickPoll triggers a one-shot poll after ~1s', async () => {
@@ -408,7 +372,7 @@ describe('HealthMonitor', () => {
     monitor.stop(); // should not throw, timers cleared
   });
 
-  it('auto-replies to sender on permanent failure', async () => {
+  it('auto-replies to sender on permanent failure (via dispatcher)', async () => {
     db.createAgent({ name: 'health-autoreply', engine: 'claude', cwd: '/tmp', proxyId: 'p1' });
     const a = db.getAgent('health-autoreply')!;
     db.updateAgentState('health-autoreply', 'active', a.version, {
@@ -441,18 +405,9 @@ describe('HealthMonitor', () => {
     const autoReplyDispatcher = new MessageDispatcher({
       db, locks: autoReplyLocks, proxyDispatch: autoReplyDispatch, orchestratorHost: 'http://localhost:3000',
     });
-    const failMonitor = new HealthMonitor({
-      db,
-      locks: autoReplyLocks,
-      proxyDispatch: autoReplyDispatch,
-      orchestratorHost: 'http://localhost:3000',
-      messageDispatcher: autoReplyDispatcher,
-      pollIntervalMs: 100,
-    });
 
-    // Same monitor: first establishes baseline, second detects idle + attempts delivery
-    await failMonitor.pollAll();
-    await failMonitor.pollAll();
+    // Delivery via dispatcher directly (not health monitor)
+    await autoReplyDispatcher.tryDeliver('health-autoreply');
 
     // Original message should be permanently failed
     const updated = db.getPendingMessageById(queued.id)!;
@@ -462,6 +417,8 @@ describe('HealthMonitor', () => {
     const senderMessages = db.getDeliverableMessages('notify-me');
     assert.ok(senderMessages.length >= 1);
     assert.ok(senderMessages.some(m => m.envelope.includes('[system]')));
+
+    autoReplyDispatcher.stop();
   });
 
   it('drains queued messages after first delivery', async () => {
@@ -501,8 +458,8 @@ describe('HealthMonitor', () => {
     assert.ok(delivered, 'first message should be delivered');
     assert.equal(deliveryCount, 1);
 
-    // Drain timer is scheduled — wait for it to fire (3s + buffer)
-    await new Promise(resolve => setTimeout(resolve, 3500));
+    // Drain timer is scheduled — wait for it to fire (6s + buffer)
+    await new Promise(resolve => setTimeout(resolve, 6500));
 
     // Second message should have been delivered by drain
     assert.equal(deliveryCount, 2);
@@ -532,13 +489,10 @@ describe('HealthMonitor', () => {
     };
 
     const healLocks = new LockManager(db.rawDb);
-    const healDispatcher = new MessageDispatcher({
-      db, locks: healLocks, proxyDispatch: healDispatch, orchestratorHost: 'http://localhost:3000',
-    });
     const healMonitor = new HealthMonitor({
       db, locks: healLocks, proxyDispatch: healDispatch,
       orchestratorHost: 'http://localhost:3000',
-      messageDispatcher: healDispatcher, pollIntervalMs: 100,
+      pollIntervalMs: 100,
     });
 
     // First poll establishes baseline
@@ -582,7 +536,7 @@ describe('HealthMonitor', () => {
     // Stop before drain fires
     stopDispatcher.stop();
 
-    await new Promise(resolve => setTimeout(resolve, 3500));
+    await new Promise(resolve => setTimeout(resolve, 6500));
     // Should still be 1 — drain was cancelled
     assert.equal(deliveryCount, 1);
   });
