@@ -198,6 +198,18 @@ describe('Database', () => {
       assert.equal(db.getProxy('proxy-del'), undefined);
     });
 
+    it('touchAllProxyHeartbeats refreshes all proxies', () => {
+      db.registerProxy('touch-a', 'tok-a', 'host-a:1234');
+      db.registerProxy('touch-b', 'tok-b', 'host-b:5678');
+      const count = db.touchAllProxyHeartbeats();
+      // Should touch at least the two we just registered (plus any from prior tests)
+      assert.ok(count >= 2, `expected >= 2 touched, got ${count}`);
+      const a = db.getProxy('touch-a')!;
+      const b = db.getProxy('touch-b')!;
+      assert.ok(a.lastHeartbeat);
+      assert.ok(b.lastHeartbeat);
+    });
+
     it('replaces proxy on re-register', () => {
       db.registerProxy('proxy-re', 'old-token', 'old-host:1234');
       db.registerProxy('proxy-re', 'new-token', 'new-host:5678');
