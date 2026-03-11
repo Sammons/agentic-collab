@@ -58,15 +58,10 @@ export function listSessions(): string[] {
  * Paste text into a tmux pane via load-buffer + paste-buffer.
  * Optionally press Enter after pasting.
  */
-// Delay between paste and Enter to let tmux flush the buffer to the pane.
-// Scale with message length: 500ms base + 100ms per 1KB, capped at 3s.
-const PASTE_ENTER_BASE_MS = 500;
-const PASTE_ENTER_PER_KB_MS = 100;
-const PASTE_ENTER_MAX_MS = 3000;
-
+// Delay between paste and Enter: 1ms per character (terminal ingestion rate),
+// with a 500ms floor so short messages still get a comfortable flush window.
 function pasteEnterDelay(textLength: number): number {
-  const delay = PASTE_ENTER_BASE_MS + Math.ceil(textLength / 1024) * PASTE_ENTER_PER_KB_MS;
-  return Math.min(delay, PASTE_ENTER_MAX_MS);
+  return Math.max(500, textLength);
 }
 
 export async function pasteText(sessionName: string, text: string, pressEnter: boolean): Promise<void> {
