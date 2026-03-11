@@ -3020,11 +3020,13 @@
     if (existingErr) existingErr.remove();
 
     sendBtn.disabled = true;
+    const message = voiceState.usedSinceSend ? '[voice] ' + text : text;
+    voiceState.usedSinceSend = false;
     try {
       const res = await fetch('/api/dashboard/send', {
         method: 'POST',
         headers: authHeaders(),
-        body: JSON.stringify({ agent: state.selected, message: text }),
+        body: JSON.stringify({ agent: state.selected, message }),
       });
       if (res.status === 401) { handleAuthError(); return; }
       if (!res.ok) {
@@ -3464,6 +3466,7 @@
     audioCtx: null,  // AudioContext
     processor: null,  // ScriptProcessorNode
     sid: null,       // session ID
+    usedSinceSend: false, // true if voice committed text since last send
   };
 
   async function initVoice() {
@@ -3630,9 +3633,10 @@
         } else if (msg.type === 'committed') {
           partial.textContent = '';
           if (msg.text && msg.text.trim()) {
-            // Append to textarea
+            // Append to textarea and flag for [voice] prefix at send time
             const sep = input.value && !input.value.endsWith('\n') && !input.value.endsWith(' ') ? ' ' : '';
             input.value += sep + msg.text.trim();
+            voiceState.usedSinceSend = true;
             input.dispatchEvent(new Event('input'));
             // Enable send button
             document.getElementById('sendBtn').disabled = !input.value.trim() || !state.selected;
