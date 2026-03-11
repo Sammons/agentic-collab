@@ -1024,9 +1024,10 @@ route('POST', '/api/reminders/:id/complete', async (_req, res, match, ctx) => {
   const reminder = ctx.db.getReminder(id);
   if (!reminder) return json(res, 404, { error: 'Reminder not found' });
 
-  const completed = ctx.db.completeReminder(id);
+  // Delete the completed reminder — no need to keep it around
+  ctx.db.deleteReminder(id);
 
-  // If there's a next pending reminder for this agent, immediately enqueue it
+  // Promote the next pending reminder (now that the completed one is gone)
   const next = ctx.db.getTopReminder(reminder.agentName);
   if (next) {
     const creator = next.createdBy || 'system';
@@ -1038,10 +1039,13 @@ route('POST', '/api/reminders/:id/complete', async (_req, res, match, ctx) => {
     });
     ctx.db.updateReminderDelivery(next.id);
     ctx.wss.broadcast(JSON.stringify({ type: 'queue_update', message: msg }));
+    ctx.messageDispatcher.tryDeliver(next.agentName).catch((err) => {
+      console.error(`[routes] Reminder promotion delivery failed for ${next.agentName}:`, (err as Error).message);
+    });
   }
 
   broadcastReminderUpdate(ctx);
-  json(res, 200, completed);
+  json(res, 200, { ok: true, deleted: id });
 });
 
 route('DELETE', '/api/reminders/:id', async (_req, res, match, ctx) => {
