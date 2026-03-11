@@ -907,15 +907,20 @@ export async function deliverToAgent(
   let error: string | null = null;
 
   await ctx.locks.withLock(agent.name, async () => {
-    const result = await ctx.proxyDispatch(proxyId, {
-      action: 'paste',
-      sessionName: sessionName(agent),
-      text,
-      pressEnter: true,
-    });
-
-    if (!result.ok) {
-      error = result.error ?? 'Unknown delivery error';
+    try {
+      const hookResult = resolveHook('submit', agent.hookSubmit, agent, { task: text });
+      // Wrap proxyDispatch to throw on failure so dispatchHookResult propagates errors
+      const throwingCtx: LifecycleContext = {
+        ...ctx,
+        proxyDispatch: async (pid, cmd) => {
+          const result = await ctx.proxyDispatch(pid, cmd);
+          if (!result.ok) throw new Error(result.error ?? 'Proxy dispatch failed');
+          return result;
+        },
+      };
+      await dispatchHookResult(throwingCtx, proxyId, sessionName(agent), hookResult);
+    } catch (err) {
+      error = (err as Error).message ?? 'Unknown delivery error';
     }
   });
 

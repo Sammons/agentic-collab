@@ -1,12 +1,16 @@
 /**
  * Event-driven message delivery.
  *
- * Replaces the poll-based delivery that lived inside HealthMonitor.
- * Exposes tryDeliver(agentName) which can be called immediately on enqueue
- * (sub-second delivery) or from the health monitor poll as a fallback.
+ * Sole owner of message delivery — the health monitor does not participate.
+ * Triggered immediately on enqueue via tryDeliver(agentName), with a drain
+ * loop (6s interval, max 20 attempts) for batch delivery.
  *
  * Delivery requires the agent to be idle (waiting_for_input). If the agent
- * isn't idle, the message stays queued for the next attempt.
+ * isn't idle, the message stays queued for the next drain attempt.
+ *
+ * Race safety: the draining set prevents concurrent drain loops for the
+ * same agent. A drain loop owns exclusive delivery rights until it finishes
+ * or exhausts its attempts.
  */
 
 import type { Database } from './database.ts';
@@ -35,8 +39,11 @@ export class MessageDispatcher {
   private readonly onDashboardMessage: (message: DashboardMessage) => void;
   private readonly onMessageDelivered: (agentName: string) => void;
   private readonly drainTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  private static readonly DRAIN_INTERVAL_MS = 3000;
+  /** Guards against concurrent drain loops for the same agent. */
+  private readonly draining = new Set<string>();
+  private static readonly DRAIN_INTERVAL_MS = 6000;
   private static readonly DRAIN_MAX_ATTEMPTS = 20;
+  private static readonly STALE_ATTEMPT_TIMEOUT_S = 60;
 
   constructor(opts: MessageDispatcherOptions) {
     this.db = opts.db;
@@ -50,13 +57,16 @@ export class MessageDispatcher {
 
   /**
    * Attempt immediate delivery of pending messages to an agent.
-   * Called on enqueue (event-driven) and from health monitor poll (fallback).
+   * Called on enqueue from API routes (event-driven, sub-second).
    *
    * Returns true if a message was delivered, false otherwise.
    * If a message was delivered and more are queued, schedules a drain
-   * timer to retry delivery every 3s until the queue is empty.
+   * loop to retry delivery every 6s until the queue is empty.
    */
   async tryDeliver(agentName: string): Promise<boolean> {
+    // Recover any stale delivery attempts before trying
+    this.db.resetStaleAttempts(MessageDispatcher.STALE_ATTEMPT_TIMEOUT_S);
+
     const agent = this.db.getAgent(agentName);
     if (!agent || !agent.proxyId || !canSuspend(agent)) return false;
 
@@ -65,7 +75,11 @@ export class MessageDispatcher {
     const adapter = getAdapter(agent.engine);
     if (!adapter.canDeliverWhileActive) {
       const isIdle = await this.checkAgentIdle(agent);
-      if (!isIdle) return false;
+      if (!isIdle) {
+        // Agent not idle — start a drain loop to retry later
+        this.scheduleDrain(agentName);
+        return false;
+      }
     }
 
     const delivered = await this.deliverNextMessage(agentName);
@@ -83,45 +97,64 @@ export class MessageDispatcher {
       clearTimeout(timer);
     }
     this.drainTimers.clear();
+    this.draining.clear();
   }
 
   /**
-   * Schedule a drain attempt to deliver remaining queued messages.
+   * Schedule a drain loop to deliver remaining queued messages.
    * Retries every DRAIN_INTERVAL_MS until queue is empty or max attempts reached.
+   *
+   * Race-safe: the draining set prevents concurrent drain loops for the same agent.
+   * The flag is held for the entire drain lifecycle (across all attempts), not just
+   * while a single delivery is in-flight.
    */
   private scheduleDrain(agentName: string, attempt: number = 0): void {
-    if (this.drainTimers.has(agentName)) return; // already draining
+    if (this.draining.has(agentName)) return; // another drain loop is active
     if (attempt >= MessageDispatcher.DRAIN_MAX_ATTEMPTS) return;
 
     const remaining = this.db.getDeliverableMessages(agentName);
     if (remaining.length === 0) return;
 
+    // Claim exclusive drain rights
+    this.draining.add(agentName);
+
     const timer = setTimeout(async () => {
       this.drainTimers.delete(agentName);
       try {
-        const delivered = await this.tryDeliver(agentName);
-        if (delivered) {
+        // Recover stale attempts before each drain cycle
+        this.db.resetStaleAttempts(MessageDispatcher.STALE_ATTEMPT_TIMEOUT_S);
+
+        const agent = this.db.getAgent(agentName);
+        if (!agent || !agent.proxyId || !canSuspend(agent)) {
+          this.draining.delete(agentName);
+          return;
+        }
+
+        const adapter = getAdapter(agent.engine);
+        let canDeliver = true;
+        if (!adapter.canDeliverWhileActive) {
+          canDeliver = await this.checkAgentIdle(agent);
+        }
+
+        if (canDeliver) {
+          await this.deliverNextMessage(agentName);
+        }
+
+        // Check if more messages remain
+        const still = this.db.getDeliverableMessages(agentName);
+        if (still.length > 0 && attempt + 1 < MessageDispatcher.DRAIN_MAX_ATTEMPTS) {
+          // Release drain lock, then re-schedule
+          this.draining.delete(agentName);
           this.scheduleDrain(agentName, attempt + 1);
         } else {
-          // Agent not idle yet — retry
-          const still = this.db.getDeliverableMessages(agentName);
-          if (still.length > 0) {
-            this.scheduleDrain(agentName, attempt + 1);
-          }
+          this.draining.delete(agentName);
         }
       } catch (err) {
         console.error(`[dispatcher] Drain error for ${agentName}:`, (err as Error).message);
+        this.draining.delete(agentName);
       }
     }, MessageDispatcher.DRAIN_INTERVAL_MS);
     this.drainTimers.set(agentName, timer);
-  }
-
-  /**
-   * Deliver without checking idle state — for use when the health monitor
-   * has already confirmed the agent is waiting_for_input.
-   */
-  async deliverIfReady(agentName: string): Promise<boolean> {
-    return this.deliverNextMessage(agentName);
   }
 
   /**
