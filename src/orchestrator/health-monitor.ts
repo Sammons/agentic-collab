@@ -231,6 +231,9 @@ export class HealthMonitor {
     const paneOutput = await this.capturePaneOutput(agent);
     if (paneOutput === null) return;
 
+    // Check if the CLI exited back to a bare shell prompt (e.g. session not found)
+    if (this.detectCliExit(agent, paneOutput)) return;
+
     this.recordContextPercent(agent, paneOutput);
 
     const isIdle = this.checkScreenDiff(agent.name, paneOutput);
@@ -337,6 +340,56 @@ export class HealthMonitor {
    * Check if an idle agent has exceeded the suspend timeout.
    * Currently logs only — auto-suspend is not implemented yet.
    */
+  /**
+   * Detect if the CLI has exited back to a bare shell prompt.
+   * This happens when `claude --resume <id>` fails (e.g. "No conversation found")
+   * or the CLI crashes. The tmux session stays alive but shows a bash prompt.
+   *
+   * Returns true if exit was detected (agent marked as failed), false otherwise.
+   */
+  private detectCliExit(agent: AgentRecord, paneOutput: string): boolean {
+    const key = `shell_${agent.name}`;
+    const lines = paneOutput.split('\n');
+
+    // Find the last non-empty line
+    let lastLine = '';
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const trimmed = lines[i]!.trim();
+      if (trimmed) { lastLine = trimmed; break; }
+    }
+
+    // Bare shell prompt: user@host:path$ or [user@host path]$
+    // Must end with $ (bash) or % (zsh) optionally followed by whitespace
+    const isShellPrompt = /[@:].*[$%]\s*$/.test(lastLine);
+    if (!isShellPrompt) {
+      this.consecutiveFailures.delete(key);
+      return false;
+    }
+    const count = (this.consecutiveFailures.get(key) ?? 0) + 1;
+    this.consecutiveFailures.set(key, count);
+
+    if (count < 2) return false; // need 2 consecutive to confirm
+
+    // Determine reason from pane context
+    let reason = 'CLI exited to shell prompt';
+    if (/No conversation found|session.*not found/i.test(paneOutput)) {
+      reason = 'CLI session not found — resume failed';
+    } else if (/error|panic|crash/i.test(paneOutput)) {
+      reason = 'CLI crashed to shell prompt';
+    }
+
+    console.warn(`[health] ${agent.name}: ${reason}`);
+    this.db.updateAgentState(agent.name, 'failed', agent.version, {
+      failedAt: new Date().toISOString(),
+      failureReason: reason,
+    });
+    this.db.logEvent(agent.name, 'cli_exit_detected', undefined, { reason, lastLine });
+    this.onAgentUpdate(agent.name);
+    this.consecutiveFailures.delete(key);
+    this.lastPaneSnapshot.delete(agent.name);
+    return true;
+  }
+
   private checkIdleSuspendTimeout(agentName: string): void {
     const agent = this.db.getAgent(agentName);
     if (!agent || agent.state !== 'idle' || !agent.lastActivity) return;
