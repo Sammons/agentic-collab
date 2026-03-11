@@ -130,6 +130,23 @@ export type PendingMessage = {
   deliveredAt: string | null;
 };
 
+// ── Reminders ──
+
+export type ReminderStatus = 'pending' | 'completed';
+
+export type Reminder = {
+  id: number;
+  agentName: string;
+  createdBy: string | null;
+  prompt: string;
+  cadenceMinutes: number;
+  sortOrder: number;
+  status: ReminderStatus;
+  lastDeliveredAt: string | null;
+  completedAt: string | null;
+  createdAt: string;
+};
+
 // ── Proxy Registration ──
 
 export type ProxyRegistration = {
