@@ -2,9 +2,20 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { Database } from './database.ts';
 import { ReminderDispatcher } from './reminder-dispatcher.ts';
+import type { MessageDispatcher } from './message-dispatcher.ts';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+
+/** Minimal mock that records tryDeliver calls */
+function mockMessageDispatcher(): MessageDispatcher & { deliverCalls: string[] } {
+  const deliverCalls: string[] = [];
+  return {
+    deliverCalls,
+    tryDeliver: async (agentName: string) => { deliverCalls.push(agentName); return false; },
+    stop: () => {},
+  } as unknown as MessageDispatcher & { deliverCalls: string[] };
+}
 
 describe('ReminderDispatcher', () => {
   let db: Database;
@@ -30,14 +41,17 @@ describe('ReminderDispatcher', () => {
     });
 
     const queued: unknown[] = [];
+    const mock = mockMessageDispatcher();
     const dispatcher = new ReminderDispatcher({
       db,
+      messageDispatcher: mock,
       onQueueUpdate: (msg) => queued.push(msg),
     });
 
     dispatcher.tick();
 
     assert.equal(queued.length, 1);
+    assert.deepEqual(mock.deliverCalls, ['dispatch-agent']);
     const pending = db.getDeliverableMessages('dispatch-agent');
     assert.ok(pending.some(m => m.envelope.includes('Check the logs')));
     assert.ok(pending.some(m => m.envelope.includes(`reminder #${r.id}`)));
@@ -60,6 +74,7 @@ describe('ReminderDispatcher', () => {
     const queued: unknown[] = [];
     const dispatcher = new ReminderDispatcher({
       db,
+      messageDispatcher: mockMessageDispatcher(),
       onQueueUpdate: (msg) => queued.push(msg),
     });
 
@@ -82,7 +97,7 @@ describe('ReminderDispatcher', () => {
 
     assert.equal(db.getReminder(r.id)!.lastDeliveredAt, null);
 
-    const dispatcher = new ReminderDispatcher({ db });
+    const dispatcher = new ReminderDispatcher({ db, messageDispatcher: mockMessageDispatcher() });
     dispatcher.tick();
 
     const updated = db.getReminder(r.id)!;
@@ -95,6 +110,7 @@ describe('ReminderDispatcher', () => {
   it('start/stop manage the timer', () => {
     const dispatcher = new ReminderDispatcher({
       db,
+      messageDispatcher: mockMessageDispatcher(),
       intervalMs: 100_000, // long interval so it doesn't tick during test
     });
 
@@ -122,7 +138,7 @@ describe('ReminderDispatcher', () => {
     });
 
     // First tick should deliver r1 (top reminder)
-    const dispatcher = new ReminderDispatcher({ db });
+    const dispatcher = new ReminderDispatcher({ db, messageDispatcher: mockMessageDispatcher() });
     dispatcher.tick();
 
     const afterTick1 = db.getReminder(r1.id)!;
