@@ -231,6 +231,9 @@
   .msg-body pre { white-space: pre-wrap; }
   .msg-body ul, .msg-body ol { margin: 4px 0; padding-left: 20px; }
   .msg-body h1, .msg-body h2, .msg-body h3, .msg-body h4, .msg-body h5, .msg-body h6 { margin: 8px 0 4px; }
+  .msg-body table { border-collapse: collapse; margin: 4px 0; font-size: 12px; }
+  .msg-body th, .msg-body td { border: 1px solid var(--border); padding: 4px 8px; text-align: left; }
+  .msg-body th { background: rgba(255,255,255,0.05); font-weight: 600; }
   .msg.to-agent {
     align-self: flex-end;
     background: #1a3a5c;
@@ -3223,7 +3226,7 @@
   /**
    * Minimal zero-dependency markdown renderer.
    * Input must already be HTML-escaped via esc().
-   * Supports: headings, bold, italic, code blocks, inline code, lists, links, paragraphs.
+   * Supports: headings, bold, italic, code blocks, inline code, lists, links, tables, paragraphs.
    */
   function renderMarkdown(escaped) {
     if (!escaped) return '';
@@ -3246,12 +3249,13 @@
     text = text.replace(/(?<!\w)\*(.+?)\*(?!\w)/g, '<em>$1</em>');
     // Links
     text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" style="color:var(--accent)">$1</a>');
-    // Lists and paragraphs: line-based parser for proper nesting
+    // Lists, tables, and paragraphs: line-based parser for proper nesting
     {
       const lines = text.split('\n');
       const out = [];
       const listStack = []; // stack of { tag: 'ul'|'ol', indent: number }
       let inPara = false;
+      let inTable = false;
 
       function closeListsTo(indent) {
         while (listStack.length > 0 && listStack[listStack.length - 1].indent >= indent) {
@@ -3260,13 +3264,47 @@
       }
       function closeAllLists() { closeListsTo(-1); }
       function closePara() { if (inPara) { out.push('</p>'); inPara = false; } }
+      function closeTable() { if (inTable) { out.push('</tbody></table>'); inTable = false; } }
 
-      for (const line of lines) {
+      function parseTableRow(line) {
+        // Split on | and trim — ignore leading/trailing empty cells from outer pipes
+        const cells = line.split('|').map(c => c.trim());
+        if (cells[0] === '') cells.shift();
+        if (cells.length > 0 && cells[cells.length - 1] === '') cells.pop();
+        return cells;
+      }
+
+      function isSeparatorRow(line) {
+        return /^\|?[\s:]*-{2,}[\s:]*(\|[\s:]*-{2,}[\s:]*)+\|?\s*$/.test(line);
+      }
+
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
         const hrMatch = line.match(/^---+$/);
         if (hrMatch) {
           closePara(); closeAllLists();
           out.push('<hr style="border:none;border-top:1px solid var(--border);margin:8px 0">');
           continue;
+        }
+
+        // Table detection: header row + separator row starts a table
+        if (!inTable && line.includes('|') && i + 1 < lines.length && isSeparatorRow(lines[i + 1])) {
+          closePara(); closeAllLists();
+          const headers = parseTableRow(line);
+          out.push('<table><thead><tr>' + headers.map(h => '<th>' + h + '</th>').join('') + '</tr></thead><tbody>');
+          i++; // skip separator row
+          inTable = true;
+          continue;
+        }
+        if (inTable) {
+          if (line.includes('|')) {
+            const cells = parseTableRow(line);
+            out.push('<tr>' + cells.map(c => '<td>' + c + '</td>').join('') + '</tr>');
+            continue;
+          } else {
+            closeTable();
+            // fall through to process this line normally
+          }
         }
 
         const ulMatch = line.match(/^(\s*)([-*])\s+(.+)$/);
@@ -3308,6 +3346,7 @@
       }
       closePara();
       closeAllLists();
+      closeTable();
       text = out.join('\n');
     }
     // Restore code blocks
