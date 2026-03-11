@@ -550,6 +550,47 @@ describe('HealthMonitor', () => {
     // Should still be 1 — drain was cancelled
     assert.equal(deliveryCount, 1);
   });
+
+  it('detects CLI exit to bare shell prompt and marks agent failed', async () => {
+    const agentName = 'health-cli-exit';
+    db.createAgent({ name: agentName, engine: 'claude', cwd: '/tmp', proxyId: 'p1' });
+    const a = db.getAgent(agentName)!;
+    db.updateAgentState(agentName, 'active', a.version, { tmuxSession: `agent-${agentName}` });
+
+    // Pane output shows "No conversation found" and a bash prompt
+    captureOutput = [
+      'No conversation found with session ID: 353062a5-fe5b-4305-bb7c-ab9d09ce492b',
+      'sammons@crankshaft:~/Desktop/claude_home$ ',
+    ].join('\n');
+
+    const monitor = makeMonitor();
+
+    // First poll: increments counter but doesn't fail yet (need 2 consecutive)
+    await monitor.pollAgent(db.getAgent(agentName)!);
+    assert.equal(db.getAgent(agentName)!.state, 'active');
+
+    // Second poll: confirms CLI exit, marks as failed
+    ensureActive(agentName);
+    await monitor.pollAgent(db.getAgent(agentName)!);
+    const final = db.getAgent(agentName)!;
+    assert.equal(final.state, 'failed');
+    assert.ok(final.failureReason?.includes('session not found'));
+  });
+
+  it('does not false-positive on normal Claude prompt', async () => {
+    const agentName = 'health-no-false-pos';
+    db.createAgent({ name: agentName, engine: 'claude', cwd: '/tmp', proxyId: 'p1' });
+    const a = db.getAgent(agentName)!;
+    db.updateAgentState(agentName, 'active', a.version, { tmuxSession: `agent-${agentName}` });
+
+    // Normal Claude output with ❯ prompt
+    captureOutput = '❯ \n';
+
+    const monitor = makeMonitor();
+    await monitor.pollAgent(db.getAgent(agentName)!);
+    await monitor.pollAgent(db.getAgent(agentName)!);
+    assert.notEqual(db.getAgent(agentName)!.state, 'failed'); // must not false-positive on CLI prompt
+  });
 });
 
 describe('HealthMonitor.stripAnsi', () => {
