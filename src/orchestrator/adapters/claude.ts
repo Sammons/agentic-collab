@@ -139,6 +139,10 @@ export class ClaudeAdapter implements EngineAdapter {
     return ['Escape', 'Escape', 'Escape'];
   }
 
+  buildSubmitCommand(task: string): string {
+    return task;
+  }
+
   extractSessionId(_paneOutput: string): string | null {
     // Claude uses --session-id at spawn time, so we don't need to parse output.
     return null;
