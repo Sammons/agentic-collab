@@ -283,6 +283,93 @@ cmd('reload', 'reload <name> [task...]', 'Reload an agent (kill + respawn)', asy
   console.log(`${name} reloading`);
 });
 
+// ── Reminders ──
+
+cmd('reminder', 'reminder <sub> [args...]', 'Manage reminders (add|list|done|cancel|swap)', async (args) => {
+  const sub = args[0];
+  const sargs = args.slice(1);
+
+  if (sub === 'add') {
+    // collab reminder add <agent> "<prompt>" --cadence 10m [--from <name>]
+    let cadence = null, from = null;
+    const positional = [];
+    for (let i = 0; i < sargs.length; i++) {
+      if (sargs[i] === '--cadence' && sargs[i + 1]) { cadence = sargs[++i]; }
+      else if (sargs[i] === '--from' && sargs[i + 1]) { from = sargs[++i]; }
+      else { positional.push(sargs[i]); }
+    }
+    const targetAgent = positional[0];
+    const prompt = positional.slice(1).join(' ');
+    if (!targetAgent || !prompt) {
+      console.error('usage: collab reminder add <agent> "<prompt>" --cadence 10m [--from <name>]');
+      process.exit(1);
+    }
+    // parse cadence: "10m" → 10, "30m" → 30, bare number → minutes
+    let cadenceMinutes = 30;
+    if (cadence) {
+      const m = cadence.match(/^(\d+)m?$/);
+      if (!m) { console.error('error: --cadence must be like 10m or 30'); process.exit(1); }
+      cadenceMinutes = parseInt(m[1], 10);
+    }
+    if (cadenceMinutes < 5) { console.error('error: cadence must be >= 5 minutes'); process.exit(1); }
+    const createdBy = from || agentName() || undefined;
+    const reminder = await api('POST', '/api/reminders', { agentName: targetAgent, prompt, cadenceMinutes, createdBy });
+    console.log(`created reminder #${reminder.id} for ${targetAgent} (every ${cadenceMinutes}m)`);
+  }
+
+  else if (sub === 'list') {
+    // collab reminder list [--agent <name>]
+    let agent = null;
+    for (let i = 0; i < sargs.length; i++) {
+      if (sargs[i] === '--agent' && sargs[i + 1]) { agent = sargs[++i]; }
+    }
+    const query = agent ? `?agent=${encodeURIComponent(agent)}` : '';
+    const reminders = await api('GET', `/api/reminders${query}`);
+    if (reminders.length === 0) { console.log('No reminders'); return; }
+    const maxId = Math.max(...reminders.map(r => r.id.toString().length), 2);
+    const maxAgent = Math.max(...reminders.map(r => r.agentName.length), 5);
+    const maxPrompt = Math.min(Math.max(...reminders.map(r => r.prompt.length), 6), 50);
+    console.log(`${'ID'.padEnd(maxId)}  ${'Agent'.padEnd(maxAgent)}  ${'Prompt'.padEnd(maxPrompt)}  Cadence   Status`);
+    for (const r of reminders) {
+      const prompt = r.prompt.length > 50 ? r.prompt.slice(0, 47) + '...' : r.prompt;
+      const cadence = `${r.cadenceMinutes}m`.padEnd(9);
+      const status = r.status === 'completed' ? 'done' : 'pending';
+      console.log(`${r.id.toString().padEnd(maxId)}  ${r.agentName.padEnd(maxAgent)}  ${prompt.padEnd(maxPrompt)}  ${cadence} ${status}`);
+    }
+  }
+
+  else if (sub === 'done') {
+    // collab reminder done <id>
+    const id = parseInt(sargs[0], 10);
+    if (isNaN(id)) { console.error('usage: collab reminder done <id>'); process.exit(1); }
+    await api('POST', `/api/reminders/${id}/complete`);
+    console.log(`reminder #${id} completed`);
+  }
+
+  else if (sub === 'cancel') {
+    // collab reminder cancel <id>
+    const id = parseInt(sargs[0], 10);
+    if (isNaN(id)) { console.error('usage: collab reminder cancel <id>'); process.exit(1); }
+    await api('DELETE', `/api/reminders/${id}`);
+    console.log(`reminder #${id} cancelled`);
+  }
+
+  else if (sub === 'swap') {
+    // collab reminder swap <id1> <id2>
+    const id1 = parseInt(sargs[0], 10);
+    const id2 = parseInt(sargs[1], 10);
+    if (isNaN(id1) || isNaN(id2)) { console.error('usage: collab reminder swap <id1> <id2>'); process.exit(1); }
+    await api('POST', '/api/reminders/swap', { id1, id2 });
+    console.log(`swapped reminder #${id1} ↔ #${id2}`);
+  }
+
+  else {
+    console.error(`unknown subcommand: ${sub}`);
+    console.error('usage: collab reminder {add|list|done|cancel|swap}');
+    process.exit(1);
+  }
+});
+
 // ── Main ──
 
 function showHelp() {
