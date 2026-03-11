@@ -39,6 +39,22 @@
     border-bottom: 1px solid var(--border);
   }
   header h1 { font-size: 16px; font-weight: 600; }
+  .hotkey-hints {
+    display: flex;
+    gap: 12px;
+    font-size: 11px;
+    color: var(--text-dim);
+    opacity: 0.6;
+  }
+  .hotkey-hints kbd {
+    background: var(--bg);
+    padding: 1px 5px;
+    border-radius: 3px;
+    border: 1px solid var(--border);
+    font-size: 10px;
+    font-family: inherit;
+    margin-right: 2px;
+  }
   .conn-status {
     display: flex;
     align-items: center;
@@ -1293,6 +1309,12 @@
 <body>
 <header>
   <h1>Agentic Collab</h1>
+  <div class="hotkey-hints">
+    <kbd>&#8984;K</kbd> search
+    <kbd>Enter</kbd> send
+    <kbd>Space</kbd> PTT
+    <kbd>Esc</kbd> close
+  </div>
   <div class="conn-status">
     <div class="conn-dot" id="connDot"></div>
     <span id="connLabel">Disconnected</span>
