@@ -109,6 +109,16 @@ export function sendKeys(sessionName: string, keys: string): void {
 }
 
 /**
+ * Resize the tmux window for a session to the given width and height.
+ */
+export function resizePane(sessionName: string, width: number, height: number): void {
+  validateSessionName(sessionName);
+  const w = Math.max(1, Math.min(Math.floor(width), 500));
+  const h = Math.max(1, Math.min(Math.floor(height), 200));
+  exec(`tmux resize-window -t '${esc(sessionName)}' -x ${w} -y ${h}`);
+}
+
+/**
  * Validate tmux session name — only allow safe characters.
  */
 const SESSION_NAME_RE = /^[a-zA-Z0-9_-]+$/;

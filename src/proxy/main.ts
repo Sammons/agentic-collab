@@ -245,6 +245,10 @@ async function executeCommand(command: ProxyCommand): Promise<ProxyResponse> {
         return { ok: true, data: stdout };
       }
 
+      case 'resize_pane':
+        tmux.resizePane(command.sessionName, command.width, command.height);
+        return { ok: true };
+
       default:
         return { ok: false, error: `Unknown action: ${(command as Record<string, unknown>).action}` };
     }

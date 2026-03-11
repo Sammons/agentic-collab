@@ -740,6 +740,7 @@
   }
   .watch-keys button:hover { border-color: var(--accent); color: var(--accent); }
   .watch-keys button:active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .watch-resize-btn { margin-left: auto; font-size: 12px !important; }
   .watch-type {
     display: flex;
     gap: 6px;
@@ -2223,7 +2224,7 @@
 
     panel.innerHTML = `
       <div class="watch-output"><div class="watch-status">Connecting...</div></div>
-      <div class="watch-keys">${keysHtml}</div>
+      <div class="watch-keys">${keysHtml}<button class="watch-resize-btn" title="Resize tmux pane to match viewport">\u2922 Resize</button></div>
       <div class="watch-type">
         <input type="text" class="watch-type-input" placeholder="Type literal text..." />
         <button class="watch-type-send" title="Send text (no Enter)">Send</button>
@@ -2246,6 +2247,31 @@
         });
       } catch (err) {
         console.error('[watch] Key send failed:', err);
+      }
+    });
+
+    // Resize button handler
+    panel.querySelector('.watch-resize-btn').addEventListener('click', async () => {
+      if (!state.selected) return;
+      // Measure character dimensions using a hidden probe element
+      const probe = document.createElement('span');
+      probe.style.cssText = 'position:absolute;visibility:hidden;white-space:pre;font:12px "SF Mono","Menlo","Monaco","Cascadia Mono","Consolas",monospace';
+      probe.textContent = 'M';
+      document.body.appendChild(probe);
+      const charW = probe.offsetWidth || 7.2;
+      const charH = probe.offsetHeight || 16;
+      document.body.removeChild(probe);
+      const cols = Math.floor(outputEl.clientWidth / charW);
+      const rows = Math.floor(outputEl.clientHeight / charH);
+      if (cols < 1 || rows < 1) return;
+      try {
+        await fetch(`/api/agents/${encodeURIComponent(state.selected)}/resize`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', ...authHeaders() },
+          body: JSON.stringify({ width: cols, height: rows }),
+        });
+      } catch (err) {
+        console.error('[watch] Resize failed:', err);
       }
     });
 
