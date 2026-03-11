@@ -836,6 +836,30 @@ route('POST', '/api/agents/:name/type', async (req, res, match, ctx) => {
   json(res, 200, { ok: true });
 });
 
+route('POST', '/api/agents/:name/resize', async (req, res, match, ctx) => {
+  const name = match.pathname.groups['name']!;
+  const body = await readJson(req);
+  const width = body?.width;
+  const height = body?.height;
+  if (typeof width !== 'number' || typeof height !== 'number' || width < 1 || height < 1) {
+    json(res, 400, { error: 'width and height required (positive integers)' }); return;
+  }
+
+  const agent = ctx.db.getAgent(name);
+  if (!agent) { json(res, 404, { error: `Agent "${name}" not found` }); return; }
+  if (!agent.proxyId) { json(res, 400, { error: `Agent "${name}" has no proxy` }); return; }
+
+  const result = await ctx.proxyDispatch(agent.proxyId, {
+    action: 'resize_pane',
+    sessionName: agent.tmuxSession ?? `agent-${name}`,
+    width: Math.floor(width),
+    height: Math.floor(height),
+  });
+
+  if (!result.ok) { json(res, 500, { error: result.error }); return; }
+  json(res, 200, { ok: true });
+});
+
 route('POST', '/api/agents/:name/destroy', async (_req, res, match, ctx) => {
   const name = match.pathname.groups['name']!;
 
