@@ -103,6 +103,8 @@ export type DashboardMessage = {
   id: number;
   agent: string;
   direction: MessageDirection;
+  sourceAgent: string | null;
+  targetAgent: string | null;
   topic: string | null;
   message: string;
   queueId: number | null;
