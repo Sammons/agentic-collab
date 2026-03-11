@@ -6,7 +6,7 @@ Zero-dependency orchestrator for managing AI coding agents (Claude, Codex, OpenC
 
 ## Dashboard
 
-Real-time dashboard for monitoring and controlling agents. Search/filter, send messages, upload files, view persona config — all from the browser. Mobile responsive.
+Real-time dashboard for monitoring and controlling agents. Search/filter, send messages, upload files, view persona config — all from the browser. Mobile responsive. Features cmd+k command palette for quick agent navigation, markdown rendering (tables, code blocks, lists), and voice-to-text input with `[voice]` prefix tagging.
 
 | Desktop | Mobile |
 |---------|--------|
@@ -350,6 +350,7 @@ All `POST`/`DELETE` endpoints require `Authorization: Bearer <secret>` when `ORC
 | `POST` | `/api/orchestrator/restore` | Restore agents after restart |
 | `GET` | `/api/events/:agentName` | Agent event log |
 | `GET` | `/api/proxies` | List registered proxies |
+| `POST` | `/api/sync-personas` | Sync persona files to DB (returns created/updated/unchanged) |
 
 ### WebSocket
 
