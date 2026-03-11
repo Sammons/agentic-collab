@@ -14,6 +14,8 @@ import type {
   PendingMessage,
   PendingMessageStatus,
   ProxyRegistration,
+  Reminder,
+  ReminderStatus,
 } from '../shared/types.ts';
 
 const SCHEMA = `
@@ -173,6 +175,22 @@ export class Database {
     if (!proxyColumns.some((c) => c['name'] === 'version')) {
       this.db.exec('ALTER TABLE proxies ADD COLUMN version TEXT');
     }
+
+    // Create reminders table
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS reminders (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        agent_name TEXT NOT NULL,
+        created_by TEXT,
+        prompt TEXT NOT NULL,
+        cadence_minutes INTEGER NOT NULL DEFAULT 10,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'pending',
+        last_delivered_at TEXT,
+        completed_at TEXT,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+      )
+    `);
   }
 
   /** Expose raw handle for LockManager (shares same DB connection). */
@@ -632,6 +650,100 @@ export class Database {
     `).all(thresholdSeconds) as Array<Record<string, unknown>>;
     return rows.map(mapProxyRow);
   }
+
+  // ── Reminders ──
+
+  createReminder(opts: { agentName: string; createdBy?: string; prompt: string; cadenceMinutes: number }): Reminder {
+    if (opts.cadenceMinutes < 5) {
+      throw new Error('cadenceMinutes must be >= 5');
+    }
+    // Auto-assign sort_order as max(sort_order) + 1 for that agent's pending reminders
+    const maxRow = this.db.prepare(
+      "SELECT COALESCE(MAX(sort_order), -1) AS max_order FROM reminders WHERE agent_name = ? AND status = 'pending'"
+    ).get(opts.agentName) as Record<string, unknown>;
+    const nextOrder = ((maxRow['max_order'] as number) ?? -1) + 1;
+
+    this.db.prepare(`
+      INSERT INTO reminders (agent_name, created_by, prompt, cadence_minutes, sort_order)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(opts.agentName, opts.createdBy ?? null, opts.prompt, opts.cadenceMinutes, nextOrder);
+
+    const row = this.db.prepare('SELECT * FROM reminders WHERE id = last_insert_rowid()').get() as Record<string, unknown>;
+    return mapReminderRow(row);
+  }
+
+  listReminders(agentName?: string): Reminder[] {
+    if (agentName) {
+      const rows = this.db.prepare(
+        'SELECT * FROM reminders WHERE agent_name = ? ORDER BY agent_name ASC, sort_order ASC'
+      ).all(agentName) as Array<Record<string, unknown>>;
+      return rows.map(mapReminderRow);
+    }
+    const rows = this.db.prepare(
+      'SELECT * FROM reminders ORDER BY agent_name ASC, sort_order ASC'
+    ).all() as Array<Record<string, unknown>>;
+    return rows.map(mapReminderRow);
+  }
+
+  getReminder(id: number): Reminder | undefined {
+    const row = this.db.prepare('SELECT * FROM reminders WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+    if (!row) return undefined;
+    return mapReminderRow(row);
+  }
+
+  completeReminder(id: number): Reminder | undefined {
+    this.db.prepare(
+      "UPDATE reminders SET status = 'completed', completed_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?"
+    ).run(id);
+    return this.getReminder(id);
+  }
+
+  deleteReminder(id: number): boolean {
+    const result = this.db.prepare('DELETE FROM reminders WHERE id = ?').run(id);
+    return result.changes > 0;
+  }
+
+  swapReminderOrder(id1: number, id2: number): boolean {
+    const r1 = this.getReminder(id1);
+    const r2 = this.getReminder(id2);
+    if (!r1 || !r2) return false;
+    if (r1.agentName !== r2.agentName) return false;
+
+    this.db.prepare('UPDATE reminders SET sort_order = ? WHERE id = ?').run(r2.sortOrder, id1);
+    this.db.prepare('UPDATE reminders SET sort_order = ? WHERE id = ?').run(r1.sortOrder, id2);
+    return true;
+  }
+
+  getTopReminder(agentName: string): Reminder | undefined {
+    const row = this.db.prepare(
+      "SELECT * FROM reminders WHERE agent_name = ? AND status = 'pending' ORDER BY sort_order ASC LIMIT 1"
+    ).get(agentName) as Record<string, unknown> | undefined;
+    if (!row) return undefined;
+    return mapReminderRow(row);
+  }
+
+  updateReminderDelivery(id: number): void {
+    this.db.prepare(
+      "UPDATE reminders SET last_delivered_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?"
+    ).run(id);
+  }
+
+  listDueReminders(): Reminder[] {
+    // For each agent, find their top pending reminder where cadence has elapsed
+    const rows = this.db.prepare(`
+      SELECT r.* FROM reminders r
+      INNER JOIN (
+        SELECT agent_name, MIN(sort_order) AS min_order
+        FROM reminders
+        WHERE status = 'pending'
+        GROUP BY agent_name
+      ) top ON r.agent_name = top.agent_name AND r.sort_order = top.min_order
+      WHERE r.status = 'pending'
+        AND (r.last_delivered_at IS NULL
+             OR (julianday('now') - julianday(r.last_delivered_at)) * 86400.0 >= r.cadence_minutes * 60)
+    `).all() as Array<Record<string, unknown>>;
+    return rows.map(mapReminderRow);
+  }
 }
 
 // ── Row Mappers ──
@@ -711,6 +823,21 @@ function mapPendingMessageRow(row: Record<string, unknown>): PendingMessage {
     nextAttemptAt: row['next_attempt_at'] as string | null,
     createdAt: row['created_at'] as string,
     deliveredAt: row['delivered_at'] as string | null,
+  };
+}
+
+function mapReminderRow(row: Record<string, unknown>): Reminder {
+  return {
+    id: row['id'] as number,
+    agentName: row['agent_name'] as string,
+    createdBy: row['created_by'] as string | null,
+    prompt: row['prompt'] as string,
+    cadenceMinutes: row['cadence_minutes'] as number,
+    sortOrder: row['sort_order'] as number,
+    status: row['status'] as ReminderStatus,
+    lastDeliveredAt: row['last_delivered_at'] as string | null,
+    completedAt: row['completed_at'] as string | null,
+    createdAt: row['created_at'] as string,
   };
 }
 

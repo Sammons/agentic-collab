@@ -958,6 +958,90 @@ route('GET', '/api/orchestrator/status', async (_req, res, _match, ctx) => {
   json(res, 200, stats);
 });
 
+// ── Reminders ──
+
+route('POST', '/api/reminders', async (req, res, _match, ctx) => {
+  const body = await readJson(req);
+  if (!body.agentName || typeof body.agentName !== 'string') {
+    return json(res, 400, { error: 'agentName required' });
+  }
+  if (!body.prompt || typeof body.prompt !== 'string') {
+    return json(res, 400, { error: 'prompt required' });
+  }
+  if (typeof body.cadenceMinutes !== 'number' || body.cadenceMinutes < 5) {
+    return json(res, 400, { error: 'cadenceMinutes must be >= 5' });
+  }
+
+  const agent = ctx.db.getAgent(body.agentName as string);
+  if (!agent) return json(res, 404, { error: `Agent "${body.agentName}" not found` });
+
+  const reminder = ctx.db.createReminder({
+    agentName: body.agentName as string,
+    createdBy: (body.createdBy as string | undefined) ?? undefined,
+    prompt: body.prompt as string,
+    cadenceMinutes: body.cadenceMinutes as number,
+  });
+
+  broadcastReminderUpdate(ctx);
+  json(res, 201, reminder);
+});
+
+route('GET', '/api/reminders', async (req, res, _match, ctx) => {
+  const url = new URL(req.url!, `http://${req.headers.host}`);
+  const agent = url.searchParams.get('agent') ?? undefined;
+  const reminders = ctx.db.listReminders(agent);
+  json(res, 200, reminders);
+});
+
+route('POST', '/api/reminders/:id/complete', async (_req, res, match, ctx) => {
+  const id = parseInt(match.pathname.groups['id']!, 10);
+  if (isNaN(id)) return json(res, 400, { error: 'Invalid reminder ID' });
+
+  const reminder = ctx.db.getReminder(id);
+  if (!reminder) return json(res, 404, { error: 'Reminder not found' });
+
+  const completed = ctx.db.completeReminder(id);
+
+  // If there's a next pending reminder for this agent, immediately enqueue it
+  const next = ctx.db.getTopReminder(reminder.agentName);
+  if (next) {
+    const creator = next.createdBy || 'system';
+    const envelope = `[reminder #${next.id} from ${creator}]: ${next.prompt}\nMark done when complete: collab reminder done ${next.id}`;
+    const msg = ctx.db.enqueueMessage({
+      sourceAgent: null,
+      targetAgent: next.agentName,
+      envelope,
+    });
+    ctx.db.updateReminderDelivery(next.id);
+    ctx.wss.broadcast(JSON.stringify({ type: 'queue_update', message: msg }));
+  }
+
+  broadcastReminderUpdate(ctx);
+  json(res, 200, completed);
+});
+
+route('DELETE', '/api/reminders/:id', async (_req, res, match, ctx) => {
+  const id = parseInt(match.pathname.groups['id']!, 10);
+  if (isNaN(id)) return json(res, 400, { error: 'Invalid reminder ID' });
+
+  ctx.db.deleteReminder(id);
+  broadcastReminderUpdate(ctx);
+  json(res, 200, { ok: true });
+});
+
+route('POST', '/api/reminders/swap', async (req, res, _match, ctx) => {
+  const body = await readJson(req);
+  if (typeof body.id1 !== 'number' || typeof body.id2 !== 'number') {
+    return json(res, 400, { error: 'id1 and id2 required' });
+  }
+
+  const ok = ctx.db.swapReminderOrder(body.id1 as number, body.id2 as number);
+  if (!ok) return json(res, 400, { error: 'Swap failed — reminders must exist and belong to same agent' });
+
+  broadcastReminderUpdate(ctx);
+  json(res, 200, { ok: true });
+});
+
   return routes;
 }
 
@@ -1111,6 +1195,11 @@ function validateAgentName(name: string): string | null {
   if (typeof name !== 'string') return 'name must be a string';
   if (!AGENT_NAME_RE.test(name)) return 'name must be 1-63 chars, start with alphanumeric, contain only [a-zA-Z0-9_-]';
   return null;
+}
+
+function broadcastReminderUpdate(ctx: RouteContext): void {
+  const reminders = ctx.db.listReminders();
+  ctx.wss.broadcast(JSON.stringify({ type: 'reminder_update', reminders }));
 }
 
 function broadcastProxyUpdate(ctx: RouteContext): void {

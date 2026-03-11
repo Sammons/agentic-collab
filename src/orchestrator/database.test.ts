@@ -424,4 +424,208 @@ describe('Database', () => {
       assert.ok(typeof (counts['cursor-agent-a'] ?? 0) === 'number');
     });
   });
+
+  describe('reminders', () => {
+    let rDb: Database;
+    let rTmpDir: string;
+
+    before(() => {
+      rTmpDir = mkdtempSync(join(tmpdir(), 'agentic-reminder-test-'));
+      rDb = new Database(join(rTmpDir, 'reminder.db'));
+      rDb.createAgent({ name: 'rem-agent-a', engine: 'claude', cwd: '/tmp' });
+      rDb.createAgent({ name: 'rem-agent-b', engine: 'claude', cwd: '/tmp' });
+    });
+
+    after(() => {
+      rDb.close();
+      rmSync(rTmpDir, { recursive: true, force: true });
+    });
+
+    it('creates a reminder', () => {
+      const r = rDb.createReminder({
+        agentName: 'rem-agent-a',
+        createdBy: 'dashboard',
+        prompt: 'Check build status',
+        cadenceMinutes: 10,
+      });
+      assert.equal(r.agentName, 'rem-agent-a');
+      assert.equal(r.createdBy, 'dashboard');
+      assert.equal(r.prompt, 'Check build status');
+      assert.equal(r.cadenceMinutes, 10);
+      assert.equal(r.status, 'pending');
+      assert.equal(r.sortOrder, 0);
+      assert.equal(r.lastDeliveredAt, null);
+      assert.equal(r.completedAt, null);
+      assert.ok(r.id > 0);
+    });
+
+    it('auto-increments sort_order per agent', () => {
+      const r1 = rDb.createReminder({
+        agentName: 'rem-agent-a',
+        prompt: 'Second reminder',
+        cadenceMinutes: 15,
+      });
+      const r2 = rDb.createReminder({
+        agentName: 'rem-agent-a',
+        prompt: 'Third reminder',
+        cadenceMinutes: 20,
+      });
+      // r1 should be sort_order 1, r2 should be sort_order 2 (first was 0)
+      assert.equal(r1.sortOrder, 1);
+      assert.equal(r2.sortOrder, 2);
+
+      // Different agent starts from 0
+      const r3 = rDb.createReminder({
+        agentName: 'rem-agent-b',
+        prompt: 'Agent B first',
+        cadenceMinutes: 5,
+      });
+      assert.equal(r3.sortOrder, 0);
+    });
+
+    it('rejects cadence < 5', () => {
+      assert.throws(() => {
+        rDb.createReminder({
+          agentName: 'rem-agent-a',
+          prompt: 'Too fast',
+          cadenceMinutes: 3,
+        });
+      }, /cadenceMinutes must be >= 5/);
+    });
+
+    it('listReminders filters by agent', () => {
+      const allA = rDb.listReminders('rem-agent-a');
+      assert.ok(allA.length >= 3);
+      assert.ok(allA.every(r => r.agentName === 'rem-agent-a'));
+
+      const allB = rDb.listReminders('rem-agent-b');
+      assert.ok(allB.length >= 1);
+      assert.ok(allB.every(r => r.agentName === 'rem-agent-b'));
+
+      const all = rDb.listReminders();
+      assert.ok(all.length >= allA.length + allB.length);
+    });
+
+    it('completeReminder updates status and completed_at', () => {
+      const r = rDb.createReminder({
+        agentName: 'rem-agent-a',
+        prompt: 'Will complete',
+        cadenceMinutes: 10,
+      });
+      const completed = rDb.completeReminder(r.id);
+      assert.ok(completed);
+      assert.equal(completed!.status, 'completed');
+      assert.ok(completed!.completedAt !== null);
+    });
+
+    it('deleteReminder removes it', () => {
+      const r = rDb.createReminder({
+        agentName: 'rem-agent-a',
+        prompt: 'Will delete',
+        cadenceMinutes: 10,
+      });
+      assert.ok(rDb.getReminder(r.id));
+      assert.equal(rDb.deleteReminder(r.id), true);
+      assert.equal(rDb.getReminder(r.id), undefined);
+      assert.equal(rDb.deleteReminder(r.id), false);
+    });
+
+    it('swapReminderOrder swaps two reminders', () => {
+      const r1 = rDb.createReminder({
+        agentName: 'rem-agent-b',
+        prompt: 'Swap A',
+        cadenceMinutes: 10,
+      });
+      const r2 = rDb.createReminder({
+        agentName: 'rem-agent-b',
+        prompt: 'Swap B',
+        cadenceMinutes: 10,
+      });
+
+      const origOrder1 = r1.sortOrder;
+      const origOrder2 = r2.sortOrder;
+
+      assert.equal(rDb.swapReminderOrder(r1.id, r2.id), true);
+
+      const updated1 = rDb.getReminder(r1.id)!;
+      const updated2 = rDb.getReminder(r2.id)!;
+      assert.equal(updated1.sortOrder, origOrder2);
+      assert.equal(updated2.sortOrder, origOrder1);
+    });
+
+    it('swapReminderOrder fails for different agents', () => {
+      const rA = rDb.createReminder({
+        agentName: 'rem-agent-a',
+        prompt: 'Agent A',
+        cadenceMinutes: 10,
+      });
+      const rB = rDb.createReminder({
+        agentName: 'rem-agent-b',
+        prompt: 'Agent B',
+        cadenceMinutes: 10,
+      });
+      assert.equal(rDb.swapReminderOrder(rA.id, rB.id), false);
+    });
+
+    it('getTopReminder returns lowest sort_order pending', () => {
+      // Create a fresh agent with known state
+      rDb.createAgent({ name: 'rem-agent-top', engine: 'claude', cwd: '/tmp' });
+      const first = rDb.createReminder({
+        agentName: 'rem-agent-top',
+        prompt: 'First',
+        cadenceMinutes: 5,
+      });
+      rDb.createReminder({
+        agentName: 'rem-agent-top',
+        prompt: 'Second',
+        cadenceMinutes: 5,
+      });
+
+      const top = rDb.getTopReminder('rem-agent-top');
+      assert.ok(top);
+      assert.equal(top!.id, first.id);
+      assert.equal(top!.prompt, 'First');
+    });
+
+    it('listDueReminders returns reminders where cadence elapsed', () => {
+      rDb.createAgent({ name: 'rem-agent-due', engine: 'claude', cwd: '/tmp' });
+      const r = rDb.createReminder({
+        agentName: 'rem-agent-due',
+        prompt: 'Due reminder',
+        cadenceMinutes: 5,
+      });
+
+      // Never delivered → should be due
+      const due = rDb.listDueReminders();
+      assert.ok(due.some(d => d.id === r.id));
+    });
+
+    it('listDueReminders skips recently delivered', () => {
+      rDb.createAgent({ name: 'rem-agent-recent', engine: 'claude', cwd: '/tmp' });
+      const r = rDb.createReminder({
+        agentName: 'rem-agent-recent',
+        prompt: 'Recent reminder',
+        cadenceMinutes: 5,
+      });
+
+      // Mark as just delivered
+      rDb.updateReminderDelivery(r.id);
+
+      const due = rDb.listDueReminders();
+      assert.ok(!due.some(d => d.id === r.id));
+    });
+
+    it('listDueReminders skips completed reminders', () => {
+      rDb.createAgent({ name: 'rem-agent-done', engine: 'claude', cwd: '/tmp' });
+      const r = rDb.createReminder({
+        agentName: 'rem-agent-done',
+        prompt: 'Completed reminder',
+        cadenceMinutes: 5,
+      });
+      rDb.completeReminder(r.id);
+
+      const due = rDb.listDueReminders();
+      assert.ok(!due.some(d => d.id === r.id));
+    });
+  });
 });
