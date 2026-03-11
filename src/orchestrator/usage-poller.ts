@@ -341,6 +341,20 @@ export class UsagePoller {
         continue;
       }
 
+      // Handle Codex update prompt ("Update available! ... Press enter to continue")
+      if (/Update available.*Skip/s.test(output)) {
+        console.log(`[usage] Dismissing Codex update dialog for ${config.sessionName}`);
+        // Select "2. Skip"
+        await this.proxyDispatch(proxyId, {
+          action: 'paste',
+          sessionName: config.sessionName,
+          text: '2',
+          pressEnter: true,
+        });
+        await sleep(3000);
+        continue;
+      }
+
       const state = adapter.detectIdleState(output);
       if (state === 'waiting_for_input') return true;
 
