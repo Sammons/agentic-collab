@@ -1361,7 +1361,6 @@
     <div class="watch-panel" id="watchPanel" style="display:none"></div>
     <div class="topic-breadcrumbs" id="topicBreadcrumbs" style="display:none"></div>
     <div class="thread-input" id="threadInput" style="display:none">
-      <input type="text" id="topicInput" placeholder="Topic (required)" autocomplete="off" style="flex:none;width:160px;padding:6px 8px;font-size:12px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface);color:var(--text);outline:none;" />
       <textarea id="msgInput" placeholder="Type a message..." rows="1" autocomplete="off" autocorrect="on" autocapitalize="sentences" spellcheck="false" name="msg-no-autofill"></textarea>
       <div class="upload-wrap" id="uploadWrap">
         <input type="file" id="fileInput" multiple disabled />
@@ -1461,6 +1460,7 @@
     proxies: [],      // registered proxy list from init
     emptyGroups: [],  // groups created via + New Group (no agents yet)
     drafts: {},       // { agentName: draftText }
+    topicPerAgent: {},  // { agentName: selectedTopic } — persists across agent switches
     editingPersona: false,
   };
 
@@ -2007,31 +2007,36 @@
     messages.scrollTop = messages.scrollHeight;
   }
 
+  function getActiveTopic() {
+    if (!state.selected) return 'general';
+    return state.topicPerAgent[state.selected] || 'general';
+  }
+
+  function setActiveTopic(topic) {
+    if (state.selected) state.topicPerAgent[state.selected] = topic;
+  }
+
   function renderTopicBreadcrumbs() {
     const container = document.getElementById('topicBreadcrumbs');
     if (!state.selected) { container.innerHTML = ''; return; }
     const thread = state.threads[state.selected] || [];
-    // Extract unique topics, most recent first
-    const seen = new Set();
-    const topics = [];
+    // Always start with "general", then unique topics from thread (most recent first)
+    const seen = new Set(['general']);
+    const topics = ['general'];
     for (let i = thread.length - 1; i >= 0; i--) {
       const t = thread[i].topic;
       if (t && !seen.has(t)) { seen.add(t); topics.push(t); }
     }
-    if (topics.length === 0) { container.innerHTML = ''; return; }
-    const topicInput = document.getElementById('topicInput');
-    const currentTopic = topicInput?.value?.trim() || '';
+    const current = getActiveTopic();
     container.innerHTML = topics.map(t =>
-      `<span class="topic-chip${t === currentTopic ? ' active' : ''}" data-topic="${esc(t)}">${esc(t)}</span>`
+      `<span class="topic-chip${t === current ? ' active' : ''}" data-topic="${esc(t)}">${esc(t)}</span>`
     ).join('');
   }
 
   document.getElementById('topicBreadcrumbs').addEventListener('click', (e) => {
     const chip = e.target.closest('.topic-chip');
     if (!chip) return;
-    const topicInput = document.getElementById('topicInput');
-    topicInput.value = chip.dataset.topic;
-    topicInput.focus();
+    setActiveTopic(chip.dataset.topic);
     renderTopicBreadcrumbs();
   });
 
@@ -2046,6 +2051,13 @@
     }
     state.selected = name;
     state.unread[name] = 0;
+    // Auto-select most recent topic for this agent if none saved
+    if (!state.topicPerAgent[name]) {
+      const thread = state.threads[name] || [];
+      for (let i = thread.length - 1; i >= 0; i--) {
+        if (thread[i].topic) { state.topicPerAgent[name] = thread[i].topic; break; }
+      }
+    }
     // Persist read cursor on server so unread counts survive refresh
     fetch('/api/dashboard/read-cursor', {
       method: 'PUT',
@@ -3160,21 +3172,13 @@
   async function sendMessage() {
     if (!state.selected) return;
     const input = document.getElementById('msgInput');
-    const topicInput = document.getElementById('topicInput');
     const sendBtn = document.getElementById('sendBtn');
     const text = input.value.trim();
-    const topic = topicInput.value.trim();
+    const topic = getActiveTopic();
     if (!text) return;
-    if (!topic) {
-      topicInput.style.borderColor = 'var(--red)';
-      topicInput.focus();
-      setTimeout(() => { topicInput.style.borderColor = ''; }, 2000);
-      return;
-    }
 
     // Clear any previous error state
     input.style.borderColor = '';
-    topicInput.style.borderColor = '';
     const existingErr = document.getElementById('sendError');
     if (existingErr) existingErr.remove();
 
