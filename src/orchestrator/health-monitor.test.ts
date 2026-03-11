@@ -113,9 +113,13 @@ describe('HealthMonitor', () => {
     await monitor.pollAll();
     assert.equal(db.getAgent('health-a1')?.state, 'active', 'still active after first poll (baseline)');
 
-    // Second poll — same output → IDLE_THRESHOLD reached → idle
+    // Second poll — same output → not yet at IDLE_THRESHOLD
     await monitor.pollAll();
-    assert.equal(db.getAgent('health-a1')?.state, 'idle', 'idle after 2 consecutive unchanged polls');
+    assert.equal(db.getAgent('health-a1')?.state, 'active', 'still active after 2 polls (threshold=2)');
+
+    // Third poll — same output → IDLE_THRESHOLD reached → idle
+    await monitor.pollAll();
+    assert.equal(db.getAgent('health-a1')?.state, 'idle', 'idle after 3 consecutive unchanged polls');
   });
 
   it('detects active transition when screen changes', async () => {
@@ -175,7 +179,8 @@ describe('HealthMonitor', () => {
       onAgentUpdate: (name) => updates.push(name),
     });
 
-    // Need 2 polls with same output for idle transition via screen-diff
+    // Need 3 polls with same output for idle transition (baseline + IDLE_THRESHOLD=2)
+    await monitor.pollAll();
     await monitor.pollAll();
     await monitor.pollAll();
 
@@ -346,8 +351,9 @@ describe('HealthMonitor', () => {
       onAgentUpdate: (name) => updates.push(name),
     });
 
-    // Establish baseline with a poll so the quick poll can do screen-diff
-    await monitor.pollAll();
+    // Establish baseline + build up unchangedCount with polls
+    await monitor.pollAll(); // baseline
+    await monitor.pollAll(); // unchangedCount = 1
 
     // Reset agent to active for the quick poll transition test
     ensureActive('health-a1');
@@ -359,7 +365,7 @@ describe('HealthMonitor', () => {
     // Wait for the 1s timer to fire
     await new Promise<void>((resolve) => setTimeout(resolve, 1200));
 
-    // Quick poll sees same output as baseline → idle
+    // Quick poll sees same output → unchangedCount reaches IDLE_THRESHOLD → idle
     const agent = db.getAgent('health-a1');
     assert.equal(agent?.state, 'idle');
 
@@ -499,9 +505,13 @@ describe('HealthMonitor', () => {
     await healMonitor.pollAll();
     assert.equal(db.getAgent('health-selfheal')?.state, 'active', 'still active after baseline poll');
 
-    // Second poll — same output → idle
+    // Second poll — same output → not yet idle
     await healMonitor.pollAll();
-    assert.equal(db.getAgent('health-selfheal')?.state, 'idle', 'idle after 2 consecutive unchanged polls');
+    assert.equal(db.getAgent('health-selfheal')?.state, 'active', 'still active (threshold=2)');
+
+    // Third poll — same output → idle
+    await healMonitor.pollAll();
+    assert.equal(db.getAgent('health-selfheal')?.state, 'idle', 'idle after 3 consecutive unchanged polls');
 
     healMonitor.stop();
   });
