@@ -158,6 +158,7 @@ const usagePoller = new UsagePoller({
 
 const reminderDispatcher = new ReminderDispatcher({
   db,
+  messageDispatcher,
   onQueueUpdate: (message) => {
     wss.broadcast(JSON.stringify({ type: 'queue_update', message }));
   },
