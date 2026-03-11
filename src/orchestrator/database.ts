@@ -501,6 +501,13 @@ export class Database {
     return mapPendingMessageRow(row);
   }
 
+  agentsWithPendingMessages(): string[] {
+    const rows = this.db.prepare(`
+      SELECT DISTINCT target_agent FROM pending_messages WHERE status = 'pending'
+    `).all() as Array<Record<string, unknown>>;
+    return rows.map(r => r['target_agent'] as string);
+  }
+
   getDeliverableMessages(agentName: string): PendingMessage[] {
     const rows = this.db.prepare(`
       SELECT * FROM pending_messages
