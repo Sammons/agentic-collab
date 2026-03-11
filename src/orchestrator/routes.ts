@@ -16,7 +16,7 @@ import type { AgentState, EngineType, ProxyCommand, ProxyResponse, ProxyRegistra
 import { sanitizeMessage, generateMessageId } from '../shared/sanitize.ts';
 import { getVersion } from '../shared/version.ts';
 import type { LockManager } from '../shared/lock.ts';
-import { getPersonasDir, parseFrontmatter, createPersonaAndAgent, syncSinglePersona, updateFrontmatterField, resolvePersonaPath, toHostPath } from './persona.ts';
+import { getPersonasDir, parseFrontmatter, createPersonaAndAgent, syncSinglePersona, syncPersonasWithDiff, updateFrontmatterField, resolvePersonaPath, toHostPath } from './persona.ts';
 import {
   spawnAgent, resumeAgent, suspendAgent, destroyAgent,
   reloadAgent, interruptAgent, compactAgent, killAgent,
@@ -646,6 +646,18 @@ route('POST', '/api/personas', async (req, res, _match, ctx) => {
   } catch (err) {
     json(res, 400, { error: (err as Error).message });
   }
+});
+
+route('POST', '/api/sync-personas', async (_req, res, _match, ctx) => {
+  const result = syncPersonasWithDiff(ctx.db);
+  // Broadcast agent updates for any created or updated agents
+  for (const name of [...result.created, ...result.updated]) {
+    broadcastAgentUpdate(ctx, name);
+  }
+  if (result.created.length > 0 || result.updated.length > 0) {
+    console.log(`[sync-personas] created: ${result.created.length}, updated: ${result.updated.length}, unchanged: ${result.unchanged.length}, skipped: ${result.skipped.length}`);
+  }
+  json(res, 200, result);
 });
 
 // ── Agent Lifecycle Operations ──
