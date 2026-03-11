@@ -31,7 +31,19 @@ export function getVersion(): string {
     // Git not available (e.g. inside Docker without .git)
   }
 
-  // 3. Fallback: package.json version
+  // 3. .build-version file (written by Dockerfile from .git/HEAD)
+  try {
+    const buildVersionPath = join(import.meta.dirname!, '..', '..', '.build-version');
+    const ver = readFileSync(buildVersionPath, 'utf-8').trim();
+    if (ver) {
+      cachedVersion = ver;
+      return cachedVersion;
+    }
+  } catch {
+    // Not present (running outside Docker or git rev-parse worked)
+  }
+
+  // 4. Fallback: package.json version
   try {
     const pkgPath = join(import.meta.dirname!, '..', '..', 'package.json');
     const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8'));
