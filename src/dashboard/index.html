@@ -2253,16 +2253,24 @@
     // Resize button handler
     panel.querySelector('.watch-resize-btn').addEventListener('click', async () => {
       if (!state.selected) return;
-      // Measure character dimensions using a hidden probe element
+      // Measure character dimensions inside the output container so the probe
+      // inherits the actual font, font-size, and line-height
       const probe = document.createElement('span');
-      probe.style.cssText = 'position:absolute;visibility:hidden;white-space:pre;font:12px "SF Mono","Menlo","Monaco","Cascadia Mono","Consolas",monospace';
+      probe.style.cssText = 'position:absolute;visibility:hidden;white-space:pre';
       probe.textContent = 'M';
-      document.body.appendChild(probe);
+      outputEl.appendChild(probe);
       const charW = probe.offsetWidth || 7.2;
       const charH = probe.offsetHeight || 16;
-      document.body.removeChild(probe);
-      const cols = Math.floor(outputEl.clientWidth / charW);
-      const rows = Math.floor(outputEl.clientHeight / charH);
+      outputEl.removeChild(probe);
+      // Account for line-height and padding
+      const style = getComputedStyle(outputEl);
+      const lineH = parseFloat(style.lineHeight) || (charH * 1.4);
+      const padX = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
+      const padY = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+      const statusEl = outputEl.querySelector('.watch-status');
+      const statusH = statusEl ? statusEl.offsetHeight + parseFloat(getComputedStyle(statusEl).marginBottom || '0') : 0;
+      const cols = Math.floor((outputEl.clientWidth - padX) / charW);
+      const rows = Math.floor((outputEl.clientHeight - padY - statusH) / lineH);
       if (cols < 1 || rows < 1) return;
       try {
         await fetch(`/api/agents/${encodeURIComponent(state.selected)}/resize`, {
