@@ -98,6 +98,12 @@ export interface EngineAdapter {
   compactKeys?(): string[];
 
   /**
+   * Build the text to paste for submitting a message/task to the agent.
+   * Called by the submit hook's preset resolver when no custom hook is defined.
+   */
+  buildSubmitCommand(task: string): string;
+
+  /**
    * Extract session ID from pane output after spawn.
    * Used by engines that don't support pre-set session IDs (e.g. Codex).
    * Returns the session ID string, or null if not found/not applicable.

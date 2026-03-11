@@ -147,6 +147,10 @@ export class OpenCodeAdapter implements EngineAdapter {
     return ['Escape'];
   }
 
+  buildSubmitCommand(task: string): string {
+    return task;
+  }
+
   extractSessionId(paneOutput: string): string | null {
     // On Ctrl-C exit, OpenCode prints: "Continue  opencode -s ses_xxx"
     // Also visible in `opencode session list` output.

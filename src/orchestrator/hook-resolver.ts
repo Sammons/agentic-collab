@@ -242,11 +242,8 @@ function resolvePresetWithAdapter(
     }
 
     case 'submit': {
-      // Default submit behavior: plain paste of the task text
-      if (context?.task) {
-        return { mode: 'paste', text: context.task };
-      }
-      return { mode: 'skip' };
+      if (!context?.task) return { mode: 'skip' };
+      return { mode: 'paste', text: adapter.buildSubmitCommand(context.task) };
     }
   }
 }
