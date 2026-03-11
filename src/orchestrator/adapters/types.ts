@@ -109,4 +109,13 @@ export interface EngineAdapter {
    * Returns the session ID string, or null if not found/not applicable.
    */
   extractSessionId(paneOutput: string): string | null;
+
+  /**
+   * Build a shell command that outputs the session ID to stdout.
+   * Called by the detect_session hook's preset resolver.
+   * The command runs on the proxy host (not inside tmux).
+   * Returns null if detection is not supported for this engine
+   * (e.g. Claude pre-generates UUIDs at spawn time).
+   */
+  buildDetectSessionCommand(cwd: string): string | null;
 }
