@@ -170,6 +170,16 @@ export class Database {
       this.db.exec('ALTER TABLE dashboard_messages ADD COLUMN archived_at TEXT');
     }
 
+    // Add source_agent and target_agent to dashboard_messages
+    const dmColsForAgents = this.db.prepare('PRAGMA table_info(dashboard_messages)').all() as Array<Record<string, unknown>>;
+    const dmColNamesForAgents = new Set(dmColsForAgents.map(c => c['name'] as string));
+    if (!dmColNamesForAgents.has('source_agent')) {
+      this.db.exec('ALTER TABLE dashboard_messages ADD COLUMN source_agent TEXT');
+    }
+    if (!dmColNamesForAgents.has('target_agent')) {
+      this.db.exec('ALTER TABLE dashboard_messages ADD COLUMN target_agent TEXT');
+    }
+
     // Add version column to proxies
     const proxyColumns = this.db.prepare('PRAGMA table_info(proxies)').all() as Array<Record<string, unknown>>;
     if (!proxyColumns.some((c) => c['name'] === 'version')) {
@@ -398,11 +408,11 @@ export class Database {
 
   // ── Dashboard Messages ──
 
-  addDashboardMessage(agent: string, direction: MessageDirection, message: string, topic?: string): DashboardMessage {
+  addDashboardMessage(agent: string, direction: MessageDirection, message: string, opts?: { topic?: string; sourceAgent?: string; targetAgent?: string }): DashboardMessage {
     this.db.prepare(`
-      INSERT INTO dashboard_messages (agent, direction, topic, message)
-      VALUES (?, ?, ?, ?)
-    `).run(agent, direction, topic ?? null, message);
+      INSERT INTO dashboard_messages (agent, direction, topic, message, source_agent, target_agent)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(agent, direction, opts?.topic ?? null, message, opts?.sourceAgent ?? null, opts?.targetAgent ?? null);
 
     const row = this.db.prepare(
       'SELECT * FROM dashboard_messages WHERE id = last_insert_rowid()'
@@ -807,6 +817,8 @@ function mapDashboardMessageRow(row: Record<string, unknown>): DashboardMessage 
     id: row['id'] as number,
     agent: row['agent'] as string,
     direction: row['direction'] as MessageDirection,
+    sourceAgent: (row['source_agent'] as string | null) ?? null,
+    targetAgent: (row['target_agent'] as string | null) ?? null,
     topic: row['topic'] as string | null,
     message: row['message'] as string,
     queueId: (row['queue_id'] as number | null) ?? null,
