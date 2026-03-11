@@ -24,6 +24,7 @@ import type { EngineAdapter, SpawnOptions, ResumeOptions } from './adapters/type
 import type { AgentRecord, HookValue, StructuredHook, SendAction, PresetHook, ShellHook, SendHook } from '../shared/types.ts';
 import { getAdapter } from './adapters/index.ts';
 import { deserializeHookValue } from './persona.ts';
+import { shellQuote } from '../shared/utils.ts';
 
 // ── Result Types ──
 
@@ -215,9 +216,21 @@ function applyPresetOptions(hook: PresetHook, context?: HookContext): HookContex
 // ── Template Variable Interpolation ──
 
 /**
+ * Variables whose values must be shell-quoted when interpolated because
+ * they can contain multi-line text, spaces, quotes, and special characters.
+ */
+const SHELL_QUOTE_VARS: ReadonlySet<keyof TemplateVars> = new Set([
+  'PERSONA_PROMPT',
+  'PERSONA_PROMPT_FILEPATH',
+]);
+
+/**
  * Replace $TEMPLATE_VAR placeholders in a shell command string.
  * Supported variables: $AGENT_NAME, $AGENT_CWD, $SESSION_ID,
  * $PERSONA_PROMPT, $PERSONA_PROMPT_FILEPATH.
+ *
+ * PERSONA_PROMPT and PERSONA_PROMPT_FILEPATH are automatically shell-quoted
+ * because they may contain multi-line text and special characters.
  *
  * Undefined variables are replaced with empty string.
  * Only exact $VAR_NAME tokens are replaced (not ${VAR} or partial matches).
@@ -226,7 +239,11 @@ export function interpolateTemplateVars(command: string, vars?: TemplateVars): s
   if (!vars) return command;
   return command.replace(/\$([A-Z_]+)/g, (_match, name: string) => {
     const val = vars[name as keyof TemplateVars];
-    return val ?? '';
+    if (val == null) return '';
+    if (SHELL_QUOTE_VARS.has(name as keyof TemplateVars)) {
+      return shellQuote(val);
+    }
+    return val;
   });
 }
 
