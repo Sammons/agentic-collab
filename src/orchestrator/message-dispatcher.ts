@@ -90,6 +90,21 @@ export class MessageDispatcher {
   }
 
   /**
+   * Sweep all agents with pending messages and trigger delivery.
+   * Called at startup to resume delivery of messages queued before restart.
+   */
+  async drainPending(): Promise<void> {
+    const agents = this.db.agentsWithPendingMessages();
+    if (agents.length === 0) return;
+    console.log(`[dispatcher] Startup sweep: ${agents.length} agent(s) with pending messages`);
+    for (const agentName of agents) {
+      this.tryDeliver(agentName).catch((err) => {
+        console.error(`[dispatcher] Startup delivery failed for ${agentName}:`, (err as Error).message);
+      });
+    }
+  }
+
+  /**
    * Clean up drain timers on shutdown.
    */
   stop(): void {
