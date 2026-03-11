@@ -14,6 +14,7 @@ import { LockManager } from '../shared/lock.ts';
 import { HealthMonitor } from './health-monitor.ts';
 import { MessageDispatcher } from './message-dispatcher.ts';
 import { UsagePoller } from './usage-poller.ts';
+import { ReminderDispatcher } from './reminder-dispatcher.ts';
 import { shutdownAgents, restoreAllAgents } from './network.ts';
 import type { LifecycleContext } from './lifecycle.ts';
 import { syncPersonasToDb } from './persona.ts';
@@ -151,6 +152,15 @@ const usagePoller = new UsagePoller({
   db,
   proxyDispatch,
   cwd: '/tmp',
+});
+
+// ── Reminder Dispatcher ──
+
+const reminderDispatcher = new ReminderDispatcher({
+  db,
+  onQueueUpdate: (message) => {
+    wss.broadcast(JSON.stringify({ type: 'queue_update', message }));
+  },
 });
 
 const lifecycleCtx: LifecycleContext = {
@@ -311,6 +321,7 @@ async function shutdown(): Promise<void> {
   healthMonitor.stop();
   messageDispatcher.stop();
   usagePoller.stop();
+  reminderDispatcher.stop();
   await usagePoller.cleanup().catch(err =>
     console.error('[orchestrator] Usage session cleanup error:', err));
 
@@ -348,9 +359,10 @@ server.listen(PORT, '0.0.0.0', async () => {
     console.error('[orchestrator] Persona sync failed:', err);
   }
 
-  // Start health monitor + usage poller
+  // Start health monitor + usage poller + reminder dispatcher
   healthMonitor.start();
   usagePoller.start();
+  reminderDispatcher.start();
 
   // Attempt network restore for agents that were running before last shutdown/crash
   try {
