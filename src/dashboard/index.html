@@ -2259,12 +2259,16 @@
       probe.style.cssText = 'position:absolute;visibility:hidden;white-space:pre';
       probe.textContent = 'M';
       outputEl.appendChild(probe);
-      const charW = probe.offsetWidth || 7.2;
-      const charH = probe.offsetHeight || 16;
+      // Use getBoundingClientRect for sub-pixel accuracy — offsetWidth rounds
+      // to integer pixels, understating the true character width and inflating
+      // the column count (e.g. 7px vs 7.23px → 211 cols vs 204 cols).
+      const probeRect = probe.getBoundingClientRect();
+      const charW = probeRect.width || 7.2;
+      const charH = probeRect.height || 16;
       outputEl.removeChild(probe);
       // Account for line-height and padding
       const style = getComputedStyle(outputEl);
-      const lineH = parseFloat(style.lineHeight) || (charH * 1.4);
+      const lineH = parseFloat(style.lineHeight) || charH;
       const padX = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
       const padY = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
       const statusEl = outputEl.querySelector('.watch-status');
