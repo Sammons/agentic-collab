@@ -147,4 +147,12 @@ export class CodexAdapter implements EngineAdapter {
     // Falls back to `codex resume --last` which resumes the most recent session.
     return null;
   }
+
+  buildDetectSessionCommand(cwd: string): string | null {
+    // Find the most recently modified session file in ~/.codex/sessions/
+    // that was created while in the agent's CWD. Falls back to the most
+    // recent session file regardless of CWD.
+    // Output: the UUID filename without the .jsonl extension.
+    return `ls -t ~/.codex/sessions/*.jsonl 2>/dev/null | head -1 | xargs -r basename -s .jsonl`;
+  }
 }

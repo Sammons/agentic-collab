@@ -35,7 +35,7 @@ export type HookResult =
 
 // ── Hook Fields ──
 
-export type HookField = 'start' | 'resume' | 'exit' | 'compact' | 'interrupt' | 'submit';
+export type HookField = 'start' | 'resume' | 'exit' | 'compact' | 'interrupt' | 'submit' | 'detect_session';
 
 // ── Context for resolution ──
 
@@ -46,6 +46,8 @@ export type HookContext = {
   resumeOpts?: ResumeOptions;
   /** Task text for submit hooks */
   task?: string;
+  /** Agent CWD for detect_session hooks */
+  cwd?: string;
 };
 
 // ── Type guards ──
@@ -245,6 +247,12 @@ function resolvePresetWithAdapter(
       if (!context?.task) return { mode: 'skip' };
       return { mode: 'paste', text: adapter.buildSubmitCommand(context.task) };
     }
+
+    case 'detect_session': {
+      const cmd = adapter.buildDetectSessionCommand(context?.cwd ?? '.');
+      if (!cmd) return { mode: 'skip' };
+      return { mode: 'paste', text: cmd };
+    }
   }
 }
 
@@ -284,6 +292,7 @@ const HOOK_FIELD_MAP: Record<HookField, keyof AgentRecord> = {
   compact: 'hookCompact',
   interrupt: 'hookInterrupt',
   submit: 'hookSubmit',
+  detect_session: 'hookDetectSession',
 };
 
 /**

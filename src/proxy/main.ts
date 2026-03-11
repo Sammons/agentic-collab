@@ -233,6 +233,18 @@ async function executeCommand(command: ProxyCommand): Promise<ProxyResponse> {
         removeCodexProfile(command.profileName);
         return { ok: true };
 
+      case 'exec': {
+        const { execSync } = await import('node:child_process');
+        const timeout = command.timeoutMs ?? 5_000;
+        const stdout = execSync(command.command, {
+          encoding: 'utf-8',
+          timeout,
+          cwd: command.cwd ?? undefined,
+          stdio: ['ignore', 'pipe', 'pipe'],
+        }).trim();
+        return { ok: true, data: stdout };
+      }
+
       default:
         return { ok: false, error: `Unknown action: ${(command as Record<string, unknown>).action}` };
     }

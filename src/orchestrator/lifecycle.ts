@@ -115,6 +115,65 @@ async function dispatchHookResult(
   });
 }
 
+// ── Session ID Detection ──
+
+/**
+ * Detect the agent's session ID using the detect_session hook.
+ *
+ * Resolution order:
+ * 1. If agent has a custom detect_session hook → resolve it:
+ *    - paste mode: the text is a shell command — exec on proxy and capture stdout
+ *    - skip mode: fall through to extractSessionId
+ * 2. If preset returns a command via adapter.buildDetectSessionCommand → exec on proxy
+ * 3. Fall back to adapter.extractSessionId (pane capture + regex)
+ *
+ * Returns the session ID string, or null if detection fails/not applicable.
+ */
+async function detectSessionId(
+  ctx: LifecycleContext,
+  agent: AgentRecord,
+  proxyId: string,
+  tmuxSession: string,
+): Promise<string | null> {
+  const adapter = getAdapter(agent.engine);
+
+  // Try the detect_session hook first
+  const hookResult = resolveHook('detect_session', agent.hookDetectSession, agent, { cwd: agent.cwd });
+
+  if (hookResult.mode === 'paste' && hookResult.text) {
+    // The hook resolved to a shell command — execute on the proxy and capture stdout
+    try {
+      const execResult = await ctx.proxyDispatch(proxyId, {
+        action: 'exec',
+        command: hookResult.text,
+        cwd: agent.cwd,
+        timeoutMs: 5_000,
+      });
+      if (execResult.ok && typeof execResult.data === 'string' && execResult.data) {
+        return execResult.data;
+      }
+    } catch {
+      // Exec failed — fall through to pane capture
+    }
+  }
+
+  // Fall back to pane capture + adapter.extractSessionId
+  try {
+    const captureResult = await ctx.proxyDispatch(proxyId, {
+      action: 'capture',
+      sessionName: tmuxSession,
+      lines: 50,
+    });
+    if (captureResult.ok && typeof captureResult.data === 'string') {
+      return adapter.extractSessionId(captureResult.data);
+    }
+  } catch {
+    // Best-effort — session ID capture failure is non-fatal
+  }
+
+  return null;
+}
+
 // ── Watchdog helper ──
 
 /**
@@ -281,23 +340,14 @@ export async function spawnAgent(
 
     // 6. Determine session ID to persist.
     // Claude: pre-generated via --session-id (generatedSessionId is always set).
-    // Codex/OpenCode: try extracting from pane output; fall back to null.
+    // Other engines: detect via detect_session hook → pane capture fallback.
     let capturedSessionId: string | null = generatedSessionId;
     if (adapter.engine !== 'claude') {
-      // Non-Claude engines don't accept --session-id, so the generated one wasn't used.
-      // Try extracting from pane output instead.
-      capturedSessionId = null;
-      try {
-        const captureResult = await ctx.proxyDispatch(opts.proxyId, {
-          action: 'capture',
-          sessionName: tmuxSession,
-          lines: 50,
-        });
-        if (captureResult.ok && typeof captureResult.data === 'string') {
-          capturedSessionId = adapter.extractSessionId(captureResult.data);
-        }
-      } catch {
-        // Best-effort — session ID capture failure is non-fatal
+      const currentAgent = ctx.db.getAgent(opts.name);
+      if (currentAgent) {
+        capturedSessionId = await detectSessionId(ctx, currentAgent, opts.proxyId, tmuxSession);
+      } else {
+        capturedSessionId = null;
       }
     }
 
@@ -460,6 +510,15 @@ export async function resumeAgent(
         text: opts.task,
         pressEnter: true,
       });
+    }
+
+    // 6. Detect session ID if we don't have one yet (non-Claude fresh spawn via resume path).
+    if (!resumeSessionId && adapter.engine !== 'claude') {
+      await sleep(POST_SPAWN_ACTIVE_DELAY_MS);
+      const currentAgent = ctx.db.getAgent(name);
+      if (currentAgent) {
+        resumeSessionId = await detectSessionId(ctx, currentAgent, proxyId, tmuxSession);
+      }
     }
 
     // ── Phase 3: finalize (lock) ──

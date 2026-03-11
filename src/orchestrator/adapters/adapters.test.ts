@@ -136,6 +136,10 @@ describe('Engine Adapters', () => {
       assert.equal(adapter.extractSessionId('any pane output'), null);
     });
 
+    it('buildDetectSessionCommand returns null (Claude pre-generates UUIDs)', () => {
+      assert.equal(adapter.buildDetectSessionCommand('/some/cwd'), null);
+    });
+
     it('detects idle state from ASCII > prompt', () => {
       assert.equal(adapter.detectIdleState('some output\n> '), 'waiting_for_input');
     });
@@ -442,6 +446,13 @@ describe('Engine Adapters', () => {
     it('extractSessionId returns null (Codex falls back to --last)', () => {
       assert.equal(adapter.extractSessionId('any codex output'), null);
     });
+
+    it('buildDetectSessionCommand returns ls command for codex sessions', () => {
+      const cmd = adapter.buildDetectSessionCommand('/home/user/project');
+      assert.ok(cmd, 'should return a command');
+      assert.ok(cmd!.includes('.codex/sessions'), 'should reference codex sessions directory');
+      assert.ok(cmd!.includes('basename'), 'should strip path to get UUID');
+    });
   });
 
   describe('OpenCodeAdapter', () => {
@@ -557,6 +568,10 @@ describe('Engine Adapters', () => {
 
     it('returns null session ID when not present', () => {
       assert.equal(adapter.extractSessionId('any opencode output'), null);
+    });
+
+    it('buildDetectSessionCommand returns null (OpenCode uses pane parsing)', () => {
+      assert.equal(adapter.buildDetectSessionCommand('/some/cwd'), null);
     });
   });
 });
