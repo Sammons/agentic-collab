@@ -128,6 +128,10 @@ describe('Engine Adapters', () => {
       assert.ok(keys.every(k => k === 'Escape'));
     });
 
+    it('buildSubmitCommand returns task text', () => {
+      assert.equal(adapter.buildSubmitCommand('do the thing'), 'do the thing');
+    });
+
     it('extractSessionId returns null (Claude uses --session-id at spawn)', () => {
       assert.equal(adapter.extractSessionId('any pane output'), null);
     });
@@ -431,6 +435,10 @@ describe('Engine Adapters', () => {
       assert.equal(adapter.detectIdleState(pane), 'waiting_for_input');
     });
 
+    it('buildSubmitCommand returns task text', () => {
+      assert.equal(adapter.buildSubmitCommand('implement feature X'), 'implement feature X');
+    });
+
     it('extractSessionId returns null (Codex falls back to --last)', () => {
       assert.equal(adapter.extractSessionId('any codex output'), null);
     });
@@ -536,6 +544,10 @@ describe('Engine Adapters', () => {
     it('returns null context when no percentage visible', () => {
       const result = adapter.parseContextPercent('anything');
       assert.equal(result.contextPct, null);
+    });
+
+    it('buildSubmitCommand returns task text', () => {
+      assert.equal(adapter.buildSubmitCommand('fix the bug'), 'fix the bug');
     });
 
     it('extracts session ID from exit output', () => {
