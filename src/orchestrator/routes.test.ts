@@ -345,7 +345,7 @@ describe('API Routes', () => {
       from: 'dashboard',
       to: 'api-agent-1',
       message: 'Test inter-agent message',
-      re: 'test-topic',
+      topic: 'test-topic',
     });
 
     assert.equal(status, 202);
@@ -359,6 +359,7 @@ describe('API Routes', () => {
       from: 'a',
       to: 'nonexistent',
       message: 'hello',
+      topic: 'test-topic',
     });
     assert.equal(status, 404);
   });

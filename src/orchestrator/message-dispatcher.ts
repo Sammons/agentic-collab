@@ -254,7 +254,7 @@ export class MessageDispatcher {
         });
         this.onQueueUpdate(reply);
       } else {
-        const msg = this.db.addDashboardMessage(message.targetAgent, 'from_agent', failureText);
+        const msg = this.db.addDashboardMessage(message.targetAgent, 'from_agent', failureText, { topic: 'system' });
         this.onDashboardMessage(msg);
       }
     } catch (err) {

@@ -137,15 +137,19 @@ describe('Database', () => {
 
   describe('dashboard_messages', () => {
     it('adds and retrieves messages', () => {
-      const msg = db.addDashboardMessage('test-agent-1', 'to_agent', 'Hello agent', 'greeting');
+      const msg = db.addDashboardMessage('test-agent-1', 'to_agent', 'Hello agent', { topic: 'greeting' });
       assert.equal(msg.agent, 'test-agent-1');
       assert.equal(msg.direction, 'to_agent');
       assert.equal(msg.message, 'Hello agent');
       assert.equal(msg.topic, 'greeting');
+      assert.equal(msg.sourceAgent, null);
+      assert.equal(msg.targetAgent, null);
 
       const msg2 = db.addDashboardMessage('test-agent-1', 'from_agent', 'Hi there');
       assert.equal(msg2.direction, 'from_agent');
       assert.equal(msg2.topic, null);
+      assert.equal(msg2.sourceAgent, null);
+      assert.equal(msg2.targetAgent, null);
     });
 
     it('retrieves threads grouped by agent', () => {

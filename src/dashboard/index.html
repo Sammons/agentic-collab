@@ -270,6 +270,14 @@
   }
   .msg:hover .msg-withdraw { opacity: 1; }
   .msg-withdraw:hover { color: var(--red); }
+  .msg-topic {
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 3px;
+    background: rgba(88,166,255,0.15);
+    color: var(--accent);
+    white-space: nowrap;
+  }
 
   /* ── Input ── */
   .thread-input {
@@ -1306,6 +1314,7 @@
     <div class="reminder-panel" id="reminderPanel" style="display:none"></div>
     <div class="watch-panel" id="watchPanel" style="display:none"></div>
     <div class="thread-input" id="threadInput" style="display:none">
+      <input type="text" id="topicInput" placeholder="Topic (required)" autocomplete="off" style="flex:none;width:160px;padding:6px 8px;font-size:12px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface);color:var(--text);outline:none;" />
       <textarea id="msgInput" placeholder="Type a message..." rows="1" autocomplete="off" autocorrect="on" autocapitalize="sentences" spellcheck="false" name="msg-no-autofill"></textarea>
       <div class="upload-wrap" id="uploadWrap">
         <input type="file" id="fileInput" multiple disabled />
@@ -1921,9 +1930,11 @@
         div.className = `msg ${msg.direction === 'to_agent' ? 'to-agent' : 'from-agent'}`;
       }
       if (msg.withdrawn) div.classList.add('withdrawn');
-      const sender = isSystem ? 'system' : (msg.direction === 'to_agent' ? 'you' : state.selected);
+      const fromLabel = isSystem ? 'system' : (msg.sourceAgent || (msg.direction === 'to_agent' ? 'dashboard' : state.selected));
+      const toLabel = msg.targetAgent || (msg.direction === 'to_agent' ? state.selected : 'dashboard');
       const time = new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      const topicStr = (!isUpload && msg.topic) ? ` (re: ${esc(msg.topic)})` : '';
+      const topicBadge = msg.topic ? `<span class="msg-topic">${esc(msg.topic)}</span>` : '';
+      const routeStr = `${esc(fromLabel)} \u2192 ${esc(toLabel)}`;
       const displayMsg = isSystem ? msg.message.replace(/^\[system\]\s*/, '') : msg.message;
       const statusHtml = (msg.direction === 'to_agent' && msg.queueId)
         ? `<span class="msg-status ${msg.deliveryStatus || 'pending'}" data-queue-id="${msg.queueId}">${
@@ -1932,9 +1943,9 @@
             '\u2022\u2022\u2022 sending'
           }</span>`
         : '';
-      const canWithdraw = msg.direction === 'to_agent' && !isSystem && !msg.withdrawn;
+      const canWithdraw = msg.direction === 'to_agent' && !isSystem && !msg.withdrawn && (!msg.sourceAgent || msg.sourceAgent === 'dashboard');
       const withdrawHtml = canWithdraw ? `<span class="msg-withdraw" data-msg-id="${msg.id}" title="Withdraw message">unsend</span>` : '';
-      const headerHtml = `<div class="msg-header"><span class="msg-sender">${esc(sender)}${topicStr}</span><span class="msg-meta">${withdrawHtml}<span class="msg-time">${time}</span>${statusHtml}</span></div>`;
+      const headerHtml = `<div class="msg-header"><span class="msg-sender">${routeStr}</span>${topicBadge}<span class="msg-meta">${withdrawHtml}<span class="msg-time">${time}</span>${statusHtml}</span></div>`;
       if (isUpload) {
         div.innerHTML = `${headerHtml}<div class="file-info"><span class="file-icon">&#128206;</span> ${esc(displayMsg)}</div>`;
       } else {
@@ -3023,9 +3034,11 @@
           div.className = `msg ${msg.direction === 'to_agent' ? 'to-agent' : 'from-agent'}`;
         }
         if (msg.withdrawn) div.classList.add('withdrawn');
-        const sender = isSystem ? 'system' : (msg.direction === 'to_agent' ? 'you' : state.selected);
+        const fromLabel = isSystem ? 'system' : (msg.sourceAgent || (msg.direction === 'to_agent' ? 'dashboard' : state.selected));
+        const toLabel = msg.targetAgent || (msg.direction === 'to_agent' ? state.selected : 'dashboard');
         const time = new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        const topicStr = (!isUpload && msg.topic) ? ` (re: ${esc(msg.topic)})` : '';
+        const topicBadge = msg.topic ? `<span class="msg-topic">${esc(msg.topic)}</span>` : '';
+        const routeStr = `${esc(fromLabel)} \u2192 ${esc(toLabel)}`;
         const displayMsg = isSystem ? msg.message.replace(/^\[system\]\s*/, '') : msg.message;
         const statusHtml = (msg.direction === 'to_agent' && msg.queueId)
           ? `<span class="msg-status ${msg.deliveryStatus || 'pending'}" data-queue-id="${msg.queueId}">${
@@ -3034,7 +3047,7 @@
               '\u2022\u2022\u2022 sending'
             }</span>`
           : '';
-        const headerHtml = `<div class="msg-header"><span class="msg-sender">${esc(sender)}${topicStr}</span><span class="msg-meta"><span class="msg-time">${time}</span>${statusHtml}</span></div>`;
+        const headerHtml = `<div class="msg-header"><span class="msg-sender">${routeStr}</span>${topicBadge}<span class="msg-meta"><span class="msg-time">${time}</span>${statusHtml}</span></div>`;
         if (isUpload) {
           div.innerHTML = `${headerHtml}<div class="file-info"><span class="file-icon">&#128206;</span> ${esc(displayMsg)}</div>`;
         } else {
@@ -3068,12 +3081,21 @@
   async function sendMessage() {
     if (!state.selected) return;
     const input = document.getElementById('msgInput');
+    const topicInput = document.getElementById('topicInput');
     const sendBtn = document.getElementById('sendBtn');
     const text = input.value.trim();
+    const topic = topicInput.value.trim();
     if (!text) return;
+    if (!topic) {
+      topicInput.style.borderColor = 'var(--red)';
+      topicInput.focus();
+      setTimeout(() => { topicInput.style.borderColor = ''; }, 2000);
+      return;
+    }
 
     // Clear any previous error state
     input.style.borderColor = '';
+    topicInput.style.borderColor = '';
     const existingErr = document.getElementById('sendError');
     if (existingErr) existingErr.remove();
 
@@ -3084,7 +3106,7 @@
       const res = await fetch('/api/dashboard/send', {
         method: 'POST',
         headers: authHeaders(),
-        body: JSON.stringify({ agent: state.selected, message }),
+        body: JSON.stringify({ agent: state.selected, message, topic }),
       });
       if (res.status === 401) { handleAuthError(); return; }
       if (!res.ok) {
@@ -3094,7 +3116,6 @@
           input.value = '';
           input.style.height = 'auto';
           delete state.drafts[state.selected];
-          // Delivery status shown inline on the message bubble via queue_update
         } else {
           console.error('Send failed: HTTP', res.status);
           showSendError(input, sendBtn);
@@ -3103,6 +3124,7 @@
         input.value = '';
         input.style.height = 'auto';
         delete state.drafts[state.selected];
+        // Keep topic — user often sends multiple messages on same topic
       }
     } catch (err) {
       console.error('Send failed:', err);
