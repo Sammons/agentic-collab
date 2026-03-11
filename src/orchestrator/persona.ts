@@ -52,6 +52,8 @@ export type PersonaFrontmatter = {
   interrupt?: HookValue;
   /** Hook value for submitting messages to the agent. */
   submit?: HookValue;
+  /** Hook value for detecting the agent's session ID after spawn/resume. */
+  detect_session?: HookValue;
   /** Legacy alias for start (backward compat). */
   spawn?: HookValue;
 };
@@ -63,7 +65,7 @@ export type ParsedPersona = {
 };
 
 /** Hook field names that support structured (nested) values. */
-const HOOK_FIELDS = new Set(['start', 'resume', 'compact', 'exit', 'interrupt', 'submit', 'spawn']);
+const HOOK_FIELDS = new Set(['start', 'resume', 'compact', 'exit', 'interrupt', 'submit', 'detect_session', 'spawn']);
 
 /**
  * Parse YAML-like frontmatter from a markdown string.
@@ -649,6 +651,7 @@ export function syncSinglePersona(db: Database, name: string, personasDir?: stri
     hookExit: serializeHookValue(fm.exit),
     hookInterrupt: serializeHookValue(fm.interrupt),
     hookSubmit: serializeHookValue(fm.submit),
+    hookDetectSession: serializeHookValue(fm.detect_session),
   });
   return true;
 }
@@ -690,6 +693,7 @@ export function syncPersonasToDb(db: Database, personasDir?: string): number {
       hookExit: serializeHookValue(frontmatter.exit),
       hookInterrupt: serializeHookValue(frontmatter.interrupt),
       hookSubmit: serializeHookValue(frontmatter.submit),
+      hookDetectSession: serializeHookValue(frontmatter.detect_session),
     });
 
     synced++;
@@ -742,6 +746,7 @@ export function createPersonaAndAgent(
     hookExit: serializeHookValue(fm.exit),
     hookInterrupt: serializeHookValue(fm.interrupt),
     hookSubmit: serializeHookValue(fm.submit),
+    hookDetectSession: serializeHookValue(fm.detect_session),
   });
 
   return { name, frontmatter: fm, body };

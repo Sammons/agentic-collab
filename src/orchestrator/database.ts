@@ -153,6 +153,9 @@ export class Database {
     if (!agentColNames.has('hook_submit')) {
       this.db.exec('ALTER TABLE agents ADD COLUMN hook_submit TEXT');
     }
+    if (!agentColNames.has('hook_detect_session')) {
+      this.db.exec('ALTER TABLE agents ADD COLUMN hook_detect_session TEXT');
+    }
 
     // Add withdrawn column to dashboard_messages
     if (!dmColumns.some((c) => c['name'] === 'withdrawn')) {
@@ -200,10 +203,11 @@ export class Database {
     hookExit?: string;
     hookInterrupt?: string;
     hookSubmit?: string;
+    hookDetectSession?: string;
   }): AgentRecord {
     this.db.prepare(`
-      INSERT INTO agents (name, engine, model, thinking, cwd, persona, permissions, proxy_host, proxy_id, agent_group, hook_start, hook_resume, hook_compact, hook_exit, hook_interrupt, hook_submit, state)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'void')
+      INSERT INTO agents (name, engine, model, thinking, cwd, persona, permissions, proxy_host, proxy_id, agent_group, hook_start, hook_resume, hook_compact, hook_exit, hook_interrupt, hook_submit, hook_detect_session, state)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'void')
     `).run(
       opts.name,
       opts.engine,
@@ -221,6 +225,7 @@ export class Database {
       opts.hookExit ?? null,
       opts.hookInterrupt ?? null,
       opts.hookSubmit ?? null,
+      opts.hookDetectSession ?? null,
     );
     return this.getAgent(opts.name)!;
   }
@@ -245,6 +250,7 @@ export class Database {
     hookExit?: string;
     hookInterrupt?: string;
     hookSubmit?: string;
+    hookDetectSession?: string;
   }): AgentRecord {
     const existing = this.getAgent(opts.name);
     if (!existing) {
@@ -255,7 +261,8 @@ export class Database {
       UPDATE agents SET engine = ?, model = ?, thinking = ?, cwd = ?,
         persona = ?, permissions = ?, proxy_host = ?, agent_group = ?,
         hook_start = ?, hook_resume = ?, hook_compact = ?,
-        hook_exit = ?, hook_interrupt = ?, hook_submit = ?
+        hook_exit = ?, hook_interrupt = ?, hook_submit = ?,
+        hook_detect_session = ?
       WHERE name = ?
     `).run(
       opts.engine,
@@ -272,6 +279,7 @@ export class Database {
       opts.hookExit ?? null,
       opts.hookInterrupt ?? null,
       opts.hookSubmit ?? null,
+      opts.hookDetectSession ?? null,
       opts.name,
     );
     return this.getAgent(opts.name)!;
@@ -646,6 +654,7 @@ function mapAgentRow(row: Record<string, unknown>): AgentRecord {
     hookExit: row['hook_exit'] as string | null,
     hookInterrupt: row['hook_interrupt'] as string | null,
     hookSubmit: row['hook_submit'] as string | null,
+    hookDetectSession: row['hook_detect_session'] as string | null,
     state: row['state'] as AgentState,
     stateBeforeShutdown: row['state_before_shutdown'] as string | null,
     currentSessionId: row['current_session_id'] as string | null,
@@ -736,6 +745,7 @@ const COLUMN_MAP: Record<string, string> = {
   hookExit: 'hook_exit',
   hookInterrupt: 'hook_interrupt',
   hookSubmit: 'hook_submit',
+  hookDetectSession: 'hook_detect_session',
 };
 
 function toColumnName(key: string): string {
