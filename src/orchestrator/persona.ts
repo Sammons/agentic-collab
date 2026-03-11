@@ -702,6 +702,90 @@ export function syncPersonasToDb(db: Database, personasDir?: string): number {
   return synced;
 }
 
+// ── Sync with Diff ──
+
+export type SyncDiffResult = {
+  created: string[];
+  updated: string[];
+  unchanged: string[];
+  skipped: string[];
+};
+
+/**
+ * Sync persona files to DB and return a diff of what changed.
+ * - NEW: file exists, no DB record → created
+ * - UPDATED: file exists, DB record differs → updated
+ * - UNCHANGED: file exists, DB record matches → unchanged
+ * - SKIPPED: file missing engine/cwd → skipped
+ * - DELETED personas (DB record, no file) are intentionally ignored.
+ */
+export function syncPersonasWithDiff(db: Database, personasDir?: string): SyncDiffResult {
+  const personas = scanPersonas(personasDir);
+  const result: SyncDiffResult = { created: [], updated: [], unchanged: [], skipped: [] };
+
+  for (const persona of personas) {
+    const { name, frontmatter } = persona;
+    const engine = frontmatter.engine;
+    const cwd = frontmatter.cwd;
+
+    if (!engine || !VALID_ENGINES.has(engine) || !cwd) {
+      result.skipped.push(name);
+      continue;
+    }
+
+    const existing = db.getAgent(name);
+    const upsertOpts = {
+      name,
+      engine: engine as EngineType,
+      model: frontmatter.model as string | undefined,
+      thinking: frontmatter.thinking as string | undefined,
+      cwd,
+      persona: name,
+      permissions: frontmatter.permissions as string | undefined,
+      proxyHost: frontmatter.proxy_host as string | undefined,
+      agentGroup: frontmatter.group as string | undefined,
+      hookStart: serializeHookValue(frontmatter.start ?? frontmatter.spawn),
+      hookResume: serializeHookValue(frontmatter.resume),
+      hookCompact: serializeHookValue(frontmatter.compact),
+      hookExit: serializeHookValue(frontmatter.exit),
+      hookInterrupt: serializeHookValue(frontmatter.interrupt),
+      hookSubmit: serializeHookValue(frontmatter.submit),
+      hookDetectSession: serializeHookValue(frontmatter.detect_session),
+    };
+
+    if (!existing) {
+      db.upsertAgentFromPersona(upsertOpts);
+      result.created.push(name);
+    } else {
+      // Check if any config fields differ
+      const changed =
+        existing.engine !== upsertOpts.engine ||
+        (existing.model ?? undefined) !== upsertOpts.model ||
+        (existing.thinking ?? undefined) !== upsertOpts.thinking ||
+        existing.cwd !== upsertOpts.cwd ||
+        (existing.permissions ?? undefined) !== upsertOpts.permissions ||
+        (existing.proxyHost ?? undefined) !== upsertOpts.proxyHost ||
+        (existing.agentGroup ?? undefined) !== upsertOpts.agentGroup ||
+        (existing.hookStart ?? undefined) !== upsertOpts.hookStart ||
+        (existing.hookResume ?? undefined) !== upsertOpts.hookResume ||
+        (existing.hookCompact ?? undefined) !== upsertOpts.hookCompact ||
+        (existing.hookExit ?? undefined) !== upsertOpts.hookExit ||
+        (existing.hookInterrupt ?? undefined) !== upsertOpts.hookInterrupt ||
+        (existing.hookSubmit ?? undefined) !== upsertOpts.hookSubmit ||
+        (existing.hookDetectSession ?? undefined) !== upsertOpts.hookDetectSession;
+
+      if (changed) {
+        db.upsertAgentFromPersona(upsertOpts);
+        result.updated.push(name);
+      } else {
+        result.unchanged.push(name);
+      }
+    }
+  }
+
+  return result;
+}
+
 // ── Atomic Persona Creation ──
 
 /**
