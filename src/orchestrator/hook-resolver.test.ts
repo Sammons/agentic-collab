@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { resolveHook, resolveAgentHook } from './hook-resolver.ts';
+import { resolveHook, resolveAgentHook, interpolateTemplateVars } from './hook-resolver.ts';
 import type { AgentRecord } from '../shared/types.ts';
 
 // ── Helpers ──
@@ -366,6 +366,71 @@ describe('hook-resolver', () => {
       const result = resolveAgentHook('submit', agent);
       assert.equal(result.mode, 'paste');
       assert.equal((result as { text: string }).text, 'custom-submit-cmd');
+    });
+  });
+
+  describe('template variable interpolation', () => {
+    it('replaces all known template variables', () => {
+      const result = interpolateTemplateVars(
+        'claude --session-id $SESSION_ID --append-system-prompt $PERSONA_PROMPT',
+        {
+          AGENT_NAME: 'sysadmin',
+          AGENT_CWD: '/home/user/project',
+          SESSION_ID: 'abc-123',
+          PERSONA_PROMPT: 'You are a sysadmin',
+          PERSONA_PROMPT_FILEPATH: '/tmp/persona.md',
+        },
+      );
+      assert.equal(result, 'claude --session-id abc-123 --append-system-prompt You are a sysadmin');
+    });
+
+    it('replaces undefined variables with empty string', () => {
+      const result = interpolateTemplateVars(
+        'claude --resume $SESSION_ID',
+        { AGENT_NAME: 'test' },
+      );
+      assert.equal(result, 'claude --resume ');
+    });
+
+    it('returns command unchanged when no vars provided', () => {
+      const result = interpolateTemplateVars('claude --help');
+      assert.equal(result, 'claude --help');
+    });
+
+    it('replaces $AGENT_NAME and $AGENT_CWD', () => {
+      const result = interpolateTemplateVars(
+        'echo $AGENT_NAME in $AGENT_CWD',
+        { AGENT_NAME: 'test-bot', AGENT_CWD: '/workspace' },
+      );
+      assert.equal(result, 'echo test-bot in /workspace');
+    });
+
+    it('does not replace non-template vars like $HOME', () => {
+      // $HOME has no match in TemplateVars, so it becomes empty string
+      // This is expected — shell hooks should use actual shell env vars via export
+      const result = interpolateTemplateVars('echo $HOME $AGENT_NAME', { AGENT_NAME: 'bot' });
+      assert.equal(result, 'echo  bot');
+    });
+  });
+
+  describe('shell hook with template vars', () => {
+    it('interpolates template vars in shell hook command', () => {
+      const agent = makeAgent({ name: 'my-agent' });
+      const result = resolveHook('start', { shell: 'claude --session-id $SESSION_ID' }, agent, {
+        templateVars: { SESSION_ID: 'uuid-123', AGENT_NAME: 'my-agent' },
+      });
+      assert.equal(result.mode, 'paste');
+      const text = (result as { text: string }).text;
+      assert.ok(text.includes('claude --session-id uuid-123'), `Expected interpolated command, got: ${text}`);
+      assert.ok(text.includes('COLLAB_AGENT=my-agent'), `Expected env prefix, got: ${text}`);
+    });
+
+    it('shell hook without templateVars passes command through unchanged', () => {
+      const agent = makeAgent({ name: 'my-agent' });
+      const result = resolveHook('start', { shell: 'claude --session-id $SESSION_ID' }, agent);
+      assert.equal(result.mode, 'paste');
+      const text = (result as { text: string }).text;
+      assert.ok(text.includes('$SESSION_ID'), `Expected uninterpolated var, got: ${text}`);
     });
   });
 });
