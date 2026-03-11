@@ -3688,10 +3688,15 @@
       }
     }
 
+    // Prevent mousedown on voice controls from stealing focus/closing mobile keyboard
+    toggle.addEventListener('mousedown', (e) => { e.preventDefault(); });
+    btn.addEventListener('mousedown', (e) => { e.preventDefault(); });
+
     toggle.addEventListener('click', (e) => {
       const b = e.target.closest('button[data-mode]');
       if (!b || b.classList.contains('active')) return;
       setVoiceMode(b.dataset.mode);
+      document.getElementById('msgInput')?.focus();
     });
 
     // Push-to-talk: hold button (pointer + touch events for mobile compatibility)
