@@ -1746,6 +1746,8 @@
       headers: { 'content-type': 'application/json', ...authHeaders() },
       body: JSON.stringify({ agent: name }),
     }).catch(err => console.warn('Read cursor update failed:', err));
+    // Mobile: show thread panel BEFORE rendering so scrollHeight is accurate
+    document.querySelector('.layout').classList.add('mobile-thread');
     // Preserve current tab (messages/persona/watch) when switching agents
     renderAgents();
     renderThread();
@@ -1757,8 +1759,6 @@
       freshInput.style.height = freshInput.scrollHeight + 'px';
     }
     updateSendability();
-    // Mobile: show thread panel
-    document.querySelector('.layout').classList.add('mobile-thread');
     freshInput?.focus();
   }
 
