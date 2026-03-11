@@ -238,8 +238,8 @@ route('DELETE', '/api/agents/:name', async (_req, res, match, ctx) => {
 
 route('POST', '/api/agents/send', async (req, res, _match, ctx) => {
   const body = await readJson(req);
-  if (!body.from || !body.to || !body.message) {
-    return json(res, 400, { error: 'from, to, message required' });
+  if (!body.from || !body.to || !body.message || !body.topic) {
+    return json(res, 400, { error: 'from, to, message, topic required' });
   }
 
   const target = ctx.db.getAgent(body.to);
@@ -247,10 +247,10 @@ route('POST', '/api/agents/send', async (req, res, _match, ctx) => {
 
   const messageId = generateMessageId();
   const sanitized = sanitizeMessage(body.message);
+  const topicStr = body.topic as string;
 
-  // Format envelope
-  const topic = body.re ? ` (re: ${body.re})` : '';
-  const envelope = `[from: ${body.from}, reply with collab reply]:${topic} '${sanitized}'`;
+  // Format envelope with topic
+  const envelope = `[from: ${body.from}, reply with collab reply --topic ${topicStr}]: '${sanitized}'`;
 
   // Enqueue for async delivery
   const pending = ctx.db.enqueueMessage({
@@ -259,12 +259,39 @@ route('POST', '/api/agents/send', async (req, res, _match, ctx) => {
     envelope,
   });
 
+  // Store in dashboard_messages for sender thread (from_agent direction — agent sent it)
+  const senderMsg = ctx.db.addDashboardMessage(body.from as string, 'from_agent', sanitized, {
+    topic: topicStr,
+    sourceAgent: body.from as string,
+    targetAgent: body.to as string,
+  });
+  ctx.db.linkDashboardMessageToQueue(senderMsg.id, pending.id);
+
+  // Store in dashboard_messages for receiver thread (to_agent direction — message going to agent)
+  const receiverMsg = ctx.db.addDashboardMessage(body.to as string, 'to_agent', sanitized, {
+    topic: topicStr,
+    sourceAgent: body.from as string,
+    targetAgent: body.to as string,
+  });
+  ctx.db.linkDashboardMessageToQueue(receiverMsg.id, pending.id);
+
   // Log routing events
   ctx.db.logEvent(body.from as string, 'message_queued', messageId, { to: body.to, queueId: pending.id });
   ctx.db.logEvent(body.to as string, 'message_queued', messageId, { from: body.from, queueId: pending.id });
 
-  // Broadcast queue update
+  // Broadcast both messages + queue update to dashboard
+  const linkedSenderMsg = { ...senderMsg, queueId: pending.id, deliveryStatus: 'pending' };
+  const linkedReceiverMsg = { ...receiverMsg, queueId: pending.id, deliveryStatus: 'pending' };
+  ctx.wss.broadcast(JSON.stringify({ type: 'message', msg: linkedSenderMsg }));
+  ctx.wss.broadcast(JSON.stringify({ type: 'message', msg: linkedReceiverMsg }));
   ctx.wss.broadcast(JSON.stringify({ type: 'queue_update', message: pending }));
+
+  // Auto-create reply reminder if requested
+  if (body.replyReminder) {
+    const cadence = typeof body.replyReminder === 'number' ? body.replyReminder : 30;
+    const prompt = `[reply-reminder] topic: ${topicStr} | from: ${body.from} | "${sanitized}" — Please respond if you haven't already.`;
+    ctx.db.createReminder({ agentName: body.to as string, createdBy: body.from as string, prompt, cadenceMinutes: Math.max(cadence, 5) });
+  }
 
   // Event-driven delivery — attempt immediately, don't block response
   ctx.messageDispatcher.tryDeliver(body.to as string).catch((err) => {
@@ -278,21 +305,25 @@ route('POST', '/api/agents/send', async (req, res, _match, ctx) => {
 
 route('POST', '/api/dashboard/send', async (req, res, _match, ctx) => {
   const body = await readJson(req);
-  if (!body.agent || !body.message) {
-    return json(res, 400, { error: 'agent, message required' });
+  if (!body.agent || !body.message || !body.topic) {
+    return json(res, 400, { error: 'agent, message, topic required' });
   }
 
   const agent = ctx.db.getAgent(body.agent);
   if (!agent) return json(res, 404, { error: `Agent "${body.agent}" not found` });
 
   const sanitized = sanitizeMessage(body.message);
+  const topicStr = body.topic as string;
 
-  // Format envelope
-  const topic = body.topic ? ` (re: ${body.topic})` : '';
-  const envelope = `[from: dashboard, reply with collab reply]:${topic} '${sanitized}'`;
+  // Format envelope with topic for agent
+  const envelope = `[from: dashboard, reply with collab reply --topic ${topicStr}]: '${sanitized}'`;
 
   // Store in dashboard messages
-  const msg = ctx.db.addDashboardMessage(body.agent as string, 'to_agent', sanitized, body.topic as string | undefined);
+  const msg = ctx.db.addDashboardMessage(body.agent as string, 'to_agent', sanitized, {
+    topic: topicStr,
+    sourceAgent: 'dashboard',
+    targetAgent: body.agent as string,
+  });
 
   // Enqueue for async delivery
   const pending = ctx.db.enqueueMessage({
@@ -308,6 +339,13 @@ route('POST', '/api/dashboard/send', async (req, res, _match, ctx) => {
   const linkedMsg = { ...msg, queueId: pending.id, deliveryStatus: 'pending' };
   ctx.wss.broadcast(JSON.stringify({ type: 'message', msg: linkedMsg }));
   ctx.wss.broadcast(JSON.stringify({ type: 'queue_update', message: pending }));
+
+  // Auto-create reply reminder if requested
+  if (body.replyReminder) {
+    const cadence = typeof body.replyReminder === 'number' ? body.replyReminder : 30;
+    const prompt = `[reply-reminder] topic: ${topicStr} | from: dashboard | "${sanitized}" — Please respond if you haven't already.`;
+    ctx.db.createReminder({ agentName: body.agent as string, createdBy: 'dashboard', prompt, cadenceMinutes: Math.max(cadence, 5) });
+  }
 
   // Event-driven delivery — attempt immediately, don't block response
   ctx.messageDispatcher.tryDeliver(body.agent as string).catch((err) => {
@@ -391,10 +429,10 @@ route('POST', '/api/dashboard/upload', async (req, res, _match, ctx) => {
 
   // Enqueue agent notification through existing pipeline
   const agentMessage = `I uploaded ${writtenPath}`;
-  const envelope = `[from: dashboard, reply with collab reply]: '${sanitizeMessage(agentMessage)}'`;
+  const envelope = `[from: dashboard, reply with collab reply --topic file-upload]: '${sanitizeMessage(agentMessage)}'`;
   const displayMessage = `Uploaded ${filename} (${formatBytes(fileSize)})`;
 
-  const msg = ctx.db.addDashboardMessage(agentName, 'to_agent', displayMessage, 'file-upload');
+  const msg = ctx.db.addDashboardMessage(agentName, 'to_agent', displayMessage, { topic: 'file-upload', sourceAgent: 'dashboard', targetAgent: agentName });
   const pending = ctx.db.enqueueMessage({
     sourceAgent: null,
     targetAgent: agentName,
@@ -415,12 +453,12 @@ route('POST', '/api/dashboard/upload', async (req, res, _match, ctx) => {
 
 route('POST', '/api/dashboard/reply', async (req, res, _match, ctx) => {
   const body = await readJson(req);
-  if (!body.agent || !body.message) {
-    return json(res, 400, { error: 'agent, message required' });
+  if (!body.agent || !body.message || !body.topic) {
+    return json(res, 400, { error: 'agent, message, topic required' });
   }
 
   const sanitized = sanitizeMessage(body.message);
-  const msg = ctx.db.addDashboardMessage(body.agent, 'from_agent', sanitized, body.topic);
+  const msg = ctx.db.addDashboardMessage(body.agent, 'from_agent', sanitized, { topic: body.topic as string, sourceAgent: body.agent as string });
 
   // Broadcast to dashboard WebSocket
   ctx.wss.broadcast(JSON.stringify({ type: 'message', msg }));
@@ -483,7 +521,7 @@ route('POST', '/api/dashboard/messages/:id/withdraw', async (_req, res, match, c
 
   // Send a follow-up withdrawal notice to the agent
   const withdrawalText = `[system] the user withdrew this message: "${msg.message}"`;
-  const withdrawMsg = ctx.db.addDashboardMessage(msg.agent, 'to_agent', withdrawalText);
+  const withdrawMsg = ctx.db.addDashboardMessage(msg.agent, 'to_agent', withdrawalText, { topic: msg.topic ?? 'system', sourceAgent: 'dashboard', targetAgent: msg.agent });
 
   const envelope = `[from: dashboard, reply with collab reply]: '${sanitizeMessage(withdrawalText)}'`;
   const pending = ctx.db.enqueueMessage({

@@ -172,6 +172,7 @@ describe('Integration: full lifecycle via HTTP', () => {
     const send = await api('POST', '/api/dashboard/send', {
       agent: 'msg-agent',
       message: 'Hello agent, please check the PR',
+      topic: 'test-topic',
     });
     assert.equal(send.status, 202); // 202 Accepted — message queued for async delivery
 
@@ -185,6 +186,7 @@ describe('Integration: full lifecycle via HTTP', () => {
     const reply = await api('POST', '/api/dashboard/reply', {
       agent: 'msg-agent',
       message: 'PR looks good, merged.',
+      topic: 'test-topic',
     });
     assert.equal(reply.status, 200);
 

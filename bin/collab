@@ -150,16 +150,29 @@ cmd('status', 'status', 'Orchestrator status', async () => {
   }
 });
 
-cmd('send', 'send <to> <message>', 'Send a message to another agent', async (args) => {
+cmd('send', 'send <to> --topic <topic> <message> [--reply-reminder [minutes]]', 'Send a message to another agent (topic required)', async (args) => {
+  let topic = null, replyReminder = null;
   const to = args[0];
-  const message = args.slice(1).join(' ');
-  if (!to || !message) { console.error('usage: collab send <to> <message>'); process.exit(1); }
+  const positional = [];
+  for (let i = 1; i < args.length; i++) {
+    if (args[i] === '--topic' && args[i + 1]) { topic = args[++i]; }
+    else if (args[i] === '--reply-reminder') {
+      const next = args[i + 1];
+      if (next && !next.startsWith('-')) { replyReminder = parseInt(args[++i], 10); }
+      else { replyReminder = 30; }
+    }
+    else { positional.push(args[i]); }
+  }
+  const message = positional.join(' ');
+  if (!to || !message || !topic) { console.error('usage: collab send <to> --topic <topic> <message>'); process.exit(1); }
   const from = requireAgentName();
-  const data = await api('POST', '/api/agents/send', { from, to, message });
+  const body = { from, to, message, topic };
+  if (replyReminder) body.replyReminder = replyReminder;
+  const data = await api('POST', '/api/agents/send', body);
   console.log(`queued (id:${data.queueId})`);
 });
 
-cmd('reply', 'reply <message> [--topic <topic>]', 'Reply to the dashboard', async (args) => {
+cmd('reply', 'reply --topic <topic> <message>', 'Reply to the dashboard (topic required)', async (args) => {
   let topic = null;
   const filtered = [];
   for (let i = 0; i < args.length; i++) {
@@ -167,7 +180,7 @@ cmd('reply', 'reply <message> [--topic <topic>]', 'Reply to the dashboard', asyn
     else { filtered.push(args[i]); }
   }
   const message = filtered.join(' ');
-  if (!message) { console.error('usage: collab reply <message>'); process.exit(1); }
+  if (!message || !topic) { console.error('usage: collab reply --topic <topic> <message>'); process.exit(1); }
   const agent = requireAgentName();
   await api('POST', '/api/dashboard/reply', { agent, message, topic });
   console.log('sent');
