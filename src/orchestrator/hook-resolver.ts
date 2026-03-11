@@ -37,6 +37,21 @@ export type HookResult =
 
 export type HookField = 'start' | 'resume' | 'exit' | 'compact' | 'interrupt' | 'submit' | 'detect_session';
 
+// ── Template variables for shell hooks ──
+
+export type TemplateVars = {
+  /** Agent name (e.g. "sysadmin") */
+  AGENT_NAME?: string;
+  /** Agent working directory */
+  AGENT_CWD?: string;
+  /** Session ID for resume (may be undefined on first spawn) */
+  SESSION_ID?: string;
+  /** Full persona prompt string (system prompt content) */
+  PERSONA_PROMPT?: string;
+  /** Path to the persona prompt file on disk */
+  PERSONA_PROMPT_FILEPATH?: string;
+};
+
 // ── Context for resolution ──
 
 export type HookContext = {
@@ -48,6 +63,8 @@ export type HookContext = {
   task?: string;
   /** Agent CWD for detect_session hooks */
   cwd?: string;
+  /** Template variables for $VAR interpolation in shell hooks */
+  templateVars?: TemplateVars;
 };
 
 // ── Type guards ──
@@ -149,6 +166,9 @@ function resolveStructuredHook(
   }
 
   if (isShellHook(value)) {
+    // Interpolate $TEMPLATE_VARS in the shell command
+    const interpolated = interpolateTemplateVars(value.shell, context?.templateVars);
+
     // Build env var prefix from agent identity + custom env
     const envParts: string[] = [];
     envParts.push(`COLLAB_AGENT=${agent.name}`);
@@ -158,7 +178,7 @@ function resolveStructuredHook(
       }
     }
     const envPrefix = `export ${envParts.join(' ')}`;
-    return { mode: 'paste', text: `${envPrefix} && ${value.shell}` };
+    return { mode: 'paste', text: `${envPrefix} && ${interpolated}` };
   }
 
   if (isSendHook(value)) {
@@ -190,6 +210,24 @@ function applyPresetOptions(hook: PresetHook, context?: HookContext): HookContex
 
   // Apply to resume opts — model and thinking don't apply to resume
   return context;
+}
+
+// ── Template Variable Interpolation ──
+
+/**
+ * Replace $TEMPLATE_VAR placeholders in a shell command string.
+ * Supported variables: $AGENT_NAME, $AGENT_CWD, $SESSION_ID,
+ * $PERSONA_PROMPT, $PERSONA_PROMPT_FILEPATH.
+ *
+ * Undefined variables are replaced with empty string.
+ * Only exact $VAR_NAME tokens are replaced (not ${VAR} or partial matches).
+ */
+export function interpolateTemplateVars(command: string, vars?: TemplateVars): string {
+  if (!vars) return command;
+  return command.replace(/\$([A-Z_]+)/g, (_match, name: string) => {
+    const val = vars[name as keyof TemplateVars];
+    return val ?? '';
+  });
 }
 
 // ── Preset Resolution ──
