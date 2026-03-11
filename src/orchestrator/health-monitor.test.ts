@@ -577,6 +577,52 @@ describe('HealthMonitor', () => {
     assert.ok(final.failureReason?.includes('session not found'));
   });
 
+  it('detects zsh prompt (macOS default)', async () => {
+    const agentName = 'health-cli-exit-zsh';
+    db.createAgent({ name: agentName, engine: 'claude', cwd: '/tmp', proxyId: 'p1' });
+    const a = db.getAgent(agentName)!;
+    db.updateAgentState(agentName, 'active', a.version, { tmuxSession: `agent-${agentName}` });
+
+    captureOutput = 'user@macbook ~ % \n';
+
+    const monitor = makeMonitor();
+    await monitor.pollAgent(db.getAgent(agentName)!);
+    ensureActive(agentName);
+    await monitor.pollAgent(db.getAgent(agentName)!);
+    assert.equal(db.getAgent(agentName)!.state, 'failed');
+  });
+
+  it('detects root prompt', async () => {
+    const agentName = 'health-cli-exit-root';
+    db.createAgent({ name: agentName, engine: 'claude', cwd: '/tmp', proxyId: 'p1' });
+    const a = db.getAgent(agentName)!;
+    db.updateAgentState(agentName, 'active', a.version, { tmuxSession: `agent-${agentName}` });
+
+    captureOutput = 'root@server:~# \n';
+
+    const monitor = makeMonitor();
+    await monitor.pollAgent(db.getAgent(agentName)!);
+    ensureActive(agentName);
+    await monitor.pollAgent(db.getAgent(agentName)!);
+    assert.equal(db.getAgent(agentName)!.state, 'failed');
+  });
+
+  it('detects exit message even without shell prompt match', async () => {
+    const agentName = 'health-cli-exit-msg';
+    db.createAgent({ name: agentName, engine: 'claude', cwd: '/tmp', proxyId: 'p1' });
+    const a = db.getAgent(agentName)!;
+    db.updateAgentState(agentName, 'active', a.version, { tmuxSession: `agent-${agentName}` });
+
+    // Exotic prompt format but clear exit message
+    captureOutput = 'No conversation found with session ID: abc-123\n→ \n';
+
+    const monitor = makeMonitor();
+    await monitor.pollAgent(db.getAgent(agentName)!);
+    ensureActive(agentName);
+    await monitor.pollAgent(db.getAgent(agentName)!);
+    assert.equal(db.getAgent(agentName)!.state, 'failed');
+  });
+
   it('does not false-positive on normal Claude prompt', async () => {
     const agentName = 'health-no-false-pos';
     db.createAgent({ name: agentName, engine: 'claude', cwd: '/tmp', proxyId: 'p1' });
@@ -590,6 +636,21 @@ describe('HealthMonitor', () => {
     await monitor.pollAgent(db.getAgent(agentName)!);
     await monitor.pollAgent(db.getAgent(agentName)!);
     assert.notEqual(db.getAgent(agentName)!.state, 'failed'); // must not false-positive on CLI prompt
+  });
+
+  it('does not false-positive on Codex prompt', async () => {
+    const agentName = 'health-no-false-codex';
+    db.createAgent({ name: agentName, engine: 'codex', cwd: '/tmp', proxyId: 'p1' });
+    const a = db.getAgent(agentName)!;
+    db.updateAgentState(agentName, 'active', a.version, { tmuxSession: `agent-${agentName}` });
+
+    // Codex prompt
+    captureOutput = '› \n';
+
+    const monitor = makeMonitor();
+    await monitor.pollAgent(db.getAgent(agentName)!);
+    await monitor.pollAgent(db.getAgent(agentName)!);
+    assert.notEqual(db.getAgent(agentName)!.state, 'failed');
   });
 });
 

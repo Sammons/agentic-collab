@@ -345,6 +345,11 @@ export class HealthMonitor {
    * This happens when `claude --resume <id>` fails (e.g. "No conversation found")
    * or the CLI crashes. The tmux session stays alive but shows a bash prompt.
    *
+   * Uses two complementary signals for cross-platform reliability:
+   * 1. Shell prompt patterns (bash $, zsh %, fish >, root #)
+   * 2. Known CLI exit messages in the pane output
+   *
+   * Requires 2 consecutive detections to avoid false positives during spawn.
    * Returns true if exit was detected (agent marked as failed), false otherwise.
    */
   private detectCliExit(agent: AgentRecord, paneOutput: string): boolean {
@@ -358,13 +363,37 @@ export class HealthMonitor {
       if (trimmed) { lastLine = trimmed; break; }
     }
 
-    // Bare shell prompt: user@host:path$ or [user@host path]$
-    // Must end with $ (bash) or % (zsh) optionally followed by whitespace
-    const isShellPrompt = /[@:].*[$%]\s*$/.test(lastLine);
-    if (!isShellPrompt) {
+    // Signal 1: Known CLI exit messages anywhere in the pane output.
+    // These are unambiguous — no CLI prompt would contain them.
+    const exitPatterns = [
+      /No conversation found with session ID/,      // claude --resume <stale-id>
+      /Session .+ not found/i,                       // generic session lookup failure
+      /command not found.*claude/i,                  // claude not installed
+      /command not found.*codex/i,                   // codex not installed
+      /command not found.*opencode/i,                // opencode not installed
+    ];
+    const hasExitMessage = exitPatterns.some(re => re.test(paneOutput));
+
+    // Signal 2: Bare shell prompt at the bottom of the pane.
+    // Covers common shell configurations:
+    //   bash:  user@host:~/path$    or  [user@host path]$
+    //   zsh:   user@host ~/path %   or  host%
+    //   fish:  user@host ~/path>
+    //   root:  root@host:~#
+    //   minimal: bash-5.2$ or sh-5.2$
+    const shellPromptPatterns = [
+      /\w+@\w+[:\s].*[$%#>]\s*$/,     // user@host:path$ / user@host path% / root@host:~#
+      /^\[?\w+@\w+\s.*\]?[$%#]\s*$/,  // [user@host path]$
+      /^(?:ba)?sh[\d.-]*[$#]\s*$/,     // bash-5.2$ or sh$
+    ];
+    const isShellPrompt = shellPromptPatterns.some(re => re.test(lastLine));
+
+    // Need at least one signal
+    if (!isShellPrompt && !hasExitMessage) {
       this.consecutiveFailures.delete(key);
       return false;
     }
+
     const count = (this.consecutiveFailures.get(key) ?? 0) + 1;
     this.consecutiveFailures.set(key, count);
 
@@ -372,10 +401,12 @@ export class HealthMonitor {
 
     // Determine reason from pane context
     let reason = 'CLI exited to shell prompt';
-    if (/No conversation found|session.*not found/i.test(paneOutput)) {
+    if (/No conversation found/i.test(paneOutput)) {
       reason = 'CLI session not found — resume failed';
-    } else if (/error|panic|crash/i.test(paneOutput)) {
-      reason = 'CLI crashed to shell prompt';
+    } else if (/command not found/i.test(paneOutput)) {
+      reason = 'CLI binary not found';
+    } else if (hasExitMessage) {
+      reason = 'CLI exited unexpectedly';
     }
 
     console.warn(`[health] ${agent.name}: ${reason}`);
