@@ -381,7 +381,26 @@ describe('hook-resolver', () => {
           PERSONA_PROMPT_FILEPATH: '/tmp/persona.md',
         },
       );
-      assert.equal(result, 'claude --session-id abc-123 --append-system-prompt You are a sysadmin');
+      // PERSONA_PROMPT is shell-quoted
+      assert.equal(result, "claude --session-id abc-123 --append-system-prompt 'You are a sysadmin'");
+    });
+
+    it('shell-quotes PERSONA_PROMPT with special characters and newlines', () => {
+      const multiLinePrompt = "You are a helper.\nDon't break things.\nUse `collab send` for reports.";
+      const result = interpolateTemplateVars(
+        'claude --append-system-prompt $PERSONA_PROMPT',
+        { PERSONA_PROMPT: multiLinePrompt },
+      );
+      // shellQuote wraps in single quotes, escaping internal single quotes
+      assert.equal(result, "claude --append-system-prompt 'You are a helper.\nDon'\\''t break things.\nUse `collab send` for reports.'");
+    });
+
+    it('shell-quotes PERSONA_PROMPT_FILEPATH with spaces', () => {
+      const result = interpolateTemplateVars(
+        'cat $PERSONA_PROMPT_FILEPATH',
+        { PERSONA_PROMPT_FILEPATH: '/home/user/my personas/agent.md' },
+      );
+      assert.equal(result, "cat '/home/user/my personas/agent.md'");
     });
 
     it('replaces undefined variables with empty string', () => {
@@ -431,6 +450,21 @@ describe('hook-resolver', () => {
       assert.equal(result.mode, 'paste');
       const text = (result as { text: string }).text;
       assert.ok(text.includes('$SESSION_ID'), `Expected uninterpolated var, got: ${text}`);
+    });
+
+    it('shell-quotes $PERSONA_PROMPT in shell hook to prevent tmux paste breakage', () => {
+      const agent = makeAgent({ name: 'hoa-helper' });
+      const prompt = "You are my HOA helper.\nUse gsuite skills.\nDon't break things.";
+      const result = resolveHook('resume', { shell: 'claude --resume $AGENT_NAME --append-system-prompt $PERSONA_PROMPT' }, agent, {
+        templateVars: { AGENT_NAME: 'hoa-helper', PERSONA_PROMPT: prompt },
+      });
+      assert.equal(result.mode, 'paste');
+      const text = (result as { text: string }).text;
+      // The command should contain the agent name unquoted and the prompt shell-quoted
+      assert.ok(text.includes('--resume hoa-helper'), `Expected unquoted agent name, got: ${text}`);
+      assert.ok(text.includes("--append-system-prompt '"), `Expected shell-quoted prompt, got: ${text}`);
+      // The quoted prompt should be a single argument — no unquoted newlines breaking the command
+      assert.ok(!text.includes('--append-system-prompt You'), `Prompt should be quoted, not raw, got: ${text}`);
     });
   });
 });
