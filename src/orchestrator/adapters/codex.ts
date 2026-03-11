@@ -142,6 +142,17 @@ export class CodexAdapter implements EngineAdapter {
     return task;
   }
 
+  submitActions(task: string): import('../../shared/types.ts').SendAction[] {
+    // Codex TUI sometimes drops the first Enter after a large paste.
+    // Paste the text, wait for terminal ingestion, press Enter, then
+    // send a second Enter after 1s to ensure the prompt is submitted.
+    return [
+      { paste: task },
+      { keystroke: 'Enter', post_wait_ms: 1000 },
+      { keystroke: 'Enter' },
+    ];
+  }
+
   extractSessionId(_paneOutput: string): string | null {
     // Codex doesn't print session IDs in terminal output.
     // Falls back to `codex resume --last` which resumes the most recent session.

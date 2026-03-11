@@ -245,6 +245,11 @@ function resolvePresetWithAdapter(
 
     case 'submit': {
       if (!context?.task) return { mode: 'skip' };
+      // Prefer structured submit actions (e.g. Codex extra Enter after delay)
+      if (adapter.submitActions) {
+        const actions = adapter.submitActions(context.task);
+        if (actions) return { mode: 'send', actions };
+      }
       return { mode: 'paste', text: adapter.buildSubmitCommand(context.task) };
     }
 
