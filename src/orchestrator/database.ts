@@ -445,6 +445,18 @@ export class Database {
     return result.changes > 0;
   }
 
+  /**
+   * Reset last_heartbeat to now for all registered proxies.
+   * Called on orchestrator startup so the stale-proxy timer doesn't
+   * nuke proxies that were alive before the restart.
+   */
+  touchAllProxyHeartbeats(): number {
+    const result = this.db.prepare(`
+      UPDATE proxies SET last_heartbeat = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+    `).run();
+    return result.changes;
+  }
+
   removeProxy(proxyId: string): boolean {
     const result = this.db.prepare('DELETE FROM proxies WHERE proxy_id = ?').run(proxyId);
     return result.changes > 0;

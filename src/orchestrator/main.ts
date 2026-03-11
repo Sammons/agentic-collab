@@ -275,6 +275,14 @@ wss.onMessage((_client, data) => {
 
 // ── Stale Proxy Cleanup (every 30s) ──
 
+// On startup, give existing proxies a fresh grace period to reconnect.
+// Without this, a rebuild that takes >45s causes the stale timer to nuke
+// proxies before they can re-register, creating unnecessary failed→active churn.
+const touchedProxies = db.touchAllProxyHeartbeats();
+if (touchedProxies > 0) {
+  console.log(`[proxy] Refreshed heartbeat for ${touchedProxies} existing proxy(s)`);
+}
+
 const staleProxyTimer = setInterval(() => {
   const stale = db.listStaleProxies(45); // 45s = 3 missed heartbeats
   for (const proxy of stale) {
