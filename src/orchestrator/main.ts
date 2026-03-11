@@ -374,4 +374,13 @@ server.listen(PORT, '0.0.0.0', async () => {
   } catch (err) {
     console.error('[orchestrator] Network restore failed:', err);
   }
+
+  // Sweep pending messages that survived restart — agents may have queued
+  // messages from before the restart that were never delivered.
+  // Delay 10s to let proxies register and agents come online first.
+  setTimeout(() => {
+    messageDispatcher.drainPending().catch((err) => {
+      console.error('[orchestrator] Startup message sweep failed:', err);
+    });
+  }, 10_000);
 });
