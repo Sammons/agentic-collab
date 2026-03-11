@@ -157,4 +157,10 @@ export class OpenCodeAdapter implements EngineAdapter {
     const match = paneOutput.match(/\b(ses_[a-zA-Z0-9]{20,})\b/);
     return match ? match[1]! : null;
   }
+
+  buildDetectSessionCommand(_cwd: string): string | null {
+    // OpenCode session detection relies on pane output parsing (extractSessionId).
+    // No host-side command needed — the session ID is visible in the tmux pane.
+    return null;
+  }
 }

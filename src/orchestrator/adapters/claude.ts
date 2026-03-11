@@ -147,5 +147,11 @@ export class ClaudeAdapter implements EngineAdapter {
     // Claude uses --session-id at spawn time, so we don't need to parse output.
     return null;
   }
+
+  buildDetectSessionCommand(_cwd: string): string | null {
+    // Claude pre-generates session IDs at spawn time via --session-id.
+    // No post-spawn detection needed.
+    return null;
+  }
 }
 

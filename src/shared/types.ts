@@ -66,6 +66,8 @@ export type AgentRecord = {
   hookInterrupt: string | null;
   /** Hook value for submitting messages to the agent. */
   hookSubmit: string | null;
+  /** Hook value for detecting the agent's session ID after spawn/resume. */
+  hookDetectSession: string | null;
   state: AgentState;
   stateBeforeShutdown: string | null;
   currentSessionId: string | null;
@@ -184,7 +186,8 @@ export type ProxyCommand =
   | { action: 'pane_activity'; sessionName: string }
   | { action: 'send_keys'; sessionName: string; keys: string }
   | { action: 'write_codex_profile'; profileName: string; developerInstructions: string }
-  | { action: 'remove_codex_profile'; profileName: string };
+  | { action: 'remove_codex_profile'; profileName: string }
+  | { action: 'exec'; command: string; cwd?: string; timeoutMs?: number };
 
 export type ProxyResponse = {
   ok: boolean;
