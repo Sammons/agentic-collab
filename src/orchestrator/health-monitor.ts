@@ -55,9 +55,9 @@ export class HealthMonitor {
   private readonly unchangedCount = new Map<string, number>();
   /**
    * Number of consecutive unchanged polls required before marking idle.
-   * With 5s fast-poll, 1 consecutive (after baseline) = 10s to detect idle.
+   * With 5s fast-poll, 2 consecutive (after baseline) = 15s to detect idle.
    */
-  static readonly IDLE_THRESHOLD = 1;
+  static readonly IDLE_THRESHOLD = 2;
   /** Number of trailing pane lines to capture for screen-diff. */
   static readonly SNAPSHOT_LINES = 15;
   private readonly db: Database;
