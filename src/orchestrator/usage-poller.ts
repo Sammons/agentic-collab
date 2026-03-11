@@ -37,6 +37,7 @@ const CAPTURE_POLL_MS = 2000; // interval between capture attempts
 const CAPTURE_TIMEOUT_MS = 30_000; // max time to wait for usage data to load
 const SESSION_BOOT_MS = 5_000; // time to wait for CLI to boot after spawn
 const SESSION_PREFIX = 'usage-';
+const RECYCLE_MS = 8 * 60 * 60 * 1000; // 8 hours — kill and recreate stale sessions
 
 type EngineConfig = {
   engine: 'claude' | 'codex';
@@ -55,6 +56,8 @@ export class UsagePoller {
   private readonly usageData = new Map<string, EngineUsage>();
   // Track which sessions are booted to avoid re-spawning every cycle
   private readonly activeSessions = new Set<string>();
+  // Track when each session was created for recycling
+  private readonly sessionCreatedAt = new Map<string, number>();
 
   constructor(opts: UsagePollerOptions) {
     this.db = opts.db;
@@ -98,6 +101,7 @@ export class UsagePoller {
       } catch { /* best effort */ }
     }
     this.activeSessions.clear();
+    this.sessionCreatedAt.clear();
   }
 
   getUsageData(): Record<string, EngineUsage> {
@@ -169,6 +173,9 @@ export class UsagePoller {
    * Ensure the dedicated session exists and is responsive, then query usage.
    */
   private async pollEngine(proxyId: string, config: EngineConfig): Promise<void> {
+    // Recycle session if older than 8 hours
+    await this.recycleIfStale(proxyId, config);
+
     // Ensure session exists
     await this.ensureSession(proxyId, config);
 
@@ -261,9 +268,48 @@ export class UsagePoller {
     });
 
     this.activeSessions.add(config.sessionName);
+    this.sessionCreatedAt.set(config.sessionName, Date.now());
 
     // Wait for CLI to boot
     await sleep(SESSION_BOOT_MS);
+  }
+
+  /**
+   * Kill and forget a session if it was created more than RECYCLE_MS ago.
+   * The next ensureSession() call will recreate it fresh.
+   */
+  private async recycleIfStale(proxyId: string, config: EngineConfig): Promise<void> {
+    const createdAt = this.sessionCreatedAt.get(config.sessionName);
+    // If we have no timestamp but the session exists in tmux, it predates this
+    // process (e.g. survived an orchestrator restart). Kill it unconditionally.
+    const isOrphan = !createdAt && this.activeSessions.has(config.sessionName);
+    const isStale = createdAt != null && (Date.now() - createdAt) >= RECYCLE_MS;
+
+    if (!isOrphan && !isStale) {
+      // Also check for sessions that exist in tmux but aren't tracked by us
+      if (createdAt == null && !this.activeSessions.has(config.sessionName)) {
+        const hasResult = await this.proxyDispatch(proxyId, {
+          action: 'has_session',
+          sessionName: config.sessionName,
+        });
+        if (hasResult.ok && hasResult.data === true) {
+          // Untracked session from a previous process — kill it
+          console.log(`[usage] Recycling untracked session ${config.sessionName}`);
+          try {
+            await this.proxyDispatch(proxyId, { action: 'kill_session', sessionName: config.sessionName });
+          } catch { /* best effort */ }
+          return;
+        }
+      }
+      return;
+    }
+
+    console.log(`[usage] Recycling ${isOrphan ? 'orphaned' : 'stale'} session ${config.sessionName} (age: ${createdAt ? Math.round((Date.now() - createdAt) / 3600000) + 'h' : 'unknown'})`);
+    try {
+      await this.proxyDispatch(proxyId, { action: 'kill_session', sessionName: config.sessionName });
+    } catch { /* best effort */ }
+    this.activeSessions.delete(config.sessionName);
+    this.sessionCreatedAt.delete(config.sessionName);
   }
 
   /**
