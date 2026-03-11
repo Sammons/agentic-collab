@@ -1,8 +1,10 @@
 import type { Database } from './database.ts';
+import type { MessageDispatcher } from './message-dispatcher.ts';
 import type { PendingMessage } from '../shared/types.ts';
 
 export type ReminderDispatcherOptions = {
   db: Database;
+  messageDispatcher: MessageDispatcher;
   onQueueUpdate?: (message: PendingMessage) => void;
   intervalMs?: number;
 };
@@ -10,11 +12,13 @@ export type ReminderDispatcherOptions = {
 export class ReminderDispatcher {
   private timer: ReturnType<typeof setInterval> | null = null;
   private readonly db: Database;
+  private readonly messageDispatcher: MessageDispatcher;
   private readonly onQueueUpdate: ((message: PendingMessage) => void) | undefined;
   private readonly intervalMs: number;
 
   constructor(opts: ReminderDispatcherOptions) {
     this.db = opts.db;
+    this.messageDispatcher = opts.messageDispatcher;
     this.onQueueUpdate = opts.onQueueUpdate;
     this.intervalMs = opts.intervalMs ?? 60_000;
   }
@@ -46,6 +50,10 @@ export class ReminderDispatcher {
       if (this.onQueueUpdate) {
         this.onQueueUpdate(msg);
       }
+      // Trigger delivery — without this, messages sit in the queue forever
+      this.messageDispatcher.tryDeliver(reminder.agentName).catch((err) => {
+        console.error(`[reminders] Delivery trigger failed for ${reminder.agentName}:`, (err as Error).message);
+      });
     }
   }
 }
