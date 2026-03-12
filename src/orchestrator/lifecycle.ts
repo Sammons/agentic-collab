@@ -17,6 +17,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { existsSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Database } from './database.ts';
 import type { LockManager } from '../shared/lock.ts';
@@ -698,6 +699,13 @@ export async function destroyAgent(
           profileName: name,
         }).catch(() => {}); // Best-effort cleanup
       }
+    }
+
+    // Delete persona file so persona sync doesn't resurrect the agent
+    const personaFilename = agent.persona ?? name;
+    const personaPath = join(getPersonasDir(), `${personaFilename}.md`);
+    if (existsSync(personaPath)) {
+      unlinkSync(personaPath);
     }
 
     ctx.db.deleteAgent(name);
