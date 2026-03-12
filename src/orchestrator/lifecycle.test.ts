@@ -1,6 +1,6 @@
 import { describe, it, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { Database } from './database.ts';
@@ -254,6 +254,46 @@ describe('Lifecycle', () => {
         destroyAgent(ctx, 'nonexistent'),
         /not found/,
       );
+    });
+
+    it('deletes persona file on destroy', async () => {
+      const personasDir = mkdtempSync(join(tmpdir(), 'personas-destroy-'));
+      const origDir = process.env['PERSONAS_DIR'];
+      process.env['PERSONAS_DIR'] = personasDir;
+
+      try {
+        // Create a persona file
+        const personaFile = join(personasDir, 'destroy-persona.md');
+        writeFileSync(personaFile, '---\nengine: claude\ncwd: /tmp\n---\nTest persona\n');
+        assert.ok(existsSync(personaFile), 'persona file should exist before destroy');
+
+        // Create agent with matching persona name
+        db.createAgent({ name: 'destroy-persona', engine: 'claude', cwd: '/tmp', proxyId: 'p1' });
+
+        await destroyAgent(ctx, 'destroy-persona');
+
+        assert.equal(db.getAgent('destroy-persona'), undefined, 'agent should be deleted from DB');
+        assert.ok(!existsSync(personaFile), 'persona file should be deleted on destroy');
+      } finally {
+        process.env['PERSONAS_DIR'] = origDir;
+        rmSync(personasDir, { recursive: true, force: true });
+      }
+    });
+
+    it('destroys agent even if no persona file exists', async () => {
+      const personasDir = mkdtempSync(join(tmpdir(), 'personas-nopersona-'));
+      const origDir = process.env['PERSONAS_DIR'];
+      process.env['PERSONAS_DIR'] = personasDir;
+
+      try {
+        db.createAgent({ name: 'destroy-nofile', engine: 'claude', cwd: '/tmp', proxyId: 'p1' });
+        // No persona file — should still destroy without error
+        await destroyAgent(ctx, 'destroy-nofile');
+        assert.equal(db.getAgent('destroy-nofile'), undefined, 'agent should be deleted from DB');
+      } finally {
+        process.env['PERSONAS_DIR'] = origDir;
+        rmSync(personasDir, { recursive: true, force: true });
+      }
     });
   });
 
