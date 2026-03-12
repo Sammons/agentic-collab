@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Zero-dependency orchestrator for managing AI coding agents (Claude, Codex, OpenCode) via tmux sessions. Built on Node 24 — no build step, no npm install. Production-tested with 15+ concurrent agents.
+Zero-dependency orchestrator for managing AI coding agents (Claude, Codex, OpenCode) via tmux sessions. Built on Node 24 — no build step, no npm install. Production-tested with 15+ concurrent agents across multiple engines.
 
 ## Dashboard
 
@@ -176,6 +176,17 @@ You are a research specialist focused on codebase exploration.
 | `proxy_host` | no | Pin agent to a specific machine hostname |
 | `permissions` | no | `skip` to bypass permission prompts |
 | `group` | no | Group label for dashboard sidebar organization |
+| `detect_session_regex` | no | Regex with one capture group to extract session IDs from pane output on exit |
+
+**Session detection:**
+
+Some engines (Codex, OpenCode) print a resume/session ID on exit (e.g., `To continue, run: codex resume <uuid>`). The `detect_session_regex` field lets the orchestrator capture that ID automatically:
+
+```yaml
+detect_session_regex: 'codex resume ([0-9a-f-]+)'
+```
+
+On suspend or reload, after the exit command completes, the orchestrator captures the last 50 lines of tmux pane output and runs the regex against it. If capture group 1 matches, the session ID is stored — enabling correct `--resume <id>` on next start. This is engine-agnostic: any engine that prints a session ID on exit can use this field.
 
 **Lifecycle hooks:**
 
@@ -251,6 +262,23 @@ Each send action is one of: `keystroke` (tmux send-keys), `text` (tmux send-keys
 | compact | ✅ | ✅ | ✅ |
 | interrupt | ✅ | ✅ | ✅ |
 | submit | ✅ | ✅ | ✅ |
+
+**Template variables:**
+
+Shell hook strings support `$VAR_NAME` template variables that are interpolated at hook resolution time:
+
+| Variable | Description |
+|----------|-------------|
+| `$AGENT_NAME` | The agent's name (from `COLLAB_AGENT`) |
+| `$SESSION_ID` | The stored session ID (for resume hooks) |
+
+Example:
+```yaml
+start:
+  shell: codex --dangerously-bypass-approvals-and-sandbox --no-alt-screen -p $AGENT_NAME
+resume:
+  shell: codex --dangerously-bypass-approvals-and-sandbox --no-alt-screen -p $AGENT_NAME resume $SESSION_ID
+```
 
 **Environment variables:**
 
@@ -328,7 +356,7 @@ All `POST`/`DELETE` endpoints require `Authorization: Bearer <secret>` when `ORC
 | `POST` | `/api/agents/:name/interrupt` | Send interrupt keys |
 | `POST` | `/api/agents/:name/compact` | Compact agent context |
 | `POST` | `/api/agents/:name/kill` | Hard-kill session |
-| `POST` | `/api/agents/:name/destroy` | Destroy agent permanently |
+| `POST` | `/api/agents/:name/destroy` | Destroy agent permanently (also deletes persona file) |
 
 ### Messaging
 
@@ -383,7 +411,7 @@ Supported engines: `claude`, `codex`, `opencode`.
 node --test 'src/**/*.test.ts'
 ```
 
-410+ tests across 64 suites covering lifecycle operations, database persistence, networking, locking, health monitoring, adapters, message delivery, crash recovery, file upload, streaming upload, rate limiting, path traversal, persona frontmatter, version handshake, unread cursors, integration tests, and input validation.
+538 tests across 87 suites covering lifecycle operations, database persistence, networking, locking, health monitoring, adapters, message delivery, crash recovery, file upload, streaming upload, rate limiting, path traversal, persona frontmatter, session detection, version handshake, unread cursors, integration tests, and input validation.
 
 ## Project structure
 
@@ -403,6 +431,7 @@ src/
 │   ├── usage-poller.ts     # Token usage tracking via CLI sessions
 │   ├── voice-proxy.ts      # WebSocket voice dictation proxy
 │   ├── persona.ts          # Persona loading, frontmatter, startup sync
+│   ├── hook-resolver.ts    # Hook resolution: preset/shell/send modes
 │   └── adapters/           # Engine-specific behavior
 │       ├── claude.ts
 │       ├── codex.ts
