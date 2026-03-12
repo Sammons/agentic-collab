@@ -439,7 +439,7 @@ describe('HealthMonitor', () => {
     const msg1 = db.enqueueMessage({ sourceAgent: 'sender', targetAgent: 'health-drain', envelope: '[from: sender]: msg1' });
     const msg2 = db.enqueueMessage({ sourceAgent: 'sender', targetAgent: 'health-drain', envelope: '[from: sender]: msg2' });
 
-    // Agent starts idle, then goes active after first delivery, then back to idle
+    // The dispatcher no longer waits for idle, so the drain loop can deliver immediately.
     let deliveryCount = 0;
     const drainDispatch = async (_proxyId: string, command: ProxyCommand): Promise<ProxyResponse> => {
       if (command.action === 'capture') {
