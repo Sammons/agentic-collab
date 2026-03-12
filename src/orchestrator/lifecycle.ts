@@ -605,6 +605,31 @@ export async function suspendAgent(
     // Wait for process to exit, then verify
     await sleep(EXIT_WAIT_MS);
 
+    // Capture pane output before checking session liveness — the exit output
+    // (including session ID) is still in the scrollback buffer.
+    let capturedSessionId: string | null = null;
+    const agentSnapshot = ctx.db.getAgent(name);
+    const detectRegex = agentSnapshot?.detectSessionRegex;
+    if (detectRegex) {
+      try {
+        const captureResult = await ctx.proxyDispatch(proxyId, {
+          action: 'capture',
+          sessionName: tmuxSession,
+          lines: 50,
+        });
+        if (captureResult.ok && typeof captureResult.data === 'string') {
+          const re = new RegExp(detectRegex);
+          const match = re.exec(captureResult.data);
+          if (match && match[1]) {
+            capturedSessionId = match[1].trim();
+            console.log(`[lifecycle] ${name}: detected session ID on exit: ${capturedSessionId}`);
+          }
+        }
+      } catch {
+        // Best-effort — session ID capture failure is non-fatal
+      }
+    }
+
     const sessionGone = await ctx.proxyDispatch(proxyId, {
       action: 'has_session',
       sessionName: tmuxSession,
@@ -628,10 +653,16 @@ export async function suspendAgent(
         return latest;
       }
 
-      const updated = ctx.db.updateAgentState(name, 'suspended', latest.version, {
+      const extra: Record<string, unknown> = {
         lastActivity: new Date().toISOString(),
-      });
-      ctx.db.logEvent(name, 'suspended');
+      };
+      // Update currentSessionId if regex detected one on exit
+      if (capturedSessionId) {
+        extra.currentSessionId = capturedSessionId;
+      }
+
+      const updated = ctx.db.updateAgentState(name, 'suspended', latest.version, extra as Parameters<typeof ctx.db.updateAgentState>[3]);
+      ctx.db.logEvent(name, 'suspended', undefined, capturedSessionId ? { detectedSessionId: capturedSessionId } : undefined);
       return updated;
     });
   } finally {
@@ -756,6 +787,30 @@ export async function reloadAgent(
     // 2. Wait for exit
     await sleep(EXIT_WAIT_MS);
 
+    // 2b. Capture session ID from exit output via detect_session_regex
+    let exitDetectedSessionId: string | null = null;
+    const reloadAgentSnapshot = ctx.db.getAgent(name);
+    const reloadDetectRegex = reloadAgentSnapshot?.detectSessionRegex;
+    if (reloadDetectRegex) {
+      try {
+        const captureResult = await ctx.proxyDispatch(proxyId, {
+          action: 'capture',
+          sessionName: oldTmuxSession,
+          lines: 50,
+        });
+        if (captureResult.ok && typeof captureResult.data === 'string') {
+          const re = new RegExp(reloadDetectRegex);
+          const match = re.exec(captureResult.data);
+          if (match && match[1]) {
+            exitDetectedSessionId = match[1].trim();
+            console.log(`[lifecycle] ${name}: detected session ID on reload exit: ${exitDetectedSessionId}`);
+          }
+        }
+      } catch {
+        // Best-effort — non-fatal
+      }
+    }
+
     // 3. Kill tmux session
     await ctx.proxyDispatch(proxyId, {
       action: 'kill_session',
@@ -791,23 +846,23 @@ export async function reloadAgent(
       : undefined;
 
     const personaFile = resolvePersonaFilePath(name, persona);
-    let reloadSessionId = currentSessionId;
-    const useHookField = currentSessionId ? hookResume : hookStart;
+    let reloadSessionId = exitDetectedSessionId ?? currentSessionId;
+    const useHookField = reloadSessionId ? hookResume : hookStart;
     let reloadResult: HookResult;
 
     const reloadTemplateVars: TemplateVars = {
       AGENT_NAME: name,
       AGENT_CWD: cwd,
-      SESSION_ID: currentSessionId ?? undefined,
+      SESSION_ID: reloadSessionId ?? undefined,
       PERSONA_PROMPT: systemPrompt,
       PERSONA_PROMPT_FILEPATH: personaFile ?? undefined,
     };
 
-    if (currentSessionId) {
+    if (reloadSessionId) {
       reloadResult = resolveHook('resume', hookResume, phase1.current, {
         resumeOpts: {
           name,
-          sessionId: currentSessionId,
+          sessionId: reloadSessionId,
           cwd,
           task: inlineTask,
           appendSystemPrompt: systemPrompt,

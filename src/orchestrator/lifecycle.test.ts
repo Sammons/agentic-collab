@@ -600,4 +600,150 @@ describe('Lifecycle', () => {
       assert.ok(!paste.text.includes('COLLAB_PERSONA_FILE='), 'should not export COLLAB_PERSONA_FILE');
     });
   });
+
+  describe('detect_session_regex on suspend', () => {
+    it('extracts session ID from pane capture on suspend when regex is set', async () => {
+      db.createAgent({
+        name: 'detect-suspend',
+        engine: 'codex',
+        cwd: '/tmp',
+        proxyId: 'p1',
+        detectSessionRegex: 'codex resume ([0-9a-f-]+)',
+      });
+      const a = db.getAgent('detect-suspend')!;
+      db.updateAgentState('detect-suspend', 'active', a.version, {
+        tmuxSession: 'agent-detect-suspend',
+        proxyId: 'p1',
+      });
+
+      // Mock proxy to return exit output containing session ID
+      const detectCtx: LifecycleContext = {
+        ...ctx,
+        proxyDispatch: async (_proxyId: string, command: ProxyCommand): Promise<ProxyResponse> => {
+          proxyCommands.push(command);
+          if (command.action === 'capture') {
+            return { ok: true, data: 'Session saved.\nTo continue this session, run codex resume 019ce018-ff0a-7ba0-9537-e4eb16a75970\n$' };
+          }
+          if (command.action === 'has_session') {
+            return { ok: true, data: false }; // session exited cleanly
+          }
+          return { ok: true };
+        },
+      };
+
+      proxyCommands = [];
+      const result = await suspendAgent(detectCtx, 'detect-suspend');
+
+      assert.equal(result.state, 'suspended');
+      assert.equal(result.currentSessionId, '019ce018-ff0a-7ba0-9537-e4eb16a75970');
+    });
+
+    it('does not overwrite session ID when regex does not match', async () => {
+      db.createAgent({
+        name: 'detect-nomatch',
+        engine: 'codex',
+        cwd: '/tmp',
+        proxyId: 'p1',
+        detectSessionRegex: 'codex resume ([0-9a-f-]+)',
+      });
+      const a = db.getAgent('detect-nomatch')!;
+      db.updateAgentState('detect-nomatch', 'active', a.version, {
+        tmuxSession: 'agent-detect-nomatch',
+        proxyId: 'p1',
+        currentSessionId: 'original-session-id',
+      });
+
+      // Mock proxy to return exit output WITHOUT a session ID
+      const noMatchCtx: LifecycleContext = {
+        ...ctx,
+        proxyDispatch: async (_proxyId: string, command: ProxyCommand): Promise<ProxyResponse> => {
+          proxyCommands.push(command);
+          if (command.action === 'capture') {
+            return { ok: true, data: 'Process exited.\n$' };
+          }
+          if (command.action === 'has_session') {
+            return { ok: true, data: false };
+          }
+          return { ok: true };
+        },
+      };
+
+      proxyCommands = [];
+      const result = await suspendAgent(noMatchCtx, 'detect-nomatch');
+
+      assert.equal(result.state, 'suspended');
+      // currentSessionId should remain unchanged since regex didn't match
+      assert.equal(result.currentSessionId, 'original-session-id');
+    });
+
+    it('skips pane capture when no detect_session_regex is set', async () => {
+      db.createAgent({
+        name: 'detect-none',
+        engine: 'claude',
+        cwd: '/tmp',
+        proxyId: 'p1',
+        // No detectSessionRegex
+      });
+      const a = db.getAgent('detect-none')!;
+      db.updateAgentState('detect-none', 'active', a.version, {
+        tmuxSession: 'agent-detect-none',
+        proxyId: 'p1',
+      });
+
+      proxyCommands = [];
+      await suspendAgent(ctx, 'detect-none');
+
+      // The default mock returns capture for any capture call, but
+      // without detectSessionRegex the suspend flow should NOT attempt capture
+      // before the has_session check. Only has_session + kill should appear
+      // after the exit paste.
+      const captureBeforeHasSession = proxyCommands.findIndex(c => c.action === 'capture');
+      const hasSessionIdx = proxyCommands.findIndex(c => c.action === 'has_session');
+      // If capture exists, it should not be for session detection (only has_session check matters)
+      if (captureBeforeHasSession !== -1) {
+        // In the default ctx, capture returns '> \n' which won't match anything,
+        // but more importantly the code path should not call capture before has_session
+        // when there's no regex set
+        assert.ok(captureBeforeHasSession > hasSessionIdx || hasSessionIdx === -1,
+          'should not capture pane for session detection when no regex is set');
+      }
+    });
+  });
+
+  describe('detect_session_regex on reload', () => {
+    it('uses exit-detected session ID for reload resume command', async () => {
+      db.createAgent({
+        name: 'detect-reload',
+        engine: 'codex',
+        cwd: '/tmp',
+        proxyId: 'p1',
+        detectSessionRegex: 'codex resume ([0-9a-f-]+)',
+      });
+      const a = db.getAgent('detect-reload')!;
+      db.updateAgentState('detect-reload', 'active', a.version, {
+        tmuxSession: 'agent-detect-reload',
+        proxyId: 'p1',
+        currentSessionId: null, // no prior session
+      });
+
+      // Mock proxy to return exit output with session ID
+      const detectCtx: LifecycleContext = {
+        ...ctx,
+        proxyDispatch: async (_proxyId: string, command: ProxyCommand): Promise<ProxyResponse> => {
+          proxyCommands.push(command);
+          if (command.action === 'capture') {
+            return { ok: true, data: 'To continue this session, run codex resume abc-def-123\n$' };
+          }
+          return { ok: true };
+        },
+      };
+
+      proxyCommands = [];
+      const result = await reloadAgent(detectCtx, 'detect-reload', { immediate: true });
+
+      assert.equal(result.state, 'active');
+      // The detected session ID from exit should be persisted
+      assert.equal(result.currentSessionId, 'abc-def-123');
+    });
+  });
 });
