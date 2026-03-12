@@ -5,8 +5,8 @@
  * Triggered immediately on enqueue via tryDeliver(agentName), with a drain
  * loop (6s interval, max 20 attempts) for batch delivery.
  *
- * Delivery requires the agent to be idle (waiting_for_input). If the agent
- * isn't idle, the message stays queued for the next drain attempt.
+ * Delivery is immediate when an agent can accept lifecycle actions. The
+ * dispatcher does not gate on pane capture or persisted idle state.
  *
  * Race safety: the draining set prevents concurrent drain loops for the
  * same agent. A drain loop owns exclusive delivery rights until it finishes
@@ -15,9 +15,8 @@
 
 import type { Database } from './database.ts';
 import type { LockManager } from '../shared/lock.ts';
-import type { ProxyCommand, ProxyResponse, AgentRecord, PendingMessage, DashboardMessage } from '../shared/types.ts';
-import { sessionName, canSuspend } from '../shared/agent-entity.ts';
-import { getAdapter } from './adapters/index.ts';
+import type { ProxyCommand, ProxyResponse, PendingMessage, DashboardMessage } from '../shared/types.ts';
+import { canSuspend } from '../shared/agent-entity.ts';
 import { deliverToAgent, type LifecycleContext } from './lifecycle.ts';
 
 export type MessageDispatcherOptions = {
@@ -69,13 +68,6 @@ export class MessageDispatcher {
 
     const agent = this.db.getAgent(agentName);
     if (!agent || !agent.proxyId || !canSuspend(agent)) return false;
-
-    const isIdle = await this.checkAgentIdle(agent);
-    if (!isIdle) {
-      // Agent not idle — start a drain loop to retry later
-      this.scheduleDrain(agentName);
-      return false;
-    }
 
     const delivered = await this.deliverNextMessage(agentName);
     if (delivered) {
@@ -139,11 +131,7 @@ export class MessageDispatcher {
           this.draining.delete(agentName);
           return;
         }
-
-        const isIdle = await this.checkAgentIdle(agent);
-        if (isIdle) {
-          await this.deliverNextMessage(agentName);
-        }
+        await this.deliverNextMessage(agentName);
 
         // Check if more messages remain
         const still = this.db.getDeliverableMessages(agentName);
@@ -160,25 +148,6 @@ export class MessageDispatcher {
       }
     }, MessageDispatcher.DRAIN_INTERVAL_MS);
     this.drainTimers.set(agentName, timer);
-  }
-
-  /**
-   * Capture pane output and check if agent is waiting for input.
-   */
-  private async checkAgentIdle(agent: AgentRecord): Promise<boolean> {
-    if (!agent.proxyId) return false;
-
-    const captureResult = await this.proxyDispatch(agent.proxyId, {
-      action: 'capture',
-      sessionName: sessionName(agent),
-      lines: 50,
-    });
-
-    if (!captureResult.ok) return false;
-
-    const paneOutput = (captureResult.data as string) ?? '';
-    const adapter = getAdapter(agent.engine);
-    return adapter.detectIdleState(paneOutput) === 'waiting_for_input';
   }
 
   /**
