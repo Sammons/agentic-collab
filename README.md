@@ -21,7 +21,7 @@ Real-time dashboard for monitoring and controlling agents. Search/filter, send m
 │  Orchestrator (Docker, :3000)    │
 │  ┌────────┐ ┌────────────────┐  │
 │  │ SQLite  │ │ Health Monitor │  │
-│  │ (WAL)   │ │ (30s poll)     │  │
+│  │ (WAL)   │ │ + Dispatcher   │  │
 │  └────────┘ └────────────────┘  │
 │  ┌────────┐ ┌────────────────┐  │
 │  │ HTTP   │ │ WebSocket      │  │
@@ -39,7 +39,7 @@ Real-time dashboard for monitoring and controlling agents. Search/filter, send m
 └──────────────────────────────────┘
 ```
 
-**Orchestrator** runs in Docker and manages agent state, message queues, and the dashboard. **Proxy** runs on the host where tmux is available and executes session commands on behalf of the orchestrator.
+**Orchestrator** runs in Docker and manages agent state, persona sync, event-driven message queues, health polling, and the dashboard. **Proxy** runs on the host where tmux is available and executes session commands on behalf of the orchestrator.
 
 ### Agent state machine
 
@@ -51,7 +51,7 @@ void → spawning → active ↔ idle → suspending → suspended
                   (respawnable)
 ```
 
-All lifecycle transitions use three-phase locking with optimistic concurrency (version column) and 30-second watchdog timers.
+Long-running lifecycle transitions (`spawn`, `resume`, `suspend`, immediate `reload`) use three-phase locking with optimistic concurrency (version column) and watchdog timers. Short operations (`interrupt`, `compact`, `kill`, message delivery) use single-phase locks.
 
 ## Prerequisites
 
@@ -289,7 +289,7 @@ When a custom hook (inline, file, or shell mode) is active, the command is wrapp
 On startup, the orchestrator scans `persistent-agents/*.md` and merges them into SQLite:
 - **New personas** create agents in `void` state
 - **Existing personas** update config fields (engine, model, hooks, etc.) but preserve runtime state (active sessions, proxy assignments)
-- **Body content** (after frontmatter) is injected as the agent's system prompt via `--append-system-prompt`
+- **Body content** (after frontmatter) becomes the agent's system prompt via adapter-specific startup wiring (for example CLI flags or a Codex profile)
 - **Hook resolution** runs through `src/orchestrator/hook-resolver.ts` — every lifecycle operation funnels through `resolveHook()` which returns paste, keys, or skip actions
 
 Persona files are editable in the dashboard UI. Agents can also edit their own persona files and handle git workflows.
@@ -374,7 +374,7 @@ All `POST`/`DELETE` endpoints require `Authorization: Bearer <secret>` when `ORC
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/api/orchestrator/status` | Agent/proxy counts |
-| `POST` | `/api/orchestrator/shutdown` | Graceful shutdown (suspends all agents) |
+| `POST` | `/api/orchestrator/shutdown` | Mark running agents suspended for restore on shutdown |
 | `POST` | `/api/orchestrator/restore` | Restore agents after restart |
 | `GET` | `/api/events/:agentName` | Agent event log |
 | `GET` | `/api/proxies` | List registered proxies |
@@ -382,18 +382,29 @@ All `POST`/`DELETE` endpoints require `Authorization: Bearer <secret>` when `ORC
 
 ### WebSocket
 
-Connect to `/ws?token=<secret>` for real-time updates. Events: `agent_update`, `proxy_update`, `queue_update`, `dashboard_message`.
+Connect to `/ws?token=<secret>` for real-time updates. Core events: `init`, `agent_update`, `message`, `proxy_update`, `queue_update`.
 
 ## Health monitor
 
-The orchestrator polls active/idle agents every 30 seconds:
+The orchestrator observes agent sessions on two cadences:
 
-- **Context threshold** (80%): sends `/compact` to reduce context usage
-- **Reload threshold** (90%): kills and respawns the session with a task summary
-- **Idle detection**: transitions agents between `active` and `idle` states
-- **Message delivery**: delivers one queued message per poll cycle when agent is idle
-- **Crash recovery**: on startup, restores agents stuck in transitional states (`suspending`, `resuming`)
-- **Version handshake**: proxy presents its git SHA during registration; orchestrator compares and warns on mismatch
+- **Fast poll (5s)**: active agents only, for near-real-time idle detection
+- **Full poll (30s)**: all active/idle agents, for pane capture, context recording, failure detection, and queued reload checks
+
+Current health monitor responsibilities:
+
+- **Screen-diff idle detection**: compares trailing pane snapshots and transitions agents between `active` and `idle`
+- **Context tracking**: records adapter-parsed context percentages for dashboard display only
+- **CLI exit detection**: marks agents `failed` if the engine drops back to a shell prompt or prints a known fatal error
+- **Capture failure handling**: marks agents `failed` after repeated pane capture failures
+- **Queued reload execution**: runs a queued reload once the agent is idle
+- **Idle timeout logging**: records when an agent stays idle past the configured threshold
+
+Queued message delivery is handled separately by `src/orchestrator/message-dispatcher.ts`:
+
+- **Event-driven delivery**: tries immediately on enqueue, then drains every 6 seconds while work remains
+- **Idle gating**: waits for idle when the agent or engine requires it
+- **Retry/backoff**: recovers stale attempts and retries failed deliveries with backoff
 
 ## Engine adapters
 
