@@ -244,14 +244,13 @@ fi
 
 step "Starting proxy"
 
-info "Dashboard: http://localhost:3000/dashboard"
-info "Press Ctrl+C to stop the proxy"
-echo ""
-
-# Prefer mise if it has the proxy task available (requires trusted config).
-# Fall back to direct node invocation otherwise.
-if [ "$HAS_MISE" = true ] && mise task ls 2>/dev/null | grep -q '^proxy '; then
-  exec mise run proxy
+if bash "$SCRIPT_DIR/scripts/start-proxy-tmux.sh" --wait-healthy; then
+  info "Proxy tmux session: agentic-proxy"
+  info "Attach with: tmux attach -t agentic-proxy"
 else
-  exec node src/proxy/main.ts
+  fail "Proxy failed to start in tmux session agentic-proxy"
 fi
+
+info "Dashboard: http://localhost:3000/dashboard"
+echo ""
+info "Bootstrap complete"

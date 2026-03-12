@@ -10,8 +10,8 @@ test = "node --test 'src/**/*.test.ts'"
 typecheck = "npx tsc --noEmit"
 
 [tasks.proxy]
-description = "Start the proxy (auto-discovers orchestrator)"
-run = "node src/proxy/main.ts"
+description = "Start the proxy in detached tmux session agentic-proxy"
+run = "bash scripts/start-proxy-tmux.sh"
 
 [tasks.orchestrator]
 description = "Start the orchestrator (non-Docker, for development)"
