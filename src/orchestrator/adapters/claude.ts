@@ -7,7 +7,6 @@ import { shellQuote } from '../../shared/utils.ts';
 
 export class ClaudeAdapter implements EngineAdapter {
   readonly engine = 'claude';
-  readonly canDeliverWhileActive = true;
   readonly supportsResumePrompt = false;
 
   buildSpawnCommand(opts: SpawnOptions): string {
@@ -154,4 +153,3 @@ export class ClaudeAdapter implements EngineAdapter {
     return null;
   }
 }
-
