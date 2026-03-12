@@ -70,10 +70,10 @@ export class MessageDispatcher {
     const agent = this.db.getAgent(agentName);
     if (!agent || !agent.proxyId || !canSuspend(agent)) return false;
 
-    // Engines that buffer pasted input (e.g. Claude) can receive messages while active.
-    // Others must be idle (waiting_for_input) before delivery.
-    const adapter = getAdapter(agent.engine);
-    if (!adapter.canDeliverWhileActive) {
+    // Determine whether to wait for idle before delivering.
+    // Frontmatter wait_for_idle overrides engine default.
+    const mustWaitForIdle = agent.waitForIdle ?? !getAdapter(agent.engine).canDeliverWhileActive;
+    if (mustWaitForIdle) {
       const isIdle = await this.checkAgentIdle(agent);
       if (!isIdle) {
         // Agent not idle — start a drain loop to retry later
@@ -145,9 +145,9 @@ export class MessageDispatcher {
           return;
         }
 
-        const adapter = getAdapter(agent.engine);
+        const mustWaitForIdle = agent.waitForIdle ?? !getAdapter(agent.engine).canDeliverWhileActive;
         let canDeliver = true;
-        if (!adapter.canDeliverWhileActive) {
+        if (mustWaitForIdle) {
           canDeliver = await this.checkAgentIdle(agent);
         }
 

@@ -54,6 +54,8 @@ export type PersonaFrontmatter = {
   submit?: HookValue;
   /** Hook value for detecting the agent's session ID after spawn/resume. */
   detect_session?: HookValue;
+  /** Whether to wait for idle before delivering messages. Overrides engine default. */
+  wait_for_idle?: string;
   /** Legacy alias for start (backward compat). */
   spawn?: HookValue;
 };
@@ -652,6 +654,7 @@ export function syncSinglePersona(db: Database, name: string, personasDir?: stri
     hookInterrupt: serializeHookValue(fm.interrupt),
     hookSubmit: serializeHookValue(fm.submit),
     hookDetectSession: serializeHookValue(fm.detect_session),
+    waitForIdle: fm.wait_for_idle === 'true' ? true : fm.wait_for_idle === 'false' ? false : undefined,
   });
   return true;
 }
@@ -694,6 +697,7 @@ export function syncPersonasToDb(db: Database, personasDir?: string): number {
       hookInterrupt: serializeHookValue(frontmatter.interrupt),
       hookSubmit: serializeHookValue(frontmatter.submit),
       hookDetectSession: serializeHookValue(frontmatter.detect_session),
+      waitForIdle: frontmatter.wait_for_idle === 'true' ? true : frontmatter.wait_for_idle === 'false' ? false : undefined,
     });
 
     synced++;
@@ -751,6 +755,7 @@ export function syncPersonasWithDiff(db: Database, personasDir?: string): SyncDi
       hookInterrupt: serializeHookValue(frontmatter.interrupt),
       hookSubmit: serializeHookValue(frontmatter.submit),
       hookDetectSession: serializeHookValue(frontmatter.detect_session),
+      waitForIdle: frontmatter.wait_for_idle === 'true' ? true : frontmatter.wait_for_idle === 'false' ? false : undefined,
     };
 
     if (!existing) {
@@ -772,7 +777,8 @@ export function syncPersonasWithDiff(db: Database, personasDir?: string): SyncDi
         (existing.hookExit ?? undefined) !== upsertOpts.hookExit ||
         (existing.hookInterrupt ?? undefined) !== upsertOpts.hookInterrupt ||
         (existing.hookSubmit ?? undefined) !== upsertOpts.hookSubmit ||
-        (existing.hookDetectSession ?? undefined) !== upsertOpts.hookDetectSession;
+        (existing.hookDetectSession ?? undefined) !== upsertOpts.hookDetectSession ||
+        (existing.waitForIdle ?? undefined) !== (upsertOpts.waitForIdle ?? undefined);
 
       if (changed) {
         db.upsertAgentFromPersona(upsertOpts);
@@ -831,6 +837,7 @@ export function createPersonaAndAgent(
     hookInterrupt: serializeHookValue(fm.interrupt),
     hookSubmit: serializeHookValue(fm.submit),
     hookDetectSession: serializeHookValue(fm.detect_session),
+    waitForIdle: fm.wait_for_idle === 'true' ? true : fm.wait_for_idle === 'false' ? false : undefined,
   });
 
   return { name, frontmatter: fm, body };

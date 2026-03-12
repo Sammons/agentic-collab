@@ -68,6 +68,8 @@ export type AgentRecord = {
   hookSubmit: string | null;
   /** Hook value for detecting the agent's session ID after spawn/resume. */
   hookDetectSession: string | null;
+  /** Whether to wait for idle before delivering messages. null = use engine default. */
+  waitForIdle: boolean | null;
   state: AgentState;
   stateBeforeShutdown: string | null;
   currentSessionId: string | null;
