@@ -264,14 +264,38 @@
     display: flex;
     align-items: center;
     gap: 8px;
+    width: 100%;
     margin-bottom: 4px;
     font-size: 11px;
     color: var(--text-dim);
+    min-width: 0;
+    word-break: normal;
+    overflow-wrap: normal;
   }
-  .msg-sender { font-weight: 600; }
-  .msg-time { font-size: 10px; }
-  .msg-meta { margin-left: auto; display: flex; align-items: center; gap: 6px; }
-  .msg-status { font-size: 10px; }
+  .msg-sender {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 600;
+  }
+  .msg-time {
+    font-size: 10px;
+    white-space: nowrap;
+  }
+  .msg-meta {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 0 0 auto;
+    min-width: 0;
+  }
+  .msg-status {
+    font-size: 10px;
+    white-space: nowrap;
+  }
   .msg-status.pending { color: var(--text-dim); }
   .msg-status.delivered { color: var(--green); }
   .msg-status.failed { color: var(--red); }
@@ -283,6 +307,7 @@
     cursor: pointer;
     opacity: 0;
     transition: opacity 0.15s;
+    white-space: nowrap;
   }
   .msg:hover .msg-withdraw { opacity: 1; }
   .msg-withdraw:hover { color: var(--red); }
@@ -293,6 +318,9 @@
     background: rgba(88,166,255,0.15);
     color: var(--accent);
     white-space: nowrap;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .topic-breadcrumbs {
@@ -1325,6 +1353,26 @@
     }
     .clear-chat-btn { margin-left: auto; }
     .thread-messages { padding: 12px 10px; }
+    .msg-header {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: start;
+      column-gap: 8px;
+      row-gap: 4px;
+    }
+    .msg-sender {
+      grid-column: 1;
+    }
+    .msg-topic {
+      grid-column: 2;
+      max-width: 40vw;
+    }
+    .msg-meta {
+      grid-column: 1 / -1;
+      width: 100%;
+      margin-left: 0;
+      justify-content: flex-end;
+    }
     .persona-panel { padding: 14px 10px; }
     .reminder-panel { padding: 14px 10px; }
     .watch-panel { padding: 10px 8px; font-size: 11px; }
