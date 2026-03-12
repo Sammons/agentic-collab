@@ -54,8 +54,6 @@ export type PersonaFrontmatter = {
   submit?: HookValue;
   /** Hook value for detecting the agent's session ID after spawn/resume. */
   detect_session?: HookValue;
-  /** Whether to wait for idle before delivering messages. Overrides engine default. */
-  wait_for_idle?: string;
   /** Regex to extract session ID from pane output on exit. First capture group = session ID. */
   detect_session_regex?: string;
   /** Legacy alias for start (backward compat). */
@@ -656,7 +654,6 @@ export function syncSinglePersona(db: Database, name: string, personasDir?: stri
     hookInterrupt: serializeHookValue(fm.interrupt),
     hookSubmit: serializeHookValue(fm.submit),
     hookDetectSession: serializeHookValue(fm.detect_session),
-    waitForIdle: fm.wait_for_idle === 'true' ? true : fm.wait_for_idle === 'false' ? false : undefined,
     detectSessionRegex: fm.detect_session_regex as string | undefined,
   });
   return true;
@@ -700,7 +697,6 @@ export function syncPersonasToDb(db: Database, personasDir?: string): number {
       hookInterrupt: serializeHookValue(frontmatter.interrupt),
       hookSubmit: serializeHookValue(frontmatter.submit),
       hookDetectSession: serializeHookValue(frontmatter.detect_session),
-      waitForIdle: frontmatter.wait_for_idle === 'true' ? true : frontmatter.wait_for_idle === 'false' ? false : undefined,
       detectSessionRegex: frontmatter.detect_session_regex as string | undefined,
     });
 
@@ -759,7 +755,6 @@ export function syncPersonasWithDiff(db: Database, personasDir?: string): SyncDi
       hookInterrupt: serializeHookValue(frontmatter.interrupt),
       hookSubmit: serializeHookValue(frontmatter.submit),
       hookDetectSession: serializeHookValue(frontmatter.detect_session),
-      waitForIdle: frontmatter.wait_for_idle === 'true' ? true : frontmatter.wait_for_idle === 'false' ? false : undefined,
       detectSessionRegex: frontmatter.detect_session_regex as string | undefined,
     };
 
@@ -783,7 +778,6 @@ export function syncPersonasWithDiff(db: Database, personasDir?: string): SyncDi
         (existing.hookInterrupt ?? undefined) !== upsertOpts.hookInterrupt ||
         (existing.hookSubmit ?? undefined) !== upsertOpts.hookSubmit ||
         (existing.hookDetectSession ?? undefined) !== upsertOpts.hookDetectSession ||
-        (existing.waitForIdle ?? undefined) !== (upsertOpts.waitForIdle ?? undefined) ||
         (existing.detectSessionRegex ?? undefined) !== upsertOpts.detectSessionRegex;
 
       if (changed) {
@@ -843,7 +837,6 @@ export function createPersonaAndAgent(
     hookInterrupt: serializeHookValue(fm.interrupt),
     hookSubmit: serializeHookValue(fm.submit),
     hookDetectSession: serializeHookValue(fm.detect_session),
-    waitForIdle: fm.wait_for_idle === 'true' ? true : fm.wait_for_idle === 'false' ? false : undefined,
     detectSessionRegex: fm.detect_session_regex as string | undefined,
   });
 

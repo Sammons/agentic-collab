@@ -38,13 +38,6 @@ export interface EngineAdapter {
   readonly engine: string;
 
   /**
-   * Whether this engine buffers pasted input while active.
-   * If true, messages can be delivered even when the agent is not idle —
-   * the CLI will process them when the current task finishes.
-   */
-  readonly canDeliverWhileActive: boolean;
-
-  /**
    * Whether the CLI accepts a prompt as a positional argument to the resume command.
    * If true, reload tasks are passed inline (e.g. `codex resume <id> "task"`)
    * instead of being pasted separately into the tmux pane.

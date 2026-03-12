@@ -32,7 +32,6 @@ import { SPINNER_REGEX, type EngineAdapter, type SpawnOptions, type ResumeOption
 
 export class OpenCodeAdapter implements EngineAdapter {
   readonly engine = 'opencode';
-  readonly canDeliverWhileActive = false;
   readonly supportsResumePrompt = false;
 
   buildSpawnCommand(opts: SpawnOptions): string {
