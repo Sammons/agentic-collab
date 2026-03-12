@@ -70,6 +70,8 @@ export type AgentRecord = {
   hookDetectSession: string | null;
   /** Whether to wait for idle before delivering messages. null = use engine default. */
   waitForIdle: boolean | null;
+  /** Regex to extract session ID from pane output on exit. First capture group = session ID. */
+  detectSessionRegex: string | null;
   state: AgentState;
   stateBeforeShutdown: string | null;
   currentSessionId: string | null;
