@@ -7,7 +7,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { request as httpRequest } from 'node:http';
 import { pipeline } from 'node:stream/promises';
 import { timingSafeEqual } from 'node:crypto';
-import { readdirSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readdirSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { hostname } from 'node:os';
 import type { Database } from './database.ts';
@@ -227,6 +227,11 @@ route('DELETE', '/api/agents/:name', async (_req, res, match, ctx) => {
       }).catch(() => {}); // Best-effort cleanup
     }
   }
+
+  // Delete persona file so persona sync doesn't resurrect the agent
+  const personaFilename = agent.persona ?? name;
+  const personaPath = join(getPersonasDir(), `${personaFilename}.md`);
+  try { unlinkSync(personaPath); } catch { /* file may not exist */ }
 
   ctx.db.deleteAgent(name);
   ctx.db.logEvent(name, 'destroyed');
