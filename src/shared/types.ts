@@ -68,8 +68,6 @@ export type AgentRecord = {
   hookSubmit: string | null;
   /** Hook value for detecting the agent's session ID after spawn/resume. */
   hookDetectSession: string | null;
-  /** Whether to wait for idle before delivering messages. null = use engine default. */
-  waitForIdle: boolean | null;
   /** Regex to extract session ID from pane output on exit. First capture group = session ID. */
   detectSessionRegex: string | null;
   state: AgentState;
@@ -218,4 +216,3 @@ export type ProxyResponse = {
   data?: unknown;
   error?: string;
 };
-

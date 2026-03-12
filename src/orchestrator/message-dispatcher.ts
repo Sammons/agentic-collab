@@ -70,16 +70,11 @@ export class MessageDispatcher {
     const agent = this.db.getAgent(agentName);
     if (!agent || !agent.proxyId || !canSuspend(agent)) return false;
 
-    // Determine whether to wait for idle before delivering.
-    // Frontmatter wait_for_idle overrides engine default.
-    const mustWaitForIdle = agent.waitForIdle ?? !getAdapter(agent.engine).canDeliverWhileActive;
-    if (mustWaitForIdle) {
-      const isIdle = await this.checkAgentIdle(agent);
-      if (!isIdle) {
-        // Agent not idle — start a drain loop to retry later
-        this.scheduleDrain(agentName);
-        return false;
-      }
+    const isIdle = await this.checkAgentIdle(agent);
+    if (!isIdle) {
+      // Agent not idle — start a drain loop to retry later
+      this.scheduleDrain(agentName);
+      return false;
     }
 
     const delivered = await this.deliverNextMessage(agentName);
@@ -145,13 +140,8 @@ export class MessageDispatcher {
           return;
         }
 
-        const mustWaitForIdle = agent.waitForIdle ?? !getAdapter(agent.engine).canDeliverWhileActive;
-        let canDeliver = true;
-        if (mustWaitForIdle) {
-          canDeliver = await this.checkAgentIdle(agent);
-        }
-
-        if (canDeliver) {
+        const isIdle = await this.checkAgentIdle(agent);
+        if (isIdle) {
           await this.deliverNextMessage(agentName);
         }
 
