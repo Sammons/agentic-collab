@@ -161,6 +161,9 @@ export class Database {
     if (!agentColNames.has('wait_for_idle')) {
       this.db.exec('ALTER TABLE agents ADD COLUMN wait_for_idle INTEGER');
     }
+    if (!agentColNames.has('detect_session_regex')) {
+      this.db.exec('ALTER TABLE agents ADD COLUMN detect_session_regex TEXT');
+    }
 
     // Add withdrawn column to dashboard_messages
     if (!dmColumns.some((c) => c['name'] === 'withdrawn')) {
@@ -236,10 +239,11 @@ export class Database {
     hookSubmit?: string;
     hookDetectSession?: string;
     waitForIdle?: boolean;
+    detectSessionRegex?: string;
   }): AgentRecord {
     this.db.prepare(`
-      INSERT INTO agents (name, engine, model, thinking, cwd, persona, permissions, proxy_host, proxy_id, agent_group, hook_start, hook_resume, hook_compact, hook_exit, hook_interrupt, hook_submit, hook_detect_session, wait_for_idle, state)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'void')
+      INSERT INTO agents (name, engine, model, thinking, cwd, persona, permissions, proxy_host, proxy_id, agent_group, hook_start, hook_resume, hook_compact, hook_exit, hook_interrupt, hook_submit, hook_detect_session, wait_for_idle, detect_session_regex, state)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'void')
     `).run(
       opts.name,
       opts.engine,
@@ -259,6 +263,7 @@ export class Database {
       opts.hookSubmit ?? null,
       opts.hookDetectSession ?? null,
       opts.waitForIdle != null ? (opts.waitForIdle ? 1 : 0) : null,
+      opts.detectSessionRegex ?? null,
     );
     return this.getAgent(opts.name)!;
   }
@@ -285,6 +290,7 @@ export class Database {
     hookSubmit?: string;
     hookDetectSession?: string;
     waitForIdle?: boolean;
+    detectSessionRegex?: string;
   }): AgentRecord {
     const existing = this.getAgent(opts.name);
     if (!existing) {
@@ -296,7 +302,7 @@ export class Database {
         persona = ?, permissions = ?, proxy_host = ?, agent_group = ?,
         hook_start = ?, hook_resume = ?, hook_compact = ?,
         hook_exit = ?, hook_interrupt = ?, hook_submit = ?,
-        hook_detect_session = ?, wait_for_idle = ?
+        hook_detect_session = ?, wait_for_idle = ?, detect_session_regex = ?
       WHERE name = ?
     `).run(
       opts.engine,
@@ -315,6 +321,7 @@ export class Database {
       opts.hookSubmit ?? null,
       opts.hookDetectSession ?? null,
       opts.waitForIdle != null ? (opts.waitForIdle ? 1 : 0) : null,
+      opts.detectSessionRegex ?? null,
       opts.name,
     );
     return this.getAgent(opts.name)!;
@@ -792,6 +799,7 @@ function mapAgentRow(row: Record<string, unknown>): AgentRecord {
     hookSubmit: row['hook_submit'] as string | null,
     hookDetectSession: row['hook_detect_session'] as string | null,
     waitForIdle: row['wait_for_idle'] != null ? (row['wait_for_idle'] as number) === 1 : null,
+    detectSessionRegex: row['detect_session_regex'] as string | null,
     state: row['state'] as AgentState,
     stateBeforeShutdown: row['state_before_shutdown'] as string | null,
     currentSessionId: row['current_session_id'] as string | null,
@@ -900,6 +908,7 @@ const COLUMN_MAP: Record<string, string> = {
   hookInterrupt: 'hook_interrupt',
   hookSubmit: 'hook_submit',
   hookDetectSession: 'hook_detect_session',
+  detectSessionRegex: 'detect_session_regex',
 };
 
 function toColumnName(key: string): string {
