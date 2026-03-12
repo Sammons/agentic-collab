@@ -6,7 +6,7 @@ Zero-dependency orchestrator for managing AI coding agents (Claude, Codex, OpenC
 
 ## Dashboard
 
-Real-time dashboard for monitoring and controlling agents. Search/filter, send messages, upload files, view persona config — all from the browser. Mobile responsive. Features cmd+k command palette for quick agent navigation, markdown rendering (tables, code blocks, lists), and voice-to-text input with `[voice]` prefix tagging.
+Real-time dashboard for monitoring and controlling agents. Search/filter, send messages, upload files, view persona config — all from the browser. Mobile responsive. Features cmd+k command palette for quick agent navigation, markdown rendering (tables, code blocks, lists), and voice-to-text input tagged as `sent via voice-to-text:`.
 
 | Desktop | Mobile |
 |---------|--------|
