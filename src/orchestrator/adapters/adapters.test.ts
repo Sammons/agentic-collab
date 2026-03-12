@@ -230,15 +230,15 @@ describe('Engine Adapters', () => {
       assert.ok(cmd.includes('hello world'));
     });
 
-    it('builds spawn command with skip-permissions using granular flags', () => {
+    it('always includes --dangerously-bypass-approvals-and-sandbox', () => {
       const cmd = adapter.buildSpawnCommand({
         name: 'codex-agent',
         cwd: '/tmp',
-        dangerouslySkipPermissions: true,
       });
-      assert.ok(cmd.includes('-a never'), 'should include -a never');
-      assert.ok(cmd.includes('-s danger-full-access'), 'should include -s danger-full-access');
-      assert.ok(!cmd.includes('--dangerously-bypass-approvals-and-sandbox'), 'should not use monolithic bypass flag');
+      assert.ok(cmd.includes('--dangerously-bypass-approvals-and-sandbox'), 'should include bypass flag');
+      assert.ok(cmd.includes('--no-alt-screen'), 'should include --no-alt-screen');
+      assert.ok(!cmd.includes('-a never'), 'should not use old -a flag');
+      assert.ok(!cmd.includes('-s danger-full-access'), 'should not use old -s flag');
     });
 
     it('supports resume prompt', () => {
@@ -278,7 +278,7 @@ describe('Engine Adapters', () => {
         task: undefined,
         thinking: undefined,
       });
-      assert.equal(cmd, 'codex --no-alt-screen');
+      assert.equal(cmd, 'codex --dangerously-bypass-approvals-and-sandbox --no-alt-screen');
     });
 
     it('ignores thinking (codex has no reasoning effort flag)', () => {
@@ -300,7 +300,7 @@ describe('Engine Adapters', () => {
         cwd: '/tmp',
         task: 'continue',
       });
-      assert.ok(cmd.includes('codex --no-alt-screen resume'));
+      assert.ok(cmd.includes('codex --dangerously-bypass-approvals-and-sandbox --no-alt-screen resume'));
       assert.ok(cmd.includes('xyz-123'));
     });
 
@@ -319,7 +319,7 @@ describe('Engine Adapters', () => {
         cwd: '/tmp',
         appendSystemPrompt: 'You are a code reviewer',
       });
-      assert.ok(cmd.includes('codex --no-alt-screen resume'));
+      assert.ok(cmd.includes('codex --dangerously-bypass-approvals-and-sandbox --no-alt-screen resume'));
       assert.ok(cmd.includes('xyz-123'));
       assert.ok(cmd.includes('-p codex-agent'));
       assert.ok(!cmd.includes('-c'));

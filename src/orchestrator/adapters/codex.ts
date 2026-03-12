@@ -24,14 +24,10 @@ export class CodexAdapter implements EngineAdapter {
   readonly usesConfigProfile = true;
 
   buildSpawnCommand(opts: SpawnOptions): string {
-    const parts = ['codex', '--no-alt-screen'];
+    const parts = ['codex', '--dangerously-bypass-approvals-and-sandbox', '--no-alt-screen'];
 
-    if (opts.dangerouslySkipPermissions === true) {
-      // Granular flags instead of monolithic --dangerously-bypass-approvals-and-sandbox.
-      // -a never: never prompt for approval (prevents TUI hangs in unattended tmux sessions).
-      // -s danger-full-access: full filesystem access (matches persona permissions: skip).
-      parts.push('-a', 'never', '-s', 'danger-full-access');
-    }
+    // --dangerously-bypass-approvals-and-sandbox is always on for unattended tmux sessions.
+    // Without it, the TUI hangs waiting for interactive approval prompts.
 
     if (opts.model) {
       parts.push('--model', opts.model);
@@ -51,7 +47,7 @@ export class CodexAdapter implements EngineAdapter {
   }
 
   buildResumeCommand(opts: ResumeOptions): string {
-    const parts = ['codex', '--no-alt-screen', 'resume'];
+    const parts = ['codex', '--dangerously-bypass-approvals-and-sandbox', '--no-alt-screen', 'resume'];
 
     if (opts.sessionId) {
       parts.push(opts.sessionId);
