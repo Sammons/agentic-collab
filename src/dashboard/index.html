@@ -1465,6 +1465,8 @@
     editingPersona: false,
   };
 
+  const VOICE_TO_TEXT_PREFIX = 'sent via voice-to-text: ';
+
   let ws = null;
   let reconnectTimer = null;
   let reconnectDelay = 1000;
@@ -3189,7 +3191,7 @@
     if (existingErr) existingErr.remove();
 
     sendBtn.disabled = true;
-    const message = voiceState.usedSinceSend ? '[voice] ' + text : text;
+    const message = voiceState.usedSinceSend ? VOICE_TO_TEXT_PREFIX + text : text;
     voiceState.usedSinceSend = false;
     try {
       const res = await fetch('/api/dashboard/send', {
@@ -3830,7 +3832,7 @@
         } else if (msg.type === 'committed') {
           partial.textContent = '';
           if (msg.text && msg.text.trim()) {
-            // Append to textarea and flag for [voice] prefix at send time
+            // Append to textarea and flag for the voice-to-text prefix at send time
             const sep = input.value && !input.value.endsWith('\n') && !input.value.endsWith(' ') ? ' ' : '';
             input.value += sep + msg.text.trim();
             voiceState.usedSinceSend = true;
