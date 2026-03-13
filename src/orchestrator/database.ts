@@ -10,6 +10,7 @@ import type {
   DashboardMessage,
   EngineType,
   EventRecord,
+  LaunchEnv,
   MessageDirection,
   PendingMessage,
   PendingMessageStatus,
@@ -129,6 +130,9 @@ export class Database {
     if (!agentColNames.has('agent_group')) {
       this.db.exec('ALTER TABLE agents ADD COLUMN agent_group TEXT');
     }
+    if (!agentColNames.has('launch_env')) {
+      this.db.exec('ALTER TABLE agents ADD COLUMN launch_env TEXT');
+    }
     if (!agentColNames.has('sort_order')) {
       this.db.exec('ALTER TABLE agents ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0');
     }
@@ -228,6 +232,7 @@ export class Database {
     proxyHost?: string;
     proxyId?: string;
     agentGroup?: string;
+    launchEnv?: LaunchEnv | null;
     hookStart?: string;
     hookResume?: string;
     hookCompact?: string;
@@ -238,8 +243,8 @@ export class Database {
     detectSessionRegex?: string;
   }): AgentRecord {
     this.db.prepare(`
-      INSERT INTO agents (name, engine, model, thinking, cwd, persona, permissions, proxy_host, proxy_id, agent_group, hook_start, hook_resume, hook_compact, hook_exit, hook_interrupt, hook_submit, hook_detect_session, detect_session_regex, state)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'void')
+      INSERT INTO agents (name, engine, model, thinking, cwd, persona, permissions, proxy_host, proxy_id, agent_group, launch_env, hook_start, hook_resume, hook_compact, hook_exit, hook_interrupt, hook_submit, hook_detect_session, detect_session_regex, state)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'void')
     `).run(
       opts.name,
       opts.engine,
@@ -251,6 +256,7 @@ export class Database {
       opts.proxyHost ?? null,
       opts.proxyId ?? null,
       opts.agentGroup ?? null,
+      serializeLaunchEnv(opts.launchEnv),
       opts.hookStart ?? null,
       opts.hookResume ?? null,
       opts.hookCompact ?? null,
@@ -277,6 +283,7 @@ export class Database {
     permissions?: string;
     proxyHost?: string;
     agentGroup?: string;
+    launchEnv?: LaunchEnv | null;
     hookStart?: string;
     hookResume?: string;
     hookCompact?: string;
@@ -293,7 +300,7 @@ export class Database {
     // Update config fields only — preserve runtime state
     this.db.prepare(`
       UPDATE agents SET engine = ?, model = ?, thinking = ?, cwd = ?,
-        persona = ?, permissions = ?, proxy_host = ?, agent_group = ?,
+        persona = ?, permissions = ?, proxy_host = ?, agent_group = ?, launch_env = ?,
         hook_start = ?, hook_resume = ?, hook_compact = ?,
         hook_exit = ?, hook_interrupt = ?, hook_submit = ?,
         hook_detect_session = ?, detect_session_regex = ?
@@ -307,6 +314,7 @@ export class Database {
       opts.permissions ?? null,
       opts.proxyHost ?? null,
       opts.agentGroup ?? null,
+      serializeLaunchEnv(opts.launchEnv),
       opts.hookStart ?? null,
       opts.hookResume ?? null,
       opts.hookCompact ?? null,
@@ -344,6 +352,7 @@ export class Database {
     stateBeforeShutdown: string | null;
     spawnCount: number;
     agentGroup: string | null;
+    launchEnv: LaunchEnv | null;
   }>): AgentRecord {
     const agent = this.getAgent(name);
     if (!agent) throw new Error(`Agent "${name}" not found`);
@@ -783,6 +792,7 @@ function mapAgentRow(row: Record<string, unknown>): AgentRecord {
     permissions: row['permissions'] as string | null,
     proxyHost: row['proxy_host'] as string | null,
     agentGroup: row['agent_group'] as string | null,
+    launchEnv: deserializeLaunchEnv(row['launch_env']),
     sortOrder: (row['sort_order'] as number) ?? 0,
     hookStart: row['hook_start'] as string | null,
     hookResume: row['hook_resume'] as string | null,
@@ -893,6 +903,7 @@ const COLUMN_MAP: Record<string, string> = {
   stateBeforeShutdown: 'state_before_shutdown',
   spawnCount: 'spawn_count',
   agentGroup: 'agent_group',
+  launchEnv: 'launch_env',
   hookStart: 'hook_start',
   hookResume: 'hook_resume',
   hookCompact: 'hook_compact',
@@ -907,4 +918,28 @@ function toColumnName(key: string): string {
   const col = COLUMN_MAP[key];
   if (!col) throw new Error(`Unknown agent column: "${key}"`);
   return col;
+}
+
+function serializeLaunchEnv(value?: LaunchEnv | null): string | null {
+  if (value == null) return null;
+  return JSON.stringify(value);
+}
+
+function deserializeLaunchEnv(value: unknown): LaunchEnv | null {
+  if (typeof value !== 'string' || value.length === 0) return null;
+  try {
+    const parsed = JSON.parse(value);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return null;
+    }
+
+    const env: Record<string, string> = {};
+    for (const [key, raw] of Object.entries(parsed)) {
+      if (typeof raw !== 'string') return null;
+      env[key] = raw;
+    }
+    return env;
+  } catch {
+    return null;
+  }
 }
