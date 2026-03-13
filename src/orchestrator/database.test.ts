@@ -620,6 +620,52 @@ describe('Database', () => {
       assert.ok(completed!.completedAt !== null);
     });
 
+    it('listReminders keeps pending first and caps completed history to five', () => {
+      const agentName = 'rem-agent-history';
+      rDb.createAgent({ name: agentName, engine: 'claude', cwd: '/tmp' });
+      const pendingA = rDb.createReminder({
+        agentName,
+        prompt: 'Pending A',
+        cadenceMinutes: 10,
+      });
+      const pendingB = rDb.createReminder({
+        agentName,
+        prompt: 'Pending B',
+        cadenceMinutes: 15,
+      });
+
+      const completed = Array.from({ length: 6 }, (_, idx) => {
+        const reminder = rDb.createReminder({
+          agentName,
+          prompt: `Completed ${idx + 1}`,
+          cadenceMinutes: 20,
+        });
+        rDb.completeReminder(reminder.id);
+        rDb.rawDb.prepare('UPDATE reminders SET completed_at = ? WHERE id = ?').run(
+          `2026-03-13T12:00:0${idx}Z`,
+          reminder.id,
+        );
+        return reminder;
+      });
+
+      const listed = rDb.listReminders(agentName);
+      assert.deepEqual(
+        listed.map(r => r.id),
+        [
+          pendingA.id,
+          pendingB.id,
+          completed[5].id,
+          completed[4].id,
+          completed[3].id,
+          completed[2].id,
+          completed[1].id,
+        ],
+      );
+      assert.ok(listed.every(r => r.agentName === agentName));
+      assert.equal(listed.filter(r => r.status === 'completed').length, 5);
+      assert.ok(!listed.some(r => r.id === completed[0].id));
+    });
+
     it('deleteReminder removes it', () => {
       const r = rDb.createReminder({
         agentName: 'rem-agent-a',
