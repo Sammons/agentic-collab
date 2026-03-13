@@ -154,6 +154,9 @@ cwd: /home/user/project
 proxy_host: my-workstation
 permissions: skip
 group: research
+env:
+  GIT_CONFIG_GLOBAL: ./.agentic/research.gitconfig
+  GIT_AUTHOR_NAME: research-agent
 start: preset:claude
 exit: /quit
 compact: file:/home/user/hooks/compact.sh
@@ -176,7 +179,27 @@ You are a research specialist focused on codebase exploration.
 | `proxy_host` | no | Pin agent to a specific machine hostname |
 | `permissions` | no | `skip` to bypass permission prompts |
 | `group` | no | Group label for dashboard sidebar organization |
+| `env` | no | Top-level mapping of launch-time env vars for spawn/resume/reload |
 | `detect_session_regex` | no | Regex with one capture group to extract session IDs from pane output on exit |
+
+**Launch-time env (`env:`):**
+
+Use a top-level `env:` block to inject environment variables into spawn, resume, and immediate reload commands:
+
+```yaml
+env:
+  GIT_CONFIG_GLOBAL: ./.agentic/research.gitconfig
+  GIT_AUTHOR_NAME: research-agent
+  GIT_AUTHOR_EMAIL: research-agent@example.com
+```
+
+Behavior:
+
+- The orchestrator applies this block in the launch shell by prepending `export ... && <command>`.
+- Values are shell-quoted and exported verbatim. The orchestrator does not resolve paths, expand `$VARS`, or normalize values.
+- Relative paths or tool-specific syntax are interpreted by the launched process/tool, not by the orchestrator.
+- The block applies only to launch paths: `start`, `resume`, and immediate `reload`.
+- `COLLAB_AGENT` and `COLLAB_PERSONA_FILE` are reserved orchestrator vars and cannot be overridden from top-level `env:`.
 
 **Session detection:**
 
@@ -229,12 +252,12 @@ start:
     permissions: skip
 ```
 
-**Shell mode** — paste a command with auto-injected `COLLAB_AGENT` + custom env vars:
+**Shell mode** — paste a command with auto-injected `COLLAB_AGENT` + hook-local env vars:
 
 ```yaml
 start:
   shell: ./my-startup-script.sh
-  env:                  # optional extra env vars
+  env:                  # optional hook-local env vars
     PROJECT: my-project
     DEBUG: "true"
 ```
@@ -282,7 +305,13 @@ resume:
 
 **Environment variables:**
 
-When a custom hook (inline, file, or shell mode) is active, the command is wrapped with `COLLAB_AGENT` and `COLLAB_PERSONA_FILE` environment variables. Shell mode additionally injects any custom `env` vars. Preset hooks are typed directly into the agent CLI and do not receive env wrapping.
+Top-level `env:` and hook-level `env:` are separate layers:
+
+- **Top-level `env:`** applies to launch commands only (`start`, `resume`, immediate `reload`). It wraps adapter defaults, presets, inline commands, and shell hooks alike.
+- **Hook-level `env:`** exists only on structured `shell` hooks and applies only to that hook invocation.
+- When both are present on `start` or `resume`, the launch wrapper exports the top-level block first and the shell hook adds its own env prefix inside the command it pastes.
+- Non-launch hooks (`exit`, `compact`, `interrupt`, `submit`) do not receive top-level `env:`. Custom non-launch paste hooks still get `COLLAB_AGENT` and `COLLAB_PERSONA_FILE`.
+- `COLLAB_AGENT` and `COLLAB_PERSONA_FILE` are always owned by the orchestrator. Conflicting keys in top-level `env:` are ignored.
 
 ### How it works
 
@@ -403,7 +432,7 @@ Current health monitor responsibilities:
 Queued message delivery is handled separately by `src/orchestrator/message-dispatcher.ts`:
 
 - **Event-driven delivery**: tries immediately on enqueue, then drains every 6 seconds while work remains
-- **Idle gating**: waits for idle when the agent or engine requires it
+- **Immediate delivery**: no pane-capture idle check and no DB idle-state gate
 - **Retry/backoff**: recovers stale attempts and retries failed deliveries with backoff
 
 ## Engine adapters
@@ -422,7 +451,7 @@ Supported engines: `claude`, `codex`, `opencode`.
 node --test 'src/**/*.test.ts'
 ```
 
-538 tests across 87 suites covering lifecycle operations, database persistence, networking, locking, health monitoring, adapters, message delivery, crash recovery, file upload, streaming upload, rate limiting, path traversal, persona frontmatter, session detection, version handshake, unread cursors, integration tests, and input validation.
+550 tests across 91 suites covering lifecycle operations, database persistence, networking, locking, health monitoring, adapters, message delivery, crash recovery, file upload, streaming upload, rate limiting, path traversal, persona frontmatter, session detection, version handshake, unread cursors, integration tests, and input validation.
 
 ## Project structure
 
