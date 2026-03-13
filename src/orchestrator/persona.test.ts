@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync, mkdirSync, symlinkSync, rmSync } from 'node
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { readFileSync } from 'node:fs';
-import { resolvePersonaPath, loadPersona, composeSystemPrompt, parseFrontmatter, scanPersonas, syncPersonasToDb, createPersonaAndAgent, toHostPath, serializeHookValue, deserializeHookValue } from './persona.ts';
+import { resolvePersonaPath, loadPersona, composeSystemPrompt, parseFrontmatter, scanPersonas, syncSinglePersona, syncPersonasToDb, syncPersonasWithDiff, createPersonaAndAgent, toHostPath, serializeHookValue, deserializeHookValue } from './persona.ts';
 import { Database } from './database.ts';
 
 describe('Persona', () => {
@@ -284,7 +284,20 @@ describe('Persona', () => {
     it('creates agents from persona files', () => {
       const personasDir = join(syncDir, 'personas');
       mkdirSync(personasDir);
-      writeFileSync(join(personasDir, 'alpha.md'), '---\nengine: claude\nmodel: opus\nthinking: high\ncwd: /alpha\nproxy_host: myhost\npermissions: skip\n---\n# Alpha agent');
+      writeFileSync(join(personasDir, 'alpha.md'), [
+        '---',
+        'engine: claude',
+        'model: opus',
+        'thinking: high',
+        'cwd: /alpha',
+        'proxy_host: myhost',
+        'permissions: skip',
+        'env:',
+        '  GIT_CONFIG_GLOBAL: $PWD/alpha.gitconfig',
+        '  GIT_AUTHOR_NAME: alpha-agent',
+        '---',
+        '# Alpha agent',
+      ].join('\n'));
       writeFileSync(join(personasDir, 'beta.md'), '---\nengine: codex\ncwd: /beta\n---\n# Beta agent');
 
       const synced = syncPersonasToDb(db, personasDir);
@@ -299,6 +312,10 @@ describe('Persona', () => {
       assert.equal(alpha.permissions, 'skip');
       assert.equal(alpha.proxyHost, 'myhost');
       assert.equal(alpha.persona, 'alpha');
+      assert.deepEqual(alpha.launchEnv, {
+        GIT_CONFIG_GLOBAL: '$PWD/alpha.gitconfig',
+        GIT_AUTHOR_NAME: 'alpha-agent',
+      });
       assert.equal(alpha.state, 'void');
 
       const beta = db.getAgent('beta');
@@ -318,7 +335,16 @@ describe('Persona', () => {
       });
 
       // Update the persona file
-      writeFileSync(join(personasDir, 'alpha.md'), '---\nengine: claude\nmodel: sonnet\ncwd: /alpha-v2\n---\n# Alpha v2');
+      writeFileSync(join(personasDir, 'alpha.md'), [
+        '---',
+        'engine: claude',
+        'model: sonnet',
+        'cwd: /alpha-v2',
+        'env:',
+        '  GIT_CONFIG_GLOBAL: $PWD/alpha-v2.gitconfig',
+        '---',
+        '# Alpha v2',
+      ].join('\n'));
 
       const synced = syncPersonasToDb(db, personasDir);
       assert.equal(synced, 2);
@@ -329,6 +355,9 @@ describe('Persona', () => {
       assert.equal(updated.state, 'active'); // runtime state preserved
       assert.equal(updated.tmuxSession, 'agent-alpha'); // runtime state preserved
       assert.equal(updated.proxyId, 'proxy-1'); // runtime state preserved
+      assert.deepEqual(updated.launchEnv, {
+        GIT_CONFIG_GLOBAL: '$PWD/alpha-v2.gitconfig',
+      });
     });
 
     it('syncs lifecycle hook fields to database', () => {
@@ -369,6 +398,120 @@ describe('Persona', () => {
     });
   });
 
+  describe('syncSinglePersona', () => {
+    let db: Database;
+    let personasDir: string;
+
+    before(() => {
+      personasDir = mkdtempSync(join(tmpdir(), 'persona-single-sync-'));
+      db = new Database(join(personasDir, 'single.db'));
+    });
+
+    after(() => {
+      db.close();
+      rmSync(personasDir, { recursive: true, force: true });
+    });
+
+    it('persists and clears launch env for one persona file', () => {
+      writeFileSync(join(personasDir, 'solo.md'), [
+        '---',
+        'engine: claude',
+        'cwd: /solo',
+        'env:',
+        '  GIT_CONFIG_GLOBAL: $PWD/solo.gitconfig',
+        '---',
+        '# Solo',
+      ].join('\n'));
+
+      assert.equal(syncSinglePersona(db, 'solo', personasDir), true);
+      let solo = db.getAgent('solo');
+      assert.ok(solo);
+      assert.deepEqual(solo.launchEnv, {
+        GIT_CONFIG_GLOBAL: '$PWD/solo.gitconfig',
+      });
+
+      writeFileSync(join(personasDir, 'solo.md'), '---\nengine: claude\ncwd: /solo-v2\n---\n# Solo v2');
+      assert.equal(syncSinglePersona(db, 'solo', personasDir), true);
+      solo = db.getAgent('solo');
+      assert.ok(solo);
+      assert.equal(solo.cwd, '/solo-v2');
+      assert.equal(solo.launchEnv, null);
+    });
+  });
+
+  describe('syncPersonasWithDiff', () => {
+    let db: Database;
+    let personasDir: string;
+
+    before(() => {
+      personasDir = mkdtempSync(join(tmpdir(), 'persona-diff-sync-'));
+      db = new Database(join(personasDir, 'diff.db'));
+    });
+
+    after(() => {
+      db.close();
+      rmSync(personasDir, { recursive: true, force: true });
+    });
+
+    it('tracks launch env changes in diff output', () => {
+      writeFileSync(join(personasDir, 'delta.md'), [
+        '---',
+        'engine: claude',
+        'cwd: /delta',
+        'env:',
+        '  GIT_CONFIG_GLOBAL: $PWD/delta.gitconfig',
+        '---',
+        '# Delta',
+      ].join('\n'));
+
+      const created = syncPersonasWithDiff(db, personasDir);
+      assert.deepEqual(created, {
+        created: ['delta'],
+        updated: [],
+        unchanged: [],
+        skipped: [],
+      });
+      let delta = db.getAgent('delta');
+      assert.ok(delta);
+      assert.deepEqual(delta.launchEnv, {
+        GIT_CONFIG_GLOBAL: '$PWD/delta.gitconfig',
+      });
+
+      const unchanged = syncPersonasWithDiff(db, personasDir);
+      assert.deepEqual(unchanged, {
+        created: [],
+        updated: [],
+        unchanged: ['delta'],
+        skipped: [],
+      });
+
+      writeFileSync(join(personasDir, 'delta.md'), [
+        '---',
+        'engine: claude',
+        'cwd: /delta',
+        'env:',
+        '  GIT_CONFIG_GLOBAL: $PWD/delta-v2.gitconfig',
+        '  GIT_AUTHOR_NAME: delta-agent',
+        '---',
+        '# Delta v2',
+      ].join('\n'));
+
+      const updated = syncPersonasWithDiff(db, personasDir);
+      assert.deepEqual(updated, {
+        created: [],
+        updated: ['delta'],
+        unchanged: [],
+        skipped: [],
+      });
+      delta = db.getAgent('delta');
+      assert.ok(delta);
+      assert.deepEqual(delta.launchEnv, {
+        GIT_CONFIG_GLOBAL: '$PWD/delta-v2.gitconfig',
+        GIT_AUTHOR_NAME: 'delta-agent',
+      });
+    });
+  });
+
   describe('loadPersona strips frontmatter', () => {
     it('returns body only, not frontmatter', () => {
       const path = join(tmpDir, 'fm-agent.md');
@@ -396,13 +539,26 @@ describe('Persona', () => {
 
     it('writes persona file and creates agent in DB', () => {
       const personasDir = join(createDir, 'personas');
-      const content = '---\nengine: claude\nmodel: opus\ncwd: /project\n---\n# My Agent\nDoes stuff.';
+      const content = [
+        '---',
+        'engine: claude',
+        'model: opus',
+        'cwd: /project',
+        'env:',
+        '  GIT_CONFIG_GLOBAL: $PWD/my-agent.gitconfig',
+        '---',
+        '# My Agent',
+        'Does stuff.',
+      ].join('\n');
       const persona = createPersonaAndAgent(createDb, 'my-agent', content, personasDir);
 
       assert.equal(persona.name, 'my-agent');
       assert.equal(persona.frontmatter.engine, 'claude');
       assert.equal(persona.frontmatter.model, 'opus');
       assert.equal(persona.frontmatter.cwd, '/project');
+      assert.deepEqual(persona.frontmatter.env, {
+        GIT_CONFIG_GLOBAL: '$PWD/my-agent.gitconfig',
+      });
       assert.ok(persona.body.includes('# My Agent'));
 
       // Verify file was written
@@ -415,6 +571,9 @@ describe('Persona', () => {
       assert.equal(agent.engine, 'claude');
       assert.equal(agent.model, 'opus');
       assert.equal(agent.cwd, '/project');
+      assert.deepEqual(agent.launchEnv, {
+        GIT_CONFIG_GLOBAL: '$PWD/my-agent.gitconfig',
+      });
       assert.equal(agent.state, 'void');
     });
 

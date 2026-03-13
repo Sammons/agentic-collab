@@ -366,6 +366,40 @@ function coerceScalar(val: string): string | number | boolean {
   return val;
 }
 
+function normalizeLaunchEnv(value: unknown): LaunchEnv | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined;
+  }
+
+  const env: Record<string, string> = {};
+  for (const [key, raw] of Object.entries(value)) {
+    if (typeof raw !== 'string') return undefined;
+    env[key] = raw;
+  }
+  return env;
+}
+
+function launchEnvEquals(a: LaunchEnv | null, b: LaunchEnv | null | undefined): boolean {
+  const left = a ?? null;
+  const right = b ?? null;
+  if (left === null || right === null) {
+    return left === right;
+  }
+
+  const leftKeys = Object.keys(left);
+  const rightKeys = Object.keys(right);
+  if (leftKeys.length !== rightKeys.length) return false;
+
+  for (const key of leftKeys) {
+    if (left[key] !== right[key]) return false;
+  }
+  return true;
+}
+
+function optionalScalarEquals<T>(a: T | null | undefined, b: T | null | undefined): boolean {
+  return (a ?? null) === (b ?? null);
+}
+
 /**
  * Scan the personas directory and return all parsed persona files.
  */
@@ -649,6 +683,7 @@ export function syncSinglePersona(db: Database, name: string, personasDir?: stri
     permissions: fm.permissions as string | undefined,
     proxyHost: fm.proxy_host as string | undefined,
     agentGroup: fm.group as string | undefined,
+    launchEnv: normalizeLaunchEnv(fm.env),
     hookStart: serializeHookValue(fm.start ?? fm.spawn),
     hookResume: serializeHookValue(fm.resume),
     hookCompact: serializeHookValue(fm.compact),
@@ -692,6 +727,7 @@ export function syncPersonasToDb(db: Database, personasDir?: string): number {
       permissions: frontmatter.permissions as string | undefined,
       proxyHost: frontmatter.proxy_host as string | undefined,
       agentGroup: frontmatter.group as string | undefined,
+      launchEnv: normalizeLaunchEnv(frontmatter.env),
       hookStart: serializeHookValue(frontmatter.start ?? frontmatter.spawn),
       hookResume: serializeHookValue(frontmatter.resume),
       hookCompact: serializeHookValue(frontmatter.compact),
@@ -750,6 +786,7 @@ export function syncPersonasWithDiff(db: Database, personasDir?: string): SyncDi
       permissions: frontmatter.permissions as string | undefined,
       proxyHost: frontmatter.proxy_host as string | undefined,
       agentGroup: frontmatter.group as string | undefined,
+      launchEnv: normalizeLaunchEnv(frontmatter.env),
       hookStart: serializeHookValue(frontmatter.start ?? frontmatter.spawn),
       hookResume: serializeHookValue(frontmatter.resume),
       hookCompact: serializeHookValue(frontmatter.compact),
@@ -767,20 +804,21 @@ export function syncPersonasWithDiff(db: Database, personasDir?: string): SyncDi
       // Check if any config fields differ
       const changed =
         existing.engine !== upsertOpts.engine ||
-        (existing.model ?? undefined) !== upsertOpts.model ||
-        (existing.thinking ?? undefined) !== upsertOpts.thinking ||
+        !optionalScalarEquals(existing.model, upsertOpts.model) ||
+        !optionalScalarEquals(existing.thinking, upsertOpts.thinking) ||
         existing.cwd !== upsertOpts.cwd ||
-        (existing.permissions ?? undefined) !== upsertOpts.permissions ||
-        (existing.proxyHost ?? undefined) !== upsertOpts.proxyHost ||
-        (existing.agentGroup ?? undefined) !== upsertOpts.agentGroup ||
-        (existing.hookStart ?? undefined) !== upsertOpts.hookStart ||
-        (existing.hookResume ?? undefined) !== upsertOpts.hookResume ||
-        (existing.hookCompact ?? undefined) !== upsertOpts.hookCompact ||
-        (existing.hookExit ?? undefined) !== upsertOpts.hookExit ||
-        (existing.hookInterrupt ?? undefined) !== upsertOpts.hookInterrupt ||
-        (existing.hookSubmit ?? undefined) !== upsertOpts.hookSubmit ||
-        (existing.hookDetectSession ?? undefined) !== upsertOpts.hookDetectSession ||
-        (existing.detectSessionRegex ?? undefined) !== upsertOpts.detectSessionRegex;
+        !optionalScalarEquals(existing.permissions, upsertOpts.permissions) ||
+        !optionalScalarEquals(existing.proxyHost, upsertOpts.proxyHost) ||
+        !optionalScalarEquals(existing.agentGroup, upsertOpts.agentGroup) ||
+        !launchEnvEquals(existing.launchEnv, upsertOpts.launchEnv) ||
+        !optionalScalarEquals(existing.hookStart, upsertOpts.hookStart) ||
+        !optionalScalarEquals(existing.hookResume, upsertOpts.hookResume) ||
+        !optionalScalarEquals(existing.hookCompact, upsertOpts.hookCompact) ||
+        !optionalScalarEquals(existing.hookExit, upsertOpts.hookExit) ||
+        !optionalScalarEquals(existing.hookInterrupt, upsertOpts.hookInterrupt) ||
+        !optionalScalarEquals(existing.hookSubmit, upsertOpts.hookSubmit) ||
+        !optionalScalarEquals(existing.hookDetectSession, upsertOpts.hookDetectSession) ||
+        !optionalScalarEquals(existing.detectSessionRegex, upsertOpts.detectSessionRegex);
 
       if (changed) {
         db.upsertAgentFromPersona(upsertOpts);
@@ -832,6 +870,7 @@ export function createPersonaAndAgent(
     permissions: fm.permissions as string | undefined,
     proxyHost: fm.proxy_host as string | undefined,
     agentGroup: fm.group as string | undefined,
+    launchEnv: normalizeLaunchEnv(fm.env),
     hookStart: serializeHookValue(fm.start ?? fm.spawn),
     hookResume: serializeHookValue(fm.resume),
     hookCompact: serializeHookValue(fm.compact),
