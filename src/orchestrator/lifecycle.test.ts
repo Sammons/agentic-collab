@@ -212,6 +212,7 @@ describe('Lifecycle', () => {
           GIT_AUTHOR_NAME: "O'Brian",
           GIT_CONFIG_GLOBAL: '$PWD/agent config.gitconfig',
           COLLAB_AGENT: 'should-not-win',
+          COLLAB_PERSONA_FILE: '/tmp/should-not-win.md',
         },
       });
       proxyCommands = [];
@@ -227,6 +228,7 @@ describe('Lifecycle', () => {
       assert.ok(paste, 'should have paste command');
       assert.ok(paste.text.includes(`COLLAB_AGENT=${shellQuote('cmd-env-spawn')}`), 'base COLLAB_AGENT should win');
       assert.ok(!paste.text.includes(`COLLAB_AGENT=${shellQuote('should-not-win')}`), 'launchEnv must not override base COLLAB_AGENT');
+      assert.ok(!paste.text.includes(shellQuote('/tmp/should-not-win.md')), 'launchEnv must not override base COLLAB_PERSONA_FILE');
       assert.ok(paste.text.includes(`GIT_AUTHOR_NAME=${shellQuote("O'Brian")}`), 'should shell-quote single quotes');
       assert.ok(paste.text.includes(`GIT_CONFIG_GLOBAL=${shellQuote('$PWD/agent config.gitconfig')}`), 'should shell-quote launch env values');
     });
@@ -608,6 +610,40 @@ describe('Lifecycle', () => {
       assert.ok(paste.text.includes('COLLAB_PERSONA_FILE='), 'should export COLLAB_PERSONA_FILE');
     });
 
+    it('spawnAgent keeps top-level launch env separate from shell-hook env', async () => {
+      db.createAgent({
+        name: 'hook-spawn-shell-env',
+        engine: 'claude',
+        cwd: '/tmp',
+        proxyId: 'p1',
+        launchEnv: {
+          GIT_CONFIG_GLOBAL: './agent-shell.gitconfig',
+          COLLAB_PERSONA_FILE: '/tmp/bad-persona.md',
+        },
+        hookStart: JSON.stringify({
+          shell: './run.sh',
+          env: {
+            MY_VAR: 'hello',
+          },
+        }),
+      });
+      proxyCommands = [];
+
+      await spawnAgent(ctx, {
+        name: 'hook-spawn-shell-env',
+        engine: 'claude',
+        cwd: '/tmp',
+        proxyId: 'p1',
+      });
+
+      const paste = proxyCommands.find(c => c.action === 'paste') as Extract<ProxyCommand, { action: 'paste' }>;
+      assert.ok(paste, 'should have paste command');
+      assert.ok(paste.text.includes(`GIT_CONFIG_GLOBAL=${shellQuote('./agent-shell.gitconfig')}`), 'should inject top-level launch env');
+      assert.ok(paste.text.includes('MY_VAR=hello'), 'should preserve hook-local shell env');
+      assert.ok(!paste.text.includes('/tmp/bad-persona.md'), 'reserved COLLAB_PERSONA_FILE should not be overridden');
+      assert.ok(paste.text.includes('./run.sh'), 'should still execute the shell hook command');
+    });
+
     it('spawnAgent falls back to adapter when hookStart is null', async () => {
       db.createAgent({ name: 'hook-spawn-null', engine: 'claude', cwd: '/tmp', proxyId: 'p1' });
       proxyCommands = [];
@@ -666,7 +702,16 @@ describe('Lifecycle', () => {
     });
 
     it('compactAgent uses hookCompact instead of adapter', async () => {
-      db.createAgent({ name: 'hook-compact', engine: 'claude', cwd: '/tmp', proxyId: 'p1', hookCompact: 'my-compact-cmd' });
+      db.createAgent({
+        name: 'hook-compact',
+        engine: 'claude',
+        cwd: '/tmp',
+        proxyId: 'p1',
+        hookCompact: 'my-compact-cmd',
+        launchEnv: {
+          GIT_CONFIG_GLOBAL: './should-not-appear.gitconfig',
+        },
+      });
       const a = db.getAgent('hook-compact')!;
       db.updateAgentState('hook-compact', 'active', a.version, {
         tmuxSession: 'agent-hook-compact',
@@ -680,6 +725,7 @@ describe('Lifecycle', () => {
       assert.ok(paste, 'should have paste command');
       assert.ok(paste.text.includes('my-compact-cmd'), 'should use hookCompact');
       assert.ok(paste.text.includes('COLLAB_PERSONA_FILE='), 'should export COLLAB_PERSONA_FILE');
+      assert.ok(!paste.text.includes('GIT_CONFIG_GLOBAL='), 'top-level launch env should not apply to compact hooks');
     });
 
     it('compactAgent falls back to adapter compactKeys when hookCompact is null', async () => {
