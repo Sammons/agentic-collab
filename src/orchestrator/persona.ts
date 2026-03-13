@@ -7,7 +7,7 @@
 
 import { readFileSync, readdirSync, realpathSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, resolve, relative, isAbsolute } from 'node:path';
-import type { StructuredHook, HookValue, SendAction } from '../shared/types.ts';
+import type { StructuredHook, HookValue, SendAction, LaunchEnv } from '../shared/types.ts';
 
 export const PERSONAS_DIR = process.env['PERSONAS_DIR'] ?? join(process.env['HOME'] ?? '/data', 'persistent-agents');
 
@@ -40,6 +40,8 @@ export type PersonaFrontmatter = {
   proxy_host?: string;
   permissions?: string;
   group?: string;
+  /** Launch-time environment variables injected on spawn/resume/reload. */
+  env?: LaunchEnv;
   /** Hook value for starting the agent. String (legacy) or structured object. */
   start?: HookValue;
   /** Hook value for resuming the agent. */
@@ -66,8 +68,8 @@ export type ParsedPersona = {
   body: string;
 };
 
-/** Hook field names that support structured (nested) values. */
-const HOOK_FIELDS = new Set(['start', 'resume', 'compact', 'exit', 'interrupt', 'submit', 'detect_session', 'spawn']);
+/** Frontmatter field names that support structured (nested) values. */
+const NESTED_FIELDS = new Set(['env', 'start', 'resume', 'compact', 'exit', 'interrupt', 'submit', 'detect_session', 'spawn']);
 
 /**
  * Parse YAML-like frontmatter from a markdown string.
@@ -77,8 +79,8 @@ const HOOK_FIELDS = new Set(['start', 'resume', 'compact', 'exit', 'interrupt', 
  *   - Arrays of objects (for send hooks): `key:\n  send:\n    - keystroke: Escape`
  *   - Block scalars: `key: |` or `key: >` (multiline strings)
  *
- * Only hook fields (start, resume, compact, exit, interrupt, submit, spawn)
- * receive structured parsing. All other fields remain flat strings.
+ * Only nested-capable fields (env, start, resume, compact, exit, interrupt,
+ * submit, spawn) receive structured parsing. All other fields remain flat strings.
  */
 export function parseFrontmatter(raw: string): { frontmatter: Record<string, unknown>; body: string } {
   const trimmed = raw.trimStart();
@@ -132,7 +134,7 @@ export function parseFrontmatter(raw: string): { frontmatter: Record<string, unk
     }
 
     // Check if next line is indented (nested object or array)
-    if (trimmedVal === '' && HOOK_FIELDS.has(key) && i + 1 < lines.length) {
+    if (trimmedVal === '' && NESTED_FIELDS.has(key) && i + 1 < lines.length) {
       const nextLine = lines[i + 1]!;
       const nextIndent = nextLine.length - nextLine.trimStart().length;
       if (nextIndent > 0) {
@@ -190,7 +192,7 @@ function parseNestedValue(
   lines: string[],
   startLine: number,
   baseIndent: number,
-): { value: StructuredHook | Record<string, unknown>; nextLine: number } {
+): { value: StructuredHook | LaunchEnv | Record<string, unknown>; nextLine: number } {
   const result: Record<string, unknown> = {};
   let i = startLine;
 
