@@ -943,6 +943,9 @@
   .reminder-item.completed {
     opacity: 0.5;
   }
+  .reminder-item.completed .reminder-prompt {
+    text-decoration: line-through;
+  }
   .reminder-item .reminder-content {
     flex: 1;
     min-width: 0;
@@ -971,6 +974,15 @@
   .reminder-badge.active { background: rgba(88,166,255,0.15); color: var(--accent); }
   .reminder-badge.pending { background: rgba(139,148,158,0.15); color: var(--text-dim); }
   .reminder-badge.completed { background: rgba(63,185,80,0.15); color: var(--green); }
+  .reminder-section-label {
+    margin-top: 6px;
+    padding: 0 2px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-dim);
+  }
   .reminder-actions {
     display: flex;
     gap: 4px;
@@ -2283,6 +2295,54 @@
         return;
       }
       const reminders = await res.json();
+      const pendingReminders = reminders
+        .filter(r => r.status === 'pending')
+        .sort((a, b) => a.sortOrder - b.sortOrder);
+      const completedReminders = reminders
+        .filter(r => r.status === 'completed')
+        .sort((a, b) => (b.completedAt || '').localeCompare(a.completedAt || ''));
+
+      const renderReminderCard = (r, opts = {}) => {
+        const { isActive = false, prevPending = null, nextPending = null } = opts;
+        const classes = ['reminder-item'];
+        if (isActive) classes.push('active');
+        if (r.status === 'completed') classes.push('completed');
+
+        const cadenceLabel = r.cadenceMinutes >= 60
+          ? `every ${Math.round(r.cadenceMinutes / 60)}h`
+          : `every ${r.cadenceMinutes}m`;
+        const createdByHtml = r.createdBy
+          ? `<span>by ${esc(r.createdBy)}</span>`
+          : '';
+        const completedHtml = r.completedAt
+          ? `<span>completed ${esc(new Date(r.completedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }))}</span>`
+          : '';
+
+        let actionBtns = '';
+        if (r.status === 'pending') {
+          actionBtns += `<button class="complete" data-action="complete" data-id="${r.id}" title="Complete">\u2713</button>`;
+        }
+        if (prevPending && r.status === 'pending') {
+          actionBtns += `<button data-action="move-up" data-id="${r.id}" data-swap="${prevPending.id}" title="Move up">\u2191</button>`;
+        }
+        if (nextPending && r.status === 'pending') {
+          actionBtns += `<button data-action="move-down" data-id="${r.id}" data-swap="${nextPending.id}" title="Move down">\u2193</button>`;
+        }
+        actionBtns += `<button class="danger" data-action="delete" data-id="${r.id}" title="Delete">\u00d7</button>`;
+
+        return `<div class="${classes.join(' ')}">
+          <div class="reminder-content">
+            <div class="reminder-prompt">${isActive ? '\u25b6 ' : ''}${esc(r.prompt)}</div>
+            <div class="reminder-meta">
+              <span>${cadenceLabel}</span>
+              <span class="reminder-badge ${isActive ? 'active' : r.status}">${isActive ? 'active' : r.status === 'pending' ? 'queued' : r.status}</span>
+              ${createdByHtml}
+              ${completedHtml}
+            </div>
+          </div>
+          <div class="reminder-actions">${actionBtns}</div>
+        </div>`;
+      };
 
       // Build the form
       let html = `<div class="reminder-add-form">
@@ -2294,53 +2354,25 @@
         </div>
       </div>`;
 
-      if (reminders.length === 0) {
+      if (pendingReminders.length === 0 && completedReminders.length === 0) {
         html += '<div class="reminder-empty">No reminders for this agent</div>';
       } else {
-        // Sort by sort_order
-        reminders.sort((a, b) => a.sortOrder - b.sortOrder);
-        const firstPendingIdx = reminders.findIndex(r => r.status === 'pending');
-        for (let i = 0; i < reminders.length; i++) {
-          const r = reminders[i];
-          const isActive = r.status === 'pending' && i === firstPendingIdx;
-          const classes = ['reminder-item'];
-          if (isActive) classes.push('active');
-          if (r.status === 'completed') classes.push('completed');
-
-          const cadenceLabel = r.cadenceMinutes >= 60
-            ? `every ${Math.round(r.cadenceMinutes / 60)}h`
-            : `every ${r.cadenceMinutes}m`;
-          const createdByHtml = r.createdBy
-            ? `<span>by ${esc(r.createdBy)}</span>`
-            : '';
-
-          // Find adjacent IDs for swap
-          const prevPending = reminders.slice(0, i).reverse().find(x => x.status === 'pending');
-          const nextPending = reminders.slice(i + 1).find(x => x.status === 'pending');
-
-          let actionBtns = '';
-          if (r.status === 'pending') {
-            actionBtns += `<button class="complete" data-action="complete" data-id="${r.id}" title="Complete">\u2713</button>`;
+        if (pendingReminders.length > 0) {
+          for (let i = 0; i < pendingReminders.length; i++) {
+            const r = pendingReminders[i];
+            html += renderReminderCard(r, {
+              isActive: i === 0,
+              prevPending: pendingReminders[i - 1] || null,
+              nextPending: pendingReminders[i + 1] || null,
+            });
           }
-          if (prevPending && r.status === 'pending') {
-            actionBtns += `<button data-action="move-up" data-id="${r.id}" data-swap="${prevPending.id}" title="Move up">\u2191</button>`;
-          }
-          if (nextPending && r.status === 'pending') {
-            actionBtns += `<button data-action="move-down" data-id="${r.id}" data-swap="${nextPending.id}" title="Move down">\u2193</button>`;
-          }
-          actionBtns += `<button class="danger" data-action="delete" data-id="${r.id}" title="Delete">\u00d7</button>`;
+        }
 
-          html += `<div class="${classes.join(' ')}">
-            <div class="reminder-content">
-              <div class="reminder-prompt">${isActive ? '\u25b6 ' : ''}${esc(r.prompt)}</div>
-              <div class="reminder-meta">
-                <span>${cadenceLabel}</span>
-                <span class="reminder-badge ${isActive ? 'active' : r.status}">${isActive ? 'active' : r.status === 'pending' ? 'queued' : r.status}</span>
-                ${createdByHtml}
-              </div>
-            </div>
-            <div class="reminder-actions">${actionBtns}</div>
-          </div>`;
+        if (completedReminders.length > 0) {
+          html += '<div class="reminder-section-label">Recently completed</div>';
+          for (const r of completedReminders) {
+            html += renderReminderCard(r);
+          }
         }
       }
 

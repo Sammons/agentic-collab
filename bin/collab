@@ -339,15 +339,28 @@ cmd('reminder', 'reminder <sub> [args...]', 'Manage reminders (add|list|done|can
     const query = agent ? `?agent=${encodeURIComponent(agent)}` : '';
     const reminders = await api('GET', `/api/reminders${query}`);
     if (reminders.length === 0) { console.log('No reminders'); return; }
+    const pending = reminders.filter(r => r.status === 'pending');
+    const completed = reminders.filter(r => r.status === 'completed');
     const maxId = Math.max(...reminders.map(r => r.id.toString().length), 2);
     const maxAgent = Math.max(...reminders.map(r => r.agentName.length), 5);
     const maxPrompt = Math.min(Math.max(...reminders.map(r => r.prompt.length), 6), 50);
-    console.log(`${'ID'.padEnd(maxId)}  ${'Agent'.padEnd(maxAgent)}  ${'Prompt'.padEnd(maxPrompt)}  Cadence   Status`);
-    for (const r of reminders) {
-      const prompt = r.prompt.length > 50 ? r.prompt.slice(0, 47) + '...' : r.prompt;
-      const cadence = `${r.cadenceMinutes}m`.padEnd(9);
-      const status = r.status === 'completed' ? 'done' : 'pending';
-      console.log(`${r.id.toString().padEnd(maxId)}  ${r.agentName.padEnd(maxAgent)}  ${prompt.padEnd(maxPrompt)}  ${cadence} ${status}`);
+
+    const printRows = (title, rows) => {
+      if (rows.length === 0) return;
+      if (title) console.log(title);
+      console.log(`${'ID'.padEnd(maxId)}  ${'Agent'.padEnd(maxAgent)}  ${'Prompt'.padEnd(maxPrompt)}  Cadence   Status`);
+      for (const r of rows) {
+        const prompt = r.prompt.length > 50 ? r.prompt.slice(0, 47) + '...' : r.prompt;
+        const cadence = `${r.cadenceMinutes}m`.padEnd(9);
+        const status = r.status === 'completed' ? 'done' : 'pending';
+        console.log(`${r.id.toString().padEnd(maxId)}  ${r.agentName.padEnd(maxAgent)}  ${prompt.padEnd(maxPrompt)}  ${cadence} ${status}`);
+      }
+    };
+
+    printRows('', pending);
+    if (completed.length > 0) {
+      if (pending.length > 0) console.log('');
+      printRows('Recently completed', completed);
     }
   }
 
