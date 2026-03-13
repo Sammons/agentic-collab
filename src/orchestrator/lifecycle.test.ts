@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { Database } from './database.ts';
 import { LockManager } from '../shared/lock.ts';
 import type { ProxyCommand, ProxyResponse } from '../shared/types.ts';
+import { shellQuote } from '../shared/utils.ts';
 import {
   spawnAgent, resumeAgent, suspendAgent, destroyAgent,
   reloadAgent, interruptAgent, compactAgent, killAgent, startWatchdog, type LifecycleContext,
@@ -196,7 +197,38 @@ describe('Lifecycle', () => {
       // System prompt is always present (--append-system-prompt), but task flag (-p 'xxx') should not
       assert.ok(paste.text.includes('--append-system-prompt'), 'should include system prompt');
       assert.ok(!paste.text.includes('--dangerously-skip-permissions'), 'should not include skip-permissions without permissions=skip');
-      assert.ok(paste.text.startsWith('export COLLAB_AGENT=cmd-minimal && claude'), 'should have COLLAB_AGENT prefix and claude command');
+      assert.ok(paste.text.startsWith("export COLLAB_AGENT='cmd-minimal' COLLAB_PERSONA_FILE='"), 'should have quoted launch env prefix');
+      assert.ok(paste.text.includes("COLLAB_PERSONA_FILE='"), 'should export COLLAB_PERSONA_FILE during launch');
+      assert.ok(paste.text.includes(' && claude'), 'should prefix the claude command with exports');
+    });
+
+    it('injects launchEnv with shell-quoted values during spawn', async () => {
+      db.createAgent({
+        name: 'cmd-env-spawn',
+        engine: 'claude',
+        cwd: '/tmp',
+        proxyId: 'p1',
+        launchEnv: {
+          GIT_AUTHOR_NAME: "O'Brian",
+          GIT_CONFIG_GLOBAL: '$PWD/agent config.gitconfig',
+          COLLAB_AGENT: 'should-not-win',
+        },
+      });
+      proxyCommands = [];
+
+      await spawnAgent(ctx, {
+        name: 'cmd-env-spawn',
+        engine: 'claude',
+        cwd: '/tmp',
+        proxyId: 'p1',
+      });
+
+      const paste = proxyCommands.find(c => c.action === 'paste') as Extract<ProxyCommand, { action: 'paste' }>;
+      assert.ok(paste, 'should have paste command');
+      assert.ok(paste.text.includes(`COLLAB_AGENT=${shellQuote('cmd-env-spawn')}`), 'base COLLAB_AGENT should win');
+      assert.ok(!paste.text.includes(`COLLAB_AGENT=${shellQuote('should-not-win')}`), 'launchEnv must not override base COLLAB_AGENT');
+      assert.ok(paste.text.includes(`GIT_AUTHOR_NAME=${shellQuote("O'Brian")}`), 'should shell-quote single quotes');
+      assert.ok(paste.text.includes(`GIT_CONFIG_GLOBAL=${shellQuote('$PWD/agent config.gitconfig')}`), 'should shell-quote launch env values');
     });
   });
 
@@ -232,6 +264,33 @@ describe('Lifecycle', () => {
       assert.equal(result.state, 'active');
       assert.ok(proxyCommands.some(c => c.action === 'create_session'));
       assert.ok(proxyCommands.some(c => c.action === 'paste'));
+    });
+
+    it('injects launchEnv with shell-quoted values during resume', async () => {
+      db.createAgent({
+        name: 'resume-env',
+        engine: 'claude',
+        cwd: '/tmp',
+        proxyId: 'p1',
+        launchEnv: {
+          GIT_AUTHOR_EMAIL: 'resume agent@example.com',
+        },
+      });
+      const created = db.getAgent('resume-env')!;
+      db.updateAgentState('resume-env', 'suspended', created.version, {
+        tmuxSession: 'agent-resume-env',
+        proxyId: 'p1',
+        currentSessionId: 'resume-session-123',
+      });
+
+      proxyCommands = [];
+      await resumeAgent(ctx, 'resume-env');
+
+      const paste = proxyCommands.find((c) => c.action === 'paste' && c.text.includes('--resume')) as Extract<ProxyCommand, { action: 'paste' }> | undefined;
+      assert.ok(paste, 'should have resume paste command');
+      assert.ok(paste.text.includes(`COLLAB_AGENT=${shellQuote('resume-env')}`), 'should include base COLLAB_AGENT');
+      assert.ok(paste.text.includes("COLLAB_PERSONA_FILE='"), 'should include COLLAB_PERSONA_FILE during resume');
+      assert.ok(paste.text.includes(`GIT_AUTHOR_EMAIL=${shellQuote('resume agent@example.com')}`), 'should shell-quote launch env during resume');
     });
   });
 
@@ -545,7 +604,7 @@ describe('Lifecycle', () => {
       assert.ok(paste, 'should have paste command');
       assert.ok(paste.text.includes('my-custom-spawn-cmd --flag'), 'should use hookStart');
       assert.ok(!paste.text.includes('claude'), 'should not contain adapter command');
-      assert.ok(paste.text.includes('COLLAB_AGENT=hook-spawn'), 'should have COLLAB_AGENT');
+      assert.ok(paste.text.includes(`COLLAB_AGENT=${shellQuote('hook-spawn')}`), 'should have quoted COLLAB_AGENT');
       assert.ok(paste.text.includes('COLLAB_PERSONA_FILE='), 'should export COLLAB_PERSONA_FILE');
     });
 
@@ -563,7 +622,7 @@ describe('Lifecycle', () => {
       const paste = proxyCommands.find(c => c.action === 'paste') as Extract<ProxyCommand, { action: 'paste' }>;
       assert.ok(paste, 'should have paste command');
       assert.ok(paste.text.includes('claude'), 'should use adapter command');
-      assert.ok(!paste.text.includes('COLLAB_PERSONA_FILE='), 'should not export COLLAB_PERSONA_FILE');
+      assert.ok(paste.text.includes('COLLAB_PERSONA_FILE='), 'should export COLLAB_PERSONA_FILE during launch');
     });
 
     it('resumeAgent uses hookResume for existing session', async () => {
@@ -784,6 +843,34 @@ describe('Lifecycle', () => {
       assert.equal(result.state, 'active');
       // The detected session ID from exit should be persisted
       assert.equal(result.currentSessionId, 'abc-def-123');
+    });
+
+    it('injects launchEnv with shell-quoted values during reload', async () => {
+      db.createAgent({
+        name: 'reload-env',
+        engine: 'claude',
+        cwd: '/tmp',
+        proxyId: 'p1',
+        launchEnv: {
+          GIT_COMMITTER_NAME: 'Reload Agent',
+        },
+      });
+      const a = db.getAgent('reload-env')!;
+      db.updateAgentState('reload-env', 'active', a.version, {
+        tmuxSession: 'agent-reload-env',
+        proxyId: 'p1',
+        currentSessionId: 'reload-session-123',
+      });
+
+      proxyCommands = [];
+      const result = await reloadAgent(ctx, 'reload-env', { immediate: true });
+
+      assert.equal(result.state, 'active');
+      const paste = proxyCommands.find((c) => c.action === 'paste' && c.text.includes('--resume')) as Extract<ProxyCommand, { action: 'paste' }> | undefined;
+      assert.ok(paste, 'should have reload resume paste command');
+      assert.ok(paste.text.includes(`COLLAB_AGENT=${shellQuote('reload-env')}`), 'should include base COLLAB_AGENT');
+      assert.ok(paste.text.includes("COLLAB_PERSONA_FILE='"), 'should include COLLAB_PERSONA_FILE during reload');
+      assert.ok(paste.text.includes(`GIT_COMMITTER_NAME=${shellQuote('Reload Agent')}`), 'should shell-quote launch env during reload');
     });
   });
 });
