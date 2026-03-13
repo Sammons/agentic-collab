@@ -706,16 +706,23 @@ export class Database {
   }
 
   listReminders(agentName?: string): Reminder[] {
-    if (agentName) {
-      const rows = this.db.prepare(
-        'SELECT * FROM reminders WHERE agent_name = ? ORDER BY agent_name ASC, sort_order ASC'
-      ).all(agentName) as Array<Record<string, unknown>>;
-      return rows.map(mapReminderRow);
-    }
-    const rows = this.db.prepare(
-      'SELECT * FROM reminders ORDER BY agent_name ASC, sort_order ASC'
-    ).all() as Array<Record<string, unknown>>;
-    return rows.map(mapReminderRow);
+    const pendingRows = (agentName
+      ? this.db.prepare(
+          "SELECT * FROM reminders WHERE agent_name = ? AND status = 'pending' ORDER BY sort_order ASC"
+        ).all(agentName)
+      : this.db.prepare(
+          "SELECT * FROM reminders WHERE status = 'pending' ORDER BY agent_name ASC, sort_order ASC"
+        ).all()) as Array<Record<string, unknown>>;
+
+    const completedRows = (agentName
+      ? this.db.prepare(
+          "SELECT * FROM reminders WHERE agent_name = ? AND status = 'completed' ORDER BY completed_at DESC LIMIT 5"
+        ).all(agentName)
+      : this.db.prepare(
+          "SELECT * FROM reminders WHERE status = 'completed' ORDER BY completed_at DESC LIMIT 5"
+        ).all()) as Array<Record<string, unknown>>;
+
+    return [...pendingRows, ...completedRows].map(mapReminderRow);
   }
 
   getReminder(id: number): Reminder | undefined {
