@@ -8,6 +8,9 @@ export type AgentState = 'void' | 'spawning' | 'resuming' | 'suspending' | 'acti
 
 export type EngineType = 'claude' | 'codex' | 'opencode';
 
+/** Launch-time environment variables injected into the agent process. */
+export type LaunchEnv = Record<string, string>;
+
 // ── Hook Schema ──
 
 /** A single action in a send sequence. Exactly one of keystroke/text/paste must be set. */
@@ -29,7 +32,7 @@ export type PresetHook = {
 /** Shell hook: paste a command, auto-prefixed with env vars. */
 export type ShellHook = {
   shell: string;
-  env?: Record<string, string>;
+  env?: LaunchEnv;
 };
 
 /** Send hook: ordered sequence of tmux send-keys/paste actions. */

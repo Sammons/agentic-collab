@@ -213,6 +213,23 @@ describe('Persona', () => {
       assert.equal(frontmatter['permissions'], 'skip');
     });
 
+    it('parses top-level env block', () => {
+      const raw = [
+        '---',
+        'engine: claude',
+        'cwd: /tmp',
+        'env:',
+        '  GIT_CONFIG_GLOBAL: $PWD/agent-x.config',
+        '  GIT_AUTHOR_NAME: agent-x',
+        '---',
+        'Body',
+      ].join('\n');
+      const { frontmatter } = parseFrontmatter(raw);
+      const env = frontmatter['env'] as Record<string, string>;
+      assert.equal(env.GIT_CONFIG_GLOBAL, '$PWD/agent-x.config');
+      assert.equal(env.GIT_AUTHOR_NAME, 'agent-x');
+    });
+
     it('parses lifecycle hook fields (spawn, resume, compact)', () => {
       const raw = '---\nengine: codex\ncwd: /tmp\nspawn: codex --model o4-mini -a never -s danger-full-access\nresume: codex resume --last\ncompact: echo no-op\n---\nBody';
       const { frontmatter } = parseFrontmatter(raw);
@@ -480,6 +497,28 @@ describe('Persona', () => {
       assert.equal(start.shell, './run.sh');
       assert.equal(start.env.MY_VAR, 'hello');
       assert.equal(start.env.OTHER, 'world');
+    });
+
+    it('parses top-level env alongside hook env without collisions', () => {
+      const raw = [
+        '---',
+        'engine: claude',
+        'cwd: /tmp',
+        'env:',
+        '  GIT_CONFIG_GLOBAL: $PWD/agent-x.config',
+        'start:',
+        '  shell: ./run.sh',
+        '  env:',
+        '    MY_VAR: hello',
+        '---',
+        'Body',
+      ].join('\n');
+      const { frontmatter } = parseFrontmatter(raw);
+      const env = frontmatter.env as Record<string, string>;
+      const start = frontmatter.start as { shell: string; env: Record<string, string> };
+      assert.equal(env.GIT_CONFIG_GLOBAL, '$PWD/agent-x.config');
+      assert.equal(start.shell, './run.sh');
+      assert.equal(start.env.MY_VAR, 'hello');
     });
 
     it('parses nested send hook with keystroke actions', () => {
