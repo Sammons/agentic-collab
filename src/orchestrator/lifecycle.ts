@@ -23,7 +23,7 @@ import type { Database } from './database.ts';
 import type { LockManager } from '../shared/lock.ts';
 import type { ProxyCommand, ProxyResponse, AgentRecord } from '../shared/types.ts';
 import { sessionName, requireProxy, canSuspend, canResume } from '../shared/agent-entity.ts';
-import { sleep } from '../shared/utils.ts';
+import { shellQuote, sleep } from '../shared/utils.ts';
 import { getAdapter } from './adapters/index.ts';
 import { resolvePersonaPath, loadPersona, composeSystemPrompt, getPersonasDir, toHostPath } from './persona.ts';
 import { resolveHook } from './hook-resolver.ts';
@@ -47,11 +47,30 @@ const POST_SPAWN_ACTIVE_DELAY_MS = parseInt(process.env['POST_SPAWN_ACTIVE_DELAY
 const POST_RENAME_TASK_DELAY_MS = parseInt(process.env['POST_RENAME_TASK_DELAY_MS'] ?? '1000', 10);
 const INTERRUPT_KEY_DELAY_MS = parseInt(process.env['INTERRUPT_KEY_DELAY_MS'] ?? '300', 10);
 
-/** Wrap a CLI command with agent env vars (COLLAB_AGENT, optionally COLLAB_PERSONA_FILE). */
+function prependExports(cmd: string, entries: Array<[string, string]>): string {
+  const assignments = entries.map(([key, value]) => `${key}=${shellQuote(value)}`).join(' ');
+  return `export ${assignments} && ${cmd}`;
+}
+
+/** Wrap a command with base agent exports used by non-launch custom hooks. */
 function withAgentEnv(name: string, cmd: string, personaFile?: string | null): string {
-  let env = `export COLLAB_AGENT=${name}`;
-  if (personaFile) env += ` COLLAB_PERSONA_FILE=${personaFile}`;
-  return `${env} && ${cmd}`;
+  const entries: Array<[string, string]> = [['COLLAB_AGENT', name]];
+  if (personaFile) {
+    entries.push(['COLLAB_PERSONA_FILE', personaFile]);
+  }
+  return prependExports(cmd, entries);
+}
+
+/** Wrap a launch command with base exports plus persona-defined launch env. */
+function withLaunchEnv(agent: AgentRecord, cmd: string, personaFile: string): string {
+  const baseEntries: Array<[string, string]> = [
+    ['COLLAB_AGENT', agent.name],
+    ['COLLAB_PERSONA_FILE', personaFile],
+  ];
+  const reservedKeys = new Set(baseEntries.map(([key]) => key));
+  const launchEntries = Object.entries(agent.launchEnv ?? {})
+    .filter(([key]) => !reservedKeys.has(key));
+  return prependExports(cmd, [...baseEntries, ...launchEntries]);
 }
 
 /**
@@ -327,7 +346,7 @@ export async function spawnAgent(
 
     // Wrap paste commands with agent env vars
     const wrappedStart = startResult.mode === 'paste'
-      ? { mode: 'paste' as const, text: withAgentEnv(opts.name, startResult.text, hookStart ? personaFile : null) }
+      ? { mode: 'paste' as const, text: withLaunchEnv(phase1.current, startResult.text, personaFile) }
       : startResult;
 
     await dispatchHookResult(ctx, opts.proxyId, tmuxSession, wrappedStart);
@@ -461,7 +480,6 @@ export async function resumeAgent(
     //    Use hook resolver: hookResume for existing session, hookStart for fresh spawn.
     const personaFile = resolvePersonaFilePath(name, persona);
     let resumeSessionId = currentSessionId;
-    const useHookField = currentSessionId ? hookResume : hookStart;
     let resumeResult: HookResult;
 
     const resumeTemplateVars: TemplateVars = {
@@ -503,7 +521,7 @@ export async function resumeAgent(
 
     // Wrap paste commands with agent env vars
     const wrappedResume = resumeResult.mode === 'paste'
-      ? { mode: 'paste' as const, text: withAgentEnv(name, resumeResult.text, useHookField ? personaFile : null) }
+      ? { mode: 'paste' as const, text: withLaunchEnv(phase1.current, resumeResult.text, personaFile) }
       : resumeResult;
 
     await dispatchHookResult(ctx, proxyId, tmuxSession, wrappedResume);
@@ -855,7 +873,6 @@ export async function reloadAgent(
 
     const personaFile = resolvePersonaFilePath(name, persona);
     let reloadSessionId = exitDetectedSessionId ?? currentSessionId;
-    const useHookField = reloadSessionId ? hookResume : hookStart;
     let reloadResult: HookResult;
 
     const reloadTemplateVars: TemplateVars = {
@@ -896,7 +913,7 @@ export async function reloadAgent(
 
     // Wrap paste commands with agent env vars
     const wrappedReload = reloadResult.mode === 'paste'
-      ? { mode: 'paste' as const, text: withAgentEnv(name, reloadResult.text, useHookField ? personaFile : null) }
+      ? { mode: 'paste' as const, text: withLaunchEnv(phase1.current, reloadResult.text, personaFile) }
       : reloadResult;
 
     await dispatchHookResult(ctx, proxyId, tmuxSession, wrappedReload);
@@ -1093,9 +1110,9 @@ function computePeers(ctx: LifecycleContext, agentName: string): string[] {
 
 /**
  * Resolve the host-side persona file path for an agent.
- * Used to export COLLAB_PERSONA_FILE when custom hooks are active.
+ * Used for launch-time COLLAB_PERSONA_FILE exports and custom hook wrappers.
  */
-function resolvePersonaFilePath(name: string, persona?: string | null): string | null {
+function resolvePersonaFilePath(name: string, persona?: string | null): string {
   const dir = getPersonasDir();
   const filename = persona ?? name;
   return toHostPath(join(dir, `${filename}.md`));
