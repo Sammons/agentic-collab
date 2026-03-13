@@ -1,5 +1,6 @@
 import { describe, it, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { DatabaseSync } from 'node:sqlite';
 import { Database } from './database.ts';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -28,12 +29,20 @@ describe('Database', () => {
         thinking: 'high',
         cwd: '/tmp/test',
         persona: 'test-persona.md',
+        launchEnv: {
+          GIT_CONFIG_GLOBAL: '$PWD/test-agent.gitconfig',
+          GIT_AUTHOR_NAME: 'test-agent',
+        },
       });
 
       assert.equal(agent.name, 'test-agent-1');
       assert.equal(agent.engine, 'claude');
       assert.equal(agent.model, 'opus');
       assert.equal(agent.thinking, 'high');
+      assert.deepEqual(agent.launchEnv, {
+        GIT_CONFIG_GLOBAL: '$PWD/test-agent.gitconfig',
+        GIT_AUTHOR_NAME: 'test-agent',
+      });
       assert.equal(agent.state, 'void');
       assert.equal(agent.version, 0);
       assert.equal(agent.spawnCount, 0);
@@ -93,6 +102,42 @@ describe('Database', () => {
       assert.equal(updated.failureReason, 'Spawn timeout');
     });
 
+    it('upserts launch env from persona config without disturbing runtime state', () => {
+      const created = db.createAgent({ name: 'persona-env', engine: 'claude', cwd: '/tmp/persona-env' });
+      db.updateAgentState('persona-env', 'active', created.version, {
+        tmuxSession: 'agent-persona-env',
+        proxyId: 'proxy-env',
+      });
+
+      const updated = db.upsertAgentFromPersona({
+        name: 'persona-env',
+        engine: 'claude',
+        cwd: '/tmp/persona-env-v2',
+        launchEnv: {
+          GIT_CONFIG_GLOBAL: '$PWD/persona-env.gitconfig',
+          GIT_AUTHOR_NAME: 'persona-env',
+        },
+      });
+      assert.equal(updated.state, 'active');
+      assert.equal(updated.tmuxSession, 'agent-persona-env');
+      assert.equal(updated.proxyId, 'proxy-env');
+      assert.equal(updated.cwd, '/tmp/persona-env-v2');
+      assert.deepEqual(updated.launchEnv, {
+        GIT_CONFIG_GLOBAL: '$PWD/persona-env.gitconfig',
+        GIT_AUTHOR_NAME: 'persona-env',
+      });
+
+      const cleared = db.upsertAgentFromPersona({
+        name: 'persona-env',
+        engine: 'claude',
+        cwd: '/tmp/persona-env-v2',
+        launchEnv: null,
+      });
+      assert.equal(cleared.launchEnv, null);
+      assert.equal(cleared.state, 'active');
+      assert.equal(cleared.tmuxSession, 'agent-persona-env');
+    });
+
     it('deletes an agent', () => {
       db.createAgent({ name: 'delete-me', engine: 'claude', cwd: '/tmp' });
       assert.ok(db.getAgent('delete-me'));
@@ -108,6 +153,59 @@ describe('Database', () => {
       assert.throws(() => {
         db.updateAgentState('nonexistent', 'active', 0);
       }, /not found/);
+    });
+  });
+
+  describe('migrations', () => {
+    it('adds launch_env to legacy agents tables', () => {
+      const legacyDir = mkdtempSync(join(tmpdir(), 'agentic-collab-legacy-'));
+      const dbPath = join(legacyDir, 'legacy.db');
+      const legacyDb = new DatabaseSync(dbPath);
+
+      legacyDb.exec(`
+        CREATE TABLE agents (
+          name               TEXT PRIMARY KEY,
+          engine             TEXT NOT NULL,
+          model              TEXT,
+          thinking           TEXT,
+          cwd                TEXT NOT NULL,
+          persona            TEXT,
+          permissions        TEXT,
+          proxy_host         TEXT,
+          state              TEXT NOT NULL DEFAULT 'void',
+          state_before_shutdown TEXT,
+          current_session_id TEXT,
+          tmux_session       TEXT,
+          proxy_id           TEXT,
+          last_activity      TEXT,
+          last_context_pct   INTEGER,
+          reload_queued      INTEGER NOT NULL DEFAULT 0,
+          reload_task        TEXT,
+          failed_at          TEXT,
+          failure_reason     TEXT,
+          version            INTEGER NOT NULL DEFAULT 0,
+          spawn_count        INTEGER NOT NULL DEFAULT 0,
+          created_at         TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+        );
+      `);
+      legacyDb.prepare(`
+        INSERT INTO agents (name, engine, cwd, state, version, spawn_count, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run('legacy-agent', 'claude', '/legacy', 'void', 0, 0, '2026-03-13T00:00:00Z');
+      legacyDb.close();
+
+      const migratedDb = new Database(dbPath);
+      try {
+        const columns = migratedDb.rawDb.prepare('PRAGMA table_info(agents)').all() as Array<Record<string, unknown>>;
+        assert.ok(columns.some((column) => column['name'] === 'launch_env'));
+
+        const legacyAgent = migratedDb.getAgent('legacy-agent');
+        assert.ok(legacyAgent);
+        assert.equal(legacyAgent.launchEnv, null);
+      } finally {
+        migratedDb.close();
+        rmSync(legacyDir, { recursive: true, force: true });
+      }
     });
   });
 
