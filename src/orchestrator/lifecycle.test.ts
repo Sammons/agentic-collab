@@ -605,7 +605,10 @@ describe('Lifecycle', () => {
       const paste = proxyCommands.find(c => c.action === 'paste') as Extract<ProxyCommand, { action: 'paste' }>;
       assert.ok(paste, 'should have paste command');
       assert.ok(paste.text.includes('my-custom-spawn-cmd --flag'), 'should use hookStart');
-      assert.ok(!paste.text.includes('claude'), 'should not contain adapter command');
+      // Verify the command portion (after &&) uses the hook, not the adapter default.
+      // We can't assert !includes('claude') because COLLAB_PERSONA_FILE path may contain it.
+      const cmdPart = paste.text.split('&&').pop()!.trim();
+      assert.ok(!cmdPart.startsWith('claude '), 'command should not be the claude adapter default');
       assert.ok(paste.text.includes(`COLLAB_AGENT=${shellQuote('hook-spawn')}`), 'should have quoted COLLAB_AGENT');
       assert.ok(paste.text.includes('COLLAB_PERSONA_FILE='), 'should export COLLAB_PERSONA_FILE');
     });
