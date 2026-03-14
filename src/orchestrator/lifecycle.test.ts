@@ -9,7 +9,8 @@ import type { ProxyCommand, ProxyResponse } from '../shared/types.ts';
 import { shellQuote } from '../shared/utils.ts';
 import {
   spawnAgent, resumeAgent, suspendAgent, destroyAgent,
-  reloadAgent, interruptAgent, compactAgent, killAgent, startWatchdog, type LifecycleContext,
+  reloadAgent, interruptAgent, compactAgent, killAgent, startWatchdog,
+  executeCustomButton, type LifecycleContext,
 } from './lifecycle.ts';
 
 describe('Lifecycle', () => {
@@ -1079,6 +1080,76 @@ describe('Lifecycle', () => {
 
       const agent = db.getAgent('capture-no-match')!;
       assert.equal(agent.capturedVars, null, 'capturedVars should remain null when regex does not match');
+    });
+  });
+
+  describe('executeCustomButton', () => {
+    it('dispatches pipeline steps for a custom button', async () => {
+      const buttons = {
+        compact: [
+          { type: 'shell', command: '/compact' },
+          { type: 'keystrokes', actions: [{ keystroke: 'Enter' }] },
+        ],
+      };
+      db.createAgent({
+        name: 'custom-btn-agent',
+        engine: 'claude',
+        cwd: '/tmp',
+        proxyId: 'p1',
+        customButtons: JSON.stringify(buttons),
+      });
+      const a = db.getAgent('custom-btn-agent')!;
+      db.updateAgentState('custom-btn-agent', 'active', a.version, {
+        tmuxSession: 'agent-custom-btn-agent',
+        proxyId: 'p1',
+      });
+
+      proxyCommands = [];
+      await executeCustomButton(ctx, 'custom-btn-agent', 'compact');
+
+      const pastes = proxyCommands.filter(c => c.action === 'paste');
+      const keys = proxyCommands.filter(c => c.action === 'send_keys');
+      assert.ok(pastes.some(c => 'text' in c && (c as { text: string }).text === '/compact'), 'should paste /compact');
+      assert.ok(keys.some(c => 'keys' in c && (c as { keys: string }).keys === 'Enter'), 'should send Enter');
+    });
+
+    it('throws for non-existent button', async () => {
+      db.createAgent({
+        name: 'custom-btn-missing',
+        engine: 'claude',
+        cwd: '/tmp',
+        proxyId: 'p1',
+        customButtons: JSON.stringify({ other: [{ type: 'shell', command: 'echo' }] }),
+      });
+      const a = db.getAgent('custom-btn-missing')!;
+      db.updateAgentState('custom-btn-missing', 'active', a.version, {
+        tmuxSession: 'agent-custom-btn-missing',
+        proxyId: 'p1',
+      });
+
+      await assert.rejects(
+        () => executeCustomButton(ctx, 'custom-btn-missing', 'nonexistent'),
+        /not found/,
+      );
+    });
+
+    it('throws for agent with no custom buttons', async () => {
+      db.createAgent({
+        name: 'custom-btn-none',
+        engine: 'claude',
+        cwd: '/tmp',
+        proxyId: 'p1',
+      });
+      const a = db.getAgent('custom-btn-none')!;
+      db.updateAgentState('custom-btn-none', 'active', a.version, {
+        tmuxSession: 'agent-custom-btn-none',
+        proxyId: 'p1',
+      });
+
+      await assert.rejects(
+        () => executeCustomButton(ctx, 'custom-btn-none', 'anything'),
+        /no custom buttons/,
+      );
     });
   });
 });

@@ -21,7 +21,7 @@ import { existsSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Database } from './database.ts';
 import type { LockManager } from '../shared/lock.ts';
-import type { ProxyCommand, ProxyResponse, AgentRecord } from '../shared/types.ts';
+import type { ProxyCommand, ProxyResponse, AgentRecord, PipelineStep } from '../shared/types.ts';
 import { sessionName, requireProxy, canSuspend, canResume } from '../shared/agent-entity.ts';
 import { shellQuote, sleep } from '../shared/utils.ts';
 import { getAdapter } from './adapters/index.ts';
@@ -1109,6 +1109,47 @@ export async function killAgent(
     });
 
     ctx.db.logEvent(name, 'killed');
+  });
+}
+
+/**
+ * Execute a custom button pipeline for an agent.
+ * Looks up the named button in the agent's custom_buttons JSON,
+ * resolves the pipeline steps, and dispatches them.
+ */
+export async function executeCustomButton(
+  ctx: LifecycleContext,
+  name: string,
+  buttonName: string,
+): Promise<void> {
+  await ctx.locks.withLock(name, async () => {
+    const agent = ctx.db.getAgent(name);
+    if (!agent) throw new Error(`Agent "${name}" not found`);
+    if (!agent.customButtons) throw new Error(`Agent "${name}" has no custom buttons`);
+
+    const proxyId = requireProxy(agent);
+    let buttons: Record<string, unknown>;
+    try {
+      buttons = JSON.parse(agent.customButtons) as Record<string, unknown>;
+    } catch {
+      throw new Error(`Agent "${name}" has invalid custom_buttons JSON`);
+    }
+
+    const steps = buttons[buttonName];
+    if (!steps || !Array.isArray(steps)) {
+      throw new Error(`Custom button "${buttonName}" not found for agent "${name}"`);
+    }
+
+    const templateVars = {
+      AGENT_NAME: name,
+      AGENT_CWD: agent.cwd,
+      SESSION_ID: agent.currentSessionId ?? undefined,
+      capturedVars: agent.capturedVars ?? undefined,
+    };
+    const result = resolveHook('exit', steps as PipelineStep[], agent, { templateVars });
+    await dispatchHookResult(ctx, proxyId, sessionName(agent), result, { agentName: name });
+
+    ctx.db.logEvent(name, 'custom_button', undefined, { button: buttonName });
   });
 }
 
