@@ -749,6 +749,39 @@ describe('Lifecycle', () => {
     });
   });
 
+  describe('pipeline hooks', () => {
+    it('dispatches pipeline steps in order during exit', async () => {
+      const pipelineHook = JSON.stringify([
+        { type: 'keystrokes', actions: [{ keystroke: 'Escape' }] },
+        { type: 'shell', command: '/exit' },
+        { type: 'keystrokes', actions: [{ keystroke: 'Enter' }] },
+      ]);
+      db.createAgent({
+        name: 'pipeline-exit',
+        engine: 'claude',
+        cwd: '/tmp',
+        proxyId: 'p1',
+        hookExit: pipelineHook,
+      });
+      const a = db.getAgent('pipeline-exit')!;
+      db.updateAgentState('pipeline-exit', 'active', a.version, {
+        tmuxSession: 'agent-pipeline-exit',
+        proxyId: 'p1',
+      });
+      proxyCommands = [];
+
+      await suspendAgent(ctx, 'pipeline-exit');
+
+      // Should have: send_keys(Escape), paste(/exit), send_keys(Enter), then kill_session
+      const sendKeys = proxyCommands.filter(c => c.action === 'send_keys');
+      const pastes = proxyCommands.filter(c => c.action === 'paste');
+      assert.ok(sendKeys.length >= 2, `expected at least 2 send_keys, got ${sendKeys.length}`);
+      assert.ok(pastes.length >= 1, `expected at least 1 paste, got ${pastes.length}`);
+      const exitPaste = pastes.find(c => 'text' in c && (c as { text: string }).text === '/exit');
+      assert.ok(exitPaste, 'should have pasted /exit');
+    });
+  });
+
   describe('detect_session_regex on suspend', () => {
     it('extracts session ID from pane capture on suspend when regex is set', async () => {
       db.createAgent({
