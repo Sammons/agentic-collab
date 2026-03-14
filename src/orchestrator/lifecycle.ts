@@ -126,6 +126,31 @@ async function dispatchHookResult(
     return;
   }
 
+  if (result.mode === 'pipeline') {
+    for (const step of result.steps) {
+      if (step.type === 'keystrokes') {
+        await dispatchHookResult(ctx, proxyId, tmuxSession, { mode: 'send', actions: step.actions }, opts);
+      } else if (step.type === 'shell') {
+        await ctx.proxyDispatch(proxyId, {
+          action: 'paste',
+          sessionName: tmuxSession,
+          text: step.command,
+          pressEnter: opts?.pressEnter ?? true,
+        });
+      } else if (step.type === 'capture') {
+        // Capture steps are dispatched here but variable storage requires
+        // the agent name — handled in Story 3 (generic variable capture).
+        // For now, capture is a no-op pane read.
+        await ctx.proxyDispatch(proxyId, {
+          action: 'capture',
+          sessionName: tmuxSession,
+          lines: step.lines,
+        });
+      }
+    }
+    return;
+  }
+
   // mode === 'paste'
   await ctx.proxyDispatch(proxyId, {
     action: 'paste',
