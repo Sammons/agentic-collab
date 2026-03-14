@@ -1421,12 +1421,12 @@ function validateAgentName(name: string): string | null {
   return null;
 }
 
-function replyHint(topic: string): string {
-  return `reply with collab send operator --topic ${topic}`;
+function replyHint(from: string, topic: string): string {
+  return `reply with collab send ${from} --topic ${topic}`;
 }
 
 function buildReplyEnvelope(from: string, topic: string, message: string): string {
-  return `[from: ${from}, ${replyHint(topic)}]: '${message}'`;
+  return `[from: ${from}, ${replyHint(from, topic)}]: '${message}'`;
 }
 
 function broadcastReminderUpdate(ctx: RouteContext): void {
