@@ -776,4 +776,73 @@ describe('Database', () => {
       assert.ok(!due.some(d => d.id === r.id));
     });
   });
+
+  describe('captured variables', () => {
+    it('defaults capturedVars to null on new agent', () => {
+      const agent = db.createAgent({
+        name: 'capture-test-1',
+        engine: 'claude',
+        cwd: '/tmp/test',
+      });
+      assert.equal(agent.capturedVars, null);
+    });
+
+    it('stores and retrieves a captured variable', () => {
+      db.createAgent({
+        name: 'capture-test-2',
+        engine: 'claude',
+        cwd: '/tmp/test',
+      });
+      db.updateAgentCapturedVar('capture-test-2', 'SESSION_ID', 'abc-123');
+      const agent = db.getAgent('capture-test-2')!;
+      assert.deepEqual(agent.capturedVars, { SESSION_ID: 'abc-123' });
+    });
+
+    it('merges multiple captured variables', () => {
+      db.createAgent({
+        name: 'capture-test-3',
+        engine: 'claude',
+        cwd: '/tmp/test',
+      });
+      db.updateAgentCapturedVar('capture-test-3', 'SESSION_ID', 'sess-1');
+      db.updateAgentCapturedVar('capture-test-3', 'BUILD_ID', 'build-42');
+      const agent = db.getAgent('capture-test-3')!;
+      assert.deepEqual(agent.capturedVars, { SESSION_ID: 'sess-1', BUILD_ID: 'build-42' });
+    });
+
+    it('overwrites existing captured variable', () => {
+      db.createAgent({
+        name: 'capture-test-4',
+        engine: 'claude',
+        cwd: '/tmp/test',
+      });
+      db.updateAgentCapturedVar('capture-test-4', 'SESSION_ID', 'old-id');
+      db.updateAgentCapturedVar('capture-test-4', 'SESSION_ID', 'new-id');
+      const agent = db.getAgent('capture-test-4')!;
+      assert.deepEqual(agent.capturedVars, { SESSION_ID: 'new-id' });
+    });
+
+    it('preserves capturedVars through upsertAgentFromPersona', () => {
+      db.createAgent({
+        name: 'capture-test-5',
+        engine: 'claude',
+        cwd: '/tmp/test',
+      });
+      db.updateAgentCapturedVar('capture-test-5', 'SESSION_ID', 'keep-me');
+      // Upsert updates config fields but preserves runtime state
+      db.upsertAgentFromPersona({
+        name: 'capture-test-5',
+        engine: 'claude',
+        cwd: '/tmp/test-updated',
+      });
+      const agent = db.getAgent('capture-test-5')!;
+      assert.deepEqual(agent.capturedVars, { SESSION_ID: 'keep-me' });
+      assert.equal(agent.cwd, '/tmp/test-updated');
+    });
+
+    it('ignores update for non-existent agent', () => {
+      // Should not throw
+      db.updateAgentCapturedVar('non-existent-agent', 'FOO', 'bar');
+    });
+  });
 });
