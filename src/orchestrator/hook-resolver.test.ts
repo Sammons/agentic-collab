@@ -305,6 +305,47 @@ describe('hook-resolver', () => {
     });
   });
 
+  describe('structured keystrokes hook', () => {
+    it('returns send mode with actions from keystrokes key', () => {
+      const agent = makeAgent();
+      const result = resolveHook('exit', { keystrokes: [{ keystroke: 'Escape' }, { keystroke: 'Enter' }] }, agent);
+      assert.equal(result.mode, 'send');
+      const actions = (result as { actions: Array<{ keystroke: string }> }).actions;
+      assert.equal(actions.length, 2);
+      assert.equal(actions[0]!.keystroke, 'Escape');
+      assert.equal(actions[1]!.keystroke, 'Enter');
+    });
+
+    it('preserves post_wait_ms on keystrokes actions', () => {
+      const agent = makeAgent();
+      const result = resolveHook('compact', {
+        keystrokes: [
+          { keystroke: 'Escape', post_wait_ms: 200 },
+          { paste: '/compact' },
+          { keystroke: 'Enter' },
+        ],
+      }, agent);
+      assert.equal(result.mode, 'send');
+      const actions = (result as { actions: Array<Record<string, unknown>> }).actions;
+      assert.equal(actions[0]!.post_wait_ms, 200);
+    });
+
+    it('returns skip for empty keystrokes array', () => {
+      const agent = makeAgent();
+      const result = resolveHook('exit', { keystrokes: [] }, agent);
+      assert.equal(result.mode, 'skip');
+    });
+
+    it('deserializes JSON keystrokes hook from string', () => {
+      const agent = makeAgent();
+      const jsonValue = JSON.stringify({ keystrokes: [{ keystroke: 'Escape' }] });
+      const result = resolveHook('exit', jsonValue, agent);
+      assert.equal(result.mode, 'send');
+      const actions = (result as { actions: Array<{ keystroke: string }> }).actions;
+      assert.equal(actions[0]!.keystroke, 'Escape');
+    });
+  });
+
   describe('JSON-serialized structured hooks (from DB)', () => {
     it('deserializes JSON preset hook from string', () => {
       const agent = makeAgent({ engine: 'codex' });
