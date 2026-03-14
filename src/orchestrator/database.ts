@@ -165,6 +165,9 @@ export class Database {
     if (!agentColNames.has('detect_session_regex')) {
       this.db.exec('ALTER TABLE agents ADD COLUMN detect_session_regex TEXT');
     }
+    if (!agentColNames.has('captured_vars')) {
+      this.db.exec('ALTER TABLE agents ADD COLUMN captured_vars TEXT');
+    }
 
     // Add withdrawn column to dashboard_messages
     if (!dmColumns.some((c) => c['name'] === 'withdrawn')) {
@@ -395,6 +398,21 @@ export class Database {
     for (const { name, sortOrder } of orders) {
       stmt.run(sortOrder, name);
     }
+  }
+
+  /**
+   * Merge a single captured variable into the agent's captured_vars JSON map.
+   * Creates the map if null, overwrites the key if already present.
+   */
+  updateAgentCapturedVar(name: string, varName: string, value: string): void {
+    const agent = this.getAgent(name);
+    if (!agent) return;
+    const vars = agent.capturedVars ?? {};
+    vars[varName] = value;
+    this.db.prepare('UPDATE agents SET captured_vars = ? WHERE name = ?').run(
+      JSON.stringify(vars),
+      name,
+    );
   }
 
   deleteAgent(name: string): boolean {
@@ -820,6 +838,7 @@ function mapAgentRow(row: Record<string, unknown>): AgentRecord {
     reloadTask: row['reload_task'] as string | null,
     failedAt: row['failed_at'] as string | null,
     failureReason: row['failure_reason'] as string | null,
+    capturedVars: deserializeCapturedVars(row['captured_vars']),
     version: row['version'] as number,
     spawnCount: row['spawn_count'] as number,
     createdAt: row['created_at'] as string,
@@ -919,6 +938,7 @@ const COLUMN_MAP: Record<string, string> = {
   hookSubmit: 'hook_submit',
   hookDetectSession: 'hook_detect_session',
   detectSessionRegex: 'detect_session_regex',
+  capturedVars: 'captured_vars',
 };
 
 function toColumnName(key: string): string {
@@ -946,6 +966,24 @@ function deserializeLaunchEnv(value: unknown): LaunchEnv | null {
       env[key] = raw;
     }
     return env;
+  } catch {
+    return null;
+  }
+}
+
+function deserializeCapturedVars(value: unknown): Record<string, string> | null {
+  if (typeof value !== 'string' || value.length === 0) return null;
+  try {
+    const parsed = JSON.parse(value);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return null;
+    }
+    const vars: Record<string, string> = {};
+    for (const [key, raw] of Object.entries(parsed)) {
+      if (typeof raw !== 'string') return null;
+      vars[key] = raw;
+    }
+    return vars;
   } catch {
     return null;
   }
