@@ -556,4 +556,43 @@ describe('hook-resolver', () => {
       assert.ok(!text.includes('--append-system-prompt You'), `Prompt should be quoted, not raw, got: ${text}`);
     });
   });
+
+  describe('captured vars in template interpolation', () => {
+    it('interpolates captured vars as fallback', () => {
+      const result = interpolateTemplateVars(
+        'codex resume $SESSION_ID',
+        { AGENT_NAME: 'test', capturedVars: { SESSION_ID: 'abc-123' } },
+      );
+      assert.equal(result, 'codex resume abc-123');
+    });
+
+    it('built-in vars take precedence over captured vars', () => {
+      const result = interpolateTemplateVars(
+        'resume $SESSION_ID',
+        { SESSION_ID: 'builtin-id', capturedVars: { SESSION_ID: 'captured-id' } },
+      );
+      assert.equal(result, 'resume builtin-id');
+    });
+
+    it('captured vars work in pipeline shell steps', () => {
+      const agent = makeAgent();
+      const pipeline = [
+        { type: 'shell' as const, command: 'codex resume $SESSION_ID' },
+      ];
+      const result = resolveHook('resume', pipeline, agent, {
+        templateVars: { capturedVars: { SESSION_ID: 'sess-456' } },
+      });
+      assert.equal(result.mode, 'pipeline');
+      const steps = (result as { steps: Array<{ type: string; command: string }> }).steps;
+      assert.equal(steps[0]!.command, 'codex resume sess-456');
+    });
+
+    it('returns empty string for unknown vars not in captured vars', () => {
+      const result = interpolateTemplateVars(
+        'echo $UNKNOWN_VAR',
+        { AGENT_NAME: 'test', capturedVars: {} },
+      );
+      assert.equal(result, 'echo ');
+    });
+  });
 });

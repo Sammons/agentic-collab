@@ -75,14 +75,17 @@ function withLaunchEnv(agent: AgentRecord, cmd: string, personaFile: string): st
 
 /**
  * Dispatch a resolved hook result to the proxy.
- * Handles paste, keys, send sequences, and skip modes uniformly.
+ * Handles paste, keys, send sequences, pipelines, and skip modes uniformly.
+ *
+ * When agentName is provided and the pipeline contains capture steps,
+ * captured variables are stored in the agent's captured_vars column.
  */
 async function dispatchHookResult(
   ctx: LifecycleContext,
   proxyId: string,
   tmuxSession: string,
   result: HookResult,
-  opts?: { pressEnter?: boolean; keyDelay?: number },
+  opts?: { pressEnter?: boolean; keyDelay?: number; agentName?: string },
 ): Promise<void> {
   if (result.mode === 'skip') return;
 
@@ -138,14 +141,33 @@ async function dispatchHookResult(
           pressEnter: opts?.pressEnter ?? true,
         });
       } else if (step.type === 'capture') {
-        // Capture steps are dispatched here but variable storage requires
-        // the agent name — handled in Story 3 (generic variable capture).
-        // For now, capture is a no-op pane read.
-        await ctx.proxyDispatch(proxyId, {
+        const captureResult = await ctx.proxyDispatch(proxyId, {
           action: 'capture',
           sessionName: tmuxSession,
           lines: step.lines,
         });
+        if (opts?.agentName && captureResult.ok && typeof captureResult.data === 'string') {
+          try {
+            const re = new RegExp(step.regex);
+            const match = re.exec(captureResult.data);
+            if (match && match[1]) {
+              const captured = match[1].trim();
+              ctx.db.updateAgentCapturedVar(opts.agentName, step.var, captured);
+              console.log(`[lifecycle] ${opts.agentName}: captured $${step.var} = ${captured}`);
+              // When capturing SESSION_ID, also update currentSessionId for legacy resume flow
+              if (step.var === 'SESSION_ID') {
+                const latest = ctx.db.getAgent(opts.agentName!);
+                if (latest) {
+                  ctx.db.updateAgentState(opts.agentName!, latest.state, latest.version, {
+                    currentSessionId: captured,
+                  });
+                }
+              }
+            }
+          } catch (err) {
+            console.warn(`[lifecycle] ${opts.agentName}: capture regex failed for $${step.var}:`, (err as Error).message);
+          }
+        }
       }
     }
     return;
@@ -354,6 +376,7 @@ export async function spawnAgent(
       SESSION_ID: generatedSessionId,
       PERSONA_PROMPT: systemPrompt,
       PERSONA_PROMPT_FILEPATH: personaFile ?? undefined,
+      capturedVars: phase1.current.capturedVars ?? undefined,
     };
     const startResult = resolveHook('start', hookStart, phase1.current, {
       spawnOpts: {
@@ -374,7 +397,7 @@ export async function spawnAgent(
       ? { mode: 'paste' as const, text: withLaunchEnv(phase1.current, startResult.text, personaFile) }
       : startResult;
 
-    await dispatchHookResult(ctx, opts.proxyId, tmuxSession, wrappedStart);
+    await dispatchHookResult(ctx, opts.proxyId, tmuxSession, wrappedStart, { agentName: opts.name });
 
     // 5. Wait for CLI init, then inject /rename
     await sleep(RENAME_DELAY_MS);
@@ -513,6 +536,7 @@ export async function resumeAgent(
       SESSION_ID: currentSessionId ?? undefined,
       PERSONA_PROMPT: systemPrompt,
       PERSONA_PROMPT_FILEPATH: personaFile ?? undefined,
+      capturedVars: phase1.current.capturedVars ?? undefined,
     };
 
     if (currentSessionId) {
@@ -549,7 +573,7 @@ export async function resumeAgent(
       ? { mode: 'paste' as const, text: withLaunchEnv(phase1.current, resumeResult.text, personaFile) }
       : resumeResult;
 
-    await dispatchHookResult(ctx, proxyId, tmuxSession, wrappedResume);
+    await dispatchHookResult(ctx, proxyId, tmuxSession, wrappedResume, { agentName: name });
 
     // 4. /rename injection
     await sleep(RENAME_DELAY_MS);
@@ -644,7 +668,7 @@ export async function suspendAgent(
 
     // Send exit command via hook resolver
     const exitResult = resolveHook('exit', hookExit, phase1.current);
-    await dispatchHookResult(ctx, proxyId, tmuxSession, exitResult);
+    await dispatchHookResult(ctx, proxyId, tmuxSession, exitResult, { agentName: name });
 
     // Wait for process to exit, then verify
     await sleep(EXIT_WAIT_MS);
@@ -833,7 +857,7 @@ export async function reloadAgent(
 
     // 1. Send exit command via hook resolver
     const exitResult = resolveHook('exit', hookExit, phase1.current);
-    await dispatchHookResult(ctx, proxyId, oldTmuxSession, exitResult);
+    await dispatchHookResult(ctx, proxyId, oldTmuxSession, exitResult, { agentName: name });
 
     // 2. Wait for exit
     await sleep(EXIT_WAIT_MS);
@@ -906,6 +930,7 @@ export async function reloadAgent(
       SESSION_ID: reloadSessionId ?? undefined,
       PERSONA_PROMPT: systemPrompt,
       PERSONA_PROMPT_FILEPATH: personaFile ?? undefined,
+      capturedVars: phase1.current.capturedVars ?? undefined,
     };
 
     if (reloadSessionId) {
@@ -941,7 +966,7 @@ export async function reloadAgent(
       ? { mode: 'paste' as const, text: withLaunchEnv(phase1.current, reloadResult.text, personaFile) }
       : reloadResult;
 
-    await dispatchHookResult(ctx, proxyId, tmuxSession, wrappedReload);
+    await dispatchHookResult(ctx, proxyId, tmuxSession, wrappedReload, { agentName: name });
 
     // 6. /rename injection
     await sleep(RENAME_DELAY_MS);
@@ -1013,7 +1038,7 @@ export async function interruptAgent(
 
     // Send interrupt via hook resolver
     const interruptResult = resolveHook('interrupt', agent.hookInterrupt, agent);
-    await dispatchHookResult(ctx, proxyId, sessionName(agent), interruptResult, { keyDelay: INTERRUPT_KEY_DELAY_MS });
+    await dispatchHookResult(ctx, proxyId, sessionName(agent), interruptResult, { keyDelay: INTERRUPT_KEY_DELAY_MS, agentName: name });
 
     ctx.db.logEvent(name, 'interrupted');
   });
@@ -1046,7 +1071,7 @@ export async function compactAgent(
       const personaFile = resolvePersonaFilePath(name, agent.persona);
       wrappedCompact = { mode: 'paste', text: withAgentEnv(name, compactResult.text, personaFile) };
     }
-    await dispatchHookResult(ctx, proxyId, sessionName(agent), wrappedCompact);
+    await dispatchHookResult(ctx, proxyId, sessionName(agent), wrappedCompact, { agentName: name });
 
     // Transition to active so the agent doesn't appear idle during compaction.
     // The health monitor will detect idle again once compaction finishes.
@@ -1112,7 +1137,7 @@ export async function deliverToAgent(
           return result;
         },
       };
-      await dispatchHookResult(throwingCtx, proxyId, sessionName(agent), hookResult);
+      await dispatchHookResult(throwingCtx, proxyId, sessionName(agent), hookResult, { agentName: agent.name });
     } catch (err) {
       error = (err as Error).message ?? 'Unknown delivery error';
     }

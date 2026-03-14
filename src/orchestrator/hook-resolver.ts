@@ -53,6 +53,8 @@ export type TemplateVars = {
   PERSONA_PROMPT?: string;
   /** Path to the persona prompt file on disk */
   PERSONA_PROMPT_FILEPATH?: string;
+  /** Captured variables from pipeline capture steps (fallback for $VAR interpolation) */
+  capturedVars?: Record<string, string>;
 };
 
 // ── Context for resolution ──
@@ -271,12 +273,20 @@ const SHELL_QUOTE_VARS: ReadonlySet<keyof TemplateVars> = new Set([
 export function interpolateTemplateVars(command: string, vars?: TemplateVars): string {
   if (!vars) return command;
   return command.replace(/\$([A-Z_]+)/g, (_match, name: string) => {
-    const val = vars[name as keyof TemplateVars];
-    if (val == null) return '';
-    if (SHELL_QUOTE_VARS.has(name as keyof TemplateVars)) {
-      return shellQuote(val);
+    // Check built-in template vars first
+    const builtinKey = name as keyof TemplateVars;
+    const val = vars[builtinKey];
+    if (val != null && typeof val === 'string') {
+      if (SHELL_QUOTE_VARS.has(builtinKey)) {
+        return shellQuote(val);
+      }
+      return val;
     }
-    return val;
+    // Fall back to captured vars
+    if (vars.capturedVars && name in vars.capturedVars) {
+      return vars.capturedVars[name]!;
+    }
+    return '';
   });
 }
 
