@@ -1863,6 +1863,14 @@
             <button data-action="spawn">Spawn</button>
             <button class="danger" data-action="destroy">Destroy</button>
           ` : ''}
+          ${activeIdle && agent.customButtons ? (() => {
+            try {
+              const btns = JSON.parse(agent.customButtons);
+              return Object.keys(btns).map(b =>
+                `<button class="secondary" data-action="custom/${esc(b)}">${esc(b)}</button>`
+              ).join('');
+            } catch { return ''; }
+          })() : ''}
         </div>
       `;
       list.appendChild(card);

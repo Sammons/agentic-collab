@@ -20,6 +20,7 @@ import { getPersonasDir, parseFrontmatter, createPersonaAndAgent, syncSinglePers
 import {
   spawnAgent, resumeAgent, suspendAgent, destroyAgent,
   reloadAgent, interruptAgent, compactAgent, killAgent,
+  executeCustomButton,
   type LifecycleContext,
 } from './lifecycle.ts';
 import { getAdapter } from './adapters/index.ts';
@@ -1047,6 +1048,21 @@ route('POST', '/api/agents/:name/destroy', async (_req, res, match, ctx) => {
     const lifecycleCtx = makeLifecycleCtx(ctx);
     await destroyAgent(lifecycleCtx, name);
     ctx.wss.broadcast(JSON.stringify({ type: 'agent_destroyed', name }));
+    json(res, 200, { ok: true });
+  } catch (err) {
+    json(res, 400, { error: (err as Error).message });
+  }
+});
+
+// ── Custom Buttons ──
+
+route('POST', '/api/agents/:name/custom/:button', async (_req, res, match, ctx) => {
+  const name = match.pathname.groups['name']!;
+  const button = match.pathname.groups['button']!;
+
+  try {
+    const lifecycleCtx = makeLifecycleCtx(ctx);
+    await executeCustomButton(lifecycleCtx, name, button);
     json(res, 200, { ok: true });
   } catch (err) {
     json(res, 400, { error: (err as Error).message });
