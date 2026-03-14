@@ -955,4 +955,130 @@ describe('Lifecycle', () => {
       assert.ok(paste.text.includes(`GIT_COMMITTER_NAME=${shellQuote('Reload Agent')}`), 'should shell-quote launch env during reload');
     });
   });
+
+  describe('pipeline capture steps', () => {
+    it('captures variable from pane output and stores in DB', async () => {
+      const pipelineHook = JSON.stringify([
+        { type: 'shell', command: '/exit' },
+        { type: 'capture', lines: 50, regex: 'codex resume ([0-9a-f-]+)', var: 'SESSION_ID' },
+      ]);
+      db.createAgent({
+        name: 'capture-pipeline',
+        engine: 'codex',
+        cwd: '/tmp',
+        proxyId: 'p1',
+        hookExit: pipelineHook,
+      });
+      const a = db.getAgent('capture-pipeline')!;
+      db.updateAgentState('capture-pipeline', 'active', a.version, {
+        tmuxSession: 'agent-capture-pipeline',
+        proxyId: 'p1',
+      });
+
+      const captureCtx: LifecycleContext = {
+        ...ctx,
+        proxyDispatch: async (_proxyId: string, command: ProxyCommand): Promise<ProxyResponse> => {
+          proxyCommands.push(command);
+          if (command.action === 'capture') {
+            return { ok: true, data: 'Session saved.\ncodex resume 019ce018-ff0a-7ba0-9537-e4eb16a75970\n$' };
+          }
+          if (command.action === 'has_session') {
+            return { ok: true, data: false };
+          }
+          return { ok: true };
+        },
+      };
+
+      proxyCommands = [];
+      const result = await suspendAgent(captureCtx, 'capture-pipeline');
+
+      assert.equal(result.state, 'suspended');
+      // Capture step should have stored SESSION_ID in captured_vars
+      const agent = db.getAgent('capture-pipeline')!;
+      assert.ok(agent.capturedVars, 'capturedVars should not be null');
+      assert.equal(agent.capturedVars!['SESSION_ID'], '019ce018-ff0a-7ba0-9537-e4eb16a75970');
+      // SESSION_ID capture should also update currentSessionId for legacy resume
+      assert.equal(agent.currentSessionId, '019ce018-ff0a-7ba0-9537-e4eb16a75970');
+    });
+
+    it('stores non-SESSION_ID captured variables without updating currentSessionId', async () => {
+      const pipelineHook = JSON.stringify([
+        { type: 'shell', command: '/exit' },
+        { type: 'capture', lines: 20, regex: 'build: ([a-z0-9]+)', var: 'BUILD_HASH' },
+      ]);
+      db.createAgent({
+        name: 'capture-custom-var',
+        engine: 'claude',
+        cwd: '/tmp',
+        proxyId: 'p1',
+        hookExit: pipelineHook,
+      });
+      const a = db.getAgent('capture-custom-var')!;
+      db.updateAgentState('capture-custom-var', 'active', a.version, {
+        tmuxSession: 'agent-capture-custom-var',
+        proxyId: 'p1',
+        currentSessionId: 'existing-session',
+      });
+
+      const captureCtx: LifecycleContext = {
+        ...ctx,
+        proxyDispatch: async (_proxyId: string, command: ProxyCommand): Promise<ProxyResponse> => {
+          proxyCommands.push(command);
+          if (command.action === 'capture') {
+            return { ok: true, data: 'Completed. build: abc123def\n$' };
+          }
+          if (command.action === 'has_session') {
+            return { ok: true, data: false };
+          }
+          return { ok: true };
+        },
+      };
+
+      proxyCommands = [];
+      const result = await suspendAgent(captureCtx, 'capture-custom-var');
+
+      assert.equal(result.state, 'suspended');
+      const agent = db.getAgent('capture-custom-var')!;
+      assert.deepEqual(agent.capturedVars, { BUILD_HASH: 'abc123def' });
+    });
+
+    it('does not store when regex does not match', async () => {
+      const pipelineHook = JSON.stringify([
+        { type: 'shell', command: '/exit' },
+        { type: 'capture', lines: 50, regex: 'codex resume ([0-9a-f-]+)', var: 'SESSION_ID' },
+      ]);
+      db.createAgent({
+        name: 'capture-no-match',
+        engine: 'codex',
+        cwd: '/tmp',
+        proxyId: 'p1',
+        hookExit: pipelineHook,
+      });
+      const a = db.getAgent('capture-no-match')!;
+      db.updateAgentState('capture-no-match', 'active', a.version, {
+        tmuxSession: 'agent-capture-no-match',
+        proxyId: 'p1',
+      });
+
+      const captureCtx: LifecycleContext = {
+        ...ctx,
+        proxyDispatch: async (_proxyId: string, command: ProxyCommand): Promise<ProxyResponse> => {
+          proxyCommands.push(command);
+          if (command.action === 'capture') {
+            return { ok: true, data: 'No session here\n$' };
+          }
+          if (command.action === 'has_session') {
+            return { ok: true, data: false };
+          }
+          return { ok: true };
+        },
+      };
+
+      proxyCommands = [];
+      await suspendAgent(captureCtx, 'capture-no-match');
+
+      const agent = db.getAgent('capture-no-match')!;
+      assert.equal(agent.capturedVars, null, 'capturedVars should remain null when regex does not match');
+    });
+  });
 });

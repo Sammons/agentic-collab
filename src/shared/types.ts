@@ -98,6 +98,7 @@ export type AgentRecord = {
   reloadTask: string | null;
   failedAt: string | null;
   failureReason: string | null;
+  capturedVars: Record<string, string> | null;
   version: number;
   spawnCount: number;
   createdAt: string;
