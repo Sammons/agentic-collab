@@ -3,7 +3,7 @@
  * All tmux commands executed via child_process.
  */
 
-import { execSync, type ExecSyncOptions } from 'node:child_process';
+import { execSync, execFileSync, type ExecSyncOptions } from 'node:child_process';
 
 const EXEC_OPTS: ExecSyncOptions = { encoding: 'utf-8', timeout: 10_000 };
 
@@ -109,6 +109,29 @@ export function sendKeys(sessionName: string, keys: string): void {
     throw new Error(`Invalid keys: "${keys}" — only alphanumeric, spaces, and hyphens allowed`);
   }
   exec(`tmux send-keys -t '${esc(sessionName)}' ${keys}`);
+}
+
+/**
+ * Send raw tmux send-keys tokens without shell interpolation.
+ * Used only by the constrained `collab tmux ... -- send-keys ...` escape hatch.
+ */
+export function sendKeysRaw(sessionName: string, keys: string[]): void {
+  validateSessionName(sessionName);
+  if (!Array.isArray(keys) || keys.length === 0) {
+    throw new Error('keys required');
+  }
+  execFileSync('tmux', ['send-keys', '-t', sessionName, ...keys], EXEC_OPTS);
+}
+
+/**
+ * Run `tmux display-message -p` for a session and return stdout.
+ */
+export function displayMessage(sessionName: string, format: string): string {
+  validateSessionName(sessionName);
+  if (!format) {
+    throw new Error('format required');
+  }
+  return (execFileSync('tmux', ['display-message', '-t', sessionName, '-p', format], EXEC_OPTS) as string).trim();
 }
 
 /**
