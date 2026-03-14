@@ -48,8 +48,16 @@ export type KeystrokesHook = {
 /** Structured hook value — discriminated by which key is present. */
 export type StructuredHook = PresetHook | ShellHook | SendHook | KeystrokesHook;
 
-/** A hook field value: flat string (legacy) or structured object. */
-export type HookValue = string | StructuredHook | null;
+// ── Pipeline Steps ──
+
+/** A single step in a composable hook pipeline. */
+export type PipelineStep =
+  | { type: 'keystrokes'; actions: SendAction[] }
+  | { type: 'shell'; command: string; env?: LaunchEnv }
+  | { type: 'capture'; lines: number; regex: string; var: string };
+
+/** A hook field value: flat string (legacy), structured object, or pipeline (array of steps). */
+export type HookValue = string | StructuredHook | PipelineStep[] | null;
 
 export type AgentRecord = {
   name: string;

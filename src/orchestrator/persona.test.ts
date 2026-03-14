@@ -724,6 +724,62 @@ describe('Persona', () => {
       assert.equal(exit.keystrokes[1]!.keystroke, 'Enter');
     });
 
+    it('parses pipeline with mixed step types', () => {
+      const raw = [
+        '---', 'engine: claude', 'cwd: /tmp',
+        'exit:',
+        '  - keystrokes:',
+        '    - keystroke: Escape',
+        '  - shell: /exit',
+        '  - keystrokes:',
+        '    - keystroke: Enter',
+        '---', 'Body',
+      ].join('\n');
+      const { frontmatter } = parseFrontmatter(raw);
+      const exit = frontmatter.exit as Array<{ type: string }>;
+      assert.ok(Array.isArray(exit), 'exit should be a pipeline array');
+      assert.equal(exit.length, 3);
+      assert.equal(exit[0]!.type, 'keystrokes');
+      assert.equal(exit[1]!.type, 'shell');
+      assert.equal((exit[1] as { type: string; command: string }).command, '/exit');
+      assert.equal(exit[2]!.type, 'keystrokes');
+    });
+
+    it('parses pipeline with capture step', () => {
+      const raw = [
+        '---', 'engine: codex', 'cwd: /tmp',
+        'exit:',
+        '  - shell: /exit',
+        '  - capture:',
+        '      lines: 50',
+        '      regex: codex resume ([0-9a-f-]+)',
+        '      var: SESSION_ID',
+        '---', 'Body',
+      ].join('\n');
+      const { frontmatter } = parseFrontmatter(raw);
+      const exit = frontmatter.exit as Array<{ type: string }>;
+      assert.ok(Array.isArray(exit), 'exit should be a pipeline array');
+      assert.equal(exit.length, 2);
+      assert.equal(exit[0]!.type, 'shell');
+      assert.equal(exit[1]!.type, 'capture');
+      const capture = exit[1] as { type: string; lines: number; regex: string; var: string };
+      assert.equal(capture.lines, 50);
+      assert.equal(capture.regex, 'codex resume ([0-9a-f-]+)');
+      assert.equal(capture.var, 'SESSION_ID');
+    });
+
+    it('falls back to legacy parser for non-pipeline arrays', () => {
+      const raw = [
+        '---', 'engine: claude', 'cwd: /tmp',
+        'exit:', '  send:', '    - keystroke: Escape', '    - keystroke: C-c',
+        '---', 'Body',
+      ].join('\n');
+      const { frontmatter } = parseFrontmatter(raw);
+      const exit = frontmatter.exit as { send: Array<{ keystroke: string }> };
+      assert.ok(!Array.isArray(exit), 'legacy send should not be an array');
+      assert.equal(exit.send.length, 2);
+    });
+
     it('handles flat and nested hooks in same frontmatter', () => {
       const raw = [
         '---', 'engine: claude', 'model: opus', 'cwd: /tmp', 'proxy_host: crankshaft',

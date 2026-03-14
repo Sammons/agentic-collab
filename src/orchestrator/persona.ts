@@ -7,7 +7,7 @@
 
 import { readFileSync, readdirSync, realpathSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, resolve, relative, isAbsolute } from 'node:path';
-import type { StructuredHook, HookValue, SendAction, LaunchEnv } from '../shared/types.ts';
+import type { StructuredHook, HookValue, SendAction, LaunchEnv, PipelineStep } from '../shared/types.ts';
 
 export const PERSONAS_DIR = process.env['PERSONAS_DIR'] ?? join(process.env['HOME'] ?? '/data', 'persistent-agents');
 
@@ -133,11 +133,22 @@ export function parseFrontmatter(raw: string): { frontmatter: Record<string, unk
       continue;
     }
 
-    // Check if next line is indented (nested object or array)
+    // Check if next line is indented (nested object, array, or pipeline)
     if (trimmedVal === '' && NESTED_FIELDS.has(key) && i + 1 < lines.length) {
       const nextLine = lines[i + 1]!;
       const nextIndent = nextLine.length - nextLine.trimStart().length;
       if (nextIndent > 0) {
+        // Try pipeline parser first (array of steps: - keystrokes:/shell:/capture:)
+        if (key !== 'env' && nextLine.trim().startsWith('- ')) {
+          try {
+            const { value: pipelineSteps, nextLine: endLine } = parsePipelineSteps(lines, i + 1, nextIndent);
+            if (pipelineSteps.length > 0) {
+              frontmatter[key] = pipelineSteps;
+              i = endLine;
+              continue;
+            }
+          } catch { /* fall through to legacy parser */ }
+        }
         const { value, nextLine: endLine } = parseNestedValue(lines, i + 1, nextIndent);
         frontmatter[key] = value;
         i = endLine;
@@ -255,6 +266,122 @@ function parseNestedValue(
   }
 
   return { value: result as StructuredHook, nextLine: i };
+}
+
+/**
+ * Parse a pipeline — an array of steps where each step is one of:
+ *   - keystrokes: [{keystroke: ...}, ...]
+ *   - shell: <command>
+ *   - capture: {lines: N, regex: '...', var: 'NAME'}
+ *
+ * Example YAML:
+ *   - keystrokes:
+ *     - keystroke: Escape
+ *   - shell: /exit
+ *   - capture:
+ *       lines: 50
+ *       regex: 'codex resume ([0-9a-f-]+)'
+ *       var: SESSION_ID
+ *
+ * Throws on unrecognized step types so the caller can fall back to the legacy parser.
+ */
+function parsePipelineSteps(
+  lines: string[],
+  startLine: number,
+  baseIndent: number,
+): { value: PipelineStep[]; nextLine: number } {
+  const steps: PipelineStep[] = [];
+  let i = startLine;
+
+  while (i < lines.length) {
+    const line = lines[i]!;
+    if (line.trim() === '') { i++; continue; }
+
+    const lineIndent = line.length - line.trimStart().length;
+    if (lineIndent < baseIndent) break;
+
+    const content = line.trim();
+    if (!content.startsWith('- ')) {
+      // Not an array item at the expected indent — done
+      break;
+    }
+
+    const itemContent = content.slice(2).trim();
+    const colonIdx = itemContent.indexOf(':');
+    if (colonIdx === -1) throw new Error(`Pipeline step missing key: ${itemContent}`);
+
+    const stepKey = itemContent.slice(0, colonIdx).trim();
+    const stepVal = itemContent.slice(colonIdx + 1).trim();
+
+    if (stepKey === 'shell') {
+      steps.push({ type: 'shell', command: stepVal });
+      i++;
+    } else if (stepKey === 'keystrokes' || stepKey === 'send') {
+      // Parse the sub-array of SendAction items
+      i++;
+      const actions: SendAction[] = [];
+      while (i < lines.length) {
+        const subLine = lines[i]!;
+        if (subLine.trim() === '') { i++; continue; }
+        const subIndent = subLine.length - subLine.trimStart().length;
+        if (subIndent <= lineIndent) break; // back to parent level
+        const subContent = subLine.trim();
+        if (!subContent.startsWith('- ')) { i++; continue; }
+        const actionContent = subContent.slice(2).trim();
+        const actionColonIdx = actionContent.indexOf(':');
+        if (actionColonIdx === -1) { i++; continue; }
+        const actionKey = actionContent.slice(0, actionColonIdx).trim();
+        const actionVal = actionContent.slice(actionColonIdx + 1).trim();
+        const action: Record<string, unknown> = { [actionKey]: coerceScalar(actionVal) };
+        // Check for sub-properties on the next line (e.g. post_wait_ms)
+        i++;
+        while (i < lines.length) {
+          const propLine = lines[i]!;
+          if (propLine.trim() === '') { i++; continue; }
+          const propIndent = propLine.length - propLine.trimStart().length;
+          if (propIndent <= subIndent) break;
+          const propContent = propLine.trim();
+          const propColonIdx = propContent.indexOf(':');
+          if (propColonIdx !== -1) {
+            const propKey = propContent.slice(0, propColonIdx).trim();
+            const propVal = propContent.slice(propColonIdx + 1).trim();
+            action[propKey] = coerceScalar(propVal);
+          }
+          i++;
+        }
+        actions.push(action as SendAction);
+      }
+      steps.push({ type: 'keystrokes', actions });
+    } else if (stepKey === 'capture') {
+      // Parse capture sub-object (lines, regex, var)
+      i++;
+      const captureObj: Record<string, unknown> = {};
+      while (i < lines.length) {
+        const subLine = lines[i]!;
+        if (subLine.trim() === '') { i++; continue; }
+        const subIndent = subLine.length - subLine.trimStart().length;
+        if (subIndent <= lineIndent) break;
+        const subContent = subLine.trim();
+        const subColonIdx = subContent.indexOf(':');
+        if (subColonIdx !== -1) {
+          const subKey = subContent.slice(0, subColonIdx).trim();
+          const subVal = subContent.slice(subColonIdx + 1).trim();
+          captureObj[subKey] = coerceScalar(subVal);
+        }
+        i++;
+      }
+      steps.push({
+        type: 'capture',
+        lines: typeof captureObj['lines'] === 'number' ? captureObj['lines'] : 50,
+        regex: String(captureObj['regex'] ?? ''),
+        var: String(captureObj['var'] ?? ''),
+      });
+    } else {
+      throw new Error(`Unknown pipeline step type: ${stepKey}`);
+    }
+  }
+
+  return { value: steps, nextLine: i };
 }
 
 /**
@@ -622,7 +749,7 @@ export function deserializeHookValue(value: string | null): HookValue {
   if (value == null) return null;
   if (value.startsWith('{') || value.startsWith('[')) {
     try {
-      return JSON.parse(value) as StructuredHook;
+      return JSON.parse(value) as StructuredHook | PipelineStep[];
     } catch {
       return value;
     }

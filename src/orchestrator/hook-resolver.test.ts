@@ -346,6 +346,54 @@ describe('hook-resolver', () => {
     });
   });
 
+  describe('pipeline hooks', () => {
+    it('resolves array of steps to pipeline mode', () => {
+      const agent = makeAgent();
+      const steps = [
+        { type: 'keystrokes' as const, actions: [{ keystroke: 'Escape' }] },
+        { type: 'shell' as const, command: '/exit' },
+      ];
+      const result = resolveHook('exit', steps, agent);
+      assert.equal(result.mode, 'pipeline');
+      const pipeline = (result as { steps: Array<{ type: string }> }).steps;
+      assert.equal(pipeline.length, 2);
+      assert.equal(pipeline[0]!.type, 'keystrokes');
+      assert.equal(pipeline[1]!.type, 'shell');
+    });
+
+    it('interpolates template vars in shell steps', () => {
+      const agent = makeAgent();
+      const steps = [
+        { type: 'shell' as const, command: 'codex resume $SESSION_ID' },
+      ];
+      const result = resolveHook('resume', steps, agent, {
+        templateVars: { SESSION_ID: 'abc-123' },
+      });
+      assert.equal(result.mode, 'pipeline');
+      const pipeline = (result as { steps: Array<{ type: string; command: string }> }).steps;
+      assert.equal(pipeline[0]!.command, 'codex resume abc-123');
+    });
+
+    it('returns skip for empty pipeline', () => {
+      const agent = makeAgent();
+      const result = resolveHook('exit', [], agent);
+      assert.equal(result.mode, 'skip');
+    });
+
+    it('deserializes JSON pipeline from DB string', () => {
+      const agent = makeAgent();
+      const jsonValue = JSON.stringify([
+        { type: 'shell', command: '/exit' },
+        { type: 'capture', lines: 50, regex: 'session ([a-f0-9]+)', var: 'SID' },
+      ]);
+      const result = resolveHook('exit', jsonValue, agent);
+      assert.equal(result.mode, 'pipeline');
+      const pipeline = (result as { steps: Array<{ type: string }> }).steps;
+      assert.equal(pipeline.length, 2);
+      assert.equal(pipeline[1]!.type, 'capture');
+    });
+  });
+
   describe('JSON-serialized structured hooks (from DB)', () => {
     it('deserializes JSON preset hook from string', () => {
       const agent = makeAgent({ engine: 'codex' });

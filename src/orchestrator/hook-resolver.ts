@@ -22,7 +22,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve, relative, isAbsolute } from 'node:path';
 import type { EngineAdapter, SpawnOptions, ResumeOptions } from './adapters/types.ts';
-import type { AgentRecord, HookValue, StructuredHook, SendAction, PresetHook, ShellHook, SendHook, KeystrokesHook } from '../shared/types.ts';
+import type { AgentRecord, HookValue, StructuredHook, SendAction, PresetHook, ShellHook, SendHook, KeystrokesHook, PipelineStep } from '../shared/types.ts';
 import { getAdapter } from './adapters/index.ts';
 import { deserializeHookValue } from './persona.ts';
 import { shellQuote } from '../shared/utils.ts';
@@ -33,6 +33,7 @@ export type HookResult =
   | { mode: 'paste'; text: string }
   | { mode: 'keys'; keys: string[] }
   | { mode: 'send'; actions: SendAction[] }
+  | { mode: 'pipeline'; steps: PipelineStep[] }
   | { mode: 'skip' };
 
 // ── Hook Fields ──
@@ -100,7 +101,7 @@ function isKeystrokesHook(v: StructuredHook): v is KeystrokesHook {
  */
 export function resolveHook(
   field: HookField,
-  value: string | StructuredHook | null | undefined,
+  value: string | StructuredHook | PipelineStep[] | null | undefined,
   agent: AgentRecord,
   context?: HookContext,
 ): HookResult {
@@ -109,12 +110,17 @@ export function resolveHook(
     return resolvePreset(field, agent, context);
   }
 
+  // Pipeline array — ordered list of steps
+  if (Array.isArray(value)) {
+    return resolvePipeline(value, context);
+  }
+
   // String value — could be legacy format or JSON-serialized structured hook from DB
   if (typeof value === 'string') {
     // Try to deserialize JSON from DB storage
     const deserialized = deserializeHookValue(value);
     if (deserialized != null && typeof deserialized !== 'string') {
-      // It was a JSON-serialized structured hook — recurse with the parsed object
+      // It was a JSON-serialized structured hook or pipeline — recurse with the parsed value
       return resolveHook(field, deserialized, agent, context);
     }
 
@@ -199,6 +205,23 @@ function resolveStructuredHook(
 
   // Unknown structure — skip
   return { mode: 'skip' };
+}
+
+/** Resolve a pipeline (array of steps) with template variable interpolation on shell commands. */
+function resolvePipeline(steps: PipelineStep[], context?: HookContext): HookResult {
+  if (steps.length === 0) return { mode: 'skip' };
+
+  const resolvedSteps: PipelineStep[] = steps.map((step) => {
+    if (step.type === 'shell') {
+      return {
+        ...step,
+        command: interpolateTemplateVars(step.command, context?.templateVars),
+      };
+    }
+    return step;
+  });
+
+  return { mode: 'pipeline', steps: resolvedSteps };
 }
 
 /** Apply preset options (model, thinking, permissions) to spawn/resume context. */
