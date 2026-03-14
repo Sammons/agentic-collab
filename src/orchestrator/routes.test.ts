@@ -362,7 +362,7 @@ describe('API Routes', () => {
     assert.ok((data as Record<string, unknown>).queueId);
     assert.equal((data as Record<string, unknown>).status, 'pending');
     const queued = db.listPendingMessages('api-agent-1');
-    assert.ok(queued.some(m => m.envelope.includes('collab send operator --topic test-topic')));
+    assert.ok(queued.some(m => m.envelope.includes('collab send dashboard --topic test-topic')));
   });
 
   it('POST /api/agents/send rejects unknown target', async () => {
