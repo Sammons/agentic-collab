@@ -99,6 +99,7 @@ export type AgentRecord = {
   failedAt: string | null;
   failureReason: string | null;
   capturedVars: Record<string, string> | null;
+  customButtons: string | null;
   version: number;
   spawnCount: number;
   createdAt: string;

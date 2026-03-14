@@ -168,6 +168,9 @@ export class Database {
     if (!agentColNames.has('captured_vars')) {
       this.db.exec('ALTER TABLE agents ADD COLUMN captured_vars TEXT');
     }
+    if (!agentColNames.has('custom_buttons')) {
+      this.db.exec('ALTER TABLE agents ADD COLUMN custom_buttons TEXT');
+    }
 
     // Add withdrawn column to dashboard_messages
     if (!dmColumns.some((c) => c['name'] === 'withdrawn')) {
@@ -244,10 +247,11 @@ export class Database {
     hookSubmit?: string;
     hookDetectSession?: string;
     detectSessionRegex?: string;
+    customButtons?: string;
   }): AgentRecord {
     this.db.prepare(`
-      INSERT INTO agents (name, engine, model, thinking, cwd, persona, permissions, proxy_host, proxy_id, agent_group, launch_env, hook_start, hook_resume, hook_compact, hook_exit, hook_interrupt, hook_submit, hook_detect_session, detect_session_regex, state)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'void')
+      INSERT INTO agents (name, engine, model, thinking, cwd, persona, permissions, proxy_host, proxy_id, agent_group, launch_env, hook_start, hook_resume, hook_compact, hook_exit, hook_interrupt, hook_submit, hook_detect_session, detect_session_regex, custom_buttons, state)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'void')
     `).run(
       opts.name,
       opts.engine,
@@ -268,6 +272,7 @@ export class Database {
       opts.hookSubmit ?? null,
       opts.hookDetectSession ?? null,
       opts.detectSessionRegex ?? null,
+      opts.customButtons ?? null,
     );
     return this.getAgent(opts.name)!;
   }
@@ -295,6 +300,7 @@ export class Database {
     hookSubmit?: string;
     hookDetectSession?: string;
     detectSessionRegex?: string;
+    customButtons?: string;
   }): AgentRecord {
     const existing = this.getAgent(opts.name);
     if (!existing) {
@@ -306,7 +312,7 @@ export class Database {
         persona = ?, permissions = ?, proxy_host = ?, agent_group = ?, launch_env = ?,
         hook_start = ?, hook_resume = ?, hook_compact = ?,
         hook_exit = ?, hook_interrupt = ?, hook_submit = ?,
-        hook_detect_session = ?, detect_session_regex = ?
+        hook_detect_session = ?, detect_session_regex = ?, custom_buttons = ?
       WHERE name = ?
     `).run(
       opts.engine,
@@ -326,6 +332,7 @@ export class Database {
       opts.hookSubmit ?? null,
       opts.hookDetectSession ?? null,
       opts.detectSessionRegex ?? null,
+      opts.customButtons ?? null,
       opts.name,
     );
     return this.getAgent(opts.name)!;
@@ -839,6 +846,7 @@ function mapAgentRow(row: Record<string, unknown>): AgentRecord {
     failedAt: row['failed_at'] as string | null,
     failureReason: row['failure_reason'] as string | null,
     capturedVars: deserializeCapturedVars(row['captured_vars']),
+    customButtons: row['custom_buttons'] as string | null,
     version: row['version'] as number,
     spawnCount: row['spawn_count'] as number,
     createdAt: row['created_at'] as string,
@@ -939,6 +947,7 @@ const COLUMN_MAP: Record<string, string> = {
   hookDetectSession: 'hook_detect_session',
   detectSessionRegex: 'detect_session_regex',
   capturedVars: 'captured_vars',
+  customButtons: 'custom_buttons',
 };
 
 function toColumnName(key: string): string {
