@@ -749,7 +749,9 @@ describe('API Routes — Personas', () => {
     assert.equal(status, 200);
     const persona = data as { filePath: string; hostname: string };
     assert.ok(persona.filePath.endsWith('/researcher.md'), `expected filePath ending with /researcher.md, got: ${persona.filePath}`);
-    assert.ok(persona.filePath.includes(personasDir), 'filePath should include personas dir');
+    // personasDir may differ from the resolved filePath due to symlinks (e.g., /tmp → /private/tmp on macOS)
+    const personasDirBasename = personasDir.split('/').pop()!;
+    assert.ok(persona.filePath.includes(personasDirBasename), 'filePath should include personas dir basename');
     assert.equal(typeof persona.hostname, 'string');
     assert.ok(persona.hostname.length > 0, 'hostname should not be empty');
   });

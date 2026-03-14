@@ -564,41 +564,27 @@ export function composeSystemPrompt(opts: {
 
   // Messaging instructions — collab CLI (standalone binary, not a pnpm script)
   parts.push(`Messages from other agents arrive as text in your tmux pane
-formatted as: [from: <sender>, reply with collab reply]: '<message>'
+formatted as: [from: <sender>, reply with collab send operator --topic <topic>]: '<message>'
 
 You have the \`collab\` CLI on your PATH. It is a standalone binary — run it directly (e.g. \`collab send ...\`), NOT via pnpm or any repo skill.
 IMPORTANT: Do NOT use \`pnpm collaboration\` or any other wrapper. Always use the bare \`collab\` command.
 It auto-discovers auth and the orchestrator.
 Your agent name is set via COLLAB_AGENT=${opts.agentName}.
 
-Send a message to another agent:
-  collab send <to> <message>
+Send a message to the operator (dashboard):
+  collab send operator --topic <topic> <message>
 
-Reply to the dashboard (human operator):
-  collab reply <message> [--topic <topic>]
+Send a message to another agent:
+  collab send <agent> --topic <topic> <message>
 
 List all agents:
-  collab agents
+  collab list-agents
 
-Check orchestrator status:
-  collab status
+Create an agent from a persona file:
+  collab create-agent <persona-file>
 
-Spawn a new agent:
-  collab spawn <name> [task...]
-
-Agent lifecycle:
-  collab exit <name>
-  collab resume <name> [task...]
-  collab interrupt <name>
-  collab compact <name>
-  collab kill <name>
-  collab reload <name> [task...]
-
-View message queue:
-  collab queue [--agent <name>]
-
-View agent events:
-  collab events <name> [--limit N]
+Constrained tmux passthrough:
+  collab tmux <agent> -- <tmux-subcommand> [args...]
 
 Run \`collab help\` for full usage.`);
 
