@@ -14,7 +14,7 @@
  */
 
 import { readFileSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { execSync } from 'node:child_process';
 
@@ -130,6 +130,63 @@ function cmd(name, usage, desc, fn) {
   COMMANDS[name] = { usage, desc, fn };
 }
 
+function formatReplyContext(message, inReplyTo) {
+  return inReplyTo ? `In reply to: ${inReplyTo}\n\n${message}` : message;
+}
+
+function parseSendArgs(args, implicitTarget = null) {
+  let topic = null;
+  let replyReminder = null;
+  let inReplyTo = null;
+  const target = implicitTarget ?? args[0];
+  const positional = [];
+  const startIdx = implicitTarget ? 0 : 1;
+
+  for (let i = startIdx; i < args.length; i++) {
+    if (args[i] === '--topic' && args[i + 1]) { topic = args[++i]; }
+    else if (args[i] === '--in-reply-to' && args[i + 1]) { inReplyTo = args[++i]; }
+    else if (args[i] === '--reply-reminder') {
+      const next = args[i + 1];
+      if (next && !next.startsWith('-')) { replyReminder = parseInt(args[++i], 10); }
+      else { replyReminder = 30; }
+    }
+    else { positional.push(args[i]); }
+  }
+
+  return {
+    target,
+    topic,
+    replyReminder,
+    inReplyTo,
+    message: positional.join(' '),
+  };
+}
+
+async function dispatchSend({ target, topic, message, replyReminder, inReplyTo }) {
+  if (!target || !topic || !message) {
+    console.error('usage: collab send <target> --topic <topic> [--in-reply-to <text>] <message>');
+    process.exit(1);
+  }
+
+  const formattedMessage = formatReplyContext(message, inReplyTo);
+  if (target === 'operator') {
+    if (replyReminder) {
+      console.error('error: --reply-reminder is only supported when messaging another agent');
+      process.exit(1);
+    }
+    const agent = requireAgentName();
+    await api('POST', '/api/dashboard/reply', { agent, message: formattedMessage, topic });
+    console.log('sent');
+    return;
+  }
+
+  const from = requireAgentName();
+  const body = { from, to: target, message: formattedMessage, topic };
+  if (replyReminder) body.replyReminder = replyReminder;
+  const data = await api('POST', '/api/agents/send', body);
+  console.log(`queued (id:${data.queueId})`);
+}
+
 cmd('agents', 'agents', 'List all agents', async () => {
   const agents = await api('GET', '/api/agents');
   if (agents.length === 0) { console.log('No agents'); return; }
@@ -142,6 +199,12 @@ cmd('agents', 'agents', 'List all agents', async () => {
   }
 });
 
+COMMANDS['list-agents'] = {
+  ...COMMANDS['agents'],
+  usage: 'list-agents',
+  desc: 'List all agents',
+};
+
 cmd('status', 'status', 'Orchestrator status', async () => {
   const s = await api('GET', '/api/orchestrator/status');
   console.log(`agents: ${s.totalAgents}  proxies: ${s.totalProxies}`);
@@ -150,40 +213,12 @@ cmd('status', 'status', 'Orchestrator status', async () => {
   }
 });
 
-cmd('send', 'send <to> --topic <topic> <message> [--reply-reminder [minutes]]', 'Send a message to another agent (topic required)', async (args) => {
-  let topic = null, replyReminder = null;
-  const to = args[0];
-  const positional = [];
-  for (let i = 1; i < args.length; i++) {
-    if (args[i] === '--topic' && args[i + 1]) { topic = args[++i]; }
-    else if (args[i] === '--reply-reminder') {
-      const next = args[i + 1];
-      if (next && !next.startsWith('-')) { replyReminder = parseInt(args[++i], 10); }
-      else { replyReminder = 30; }
-    }
-    else { positional.push(args[i]); }
-  }
-  const message = positional.join(' ');
-  if (!to || !message || !topic) { console.error('usage: collab send <to> --topic <topic> <message>'); process.exit(1); }
-  const from = requireAgentName();
-  const body = { from, to, message, topic };
-  if (replyReminder) body.replyReminder = replyReminder;
-  const data = await api('POST', '/api/agents/send', body);
-  console.log(`queued (id:${data.queueId})`);
+cmd('send', 'send <target> --topic <topic> [--in-reply-to <text>] <message>', 'Send a message to operator or another agent', async (args) => {
+  await dispatchSend(parseSendArgs(args));
 });
 
-cmd('reply', 'reply --topic <topic> <message>', 'Reply to the dashboard (topic required)', async (args) => {
-  let topic = null;
-  const filtered = [];
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] === '--topic' && args[i + 1]) { topic = args[++i]; }
-    else { filtered.push(args[i]); }
-  }
-  const message = filtered.join(' ');
-  if (!message || !topic) { console.error('usage: collab reply --topic <topic> <message>'); process.exit(1); }
-  const agent = requireAgentName();
-  await api('POST', '/api/dashboard/reply', { agent, message, topic });
-  console.log('sent');
+cmd('reply', 'reply --topic <topic> [--in-reply-to <text>] <message>', 'Compatibility alias for send operator', async (args) => {
+  await dispatchSend(parseSendArgs(args, 'operator'));
 });
 
 cmd('spawn', 'spawn <name> [task...]', 'Spawn an agent', async (args) => {
@@ -199,6 +234,27 @@ cmd('create', 'create <name> <engine> <cwd>', 'Create a new agent', async (args)
   if (!name || !engine || !cwd) { console.error('usage: collab create <name> <engine> <cwd>'); process.exit(1); }
   const data = await api('POST', '/api/agents', { name, engine, cwd });
   console.log(`created ${data.name} (${data.engine})`);
+});
+
+cmd('create-agent', 'create-agent <persona-file>', 'Create or update an agent from a persona file', async (args) => {
+  const personaFile = args[0];
+  if (!personaFile) {
+    console.error('usage: collab create-agent <persona-file>');
+    process.exit(1);
+  }
+  const filePath = resolve(personaFile);
+  if (!existsSync(filePath)) {
+    console.error(`error: persona file not found: ${filePath}`);
+    process.exit(1);
+  }
+  const content = readFileSync(filePath, 'utf-8');
+  if (!content.trim()) {
+    console.error(`error: persona file is empty: ${filePath}`);
+    process.exit(1);
+  }
+  const name = basename(filePath).replace(/\.md$/i, '');
+  const data = await api('POST', '/api/personas', { name, content });
+  console.log(`materialized ${data.agent.name} from ${basename(filePath)}`);
 });
 
 cmd('exit', 'exit <name>', 'Exit an agent (suspend)', async (args) => {
@@ -294,6 +350,26 @@ cmd('reload', 'reload <name> [task...]', 'Reload an agent (kill + respawn)', asy
   const task = args.slice(1).join(' ') || undefined;
   await api('POST', `/api/agents/${encodeURIComponent(name)}/reload`, { immediate: true, task });
   console.log(`${name} reloading`);
+});
+
+cmd('tmux', 'tmux <agent> -- <tmux args...>', 'Run a constrained tmux command against an agent session', async (args) => {
+  const name = args[0];
+  const dashIdx = args.indexOf('--');
+  const tmuxArgs = dashIdx === -1 ? args.slice(1) : args.slice(dashIdx + 1);
+  if (!name || tmuxArgs.length === 0) {
+    console.error('usage: collab tmux <agent> -- <tmux args...>');
+    process.exit(1);
+  }
+  const data = await api('POST', `/api/agents/${encodeURIComponent(name)}/tmux`, { args: tmuxArgs });
+  if (data.data == null) {
+    console.log('ok');
+  } else if (typeof data.data === 'string') {
+    console.log(data.data);
+  } else if (typeof data.data === 'number' || typeof data.data === 'boolean') {
+    console.log(String(data.data));
+  } else {
+    console.log(JSON.stringify(data.data, null, 2));
+  }
 });
 
 // ── Reminders ──
@@ -407,11 +483,36 @@ function showHelp() {
   for (const c of visible) {
     console.log(`  ${c.usage.padEnd(maxUsage + 2)}  ${c.desc}`);
   }
+  console.log('\nNotes:');
+  console.log('  operator                The human operator in the dashboard');
   console.log('\nEnvironment:');
   console.log('  COLLAB_AGENT            Your agent name (auto-set by orchestrator)');
   console.log('  ORCHESTRATOR_URL        Override orchestrator URL');
   console.log('  ORCHESTRATOR_SECRET     Override secret');
 }
+
+[
+  'agents',
+  'status',
+  'reply',
+  'spawn',
+  'create',
+  'exit',
+  'suspend',
+  'resume',
+  'interrupt',
+  'compact',
+  'kill',
+  'destroy',
+  'queue',
+  'events',
+  'peek',
+  'keys',
+  'reload',
+  'reminder',
+].forEach((name) => {
+  if (COMMANDS[name]) COMMANDS[name].hidden = true;
+});
 
 async function main() {
   const args = process.argv.slice(2);

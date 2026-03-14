@@ -32,6 +32,15 @@ describe('API Routes', () => {
 
     const mockProxyDispatch = async (_proxyId: string, command: ProxyCommand): Promise<ProxyResponse> => {
       proxyCommands.push(command);
+      if (command.action === 'capture') {
+        return { ok: true, data: '> prompt\n' };
+      }
+      if (command.action === 'display_message') {
+        return { ok: true, data: '#{session_name}:0.0' };
+      }
+      if (command.action === 'has_session') {
+        return { ok: true, data: true };
+      }
       return { ok: true };
     };
 
@@ -352,6 +361,8 @@ describe('API Routes', () => {
     assert.ok((data as Record<string, unknown>).messageId);
     assert.ok((data as Record<string, unknown>).queueId);
     assert.equal((data as Record<string, unknown>).status, 'pending');
+    const queued = db.listPendingMessages('api-agent-1');
+    assert.ok(queued.some(m => m.envelope.includes('collab send operator --topic test-topic')));
   });
 
   it('POST /api/agents/send rejects unknown target', async () => {
@@ -369,6 +380,41 @@ describe('API Routes', () => {
     assert.equal(status, 200);
     assert.ok(Array.isArray(data));
     assert.ok((data as Array<Record<string, unknown>>).length > 0);
+  });
+
+  it('POST /api/agents/:name/tmux maps send-keys through the proxy', async () => {
+    proxyCommands = [];
+    const { status, data } = await api('POST', '/api/agents/api-agent-1/tmux', {
+      args: ['send-keys', '/exit', 'Enter'],
+    });
+    assert.equal(status, 200);
+    assert.equal((data as Record<string, unknown>).ok, true);
+    assert.deepEqual(proxyCommands.at(-1), {
+      action: 'send_keys_raw',
+      sessionName: 'agent-api-agent-1',
+      keys: ['/exit', 'Enter'],
+    });
+  });
+
+  it('POST /api/agents/:name/tmux maps display-message through the proxy', async () => {
+    proxyCommands = [];
+    const { status, data } = await api('POST', '/api/agents/api-agent-1/tmux', {
+      args: ['display-message', '-p', '#{session_name}:#{window_index}.#{pane_index}'],
+    });
+    assert.equal(status, 200);
+    assert.equal((data as Record<string, unknown>).data, '#{session_name}:0.0');
+    assert.deepEqual(proxyCommands.at(-1), {
+      action: 'display_message',
+      sessionName: 'agent-api-agent-1',
+      format: '#{session_name}:#{window_index}.#{pane_index}',
+    });
+  });
+
+  it('POST /api/agents/:name/tmux rejects unsupported commands', async () => {
+    const { status } = await api('POST', '/api/agents/api-agent-1/tmux', {
+      args: ['list-sessions'],
+    });
+    assert.equal(status, 400);
   });
 
   // ── Lifecycle Routes ──

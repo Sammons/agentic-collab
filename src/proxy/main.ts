@@ -225,6 +225,15 @@ async function executeCommand(command: ProxyCommand): Promise<ProxyResponse> {
         tmux.sendKeys(command.sessionName, command.keys);
         return { ok: true };
 
+      case 'send_keys_raw':
+        tmux.sendKeysRaw(command.sessionName, command.keys);
+        return { ok: true };
+
+      case 'display_message': {
+        const output = tmux.displayMessage(command.sessionName, command.format);
+        return { ok: true, data: output };
+      }
+
       case 'write_codex_profile':
         writeCodexProfile(command.profileName, command.developerInstructions);
         return { ok: true };
