@@ -711,6 +711,19 @@ describe('Persona', () => {
       assert.equal(submit.send[2]!.keystroke, 'Enter');
     });
 
+    it('parses nested keystrokes hook (preferred name for send)', () => {
+      const raw = [
+        '---', 'engine: claude', 'cwd: /tmp',
+        'exit:', '  keystrokes:', '    - keystroke: Escape', '    - keystroke: Enter',
+        '---', 'Body',
+      ].join('\n');
+      const { frontmatter } = parseFrontmatter(raw);
+      const exit = frontmatter.exit as { keystrokes: Array<{ keystroke: string }> };
+      assert.equal(exit.keystrokes.length, 2);
+      assert.equal(exit.keystrokes[0]!.keystroke, 'Escape');
+      assert.equal(exit.keystrokes[1]!.keystroke, 'Enter');
+    });
+
     it('handles flat and nested hooks in same frontmatter', () => {
       const raw = [
         '---', 'engine: claude', 'model: opus', 'cwd: /tmp', 'proxy_host: crankshaft',

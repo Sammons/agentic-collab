@@ -13,7 +13,8 @@
  * Structured (object):
  *   1. { preset: "<engine>", options?: { model, thinking, permissions } }
  *   2. { shell: "<command>", env?: { KEY: "val" } }
- *   3. { send: [{ keystroke: "Escape" }, { paste: "hello", post_wait_ms: 200 }] }
+ *   3. { send: [{ keystroke: "Escape" }, { paste: "hello", post_wait_ms: 200 }] }  (legacy)
+ *   4. { keystrokes: [{ keystroke: "Escape" }, { paste: "hello" }] }  (preferred)
  *
  * The resolver returns a HookResult describing how the lifecycle should deliver the command.
  */
@@ -21,7 +22,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve, relative, isAbsolute } from 'node:path';
 import type { EngineAdapter, SpawnOptions, ResumeOptions } from './adapters/types.ts';
-import type { AgentRecord, HookValue, StructuredHook, SendAction, PresetHook, ShellHook, SendHook } from '../shared/types.ts';
+import type { AgentRecord, HookValue, StructuredHook, SendAction, PresetHook, ShellHook, SendHook, KeystrokesHook } from '../shared/types.ts';
 import { getAdapter } from './adapters/index.ts';
 import { deserializeHookValue } from './persona.ts';
 import { shellQuote } from '../shared/utils.ts';
@@ -80,6 +81,10 @@ function isShellHook(v: StructuredHook): v is ShellHook {
 
 function isSendHook(v: StructuredHook): v is SendHook {
   return 'send' in v;
+}
+
+function isKeystrokesHook(v: StructuredHook): v is KeystrokesHook {
+  return 'keystrokes' in v;
 }
 
 // ── Resolver ──
@@ -185,6 +190,11 @@ function resolveStructuredHook(
   if (isSendHook(value)) {
     if (!value.send || value.send.length === 0) return { mode: 'skip' };
     return { mode: 'send', actions: value.send };
+  }
+
+  if (isKeystrokesHook(value)) {
+    if (!value.keystrokes || value.keystrokes.length === 0) return { mode: 'skip' };
+    return { mode: 'send', actions: value.keystrokes };
   }
 
   // Unknown structure — skip

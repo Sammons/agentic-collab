@@ -40,8 +40,13 @@ export type SendHook = {
   send: SendAction[];
 };
 
+/** Keystrokes hook: ordered sequence of tmux send-keys/paste actions (preferred name for SendHook). */
+export type KeystrokesHook = {
+  keystrokes: SendAction[];
+};
+
 /** Structured hook value — discriminated by which key is present. */
-export type StructuredHook = PresetHook | ShellHook | SendHook;
+export type StructuredHook = PresetHook | ShellHook | SendHook | KeystrokesHook;
 
 /** A hook field value: flat string (legacy) or structured object. */
 export type HookValue = string | StructuredHook | null;
