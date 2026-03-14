@@ -123,9 +123,9 @@ describe('Persona', () => {
         orchestratorHost: 'http://localhost:3000',
       });
       assert.ok(prompt.includes('test-agent'));
-      assert.ok(prompt.includes('collab send'));
-      assert.ok(prompt.includes('collab reply'));
-      assert.ok(prompt.includes('collab agents'));
+      assert.ok(prompt.includes('collab send operator'));
+      assert.ok(prompt.includes('collab send <agent>'));
+      assert.ok(prompt.includes('collab list-agents'));
       assert.ok(prompt.includes('COLLAB_AGENT=test-agent'));
     });
 
