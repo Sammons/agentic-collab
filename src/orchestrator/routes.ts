@@ -255,7 +255,7 @@ route('POST', '/api/agents/send', async (req, res, _match, ctx) => {
   const topicStr = body.topic as string;
 
   // Format envelope with topic
-  const envelope = `[from: ${body.from}, reply with collab reply --topic ${topicStr}]: '${sanitized}'`;
+  const envelope = buildReplyEnvelope(body.from as string, topicStr, sanitized);
 
   // Enqueue for async delivery
   const pending = ctx.db.enqueueMessage({
@@ -321,7 +321,7 @@ route('POST', '/api/dashboard/send', async (req, res, _match, ctx) => {
   const topicStr = body.topic as string;
 
   // Format envelope with topic for agent
-  const envelope = `[from: dashboard, reply with collab reply --topic ${topicStr}]: '${sanitized}'`;
+  const envelope = buildReplyEnvelope('dashboard', topicStr, sanitized);
 
   // Store in dashboard messages
   const msg = ctx.db.addDashboardMessage(body.agent as string, 'to_agent', sanitized, {
@@ -434,7 +434,7 @@ route('POST', '/api/dashboard/upload', async (req, res, _match, ctx) => {
 
   // Enqueue agent notification through existing pipeline
   const agentMessage = `I uploaded ${writtenPath}`;
-  const envelope = `[from: dashboard, reply with collab reply --topic file-upload]: '${sanitizeMessage(agentMessage)}'`;
+  const envelope = buildReplyEnvelope('dashboard', 'file-upload', sanitizeMessage(agentMessage));
   const displayMessage = `Uploaded ${filename} (${formatBytes(fileSize)})`;
 
   const msg = ctx.db.addDashboardMessage(agentName, 'to_agent', displayMessage, { topic: 'file-upload', sourceAgent: 'dashboard', targetAgent: agentName });
@@ -528,7 +528,7 @@ route('POST', '/api/dashboard/messages/:id/withdraw', async (_req, res, match, c
   const withdrawalText = `[system] the user withdrew this message: "${msg.message}"`;
   const withdrawMsg = ctx.db.addDashboardMessage(msg.agent, 'to_agent', withdrawalText, { topic: msg.topic ?? 'system', sourceAgent: 'dashboard', targetAgent: msg.agent });
 
-  const envelope = `[from: dashboard, reply with collab reply]: '${sanitizeMessage(withdrawalText)}'`;
+  const envelope = buildReplyEnvelope('dashboard', msg.topic ?? 'system', sanitizeMessage(withdrawalText));
   const pending = ctx.db.enqueueMessage({
     sourceAgent: null,
     targetAgent: msg.agent,
@@ -867,6 +867,131 @@ route('POST', '/api/agents/:name/keys', async (req, res, match, ctx) => {
 
   if (!result.ok) { json(res, 500, { error: result.error }); return; }
   json(res, 200, { ok: true });
+});
+
+function parseTmuxCaptureLines(args: string[]): number {
+  let sawPrint = false;
+  let lines = 50;
+
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '-p') {
+      sawPrint = true;
+      continue;
+    }
+    if (args[i] === '-S') {
+      const start = args[++i];
+      const match = typeof start === 'string' ? /^-(\d+)$/.exec(start) : null;
+      if (!match) {
+        throw new Error('capture-pane only supports -S -<lines>');
+      }
+      lines = Math.max(1, Math.min(parseInt(match[1]!, 10), 10000));
+      continue;
+    }
+    throw new Error('capture-pane only supports -p and optional -S -<lines>');
+  }
+
+  if (!sawPrint) {
+    throw new Error('capture-pane currently requires -p');
+  }
+  return lines;
+}
+
+function parseTmuxResize(args: string[]): { width: number; height: number } {
+  if (args.length !== 4) {
+    throw new Error('resize-window requires -x <width> and -y <height>');
+  }
+  const xIdx = args.indexOf('-x');
+  const yIdx = args.indexOf('-y');
+  const width = xIdx !== -1 ? parseInt(args[xIdx + 1] ?? '', 10) : NaN;
+  const height = yIdx !== -1 ? parseInt(args[yIdx + 1] ?? '', 10) : NaN;
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width < 1 || height < 1) {
+    throw new Error('resize-window requires -x <width> and -y <height>');
+  }
+  return { width: Math.floor(width), height: Math.floor(height) };
+}
+
+route('POST', '/api/agents/:name/tmux', async (req, res, match, ctx) => {
+  const name = match.pathname.groups['name']!;
+  const body = await readJson(req);
+  const args = body?.args;
+  if (!Array.isArray(args) || args.length === 0 || !args.every((arg: unknown) => typeof arg === 'string')) {
+    json(res, 400, { error: 'args (string[]) required' }); return;
+  }
+
+  const agent = ctx.db.getAgent(name);
+  if (!agent) { json(res, 404, { error: `Agent "${name}" not found` }); return; }
+  if (!agent.proxyId) { json(res, 400, { error: `Agent "${name}" has no proxy` }); return; }
+
+  const sessionName = agent.tmuxSession ?? `agent-${name}`;
+  const [subcommand, ...rest] = args as string[];
+  let result: ProxyResponse;
+
+  try {
+    switch (subcommand) {
+      case 'send-keys':
+        if (rest.length === 0) throw new Error('send-keys requires at least one key/token');
+        result = await ctx.proxyDispatch(agent.proxyId, {
+          action: 'send_keys_raw',
+          sessionName,
+          keys: rest,
+        });
+        break;
+
+      case 'capture-pane':
+        result = await ctx.proxyDispatch(agent.proxyId, {
+          action: 'capture',
+          sessionName,
+          lines: parseTmuxCaptureLines(rest),
+        });
+        break;
+
+      case 'display-message':
+        if (rest.length !== 2 || rest[0] !== '-p' || !rest[1]) {
+          throw new Error('display-message currently requires -p <format>');
+        }
+        result = await ctx.proxyDispatch(agent.proxyId, {
+          action: 'display_message',
+          sessionName,
+          format: rest[1],
+        });
+        break;
+
+      case 'resize-window': {
+        const { width, height } = parseTmuxResize(rest);
+        result = await ctx.proxyDispatch(agent.proxyId, {
+          action: 'resize_pane',
+          sessionName,
+          width,
+          height,
+        });
+        break;
+      }
+
+      case 'has-session':
+        if (rest.length > 0) throw new Error('has-session does not take extra arguments');
+        result = await ctx.proxyDispatch(agent.proxyId, {
+          action: 'has_session',
+          sessionName,
+        });
+        break;
+
+      case 'pane-activity':
+        if (rest.length > 0) throw new Error('pane-activity does not take extra arguments');
+        result = await ctx.proxyDispatch(agent.proxyId, {
+          action: 'pane_activity',
+          sessionName,
+        });
+        break;
+
+      default:
+        throw new Error('supported tmux commands: send-keys, capture-pane, display-message, resize-window, has-session, pane-activity');
+    }
+  } catch (err) {
+    json(res, 400, { error: (err as Error).message }); return;
+  }
+
+  if (!result.ok) { json(res, 500, { error: result.error }); return; }
+  json(res, 200, { ok: true, data: result.data ?? null });
 });
 
 route('POST', '/api/agents/:name/type', async (req, res, match, ctx) => {
@@ -1280,6 +1405,14 @@ function validateAgentName(name: string): string | null {
   return null;
 }
 
+function replyHint(topic: string): string {
+  return `reply with collab send operator --topic ${topic}`;
+}
+
+function buildReplyEnvelope(from: string, topic: string, message: string): string {
+  return `[from: ${from}, ${replyHint(topic)}]: '${message}'`;
+}
+
 function broadcastReminderUpdate(ctx: RouteContext): void {
   const reminders = ctx.db.listReminders();
   ctx.wss.broadcast(JSON.stringify({ type: 'reminder_update', reminders }));
@@ -1306,4 +1439,3 @@ function makeLifecycleCtx(ctx: RouteContext): LifecycleContext {
     orchestratorHost: ctx.orchestratorHost,
   };
 }
-
