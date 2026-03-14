@@ -904,4 +904,113 @@ describe('Persona', () => {
       }
     });
   });
+
+  describe('custom_buttons frontmatter', () => {
+    it('parses custom_buttons with pipeline steps', () => {
+      const raw = `---
+engine: claude
+cwd: /tmp
+custom_buttons:
+  compact:
+    - shell: /compact
+    - keystrokes:
+      - keystroke: Enter
+  clear:
+    - keystrokes:
+      - keystroke: Escape
+    - shell: /clear
+---
+Persona body
+`;
+      const { frontmatter } = parseFrontmatter(raw);
+      const fm = frontmatter as { custom_buttons?: Record<string, unknown[]> };
+      assert.ok(fm.custom_buttons, 'custom_buttons should be parsed');
+      assert.ok(fm.custom_buttons['compact'], 'should have compact button');
+      assert.ok(fm.custom_buttons['clear'], 'should have clear button');
+
+      const compact = fm.custom_buttons['compact']!;
+      assert.equal(compact.length, 2);
+      assert.deepEqual(compact[0], { type: 'shell', command: '/compact' });
+      assert.equal((compact[1] as { type: string }).type, 'keystrokes');
+
+      const clear = fm.custom_buttons['clear']!;
+      assert.equal(clear.length, 2);
+      assert.equal((clear[0] as { type: string }).type, 'keystrokes');
+      assert.deepEqual(clear[1], { type: 'shell', command: '/clear' });
+    });
+
+    it('syncs custom_buttons to database', () => {
+      const personasDir = mkdtempSync(join(tmpdir(), 'persona-buttons-'));
+      const dbPath = join(personasDir, 'test.db');
+      const db = new Database(dbPath);
+      const origDir = process.env['PERSONAS_DIR'];
+      process.env['PERSONAS_DIR'] = personasDir;
+
+      try {
+        writeFileSync(join(personasDir, 'btn-agent.md'), `---
+engine: claude
+cwd: /tmp
+custom_buttons:
+  compact:
+    - shell: /compact
+---
+Agent with buttons
+`);
+        syncPersonasToDb(db, personasDir);
+        const agent = db.getAgent('btn-agent')!;
+        assert.ok(agent.customButtons, 'customButtons should be stored');
+        const buttons = JSON.parse(agent.customButtons!);
+        assert.ok(buttons['compact'], 'should have compact button');
+        assert.equal(buttons['compact'].length, 1);
+        assert.deepEqual(buttons['compact'][0], { type: 'shell', command: '/compact' });
+      } finally {
+        db.close();
+        if (origDir === undefined) delete process.env['PERSONAS_DIR'];
+        else process.env['PERSONAS_DIR'] = origDir;
+        rmSync(personasDir, { recursive: true, force: true });
+      }
+    });
+
+    it('detects custom_buttons changes in syncPersonasWithDiff', () => {
+      const personasDir = mkdtempSync(join(tmpdir(), 'persona-btndiff-'));
+      const dbPath = join(personasDir, 'test.db');
+      const db = new Database(dbPath);
+      const origDir = process.env['PERSONAS_DIR'];
+      process.env['PERSONAS_DIR'] = personasDir;
+
+      try {
+        // First sync — creates agent
+        writeFileSync(join(personasDir, 'diff-btn.md'), `---
+engine: claude
+cwd: /tmp
+---
+No buttons yet
+`);
+        const r1 = syncPersonasWithDiff(db, personasDir);
+        assert.ok(r1.created.includes('diff-btn'));
+
+        // Second sync — same file, no change
+        const r2 = syncPersonasWithDiff(db, personasDir);
+        assert.ok(r2.unchanged.includes('diff-btn'));
+
+        // Third sync — add custom_buttons
+        writeFileSync(join(personasDir, 'diff-btn.md'), `---
+engine: claude
+cwd: /tmp
+custom_buttons:
+  restart:
+    - shell: /exit
+---
+Now with buttons
+`);
+        const r3 = syncPersonasWithDiff(db, personasDir);
+        assert.ok(r3.updated.includes('diff-btn'), 'should detect custom_buttons change');
+      } finally {
+        db.close();
+        if (origDir === undefined) delete process.env['PERSONAS_DIR'];
+        else process.env['PERSONAS_DIR'] = origDir;
+        rmSync(personasDir, { recursive: true, force: true });
+      }
+    });
+  });
 });

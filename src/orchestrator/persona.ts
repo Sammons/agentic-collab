@@ -60,6 +60,8 @@ export type PersonaFrontmatter = {
   detect_session_regex?: string;
   /** Legacy alias for start (backward compat). */
   spawn?: HookValue;
+  /** Custom dashboard buttons — named keys mapping to pipeline step arrays. */
+  custom_buttons?: Record<string, PipelineStep[]>;
 };
 
 export type ParsedPersona = {
@@ -131,6 +133,18 @@ export function parseFrontmatter(raw: string): { frontmatter: Record<string, unk
       frontmatter[key] = value;
       i = nextLine;
       continue;
+    }
+
+    // custom_buttons has a two-level structure: named keys → pipeline step arrays
+    if (key === 'custom_buttons' && trimmedVal === '' && i + 1 < lines.length) {
+      const nextLine = lines[i + 1]!;
+      const nextIndent = nextLine.length - nextLine.trimStart().length;
+      if (nextIndent > 0) {
+        const { value, nextLine: endLine } = parseCustomButtons(lines, i + 1, nextIndent);
+        frontmatter[key] = value;
+        i = endLine;
+        continue;
+      }
     }
 
     // Check if next line is indented (nested object, array, or pipeline)
@@ -382,6 +396,63 @@ function parsePipelineSteps(
   }
 
   return { value: steps, nextLine: i };
+}
+
+/**
+ * Parse custom_buttons: a two-level structure of named keys → pipeline step arrays.
+ *
+ * custom_buttons:
+ *   compact:
+ *     - shell: /compact
+ *     - keystrokes:
+ *       - keystroke: Enter
+ *   clear-context:
+ *     - keystrokes:
+ *       - keystroke: Escape
+ *     - shell: /clear
+ */
+function parseCustomButtons(
+  lines: string[],
+  startLine: number,
+  baseIndent: number,
+): { value: Record<string, PipelineStep[]>; nextLine: number } {
+  const buttons: Record<string, PipelineStep[]> = {};
+  let i = startLine;
+
+  while (i < lines.length) {
+    const line = lines[i]!;
+    if (line.trim() === '') { i++; continue; }
+
+    const lineIndent = line.length - line.trimStart().length;
+    if (lineIndent < baseIndent) break;
+
+    // Expect a button name at baseIndent level: "  compact:"
+    if (lineIndent === baseIndent) {
+      const colonIdx = line.indexOf(':');
+      if (colonIdx === -1) { i++; continue; }
+      const buttonName = line.slice(0, colonIdx).trim();
+      if (!buttonName) { i++; continue; }
+
+      // Next lines should be pipeline steps at deeper indent
+      if (i + 1 < lines.length) {
+        const nextLine = lines[i + 1]!;
+        const nextIndent = nextLine.length - nextLine.trimStart().length;
+        if (nextIndent > baseIndent && nextLine.trim().startsWith('- ')) {
+          const { value: steps, nextLine: endLine } = parsePipelineSteps(lines, i + 1, nextIndent);
+          buttons[buttonName] = steps;
+          i = endLine;
+          continue;
+        }
+      }
+      // Button with no steps — skip
+      i++;
+    } else {
+      // Deeper indent line that doesn't belong to us — stop
+      break;
+    }
+  }
+
+  return { value: buttons, nextLine: i };
 }
 
 /**
@@ -757,6 +828,12 @@ export function deserializeHookValue(value: string | null): HookValue {
   return value;
 }
 
+/** Serialize custom_buttons for database storage. */
+function serializeCustomButtons(value?: Record<string, PipelineStep[]>): string | null {
+  if (value == null || Object.keys(value).length === 0) return null;
+  return JSON.stringify(value);
+}
+
 // ── Startup Sync ──
 
 import type { Database } from './database.ts';
@@ -805,6 +882,7 @@ export function syncSinglePersona(db: Database, name: string, personasDir?: stri
     hookSubmit: serializeHookValue(fm.submit),
     hookDetectSession: serializeHookValue(fm.detect_session),
     detectSessionRegex: fm.detect_session_regex as string | undefined,
+    customButtons: serializeCustomButtons(fm.custom_buttons),
   });
   return true;
 }
@@ -849,6 +927,7 @@ export function syncPersonasToDb(db: Database, personasDir?: string): number {
       hookSubmit: serializeHookValue(frontmatter.submit),
       hookDetectSession: serializeHookValue(frontmatter.detect_session),
       detectSessionRegex: frontmatter.detect_session_regex as string | undefined,
+      customButtons: serializeCustomButtons(frontmatter.custom_buttons),
     });
 
     synced++;
@@ -908,6 +987,7 @@ export function syncPersonasWithDiff(db: Database, personasDir?: string): SyncDi
       hookSubmit: serializeHookValue(frontmatter.submit),
       hookDetectSession: serializeHookValue(frontmatter.detect_session),
       detectSessionRegex: frontmatter.detect_session_regex as string | undefined,
+      customButtons: serializeCustomButtons(frontmatter.custom_buttons),
     };
 
     if (!existing) {
@@ -931,7 +1011,8 @@ export function syncPersonasWithDiff(db: Database, personasDir?: string): SyncDi
         !optionalScalarEquals(existing.hookInterrupt, upsertOpts.hookInterrupt) ||
         !optionalScalarEquals(existing.hookSubmit, upsertOpts.hookSubmit) ||
         !optionalScalarEquals(existing.hookDetectSession, upsertOpts.hookDetectSession) ||
-        !optionalScalarEquals(existing.detectSessionRegex, upsertOpts.detectSessionRegex);
+        !optionalScalarEquals(existing.detectSessionRegex, upsertOpts.detectSessionRegex) ||
+        !optionalScalarEquals(existing.customButtons, upsertOpts.customButtons);
 
       if (changed) {
         db.upsertAgentFromPersona(upsertOpts);
@@ -992,6 +1073,7 @@ export function createPersonaAndAgent(
     hookSubmit: serializeHookValue(fm.submit),
     hookDetectSession: serializeHookValue(fm.detect_session),
     detectSessionRegex: fm.detect_session_regex as string | undefined,
+    customButtons: serializeCustomButtons(fm.custom_buttons),
   });
 
   return { name, frontmatter: fm, body };
