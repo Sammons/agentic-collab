@@ -54,7 +54,8 @@ export type StructuredHook = PresetHook | ShellHook | SendHook | KeystrokesHook;
 export type PipelineStep =
   | { type: 'keystrokes'; actions: SendAction[] }
   | { type: 'shell'; command: string; env?: LaunchEnv }
-  | { type: 'capture'; lines: number; regex: string; var: string };
+  | { type: 'capture'; lines: number; regex: string; var: string }
+  | { type: 'wait'; ms: number };
 
 /** A hook field value: flat string (legacy), structured object, or pipeline (array of steps). */
 export type HookValue = string | StructuredHook | PipelineStep[] | null;

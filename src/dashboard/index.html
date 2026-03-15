@@ -2242,6 +2242,8 @@
         lines.push(pad + '    lines: ' + step.lines);
         lines.push(pad + '    regex: ' + step.regex);
         lines.push(pad + '    var: ' + step.var);
+      } else if (step.type === 'wait') {
+        lines.push(pad + '- wait: ' + step.ms);
       }
     }
   }

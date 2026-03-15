@@ -168,6 +168,8 @@ async function dispatchHookResult(
             console.warn(`[lifecycle] ${opts.agentName}: capture regex failed for $${step.var}:`, (err as Error).message);
           }
         }
+      } else if (step.type === 'wait') {
+        await sleep(step.ms);
       }
     }
     return;

@@ -1013,4 +1013,26 @@ Now with buttons
       }
     });
   });
+
+  describe('wait pipeline step', () => {
+    it('parses wait step from frontmatter', () => {
+      const raw = `---
+engine: claude
+cwd: /tmp
+start:
+  - shell: claude --model opus
+  - wait: 3000
+  - shell: /status
+---
+Body
+`;
+      const { frontmatter } = parseFrontmatter(raw);
+      const steps = frontmatter['start'] as Array<{ type: string; ms?: number; command?: string }>;
+      assert.ok(Array.isArray(steps), 'start should be a pipeline array');
+      assert.equal(steps.length, 3);
+      assert.deepEqual(steps[0], { type: 'shell', command: 'claude --model opus' });
+      assert.deepEqual(steps[1], { type: 'wait', ms: 3000 });
+      assert.deepEqual(steps[2], { type: 'shell', command: '/status' });
+    });
+  });
 });
