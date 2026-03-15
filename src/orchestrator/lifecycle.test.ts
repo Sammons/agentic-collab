@@ -783,6 +783,48 @@ describe('Lifecycle', () => {
     });
   });
 
+  describe('wait pipeline step', () => {
+    it('pauses execution between pipeline steps', async () => {
+      const pipelineHook = JSON.stringify([
+        { type: 'shell', command: '/exit' },
+        { type: 'wait', ms: 100 },
+        { type: 'keystrokes', actions: [{ keystroke: 'Enter' }] },
+      ]);
+      db.createAgent({
+        name: 'wait-step-agent',
+        engine: 'claude',
+        cwd: '/tmp',
+        proxyId: 'p1',
+        hookExit: pipelineHook,
+      });
+      const a = db.getAgent('wait-step-agent')!;
+      db.updateAgentState('wait-step-agent', 'active', a.version, {
+        tmuxSession: 'agent-wait-step-agent',
+        proxyId: 'p1',
+      });
+
+      const captureCtx: LifecycleContext = {
+        ...ctx,
+        proxyDispatch: async (_proxyId: string, command: ProxyCommand): Promise<ProxyResponse> => {
+          proxyCommands.push(command);
+          if (command.action === 'has_session') return { ok: true, data: false };
+          return { ok: true };
+        },
+      };
+
+      proxyCommands = [];
+      const start = Date.now();
+      await suspendAgent(captureCtx, 'wait-step-agent');
+      const elapsed = Date.now() - start;
+
+      // Should have waited at least 100ms (the wait step)
+      assert.ok(elapsed >= 90, `expected >= 90ms elapsed, got ${elapsed}ms`);
+      // Verify steps executed: paste /exit, then send_keys Enter
+      assert.ok(proxyCommands.some(c => c.action === 'paste' && 'text' in c && (c as { text: string }).text === '/exit'));
+      assert.ok(proxyCommands.some(c => c.action === 'send_keys' && 'keys' in c && (c as { keys: string }).keys === 'Enter'));
+    });
+  });
+
   describe('session capture via exit pipeline', () => {
     it('captures session ID via capture step in exit pipeline on suspend', async () => {
       const exitPipeline = JSON.stringify([

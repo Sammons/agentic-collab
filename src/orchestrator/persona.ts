@@ -390,6 +390,10 @@ function parsePipelineSteps(
         regex: String(captureObj['regex'] ?? ''),
         var: String(captureObj['var'] ?? ''),
       });
+    } else if (stepKey === 'wait') {
+      const ms = typeof coerceScalar(stepVal) === 'number' ? coerceScalar(stepVal) as number : parseInt(stepVal, 10);
+      steps.push({ type: 'wait', ms: isNaN(ms) ? 0 : ms });
+      i++;
     } else {
       throw new Error(`Unknown pipeline step type: ${stepKey}`);
     }
