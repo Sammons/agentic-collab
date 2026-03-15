@@ -592,9 +592,6 @@
     border: 1px solid var(--border);
     border-radius: var(--radius);
     overflow: hidden;
-    position: sticky;
-    bottom: 0;
-    z-index: 2;
   }
   .create-form-toggle {
     display: flex;
@@ -1910,6 +1907,9 @@
     };
     list.appendChild(newGroupBtn);
 
+    // Create agent form — right after New Group
+    list.appendChild(form);
+
     // Engine status summary
     const engineSummary = document.createElement('div');
     engineSummary.style.cssText = 'margin-top:12px;padding:10px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);font-size:12px';
@@ -1956,9 +1956,6 @@
     }
     engineSummary.innerHTML = engineHtml;
     list.appendChild(engineSummary);
-
-    // Create form pinned at bottom (sticky) — must be last child
-    list.appendChild(form);
 
     // Restore focus to create form field if it was focused before re-render
     if (focusedCreateField) {
