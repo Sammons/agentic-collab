@@ -783,6 +783,38 @@ describe('Lifecycle', () => {
     });
   });
 
+  describe('pipeline env injection', () => {
+    it('injects COLLAB_AGENT into first shell step of pipeline start', async () => {
+      const startPipeline = JSON.stringify([
+        { type: 'shell', command: 'claude --model opus' },
+        { type: 'keystroke', key: 'Escape' },
+      ]);
+      db.createAgent({
+        name: 'env-inject-pipeline',
+        engine: 'claude',
+        cwd: '/tmp',
+        proxyId: 'p1',
+        hookStart: startPipeline,
+      });
+
+      proxyCommands = [];
+      const result = await spawnAgent(ctx, {
+        name: 'env-inject-pipeline',
+        engine: 'claude',
+        cwd: '/tmp',
+        proxyId: 'p1',
+      });
+
+      assert.equal(result.state, 'active');
+      const paste = proxyCommands.find(c => c.action === 'paste' && 'text' in c && (c as { text: string }).text.includes('claude --model opus')) as Extract<ProxyCommand, { action: 'paste' }> | undefined;
+      assert.ok(paste, 'should have paste command with claude launch');
+      assert.ok(paste!.text.includes(`COLLAB_AGENT=${shellQuote('env-inject-pipeline')}`), 'should include COLLAB_AGENT');
+      assert.ok(paste!.text.includes('COLLAB_PERSONA_FILE='), 'should include COLLAB_PERSONA_FILE');
+      // Should also have keystroke Escape
+      assert.ok(proxyCommands.some(c => c.action === 'send_keys' && 'keys' in c && (c as { keys: string }).keys === 'Escape'));
+    });
+  });
+
   describe('wait pipeline step', () => {
     it('pauses execution between pipeline steps', async () => {
       const pipelineHook = JSON.stringify([

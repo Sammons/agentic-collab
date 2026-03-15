@@ -73,6 +73,16 @@ function withLaunchEnv(agent: AgentRecord, cmd: string, personaFile: string): st
   return prependExports(cmd, [...baseEntries, ...launchEntries]);
 }
 
+/** Wrap the first shell step in a pipeline with agent env vars (same as withLaunchEnv for paste mode). */
+function wrapFirstShellStep(steps: PipelineStep[], agent: AgentRecord, personaFile: string | null): PipelineStep[] {
+  const idx = steps.findIndex(s => s.type === 'shell');
+  if (idx === -1 || !personaFile) return steps;
+  const step = steps[idx] as { type: 'shell'; command: string };
+  const wrapped = [...steps];
+  wrapped[idx] = { type: 'shell', command: withLaunchEnv(agent, step.command, personaFile) };
+  return wrapped;
+}
+
 /**
  * Dispatch a resolved hook result to the proxy.
  * Handles paste, keys, send sequences, pipelines, and skip modes uniformly.
@@ -133,6 +143,12 @@ async function dispatchHookResult(
     for (const step of result.steps) {
       if (step.type === 'keystrokes') {
         await dispatchHookResult(ctx, proxyId, tmuxSession, { mode: 'send', actions: step.actions }, opts);
+      } else if (step.type === 'keystroke') {
+        await ctx.proxyDispatch(proxyId, {
+          action: 'send_keys',
+          sessionName: tmuxSession,
+          keys: step.key,
+        });
       } else if (step.type === 'shell') {
         await ctx.proxyDispatch(proxyId, {
           action: 'paste',
@@ -335,10 +351,12 @@ export async function spawnAgent(
       templateVars,
     });
 
-    // Wrap paste commands with agent env vars
+    // Wrap launch command with agent env vars
     const wrappedStart = startResult.mode === 'paste'
       ? { mode: 'paste' as const, text: withLaunchEnv(phase1.current, startResult.text, personaFile) }
-      : startResult;
+      : startResult.mode === 'pipeline'
+        ? { ...startResult, steps: wrapFirstShellStep(startResult.steps, phase1.current, personaFile) }
+        : startResult;
 
     await dispatchHookResult(ctx, opts.proxyId, tmuxSession, wrappedStart, { agentName: opts.name });
 
@@ -503,10 +521,12 @@ export async function resumeAgent(
       });
     }
 
-    // Wrap paste commands with agent env vars
+    // Wrap launch command with agent env vars
     const wrappedResume = resumeResult.mode === 'paste'
       ? { mode: 'paste' as const, text: withLaunchEnv(phase1.current, resumeResult.text, personaFile) }
-      : resumeResult;
+      : resumeResult.mode === 'pipeline'
+        ? { ...resumeResult, steps: wrapFirstShellStep(resumeResult.steps, phase1.current, personaFile) }
+        : resumeResult;
 
     await dispatchHookResult(ctx, proxyId, tmuxSession, wrappedResume, { agentName: name });
 
@@ -843,10 +863,12 @@ export async function reloadAgent(
       });
     }
 
-    // Wrap paste commands with agent env vars
+    // Wrap launch command with agent env vars
     const wrappedReload = reloadResult.mode === 'paste'
       ? { mode: 'paste' as const, text: withLaunchEnv(phase1.current, reloadResult.text, personaFile) }
-      : reloadResult;
+      : reloadResult.mode === 'pipeline'
+        ? { ...reloadResult, steps: wrapFirstShellStep(reloadResult.steps, phase1.current, personaFile) }
+        : reloadResult;
 
     await dispatchHookResult(ctx, proxyId, tmuxSession, wrappedReload, { agentName: name });
 
