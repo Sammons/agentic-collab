@@ -783,65 +783,31 @@ describe('Lifecycle', () => {
     });
   });
 
-  describe('detect_session_regex on suspend', () => {
-    it('extracts session ID from pane capture on suspend when regex is set', async () => {
+  describe('session capture via exit pipeline', () => {
+    it('captures session ID via capture step in exit pipeline on suspend', async () => {
+      const exitPipeline = JSON.stringify([
+        { type: 'shell', command: '/exit' },
+        { type: 'capture', lines: 50, regex: 'codex resume ([0-9a-f-]+)', var: 'SESSION_ID' },
+      ]);
       db.createAgent({
-        name: 'detect-suspend',
+        name: 'capture-exit-suspend',
         engine: 'codex',
         cwd: '/tmp',
         proxyId: 'p1',
-        detectSessionRegex: 'codex resume ([0-9a-f-]+)',
+        hookExit: exitPipeline,
       });
-      const a = db.getAgent('detect-suspend')!;
-      db.updateAgentState('detect-suspend', 'active', a.version, {
-        tmuxSession: 'agent-detect-suspend',
+      const a = db.getAgent('capture-exit-suspend')!;
+      db.updateAgentState('capture-exit-suspend', 'active', a.version, {
+        tmuxSession: 'agent-capture-exit-suspend',
         proxyId: 'p1',
       });
 
-      // Mock proxy to return exit output containing session ID
-      const detectCtx: LifecycleContext = {
+      const captureCtx: LifecycleContext = {
         ...ctx,
         proxyDispatch: async (_proxyId: string, command: ProxyCommand): Promise<ProxyResponse> => {
           proxyCommands.push(command);
           if (command.action === 'capture') {
-            return { ok: true, data: 'Session saved.\nTo continue this session, run codex resume 019ce018-ff0a-7ba0-9537-e4eb16a75970\n$' };
-          }
-          if (command.action === 'has_session') {
-            return { ok: true, data: false }; // session exited cleanly
-          }
-          return { ok: true };
-        },
-      };
-
-      proxyCommands = [];
-      const result = await suspendAgent(detectCtx, 'detect-suspend');
-
-      assert.equal(result.state, 'suspended');
-      assert.equal(result.currentSessionId, '019ce018-ff0a-7ba0-9537-e4eb16a75970');
-    });
-
-    it('does not overwrite session ID when regex does not match', async () => {
-      db.createAgent({
-        name: 'detect-nomatch',
-        engine: 'codex',
-        cwd: '/tmp',
-        proxyId: 'p1',
-        detectSessionRegex: 'codex resume ([0-9a-f-]+)',
-      });
-      const a = db.getAgent('detect-nomatch')!;
-      db.updateAgentState('detect-nomatch', 'active', a.version, {
-        tmuxSession: 'agent-detect-nomatch',
-        proxyId: 'p1',
-        currentSessionId: 'original-session-id',
-      });
-
-      // Mock proxy to return exit output WITHOUT a session ID
-      const noMatchCtx: LifecycleContext = {
-        ...ctx,
-        proxyDispatch: async (_proxyId: string, command: ProxyCommand): Promise<ProxyResponse> => {
-          proxyCommands.push(command);
-          if (command.action === 'capture') {
-            return { ok: true, data: 'Process exited.\n$' };
+            return { ok: true, data: 'Session saved.\ncodex resume 019ce018-ff0a-7ba0-9537-e4eb16a75970\n$' };
           }
           if (command.action === 'has_session') {
             return { ok: true, data: false };
@@ -851,81 +817,51 @@ describe('Lifecycle', () => {
       };
 
       proxyCommands = [];
-      const result = await suspendAgent(noMatchCtx, 'detect-nomatch');
+      const result = await suspendAgent(captureCtx, 'capture-exit-suspend');
 
       assert.equal(result.state, 'suspended');
-      // currentSessionId should remain unchanged since regex didn't match
-      assert.equal(result.currentSessionId, 'original-session-id');
+      const agent = db.getAgent('capture-exit-suspend')!;
+      assert.ok(agent.capturedVars, 'capturedVars should be set');
+      assert.equal(agent.capturedVars!['SESSION_ID'], '019ce018-ff0a-7ba0-9537-e4eb16a75970');
+      assert.equal(agent.currentSessionId, '019ce018-ff0a-7ba0-9537-e4eb16a75970');
     });
 
-    it('skips pane capture when no detect_session_regex is set', async () => {
+    it('captures session ID via exit pipeline on reload', async () => {
+      const exitPipeline = JSON.stringify([
+        { type: 'shell', command: '/exit' },
+        { type: 'capture', lines: 50, regex: 'codex resume ([0-9a-f-]+)', var: 'SESSION_ID' },
+      ]);
       db.createAgent({
-        name: 'detect-none',
-        engine: 'claude',
-        cwd: '/tmp',
-        proxyId: 'p1',
-        // No detectSessionRegex
-      });
-      const a = db.getAgent('detect-none')!;
-      db.updateAgentState('detect-none', 'active', a.version, {
-        tmuxSession: 'agent-detect-none',
-        proxyId: 'p1',
-      });
-
-      proxyCommands = [];
-      await suspendAgent(ctx, 'detect-none');
-
-      // The default mock returns capture for any capture call, but
-      // without detectSessionRegex the suspend flow should NOT attempt capture
-      // before the has_session check. Only has_session + kill should appear
-      // after the exit paste.
-      const captureBeforeHasSession = proxyCommands.findIndex(c => c.action === 'capture');
-      const hasSessionIdx = proxyCommands.findIndex(c => c.action === 'has_session');
-      // If capture exists, it should not be for session detection (only has_session check matters)
-      if (captureBeforeHasSession !== -1) {
-        // In the default ctx, capture returns '> \n' which won't match anything,
-        // but more importantly the code path should not call capture before has_session
-        // when there's no regex set
-        assert.ok(captureBeforeHasSession > hasSessionIdx || hasSessionIdx === -1,
-          'should not capture pane for session detection when no regex is set');
-      }
-    });
-  });
-
-  describe('detect_session_regex on reload', () => {
-    it('uses exit-detected session ID for reload resume command', async () => {
-      db.createAgent({
-        name: 'detect-reload',
+        name: 'capture-exit-reload',
         engine: 'codex',
         cwd: '/tmp',
         proxyId: 'p1',
-        detectSessionRegex: 'codex resume ([0-9a-f-]+)',
+        hookExit: exitPipeline,
       });
-      const a = db.getAgent('detect-reload')!;
-      db.updateAgentState('detect-reload', 'active', a.version, {
-        tmuxSession: 'agent-detect-reload',
+      const a = db.getAgent('capture-exit-reload')!;
+      db.updateAgentState('capture-exit-reload', 'active', a.version, {
+        tmuxSession: 'agent-capture-exit-reload',
         proxyId: 'p1',
-        currentSessionId: null, // no prior session
+        currentSessionId: null,
       });
 
-      // Mock proxy to return exit output with session ID
-      const detectCtx: LifecycleContext = {
+      const captureCtx: LifecycleContext = {
         ...ctx,
         proxyDispatch: async (_proxyId: string, command: ProxyCommand): Promise<ProxyResponse> => {
           proxyCommands.push(command);
           if (command.action === 'capture') {
-            return { ok: true, data: 'To continue this session, run codex resume abc-def-123\n$' };
+            return { ok: true, data: 'codex resume abc-def-123\n$' };
           }
           return { ok: true };
         },
       };
 
       proxyCommands = [];
-      const result = await reloadAgent(detectCtx, 'detect-reload', { immediate: true });
+      const result = await reloadAgent(captureCtx, 'capture-exit-reload', { immediate: true });
 
       assert.equal(result.state, 'active');
-      // The detected session ID from exit should be persisted
-      assert.equal(result.currentSessionId, 'abc-def-123');
+      const agent = db.getAgent('capture-exit-reload')!;
+      assert.equal(agent.capturedVars!['SESSION_ID'], 'abc-def-123');
     });
 
     it('injects launchEnv with shell-quoted values during reload', async () => {
@@ -1080,53 +1016,6 @@ describe('Lifecycle', () => {
 
       const agent = db.getAgent('capture-no-match')!;
       assert.equal(agent.capturedVars, null, 'capturedVars should remain null when regex does not match');
-    });
-  });
-
-  describe('pipeline detect_session hook', () => {
-    it('captures session ID via pipeline detect_session after spawn', async () => {
-      const detectHook = JSON.stringify([
-        { type: 'shell', command: '/status' },
-        { type: 'capture', lines: 20, regex: '([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})', var: 'SESSION_ID' },
-        { type: 'keystrokes', actions: [{ keystroke: 'Escape' }] },
-      ]);
-      db.createAgent({
-        name: 'detect-pipeline-spawn',
-        engine: 'claude',
-        cwd: '/tmp',
-        proxyId: 'p1',
-        hookDetectSession: detectHook,
-      });
-
-      const detectCtx: LifecycleContext = {
-        ...ctx,
-        proxyDispatch: async (_proxyId: string, command: ProxyCommand): Promise<ProxyResponse> => {
-          proxyCommands.push(command);
-          if (command.action === 'capture') {
-            return { ok: true, data: 'Session ID: a1b2c3d4-e5f6-7890-abcd-ef1234567890\nModel: opus\n' };
-          }
-          if (command.action === 'has_session') {
-            return { ok: true, data: true };
-          }
-          return { ok: true };
-        },
-      };
-
-      proxyCommands = [];
-      const result = await spawnAgent(detectCtx, {
-        name: 'detect-pipeline-spawn',
-        engine: 'claude',
-        cwd: '/tmp',
-        proxyId: 'p1',
-      });
-
-      assert.equal(result.state, 'active');
-      const agent = db.getAgent('detect-pipeline-spawn')!;
-      assert.equal(agent.currentSessionId, 'a1b2c3d4-e5f6-7890-abcd-ef1234567890');
-      assert.ok(agent.capturedVars, 'capturedVars should be set');
-      assert.equal(agent.capturedVars!['SESSION_ID'], 'a1b2c3d4-e5f6-7890-abcd-ef1234567890');
-      // Should have pasted /status
-      assert.ok(proxyCommands.some(c => c.action === 'paste' && 'text' in c && (c as { text: string }).text === '/status'));
     });
   });
 
