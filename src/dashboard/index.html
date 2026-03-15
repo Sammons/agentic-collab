@@ -2210,9 +2210,40 @@
           return type + ':' + v + (a.post_wait_ms ? ' (+' + a.post_wait_ms + 'ms)' : '');
         }).join(' → ');
       }
+      if ('keystrokes' in val && Array.isArray(val.keystrokes)) {
+        return 'keystrokes: ' + val.keystrokes.map(a => {
+          const type = 'keystroke' in a ? 'keystroke' : 'text' in a ? 'text' : 'paste';
+          return type + ':' + a[type];
+        }).join(' → ');
+      }
+      // Pipeline steps array
+      if (Array.isArray(val)) {
+        return val.map(s => s.type === 'shell' ? s.command : s.type === 'keystrokes' ? 'keys' : s.type).join(' → ');
+      }
       return JSON.stringify(val);
     }
     return String(val);
+  }
+
+  /** Render pipeline steps as YAML lines at a given indent. */
+  function renderPipelineSteps(lines, steps, indent) {
+    const pad = ' '.repeat(indent);
+    for (const step of steps) {
+      if (step.type === 'shell') {
+        lines.push(pad + '- shell: ' + step.command);
+      } else if (step.type === 'keystrokes' && Array.isArray(step.actions)) {
+        lines.push(pad + '- keystrokes:');
+        for (const a of step.actions) {
+          const type = 'keystroke' in a ? 'keystroke' : 'text' in a ? 'text' : 'paste';
+          lines.push(pad + '  - ' + type + ': ' + a[type] + (a.post_wait_ms ? ' (+' + a.post_wait_ms + 'ms)' : ''));
+        }
+      } else if (step.type === 'capture') {
+        lines.push(pad + '- capture:');
+        lines.push(pad + '    lines: ' + step.lines);
+        lines.push(pad + '    regex: ' + step.regex);
+        lines.push(pad + '    var: ' + step.var);
+      }
+    }
   }
 
   /** Render a frontmatter object as YAML text. Handles nested objects and arrays. */
@@ -2222,29 +2253,39 @@
       if (val == null || val === '') continue;
       if (typeof val === 'string' || typeof val === 'number' || typeof val === 'boolean') {
         lines.push(key + ': ' + val);
-      } else if (typeof val === 'object' && !Array.isArray(val)) {
+      } else if (Array.isArray(val)) {
+        // Top-level array — pipeline steps (e.g. exit:, start: with pipeline format)
+        lines.push(key + ':');
+        renderPipelineSteps(lines, val, 2);
+      } else if (typeof val === 'object') {
         lines.push(key + ':');
         for (const [sk, sv] of Object.entries(val)) {
           if (sv == null) continue;
-          if (typeof sv === 'object' && !Array.isArray(sv)) {
+          if (Array.isArray(sv)) {
+            // Array inside object — could be custom_buttons entries or send actions
+            lines.push('  ' + sk + ':');
+            if (sv.length > 0 && sv[0] && typeof sv[0] === 'object' && 'type' in sv[0]) {
+              // Pipeline steps (custom_buttons values)
+              renderPipelineSteps(lines, sv, 4);
+            } else {
+              for (const item of sv) {
+                if (typeof item === 'object') {
+                  const entries = Object.entries(item);
+                  if (entries.length > 0) {
+                    lines.push('    - ' + entries[0][0] + ': ' + entries[0][1]);
+                    for (let i = 1; i < entries.length; i++) {
+                      lines.push('      ' + entries[i][0] + ': ' + entries[i][1]);
+                    }
+                  }
+                } else {
+                  lines.push('    - ' + item);
+                }
+              }
+            }
+          } else if (typeof sv === 'object' && !Array.isArray(sv)) {
             lines.push('  ' + sk + ':');
             for (const [ssk, ssv] of Object.entries(sv)) {
               lines.push('    ' + ssk + ': ' + ssv);
-            }
-          } else if (Array.isArray(sv)) {
-            lines.push('  ' + sk + ':');
-            for (const item of sv) {
-              if (typeof item === 'object') {
-                const entries = Object.entries(item);
-                if (entries.length > 0) {
-                  lines.push('    - ' + entries[0][0] + ': ' + entries[0][1]);
-                  for (let i = 1; i < entries.length; i++) {
-                    lines.push('      ' + entries[i][0] + ': ' + entries[i][1]);
-                  }
-                }
-              } else {
-                lines.push('    - ' + item);
-              }
             }
           } else {
             lines.push('  ' + sk + ': ' + sv);
