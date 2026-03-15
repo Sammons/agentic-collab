@@ -182,79 +182,6 @@ async function dispatchHookResult(
   });
 }
 
-// ── Session ID Detection ──
-
-/**
- * Detect the agent's session ID using the detect_session hook.
- *
- * Resolution order:
- * 1. If agent has a custom detect_session hook → resolve it:
- *    - paste mode: the text is a shell command — exec on proxy and capture stdout
- *    - skip mode: fall through to extractSessionId
- * 2. If preset returns a command via adapter.buildDetectSessionCommand → exec on proxy
- * 3. Fall back to adapter.extractSessionId (pane capture + regex)
- *
- * Returns the session ID string, or null if detection fails/not applicable.
- */
-async function detectSessionId(
-  ctx: LifecycleContext,
-  agent: AgentRecord,
-  proxyId: string,
-  tmuxSession: string,
-): Promise<string | null> {
-  const adapter = getAdapter(agent.engine);
-
-  // Try the detect_session hook first
-  const hookResult = resolveHook('detect_session', agent.hookDetectSession, agent, { cwd: agent.cwd });
-
-  if (hookResult.mode === 'pipeline') {
-    // Pipeline detect_session: dispatch steps (shell → capture → keystrokes, etc.)
-    // The capture step with var=SESSION_ID stores it in captured_vars and currentSessionId.
-    try {
-      await dispatchHookResult(ctx, proxyId, tmuxSession, hookResult, { agentName: agent.name });
-      const updated = ctx.db.getAgent(agent.name);
-      if (updated?.capturedVars?.['SESSION_ID']) {
-        return updated.capturedVars['SESSION_ID']!;
-      }
-    } catch {
-      // Pipeline failed — fall through to legacy detection
-    }
-  }
-
-  if (hookResult.mode === 'paste' && hookResult.text) {
-    // The hook resolved to a shell command — execute on the proxy and capture stdout
-    try {
-      const execResult = await ctx.proxyDispatch(proxyId, {
-        action: 'exec',
-        command: hookResult.text,
-        cwd: agent.cwd,
-        timeoutMs: 5_000,
-      });
-      if (execResult.ok && typeof execResult.data === 'string' && execResult.data) {
-        return execResult.data;
-      }
-    } catch {
-      // Exec failed — fall through to pane capture
-    }
-  }
-
-  // Fall back to pane capture + adapter.extractSessionId
-  try {
-    const captureResult = await ctx.proxyDispatch(proxyId, {
-      action: 'capture',
-      sessionName: tmuxSession,
-      lines: 50,
-    });
-    if (captureResult.ok && typeof captureResult.data === 'string') {
-      return adapter.extractSessionId(captureResult.data);
-    }
-  } catch {
-    // Best-effort — session ID capture failure is non-fatal
-  }
-
-  return null;
-}
-
 // ── Watchdog helper ──
 
 /**
@@ -428,22 +355,10 @@ export async function spawnAgent(
     // Let the CLI fully initialize before finalizing state
     await sleep(POST_SPAWN_ACTIVE_DELAY_MS);
 
-    // 6. Determine session ID to persist.
-    // If agent has an explicit detect_session hook, use it (pipeline or legacy).
-    // Otherwise: Claude uses pre-generated --session-id, other engines detect via adapter.
-    let capturedSessionId: string | null = generatedSessionId;
-    const currentAgent = ctx.db.getAgent(opts.name);
-    if (currentAgent?.hookDetectSession) {
-      // Explicit detect_session hook — run it regardless of engine
-      capturedSessionId = await detectSessionId(ctx, currentAgent, opts.proxyId, tmuxSession) ?? generatedSessionId;
-    } else if (adapter.engine !== 'claude') {
-      // Legacy path: non-Claude engines detect via adapter
-      if (currentAgent) {
-        capturedSessionId = await detectSessionId(ctx, currentAgent, opts.proxyId, tmuxSession);
-      } else {
-        capturedSessionId = null;
-      }
-    }
+    // 6. Session ID: use the pre-generated one from --session-id.
+    // Session detection is now handled by capture steps in exit/start pipelines
+    // (deprecated: detectSessionId / detect_session_regex).
+    const capturedSessionId: string | null = generatedSessionId;
 
     // ── Phase 3: finalize (lock) ──
     return await ctx.locks.withLock(opts.name, async () => {
@@ -617,17 +532,8 @@ export async function resumeAgent(
       });
     }
 
-    // 6. Detect session ID — explicit hook overrides engine default.
-    const resumeAgent = ctx.db.getAgent(name);
-    if (resumeAgent?.hookDetectSession) {
-      await sleep(POST_SPAWN_ACTIVE_DELAY_MS);
-      resumeSessionId = await detectSessionId(ctx, resumeAgent, proxyId, tmuxSession) ?? resumeSessionId;
-    } else if (!resumeSessionId && adapter.engine !== 'claude') {
-      await sleep(POST_SPAWN_ACTIVE_DELAY_MS);
-      if (resumeAgent) {
-        resumeSessionId = await detectSessionId(ctx, resumeAgent, proxyId, tmuxSession);
-      }
-    }
+    // 6. Session detection is now handled by capture steps in pipelines.
+    // (deprecated: detectSessionId / detect_session_regex)
 
     // ── Phase 3: finalize (lock) ──
     return await ctx.locks.withLock(name, async () => {
@@ -694,30 +600,9 @@ export async function suspendAgent(
     // Wait for process to exit, then verify
     await sleep(EXIT_WAIT_MS);
 
-    // Capture pane output before checking session liveness — the exit output
-    // (including session ID) is still in the scrollback buffer.
-    let capturedSessionId: string | null = null;
-    const agentSnapshot = ctx.db.getAgent(name);
-    const detectRegex = agentSnapshot?.detectSessionRegex;
-    if (detectRegex) {
-      try {
-        const captureResult = await ctx.proxyDispatch(proxyId, {
-          action: 'capture',
-          sessionName: tmuxSession,
-          lines: 50,
-        });
-        if (captureResult.ok && typeof captureResult.data === 'string') {
-          const re = new RegExp(detectRegex);
-          const match = re.exec(captureResult.data);
-          if (match && match[1]) {
-            capturedSessionId = match[1].trim();
-            console.log(`[lifecycle] ${name}: detected session ID on exit: ${capturedSessionId}`);
-          }
-        }
-      } catch {
-        // Best-effort — session ID capture failure is non-fatal
-      }
-    }
+    // Session ID capture is now handled by capture steps in the exit pipeline.
+    // If the exit hook included a capture step with var=SESSION_ID, it's already
+    // stored in captured_vars and currentSessionId by dispatchHookResult.
 
     const sessionGone = await ctx.proxyDispatch(proxyId, {
       action: 'has_session',
@@ -742,16 +627,10 @@ export async function suspendAgent(
         return latest;
       }
 
-      const extra: Record<string, unknown> = {
+      const updated = ctx.db.updateAgentState(name, 'suspended', latest.version, {
         lastActivity: new Date().toISOString(),
-      };
-      // Update currentSessionId if regex detected one on exit
-      if (capturedSessionId) {
-        extra.currentSessionId = capturedSessionId;
-      }
-
-      const updated = ctx.db.updateAgentState(name, 'suspended', latest.version, extra as Parameters<typeof ctx.db.updateAgentState>[3]);
-      ctx.db.logEvent(name, 'suspended', undefined, capturedSessionId ? { detectedSessionId: capturedSessionId } : undefined);
+      });
+      ctx.db.logEvent(name, 'suspended');
       return updated;
     });
   } finally {
@@ -883,29 +762,7 @@ export async function reloadAgent(
     // 2. Wait for exit
     await sleep(EXIT_WAIT_MS);
 
-    // 2b. Capture session ID from exit output via detect_session_regex
-    let exitDetectedSessionId: string | null = null;
-    const reloadAgentSnapshot = ctx.db.getAgent(name);
-    const reloadDetectRegex = reloadAgentSnapshot?.detectSessionRegex;
-    if (reloadDetectRegex) {
-      try {
-        const captureResult = await ctx.proxyDispatch(proxyId, {
-          action: 'capture',
-          sessionName: oldTmuxSession,
-          lines: 50,
-        });
-        if (captureResult.ok && typeof captureResult.data === 'string') {
-          const re = new RegExp(reloadDetectRegex);
-          const match = re.exec(captureResult.data);
-          if (match && match[1]) {
-            exitDetectedSessionId = match[1].trim();
-            console.log(`[lifecycle] ${name}: detected session ID on reload exit: ${exitDetectedSessionId}`);
-          }
-        }
-      } catch {
-        // Best-effort — non-fatal
-      }
-    }
+    // Session ID capture is now handled by capture steps in the exit pipeline.
 
     // 3. Kill tmux session
     await ctx.proxyDispatch(proxyId, {
@@ -942,7 +799,9 @@ export async function reloadAgent(
       : undefined;
 
     const personaFile = resolvePersonaFilePath(name, persona);
-    let reloadSessionId = exitDetectedSessionId ?? currentSessionId;
+    // Check if the exit pipeline captured a session ID via capture step
+    const postExitAgent = ctx.db.getAgent(name);
+    let reloadSessionId = postExitAgent?.capturedVars?.['SESSION_ID'] ?? currentSessionId;
     let reloadResult: HookResult;
 
     const reloadTemplateVars: TemplateVars = {
