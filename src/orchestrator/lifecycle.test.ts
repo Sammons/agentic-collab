@@ -900,6 +900,43 @@ describe('Lifecycle', () => {
       assert.equal(agent.currentSessionId, '019ce018-ff0a-7ba0-9537-e4eb16a75970');
     });
 
+    it('supports uuid shorthand in capture regex', async () => {
+      const exitPipeline = JSON.stringify([
+        { type: 'shell', command: '/exit' },
+        { type: 'capture', lines: 50, regex: 'uuid', var: 'SESSION_ID' },
+      ]);
+      db.createAgent({
+        name: 'capture-uuid-shorthand',
+        engine: 'claude',
+        cwd: '/tmp',
+        proxyId: 'p1',
+        hookExit: exitPipeline,
+      });
+      const a = db.getAgent('capture-uuid-shorthand')!;
+      db.updateAgentState('capture-uuid-shorthand', 'active', a.version, {
+        tmuxSession: 'agent-capture-uuid-shorthand',
+        proxyId: 'p1',
+      });
+
+      const captureCtx: LifecycleContext = {
+        ...ctx,
+        proxyDispatch: async (_proxyId: string, command: ProxyCommand): Promise<ProxyResponse> => {
+          proxyCommands.push(command);
+          if (command.action === 'capture') {
+            return { ok: true, data: 'Session: a1b2c3d4-e5f6-7890-abcd-ef1234567890\nModel: opus\n' };
+          }
+          if (command.action === 'has_session') return { ok: true, data: false };
+          return { ok: true };
+        },
+      };
+
+      proxyCommands = [];
+      await suspendAgent(captureCtx, 'capture-uuid-shorthand');
+
+      const agent = db.getAgent('capture-uuid-shorthand')!;
+      assert.equal(agent.capturedVars!['SESSION_ID'], 'a1b2c3d4-e5f6-7890-abcd-ef1234567890');
+    });
+
     it('captures session ID via exit pipeline on reload', async () => {
       const exitPipeline = JSON.stringify([
         { type: 'shell', command: '/exit' },
