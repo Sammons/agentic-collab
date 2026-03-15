@@ -53,6 +53,7 @@ export type StructuredHook = PresetHook | ShellHook | SendHook | KeystrokesHook;
 /** A single step in a composable hook pipeline. */
 export type PipelineStep =
   | { type: 'keystrokes'; actions: SendAction[] }
+  | { type: 'keystroke'; key: string }
   | { type: 'shell'; command: string; env?: LaunchEnv }
   | { type: 'capture'; lines: number; regex: string; var: string }
   | { type: 'wait'; ms: number };

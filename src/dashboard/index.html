@@ -2231,6 +2231,8 @@
     for (const step of steps) {
       if (step.type === 'shell') {
         lines.push(pad + '- shell: ' + step.command);
+      } else if (step.type === 'keystroke') {
+        lines.push(pad + '- keystroke: ' + step.key);
       } else if (step.type === 'keystrokes' && Array.isArray(step.actions)) {
         lines.push(pad + '- keystrokes:');
         for (const a of step.actions) {
