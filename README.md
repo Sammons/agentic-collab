@@ -180,7 +180,8 @@ You are a research specialist focused on codebase exploration.
 | `permissions` | no | `skip` to bypass permission prompts |
 | `group` | no | Group label for dashboard sidebar organization |
 | `env` | no | Top-level mapping of launch-time env vars for spawn/resume/reload |
-| `detect_session_regex` | no | Regex with one capture group to extract session IDs from pane output on exit |
+| `detect_session_regex` | no | _(deprecated)_ Use `capture` pipeline steps instead |
+| `custom_buttons` | no | Named dashboard buttons mapping to pipeline step arrays |
 
 **Launch-time env (`env:`):**
 
@@ -200,16 +201,6 @@ Behavior:
 - Relative paths or tool-specific syntax are interpreted by the launched process/tool, not by the orchestrator.
 - The block applies only to launch paths: `start`, `resume`, and immediate `reload`.
 - `COLLAB_AGENT` and `COLLAB_PERSONA_FILE` are reserved orchestrator vars and cannot be overridden from top-level `env:`.
-
-**Session detection:**
-
-Some engines (Codex, OpenCode) print a resume/session ID on exit (e.g., `To continue, run: codex resume <uuid>`). The `detect_session_regex` field lets the orchestrator capture that ID automatically:
-
-```yaml
-detect_session_regex: 'codex resume ([0-9a-f-]+)'
-```
-
-On suspend or reload, after the exit command completes, the orchestrator captures the last 50 lines of tmux pane output and runs the regex against it. If capture group 1 matches, the session ID is stored — enabling correct `--resume <id>` on next start. This is engine-agnostic: any engine that prints a session ID on exit can use this field.
 
 **Lifecycle hooks:**
 
@@ -262,45 +253,149 @@ start:
     DEBUG: "true"
 ```
 
-**Send mode** — ordered sequence of tmux actions with per-action timing:
+**Send mode** (legacy) — ordered sequence of tmux actions with per-action timing:
 
 ```yaml
 exit:
   send:
     - keystroke: Escape
-      post_wait_ms: 100   # wait 100ms after this action
+      post_wait_ms: 100
     - paste: /exit
     - keystroke: Enter
 ```
 
-Each send action is one of: `keystroke` (tmux send-keys), `text` (tmux send-keys), or `paste` (tmux paste-buffer). Optional `post_wait_ms` controls delay before the next action.
+**Pipeline mode** (preferred) — composable ordered list of steps:
 
-**Mode applicability matrix:**
+```yaml
+start:
+  - shell: claude --dangerously-skip-permissions --model opus --effort max --append-system-prompt $PERSONA_PROMPT
+  - wait: 5000
+  - shell: /status
+  - capture:
+      lines: 30
+      regex: uuid
+      var: SESSION_ID
+  - keystroke: Escape
+```
 
-| Hook | preset | shell | send |
-|------|--------|-------|------|
-| start | ✅ | ✅ | ❌ |
-| resume | ✅ | ✅ | ❌ |
-| exit | ✅ | ✅ | ✅ |
-| compact | ✅ | ✅ | ✅ |
-| interrupt | ✅ | ✅ | ✅ |
-| submit | ✅ | ✅ | ✅ |
+Pipeline steps execute sequentially. Available step types:
+
+| Step | Description |
+|------|-------------|
+| `shell: <command>` | Paste command into tmux + press Enter |
+| `keystroke: <key>` | Send a single tmux key (e.g., `Escape`, `Enter`, `C-c`) |
+| `keystrokes:` | Array of send actions (legacy, for multi-action sequences with timing) |
+| `wait: <ms>` | Pause execution for N milliseconds |
+| `capture:` | Read N lines from pane, match regex, store capture group 1 as a named variable |
+
+**Capture steps** support a `uuid` shorthand for the common UUID regex pattern:
+
+```yaml
+- capture:
+    lines: 30
+    regex: uuid          # expands to ([0-9a-f]{8}-[0-9a-f]{4}-...-[0-9a-f]{12})
+    var: SESSION_ID
+```
+
+When a capture step stores `SESSION_ID`, it also updates the agent's `currentSessionId` for resume. Captured variables are available as `$VAR_NAME` in subsequent shell steps via template interpolation.
 
 **Template variables:**
 
-Shell hook strings support `$VAR_NAME` template variables that are interpolated at hook resolution time:
+Shell hooks and pipeline shell steps support `$VAR_NAME` interpolation:
 
 | Variable | Description |
 |----------|-------------|
-| `$AGENT_NAME` | The agent's name (from `COLLAB_AGENT`) |
-| `$SESSION_ID` | The stored session ID (for resume hooks) |
+| `$AGENT_NAME` | The agent's name |
+| `$AGENT_CWD` | The agent's working directory |
+| `$SESSION_ID` | Stored session ID (from capture or built-in) |
+| `$PERSONA_PROMPT` | The full system prompt (shell-quoted) |
+| `$PERSONA_PROMPT_FILEPATH` | Path to the persona prompt file (shell-quoted) |
+| `$<CAPTURED_VAR>` | Any variable stored by a capture step |
 
-Example:
+**Custom buttons:**
+
+Define dashboard buttons that trigger pipeline steps when clicked:
+
+```yaml
+custom_buttons:
+  compact:
+    - shell: /compact
+  clear-context:
+    - keystroke: Escape
+    - shell: /clear
+```
+
+Buttons appear on agent cards when the agent is active or idle.
+
+**Default hook configurations by engine:**
+
+Claude:
 ```yaml
 start:
-  shell: codex --dangerously-bypass-approvals-and-sandbox --no-alt-screen -p $AGENT_NAME
+  - shell: claude --dangerously-skip-permissions --model opus --effort max --append-system-prompt $PERSONA_PROMPT
+  - wait: 5000
+  - shell: /status
+  - capture:
+      lines: 30
+      regex: uuid
+      var: SESSION_ID
+  - keystroke: Escape
 resume:
-  shell: codex --dangerously-bypass-approvals-and-sandbox --no-alt-screen -p $AGENT_NAME resume $SESSION_ID
+  - shell: claude --resume $SESSION_ID --append-system-prompt $PERSONA_PROMPT
+  - wait: 5000
+  - shell: /status
+  - capture:
+      lines: 30
+      regex: uuid
+      var: SESSION_ID
+  - keystroke: Escape
+exit:
+  - keystroke: Escape
+  - shell: /exit
+interrupt:
+  - keystroke: Escape
+  - keystroke: Escape
+  - keystroke: Escape
+compact:
+  shell: /compact
+```
+
+Codex:
+```yaml
+start:
+  - shell: codex --dangerously-bypass-approvals-and-sandbox --no-alt-screen -p $AGENT_NAME
+resume:
+  - shell: codex --dangerously-bypass-approvals-and-sandbox --no-alt-screen -p $AGENT_NAME resume $SESSION_ID
+exit:
+  - shell: /exit
+  - wait: 3000
+  - capture:
+      lines: 50
+      regex: 'codex resume ([0-9a-f-]+)'
+      var: SESSION_ID
+interrupt:
+  - keystroke: Escape
+  - keystroke: Escape
+```
+
+OpenCode:
+```yaml
+start:
+  - shell: opencode
+resume:
+  - shell: opencode -s $SESSION_ID
+exit:
+  - keystroke: C-c
+  - wait: 2000
+  - capture:
+      lines: 50
+      regex: '(ses_[a-zA-Z0-9]{20,})'
+      var: SESSION_ID
+interrupt:
+  - keystroke: Escape
+compact:
+  - keystroke: C-x
+  - keystroke: c
 ```
 
 **Environment variables:**
@@ -386,6 +481,7 @@ All `POST`/`DELETE` endpoints require `Authorization: Bearer <secret>` when `ORC
 | `POST` | `/api/agents/:name/compact` | Compact agent context |
 | `POST` | `/api/agents/:name/kill` | Hard-kill session |
 | `POST` | `/api/agents/:name/destroy` | Destroy agent permanently (also deletes persona file) |
+| `POST` | `/api/agents/:name/custom/:button` | Execute a custom button pipeline |
 
 ### Messaging
 
@@ -451,7 +547,7 @@ Supported engines: `claude`, `codex`, `opencode`.
 node --test 'src/**/*.test.ts'
 ```
 
-550 tests across 91 suites covering lifecycle operations, database persistence, networking, locking, health monitoring, adapters, message delivery, crash recovery, file upload, streaming upload, rate limiting, path traversal, persona frontmatter, session detection, version handshake, unread cursors, integration tests, and input validation.
+589 tests across 99 suites covering lifecycle operations, database persistence, networking, locking, health monitoring, adapters, message delivery, crash recovery, file upload, streaming upload, rate limiting, path traversal, persona frontmatter, pipeline hooks, variable capture, custom buttons, session detection, version handshake, unread cursors, integration tests, and input validation.
 
 ## Project structure
 
