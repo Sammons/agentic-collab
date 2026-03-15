@@ -611,7 +611,7 @@ function optionalScalarEquals<T>(a: T | null | undefined, b: T | null | undefine
 export function scanPersonas(personasDir?: string): ParsedPersona[] {
   const dir = personasDir ?? getPersonasDir();
   try {
-    const files = readdirSync(dir).filter(f => f.endsWith('.md')).sort();
+    const files = readdirSync(dir).filter(f => f.endsWith('.md') && !f.startsWith('_')).sort();
     const results: ParsedPersona[] = [];
     for (const file of files) {
       try {

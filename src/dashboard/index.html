@@ -1779,6 +1779,9 @@
       return a.localeCompare(b);
     });
 
+    // Create agent form — always visible before agent groups
+    list.appendChild(form);
+
     const collapsedGroups = JSON.parse(localStorage.getItem('collapsedGroups') || '[]');
     for (const groupName of sortedGroups) {
       const isCollapsed = collapsedGroups.includes(groupName);
@@ -1906,9 +1909,6 @@
       renderAgents();
     };
     list.appendChild(newGroupBtn);
-
-    // Create agent form — right after New Group
-    list.appendChild(form);
 
     // Engine status summary
     const engineSummary = document.createElement('div');
