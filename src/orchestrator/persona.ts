@@ -390,6 +390,9 @@ function parsePipelineSteps(
         regex: String(captureObj['regex'] ?? ''),
         var: String(captureObj['var'] ?? ''),
       });
+    } else if (stepKey === 'keystroke') {
+      steps.push({ type: 'keystroke', key: stepVal });
+      i++;
     } else if (stepKey === 'wait') {
       const ms = typeof coerceScalar(stepVal) === 'number' ? coerceScalar(stepVal) as number : parseInt(stepVal, 10);
       steps.push({ type: 'wait', ms: isNaN(ms) ? 0 : ms });

@@ -1034,5 +1034,23 @@ Body
       assert.deepEqual(steps[1], { type: 'wait', ms: 3000 });
       assert.deepEqual(steps[2], { type: 'shell', command: '/status' });
     });
+
+    it('parses keystroke step from frontmatter', () => {
+      const raw = `---
+engine: claude
+cwd: /tmp
+exit:
+  - keystroke: Escape
+  - shell: /exit
+---
+Body
+`;
+      const { frontmatter } = parseFrontmatter(raw);
+      const steps = frontmatter['exit'] as Array<{ type: string; key?: string; command?: string }>;
+      assert.ok(Array.isArray(steps), 'exit should be a pipeline array');
+      assert.equal(steps.length, 2);
+      assert.deepEqual(steps[0], { type: 'keystroke', key: 'Escape' });
+      assert.deepEqual(steps[1], { type: 'shell', command: '/exit' });
+    });
   });
 });
