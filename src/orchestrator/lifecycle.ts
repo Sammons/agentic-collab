@@ -207,6 +207,20 @@ async function detectSessionId(
   // Try the detect_session hook first
   const hookResult = resolveHook('detect_session', agent.hookDetectSession, agent, { cwd: agent.cwd });
 
+  if (hookResult.mode === 'pipeline') {
+    // Pipeline detect_session: dispatch steps (shell → capture → keystrokes, etc.)
+    // The capture step with var=SESSION_ID stores it in captured_vars and currentSessionId.
+    try {
+      await dispatchHookResult(ctx, proxyId, tmuxSession, hookResult, { agentName: agent.name });
+      const updated = ctx.db.getAgent(agent.name);
+      if (updated?.capturedVars?.['SESSION_ID']) {
+        return updated.capturedVars['SESSION_ID']!;
+      }
+    } catch {
+      // Pipeline failed — fall through to legacy detection
+    }
+  }
+
   if (hookResult.mode === 'paste' && hookResult.text) {
     // The hook resolved to a shell command — execute on the proxy and capture stdout
     try {
@@ -415,11 +429,15 @@ export async function spawnAgent(
     await sleep(POST_SPAWN_ACTIVE_DELAY_MS);
 
     // 6. Determine session ID to persist.
-    // Claude: pre-generated via --session-id (generatedSessionId is always set).
-    // Other engines: detect via detect_session hook → pane capture fallback.
+    // If agent has an explicit detect_session hook, use it (pipeline or legacy).
+    // Otherwise: Claude uses pre-generated --session-id, other engines detect via adapter.
     let capturedSessionId: string | null = generatedSessionId;
-    if (adapter.engine !== 'claude') {
-      const currentAgent = ctx.db.getAgent(opts.name);
+    const currentAgent = ctx.db.getAgent(opts.name);
+    if (currentAgent?.hookDetectSession) {
+      // Explicit detect_session hook — run it regardless of engine
+      capturedSessionId = await detectSessionId(ctx, currentAgent, opts.proxyId, tmuxSession) ?? generatedSessionId;
+    } else if (adapter.engine !== 'claude') {
+      // Legacy path: non-Claude engines detect via adapter
       if (currentAgent) {
         capturedSessionId = await detectSessionId(ctx, currentAgent, opts.proxyId, tmuxSession);
       } else {
@@ -599,12 +617,15 @@ export async function resumeAgent(
       });
     }
 
-    // 6. Detect session ID if we don't have one yet (non-Claude fresh spawn via resume path).
-    if (!resumeSessionId && adapter.engine !== 'claude') {
+    // 6. Detect session ID — explicit hook overrides engine default.
+    const resumeAgent = ctx.db.getAgent(name);
+    if (resumeAgent?.hookDetectSession) {
       await sleep(POST_SPAWN_ACTIVE_DELAY_MS);
-      const currentAgent = ctx.db.getAgent(name);
-      if (currentAgent) {
-        resumeSessionId = await detectSessionId(ctx, currentAgent, proxyId, tmuxSession);
+      resumeSessionId = await detectSessionId(ctx, resumeAgent, proxyId, tmuxSession) ?? resumeSessionId;
+    } else if (!resumeSessionId && adapter.engine !== 'claude') {
+      await sleep(POST_SPAWN_ACTIVE_DELAY_MS);
+      if (resumeAgent) {
+        resumeSessionId = await detectSessionId(ctx, resumeAgent, proxyId, tmuxSession);
       }
     }
 
