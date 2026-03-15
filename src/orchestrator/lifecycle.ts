@@ -164,7 +164,10 @@ async function dispatchHookResult(
         });
         if (opts?.agentName && captureResult.ok && typeof captureResult.data === 'string') {
           try {
-            const re = new RegExp(step.regex);
+            const regexStr = step.regex === 'uuid'
+              ? '([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})'
+              : step.regex;
+            const re = new RegExp(regexStr);
             const match = re.exec(captureResult.data);
             if (match && match[1]) {
               const captured = match[1].trim();
