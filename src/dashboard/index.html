@@ -1190,6 +1190,15 @@
     font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
     font-size: 12px;
   }
+  .persona-fm-details summary {
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin-bottom: 8px;
+    user-select: none;
+  }
+  .persona-fm-details summary:hover { color: var(--text); }
   .persona-yaml {
     font-size: 12px;
     padding: 12px;
@@ -2319,7 +2328,7 @@
     }
     const fm = data.frontmatter;
     if (fm && Object.keys(fm).length > 0) {
-      html += '<pre class="persona-yaml">' + esc(fmToYaml(fm)) + '</pre>';
+      html += '<details class="persona-fm-details"><summary>Frontmatter</summary><pre class="persona-yaml">' + esc(fmToYaml(fm)) + '</pre></details>';
     }
     if (data.body) {
       html += '<div class="persona-body">' + renderMarkdown(esc(data.body)) + '</div>';
