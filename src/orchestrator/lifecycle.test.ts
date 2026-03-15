@@ -1083,6 +1083,53 @@ describe('Lifecycle', () => {
     });
   });
 
+  describe('pipeline detect_session hook', () => {
+    it('captures session ID via pipeline detect_session after spawn', async () => {
+      const detectHook = JSON.stringify([
+        { type: 'shell', command: '/status' },
+        { type: 'capture', lines: 20, regex: '([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})', var: 'SESSION_ID' },
+        { type: 'keystrokes', actions: [{ keystroke: 'Escape' }] },
+      ]);
+      db.createAgent({
+        name: 'detect-pipeline-spawn',
+        engine: 'claude',
+        cwd: '/tmp',
+        proxyId: 'p1',
+        hookDetectSession: detectHook,
+      });
+
+      const detectCtx: LifecycleContext = {
+        ...ctx,
+        proxyDispatch: async (_proxyId: string, command: ProxyCommand): Promise<ProxyResponse> => {
+          proxyCommands.push(command);
+          if (command.action === 'capture') {
+            return { ok: true, data: 'Session ID: a1b2c3d4-e5f6-7890-abcd-ef1234567890\nModel: opus\n' };
+          }
+          if (command.action === 'has_session') {
+            return { ok: true, data: true };
+          }
+          return { ok: true };
+        },
+      };
+
+      proxyCommands = [];
+      const result = await spawnAgent(detectCtx, {
+        name: 'detect-pipeline-spawn',
+        engine: 'claude',
+        cwd: '/tmp',
+        proxyId: 'p1',
+      });
+
+      assert.equal(result.state, 'active');
+      const agent = db.getAgent('detect-pipeline-spawn')!;
+      assert.equal(agent.currentSessionId, 'a1b2c3d4-e5f6-7890-abcd-ef1234567890');
+      assert.ok(agent.capturedVars, 'capturedVars should be set');
+      assert.equal(agent.capturedVars!['SESSION_ID'], 'a1b2c3d4-e5f6-7890-abcd-ef1234567890');
+      // Should have pasted /status
+      assert.ok(proxyCommands.some(c => c.action === 'paste' && 'text' in c && (c as { text: string }).text === '/status'));
+    });
+  });
+
   describe('executeCustomButton', () => {
     it('dispatches pipeline steps for a custom button', async () => {
       const buttons = {
