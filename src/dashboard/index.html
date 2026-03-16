@@ -1146,7 +1146,7 @@
   }
   .agent-search input {
     width: 100%;
-    padding: 8px 10px 8px 32px;
+    padding: 8px 30px 8px 32px;
     border-radius: var(--radius);
     border: 1px solid var(--border);
     background: var(--surface);
@@ -1165,6 +1165,21 @@
     color: var(--text-dim);
     pointer-events: none;
   }
+  .agent-search .search-clear {
+    position: absolute;
+    right: 18px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 16px;
+    color: var(--text-dim);
+    cursor: pointer;
+    display: none;
+    background: none;
+    border: none;
+    padding: 2px 4px;
+    line-height: 1;
+  }
+  .agent-search .search-clear:hover { color: var(--text); }
 
   /* ── Persona frontmatter table ── */
   .persona-meta {
@@ -1349,6 +1364,9 @@
     }
     .agent-actions { gap: 4px; }
     .agent-actions button { padding: 4px 8px; font-size: 11px; }
+    .agent-search { padding: 8px; }
+    .agent-search .search-icon { left: 18px; }
+    .agent-search .search-clear { right: 14px; }
     .agent-list { padding: 8px; overflow-x: hidden; }
     .create-form-body input,
     .create-form-body select,
@@ -1422,6 +1440,7 @@
     <div class="agent-search">
       <span class="search-icon">&#128269;</span>
       <input type="text" id="agentSearch" placeholder="Filter agents..." autocomplete="off" />
+      <button class="search-clear" id="agentSearchClear" type="button">&times;</button>
     </div>
     <div class="agent-list" id="agentList">
     </div>
@@ -3757,9 +3776,19 @@
   });
 
   // ── Search Filter ──
-  document.getElementById('agentSearch').addEventListener('input', (e) => {
+  const searchInput = document.getElementById('agentSearch');
+  const searchClear = document.getElementById('agentSearchClear');
+  searchInput.addEventListener('input', (e) => {
     state.searchFilter = e.target.value;
+    searchClear.style.display = e.target.value ? 'block' : 'none';
     renderAgents();
+  });
+  searchClear.addEventListener('click', () => {
+    searchInput.value = '';
+    state.searchFilter = '';
+    searchClear.style.display = 'none';
+    renderAgents();
+    searchInput.focus();
   });
 
   // ── Engine Usage Fetch ──
