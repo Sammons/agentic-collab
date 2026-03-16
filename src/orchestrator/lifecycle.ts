@@ -486,10 +486,14 @@ export async function resumeAgent(
     let resumeSessionId = currentSessionId;
     let resumeResult: HookResult;
 
+    // SESSION_ID resolution: DB currentSessionId → capturedVars.SESSION_ID → agent name fallback
+    const resolvedSessionId = currentSessionId
+      ?? phase1.current.capturedVars?.['SESSION_ID']
+      ?? name;
     const resumeTemplateVars: TemplateVars = {
       AGENT_NAME: name,
       AGENT_CWD: cwd,
-      SESSION_ID: currentSessionId ?? undefined,
+      SESSION_ID: resolvedSessionId,
       PERSONA_PROMPT: systemPrompt,
       PERSONA_PROMPT_FILEPATH: personaFile ?? undefined,
       capturedVars: phase1.current.capturedVars ?? undefined,
@@ -832,7 +836,7 @@ export async function reloadAgent(
     const reloadTemplateVars: TemplateVars = {
       AGENT_NAME: name,
       AGENT_CWD: cwd,
-      SESSION_ID: reloadSessionId ?? undefined,
+      SESSION_ID: reloadSessionId ?? name,
       PERSONA_PROMPT: systemPrompt,
       PERSONA_PROMPT_FILEPATH: personaFile ?? undefined,
       capturedVars: phase1.current.capturedVars ?? undefined,
