@@ -1141,28 +1141,27 @@
 
   /* ── Search Input ── */
   .agent-search {
-    padding: 0 0 8px;
-    position: sticky;
-    top: 0;
-    z-index: 1;
-    background: transparent;
+    position: relative;
+    padding: 8px 12px;
   }
   .agent-search input {
     width: 100%;
-    padding: 8px 10px 8px 30px;
-    border-radius: 6px;
+    padding: 8px 10px 8px 32px;
+    border-radius: var(--radius);
     border: 1px solid var(--border);
-    background: var(--bg);
+    background: var(--surface);
     color: var(--text);
-    font-size: 13px;
+    font-size: 16px;
     outline: none;
+    box-sizing: border-box;
   }
   .agent-search input:focus { border-color: var(--accent); }
   .agent-search .search-icon {
     position: absolute;
-    left: 9px;
-    top: 9px;
-    font-size: 13px;
+    left: 22px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 14px;
     color: var(--text-dim);
     pointer-events: none;
   }
@@ -1420,7 +1419,7 @@
 <div class="layout">
   <div class="agent-sidebar">
     <div id="createFormContainer"></div>
-    <div class="agent-search" style="position:relative;padding:12px 12px 0">
+    <div class="agent-search">
       <span class="search-icon">&#128269;</span>
       <input type="text" id="agentSearch" placeholder="Filter agents..." autocomplete="off" />
     </div>
