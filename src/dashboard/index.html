@@ -1420,11 +1420,11 @@
 <div class="layout">
   <div class="agent-sidebar">
     <div id="createFormContainer"></div>
+    <div class="agent-search" style="position:relative;padding:12px 12px 0">
+      <span class="search-icon">&#128269;</span>
+      <input type="text" id="agentSearch" placeholder="Filter agents..." autocomplete="off" />
+    </div>
     <div class="agent-list" id="agentList">
-      <div class="agent-search" style="position:relative">
-        <span class="search-icon">&#128269;</span>
-        <input type="text" id="agentSearch" placeholder="Filter agents..." autocomplete="off" />
-      </div>
     </div>
   </div>
   <div class="thread-panel" id="threadPanel">
@@ -1707,8 +1707,8 @@
     const prevTask = document.getElementById('createTask')?.value || '';
     const focusedCreateField = document.activeElement?.id?.startsWith('create') ? document.activeElement.id : null;
 
-    // Remove everything except the search box
-    list.querySelectorAll(':scope > :not(.agent-search)').forEach(el => el.remove());
+    // Clear agent list (search and create form are outside the scroll container)
+    list.innerHTML = '';
 
     // Collapsible create agent form
     const hasProxies = state.proxies && state.proxies.length > 0;
