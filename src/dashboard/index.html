@@ -78,13 +78,19 @@
   }
 
   /* ── Agent Grid ── */
-  .agent-list {
+  .agent-sidebar {
+    display: flex;
+    flex-direction: column;
     border-right: 1px solid var(--border);
+    overflow: hidden;
+  }
+  .agent-list {
     overflow-y: auto;
     padding: 12px;
     display: flex;
     flex-direction: column;
     gap: 8px;
+    flex: 1;
   }
 
   .agent-card {
@@ -1280,10 +1286,10 @@
       max-height: none;
     }
     .thread-panel { height: calc(100vh - 49px); height: calc(100dvh - 49px); }
-    .layout.mobile-thread .agent-list { display: none; }
+    .layout.mobile-thread .agent-sidebar { display: none; }
     .layout.mobile-thread .thread-panel { display: flex; }
     .layout:not(.mobile-thread) .thread-panel { display: none; }
-    .layout:not(.mobile-thread) .agent-list { display: flex; }
+    .layout:not(.mobile-thread) .agent-sidebar { display: flex; }
     .mobile-back { display: block; }
     .msg { max-width: 85%; }
     .thread-input {
@@ -1412,10 +1418,13 @@
   </div>
 </header>
 <div class="layout">
-  <div class="agent-list" id="agentList">
-    <div class="agent-search" style="position:relative">
-      <span class="search-icon">&#128269;</span>
-      <input type="text" id="agentSearch" placeholder="Filter agents..." autocomplete="off" />
+  <div class="agent-sidebar">
+    <div id="createFormContainer"></div>
+    <div class="agent-list" id="agentList">
+      <div class="agent-search" style="position:relative">
+        <span class="search-icon">&#128269;</span>
+        <input type="text" id="agentSearch" placeholder="Filter agents..." autocomplete="off" />
+      </div>
     </div>
   </div>
   <div class="thread-panel" id="threadPanel">
@@ -1779,8 +1788,12 @@
       return a.localeCompare(b);
     });
 
-    // Create agent form — always visible before agent groups
-    list.appendChild(form);
+    // Create agent form — outside scroll container, always visible
+    const formContainer = document.getElementById('createFormContainer');
+    if (formContainer) {
+      formContainer.innerHTML = '';
+      formContainer.appendChild(form);
+    }
 
     const collapsedGroups = JSON.parse(localStorage.getItem('collapsedGroups') || '[]');
     for (const groupName of sortedGroups) {
