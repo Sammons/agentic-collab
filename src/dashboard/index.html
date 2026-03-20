@@ -3618,7 +3618,7 @@
       }
 
       function isSeparatorRow(line) {
-        return /^\|?[\s:]*-{2,}[\s:]*(\|[\s:]*-{2,}[\s:]*)+\|?\s*$/.test(line);
+        return /^\|?[\s:]*-{2,}[\s:]*(\|[\s:]*-{2,}[\s:]*)*\|?\s*$/.test(line) && line.includes('-');
       }
 
       for (let i = 0; i < lines.length; i++) {
