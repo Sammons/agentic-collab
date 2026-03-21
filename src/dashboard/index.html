@@ -3829,11 +3829,21 @@ You are a specialist agent. Describe your role and responsibilities here.
     const nameInput = overlay.querySelector('#createAgentName');
     setTimeout(() => nameInput.focus(), 50);
 
-    // Close on overlay click (not modal body)
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    // Close on overlay background click — require both mousedown and mouseup on overlay
+    // to prevent accidental dismissal when dragging from textarea to overlay
+    let mouseDownOnOverlay = false;
+    overlay.addEventListener('mousedown', (e) => { mouseDownOnOverlay = e.target === overlay; });
+    overlay.addEventListener('mouseup', (e) => {
+      if (mouseDownOnOverlay && e.target === overlay) overlay.remove();
+      mouseDownOnOverlay = false;
+    });
+
+    // Escape key closes modal
+    const escHandler = (e) => { if (e.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', escHandler); } };
+    document.addEventListener('keydown', escHandler);
 
     // Cancel
-    overlay.querySelector('#createCancelBtn').onclick = () => overlay.remove();
+    overlay.querySelector('#createCancelBtn').onclick = () => { overlay.remove(); document.removeEventListener('keydown', escHandler); };
 
     // Engine template switcher
     overlay.querySelector('#createEngineSelect').onchange = (e) => {
