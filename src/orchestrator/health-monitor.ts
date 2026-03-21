@@ -59,7 +59,7 @@ export class HealthMonitor {
    */
   static readonly IDLE_THRESHOLD = 2;
   /** Number of trailing pane lines to capture for screen-diff. */
-  static readonly SNAPSHOT_LINES = 15;
+  static readonly SNAPSHOT_LINES = 30;
   private readonly db: Database;
   private readonly locks: LockManager;
   private readonly proxyDispatch: (proxyId: string, command: ProxyCommand) => Promise<ProxyResponse>;
