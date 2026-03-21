@@ -365,6 +365,7 @@ route('POST', '/api/dashboard/upload', async (req, res, _match, ctx) => {
   const url = new URL(req.url!, `http://${req.headers.host}`);
   const agentName = url.searchParams.get('agent');
   const filename = url.searchParams.get('filename');
+  const userMessage = url.searchParams.get('message');
 
   if (!agentName || !filename) {
     return json(res, 400, { error: 'agent and filename query params required' });
@@ -434,9 +435,12 @@ route('POST', '/api/dashboard/upload', async (req, res, _match, ctx) => {
   const fileSize = (proxyResult.data?.size as number) ?? 0;
 
   // Enqueue agent notification through existing pipeline
-  const agentMessage = `I uploaded ${writtenPath}`;
+  const uploadNotice = `I uploaded ${writtenPath}`;
+  const agentMessage = userMessage ? `${userMessage}\n\n${uploadNotice}` : uploadNotice;
   const envelope = buildReplyEnvelope('dashboard', 'file-upload', sanitizeMessage(agentMessage));
-  const displayMessage = `Uploaded ${filename} (${formatBytes(fileSize)})`;
+  const displayMessage = userMessage
+    ? `${userMessage}\n\nUploaded ${filename} (${formatBytes(fileSize)})`
+    : `Uploaded ${filename} (${formatBytes(fileSize)})`;
 
   const msg = ctx.db.addDashboardMessage(agentName, 'to_agent', displayMessage, { topic: 'file-upload', sourceAgent: 'dashboard', targetAgent: agentName });
   const pending = ctx.db.enqueueMessage({
