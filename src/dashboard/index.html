@@ -3829,13 +3829,16 @@ You are a specialist agent. Describe your role and responsibilities here.
     const nameInput = overlay.querySelector('#createAgentName');
     setTimeout(() => nameInput.focus(), 50);
 
-    // Close on overlay background click — require both mousedown and mouseup on overlay
-    // to prevent accidental dismissal when dragging from textarea to overlay
-    let mouseDownOnOverlay = false;
-    overlay.addEventListener('mousedown', (e) => { mouseDownOnOverlay = e.target === overlay; });
-    overlay.addEventListener('mouseup', (e) => {
-      if (mouseDownOnOverlay && e.target === overlay) overlay.remove();
-      mouseDownOnOverlay = false;
+    // Close on overlay background click — stop propagation from modal to prevent
+    // accidental dismissal. Uses pointerdown/pointerup for mouse+touch support.
+    const modal = overlay.querySelector('.create-modal');
+    modal.addEventListener('pointerdown', (e) => e.stopPropagation());
+    modal.addEventListener('pointerup', (e) => e.stopPropagation());
+    let pointerDownOnOverlay = false;
+    overlay.addEventListener('pointerdown', (e) => { pointerDownOnOverlay = e.target === overlay; });
+    overlay.addEventListener('pointerup', (e) => {
+      if (pointerDownOnOverlay && e.target === overlay) overlay.remove();
+      pointerDownOnOverlay = false;
     });
 
     // Escape key closes modal
