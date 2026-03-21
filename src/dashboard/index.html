@@ -592,66 +592,116 @@
     font-weight: 600;
   }
 
-  /* ── Create Form ── */
-  .create-form {
+  /* ── Create Agent Button ── */
+  .create-agent-btn {
+    width: 100%;
+    padding: 10px 14px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+    color: var(--text-dim);
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    cursor: pointer;
+    text-align: left;
+    margin: 8px 12px;
+    box-sizing: border-box;
+    width: calc(100% - 24px);
+  }
+  .create-agent-btn:hover { color: var(--accent); border-color: var(--accent); }
+
+  /* ── Create Agent Modal ── */
+  .create-modal-overlay {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.6);
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+  }
+  .create-modal {
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius);
+    width: 100%;
+    max-width: 640px;
+    max-height: 90vh;
+    display: flex;
+    flex-direction: column;
     overflow: hidden;
   }
-  .create-form-toggle {
+  .create-modal-header {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    padding: 10px 14px;
-    cursor: pointer;
-    user-select: none;
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--text-dim);
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-  }
-  .create-form-toggle:hover { color: var(--accent); }
-  .create-form-toggle .chevron { transition: transform 0.15s; }
-  .create-form.open .chevron { transform: rotate(90deg); }
-  .create-form-body {
-    display: none;
-    padding: 0 14px 14px;
-    flex-direction: column;
     gap: 8px;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
   }
-  .create-form.open .create-form-body { display: flex; }
-  .create-form input, .create-form select, .create-form textarea {
+  .create-modal-header input {
+    flex: 1;
     padding: 8px 10px;
     border-radius: 6px;
     border: 1px solid var(--border);
     background: var(--bg);
     color: var(--text);
-    font-size: 13px;
-    font-family: inherit;
+    font-size: 16px;
     outline: none;
-    resize: vertical;
+    box-sizing: border-box;
   }
-  .create-form input:focus, .create-form select:focus, .create-form textarea:focus { border-color: var(--accent); }
-  .create-form-actions { display: flex; gap: 6px; }
-  .create-form-actions button {
-    padding: 7px 14px;
+  .create-modal-header input:focus { border-color: var(--accent); }
+  .create-modal-body {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    padding: 0 16px 16px;
+  }
+  .create-modal-body textarea {
+    flex: 1;
+    width: 100%;
+    min-height: 300px;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 12px;
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    font-size: 12px;
+    resize: none;
+    outline: none;
+    box-sizing: border-box;
+    margin-top: 12px;
+  }
+  .create-modal-body textarea:focus { border-color: var(--accent); }
+  .create-modal-actions {
+    display: flex;
+    gap: 8px;
+    padding: 12px 16px;
+    border-top: 1px solid var(--border);
+  }
+  .create-modal-actions button {
+    padding: 8px 16px;
     border-radius: 6px;
     border: none;
-    background: var(--accent);
-    color: #fff;
     font-weight: 600;
-    font-size: 12px;
+    font-size: 13px;
     cursor: pointer;
   }
-  .create-form-actions button:hover { opacity: 0.9; }
-  .create-form-actions button:disabled { opacity: 0.4; cursor: not-allowed; }
-  .create-form-actions button.secondary {
+  .create-modal-actions .primary { background: var(--accent); color: #fff; }
+  .create-modal-actions .primary:hover { opacity: 0.9; }
+  .create-modal-actions .primary:disabled { opacity: 0.4; cursor: not-allowed; }
+  .create-modal-actions .secondary {
     background: transparent;
     border: 1px solid var(--border);
     color: var(--text-dim);
   }
+  .create-modal-actions .secondary:hover { border-color: var(--accent); color: var(--accent); }
+  .create-modal-actions .cancel { background: transparent; border: none; color: var(--text-dim); margin-left: auto; }
+  .create-modal-actions .cancel:hover { color: var(--text); }
   .create-form-actions button.secondary:hover { border-color: var(--accent); color: var(--accent); }
 
   /* ── System message ── */
@@ -1708,72 +1758,13 @@
   }
 
   // ── Render ──
-  let createFormOpen = false;
 
   function renderAgents() {
     const list = document.getElementById('agentList');
 
     // Preserve create form input values and focus before clearing
-    const prevName = document.getElementById('createName')?.value || '';
-    const prevEngine = document.getElementById('createEngine')?.value || 'claude';
-    const prevProxy = document.getElementById('createProxy')?.value || '';
-    const prevCwd = document.getElementById('createCwd')?.value || '/tmp';
-    const prevModel = document.getElementById('createModel')?.value || '';
-    const prevThinking = document.getElementById('createThinking')?.value || '';
-    const prevPermissions = document.getElementById('createPermissions')?.value || '';
-    const prevGroup = document.getElementById('createGroup')?.value || '';
-    const prevTask = document.getElementById('createTask')?.value || '';
-    const focusedCreateField = document.activeElement?.id?.startsWith('create') ? document.activeElement.id : null;
-
     // Clear agent list (search and create form are outside the scroll container)
     list.innerHTML = '';
-
-    // Collapsible create agent form
-    const hasProxies = state.proxies && state.proxies.length > 0;
-    const form = document.createElement('div');
-    form.className = `create-form${createFormOpen ? ' open' : ''}`;
-    form.innerHTML = `
-      <div class="create-form-toggle">
-        <span>+ New Agent</span>
-        <span class="chevron">\u25B8</span>
-      </div>
-      <div class="create-form-body">
-        <input type="text" id="createName" placeholder="Agent name" value="${esc(prevName)}" autocomplete="off" />
-        <select id="createEngine">
-          <option value="claude"${prevEngine === 'claude' ? ' selected' : ''}>claude</option>
-          <option value="codex"${prevEngine === 'codex' ? ' selected' : ''}>codex</option>
-          <option value="opencode"${prevEngine === 'opencode' ? ' selected' : ''}>opencode</option>
-        </select>
-        <select id="createProxy">
-          ${(state.proxies || []).map(p => `<option value="${esc(p.proxyId)}"${prevProxy === p.proxyId ? ' selected' : ''}>${esc(p.proxyId)}</option>`).join('')}
-        </select>
-        <input type="text" id="createCwd" placeholder="Working directory" value="${esc(prevCwd)}" autocomplete="off" />
-        <input type="text" id="createModel" placeholder="Model (optional)" value="${esc(prevModel)}" autocomplete="off" />
-        <div style="display:flex;gap:6px">
-          <select id="createThinking" style="flex:1" title="Thinking effort">
-            <option value=""${prevThinking === '' ? ' selected' : ''}>Thinking (default)</option>
-            <option value="low"${prevThinking === 'low' ? ' selected' : ''}>low</option>
-            <option value="medium"${prevThinking === 'medium' ? ' selected' : ''}>medium</option>
-            <option value="high"${prevThinking === 'high' ? ' selected' : ''}>high</option>
-          </select>
-          <select id="createPermissions" style="flex:1" title="Permission mode">
-            <option value=""${prevPermissions === '' ? ' selected' : ''}>Permissions (default)</option>
-            <option value="skip"${prevPermissions === 'skip' ? ' selected' : ''}>skip</option>
-          </select>
-        </div>
-        <input type="text" id="createGroup" placeholder="Group (optional)" value="${esc(prevGroup)}" autocomplete="off" />
-        <textarea id="createTask" rows="2" placeholder="Initial task (optional)" autocomplete="off">${esc(prevTask)}</textarea>
-        <div class="create-form-actions">
-          <button onclick="document.dispatchEvent(new CustomEvent('create-agent', {detail:{spawn:true}}))" ${hasProxies ? '' : 'disabled title="No proxy servers registered"'}>Create & Spawn</button>
-          <button class="secondary" onclick="document.dispatchEvent(new CustomEvent('create-agent', {detail:{spawn:false}}))">Create Only</button>
-        </div>
-        ${!hasProxies ? '<div style="font-size:11px;color:var(--yellow);margin-top:2px">No proxy servers registered — spawning disabled</div>' : ''}
-      </div>
-    `;
-    form.querySelector('.create-form-toggle').onclick = () => {
-      createFormOpen = !createFormOpen;
-      form.classList.toggle('open', createFormOpen);
-    };
 
     const filter = state.searchFilter.toLowerCase();
     const filtered = filter
@@ -1806,11 +1797,14 @@
       return a.localeCompare(b);
     });
 
-    // Create agent form — outside scroll container, always visible
+    // New Agent button — opens creation modal
     const formContainer = document.getElementById('createFormContainer');
-    if (formContainer) {
-      formContainer.innerHTML = '';
-      formContainer.appendChild(form);
+    if (formContainer && !formContainer.hasChildNodes()) {
+      const btn = document.createElement('button');
+      btn.className = 'create-agent-btn';
+      btn.textContent = '+ New Agent';
+      btn.onclick = () => openCreateAgentModal();
+      formContainer.appendChild(btn);
     }
 
     const collapsedGroups = JSON.parse(localStorage.getItem('collapsedGroups') || '[]');
@@ -1987,12 +1981,6 @@
     }
     engineSummary.innerHTML = engineHtml;
     list.appendChild(engineSummary);
-
-    // Restore focus to create form field if it was focused before re-render
-    if (focusedCreateField) {
-      const el = document.getElementById(focusedCreateField);
-      if (el) el.focus();
-    }
   }
 
   function renderThread() {
@@ -3720,68 +3708,125 @@
     return `${days}d ago`;
   }
 
-  // ── Create Agent ──
-  document.addEventListener('create-agent', async (e) => {
-    const shouldSpawn = e.detail?.spawn ?? false;
-    const name = document.getElementById('createName')?.value.trim();
-    const engine = document.getElementById('createEngine')?.value;
-    const proxyHost = document.getElementById('createProxy')?.value;
-    const cwd = document.getElementById('createCwd')?.value.trim();
-    const model = document.getElementById('createModel')?.value.trim();
-    const thinking = document.getElementById('createThinking')?.value;
-    const permissions = document.getElementById('createPermissions')?.value;
-    const group = document.getElementById('createGroup')?.value.trim();
-    const task = document.getElementById('createTask')?.value.trim();
-    if (!name) { showToast('Agent name is required', 'error'); return; }
-    if (!cwd) { showToast('Working directory is required', 'error'); return; }
+  // ── Create Agent Modal ──
+  const DEFAULT_PERSONA_TEMPLATE = `---
+engine: claude
+cwd: /home/user/project
+proxy_host: crankshaft
+group: general
+start:
+  - shell: claude --dangerously-skip-permissions --model opus --effort max --append-system-prompt $PERSONA_PROMPT
+  - wait: 5000
+  - shell: /status
+  - capture:
+      lines: 30
+      regex: uuid
+      var: SESSION_ID
+  - keystroke: Escape
+resume:
+  - shell: claude --resume $SESSION_ID --append-system-prompt $PERSONA_PROMPT
+  - wait: 5000
+  - shell: /status
+  - capture:
+      lines: 30
+      regex: uuid
+      var: SESSION_ID
+  - keystroke: Escape
+exit:
+  - keystroke: Escape
+  - shell: /exit
+interrupt:
+  - keystroke: Escape
+  - keystroke: Escape
+  - keystroke: Escape
+compact:
+  shell: /compact
+---
+# Agent Name
 
-    try {
-      // Step 1: Create the agent
-      const createRes = await fetch('/api/agents', {
-        method: 'POST',
-        headers: authHeaders(),
-        body: JSON.stringify({
-          name, engine, cwd,
-          proxyHost: proxyHost || undefined,
-          model: model || undefined,
-          thinking: thinking || undefined,
-          permissions: permissions || undefined,
-          group: group || undefined,
-        }),
-      });
-      if (createRes.status === 401) { handleAuthError(); return; }
-      const createBody = await createRes.json();
-      if (!createRes.ok) {
-        showToast(createBody.error || 'Create failed', 'error');
+You are a specialist agent. Describe your role and responsibilities here.
+`;
+
+  function openCreateAgentModal() {
+    const overlay = document.createElement('div');
+    overlay.className = 'create-modal-overlay';
+    const hasProxies = state.proxies && state.proxies.length > 0;
+    overlay.innerHTML = `
+      <div class="create-modal">
+        <div class="create-modal-header">
+          <input type="text" id="createAgentName" placeholder="agent-name (kebab-case)" autocomplete="off" />
+        </div>
+        <div class="create-modal-body">
+          <textarea id="createAgentContent">${esc(DEFAULT_PERSONA_TEMPLATE)}</textarea>
+        </div>
+        <div class="create-modal-actions">
+          <button class="primary" id="createSpawnBtn" ${hasProxies ? '' : 'disabled title="No proxy registered"'}>Create &amp; Spawn</button>
+          <button class="secondary" id="createOnlyBtn">Create Only</button>
+          <button class="cancel" id="createCancelBtn">Cancel</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+
+    // Focus name input
+    const nameInput = overlay.querySelector('#createAgentName');
+    setTimeout(() => nameInput.focus(), 50);
+
+    // Close on overlay click (not modal body)
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+
+    // Cancel
+    overlay.querySelector('#createCancelBtn').onclick = () => overlay.remove();
+
+    // Create handler
+    async function createAgent(spawn) {
+      const name = nameInput.value.trim();
+      const content = overlay.querySelector('#createAgentContent').value;
+      if (!name) { showToast('Agent name is required', 'error'); return; }
+      if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$/.test(name)) {
+        showToast('Name: 1-63 chars, start alphanumeric, [a-zA-Z0-9_-]', 'error');
         return;
       }
 
-      document.getElementById('createName').value = '';
-      document.getElementById('createTask').value = '';
-      createFormOpen = false;
-
-      if (shouldSpawn) {
-        // Step 2: Spawn with optional task
-        const spawnBody = {};
-        if (task) spawnBody.task = task;
-        const spawnRes = await fetch(`/api/agents/${encodeURIComponent(name)}/spawn`, {
+      try {
+        // Create persona file + agent via POST /api/personas
+        const createRes = await fetch('/api/personas', {
           method: 'POST',
           headers: authHeaders(),
-          body: JSON.stringify(spawnBody),
+          body: JSON.stringify({ name, content }),
         });
-        if (spawnRes.ok) {
-          showToast(`Agent "${name}" created and spawning`, 'success');
-        } else {
-          showToast(`Agent created but spawn failed`, 'warning');
+        if (createRes.status === 401) { handleAuthError(); return; }
+        const createBody = await createRes.json();
+        if (!createRes.ok) {
+          showToast(createBody.error || 'Create failed', 'error');
+          return;
         }
-      } else {
-        showToast(`Agent "${name}" created`, 'success');
+
+        overlay.remove();
+
+        if (spawn) {
+          const spawnRes = await fetch(`/api/agents/${encodeURIComponent(name)}/spawn`, {
+            method: 'POST',
+            headers: authHeaders(),
+            body: JSON.stringify({}),
+          });
+          if (spawnRes.ok) {
+            showToast(`Agent "${name}" created and spawning`, 'success');
+          } else {
+            showToast('Agent created but spawn failed', 'warning');
+          }
+        } else {
+          showToast(`Agent "${name}" created`, 'success');
+        }
+        selectAgent(name);
+      } catch (err) {
+        showToast('Create failed — network error', 'error');
       }
-      selectAgent(name);
-    } catch (err) {
-      showToast('Create failed — network error', 'error');
     }
-  });
+
+    overlay.querySelector('#createSpawnBtn').onclick = () => createAgent(true);
+    overlay.querySelector('#createOnlyBtn').onclick = () => createAgent(false);
+  }
 
   // ── Search Filter ──
   const searchInput = document.getElementById('agentSearch');
