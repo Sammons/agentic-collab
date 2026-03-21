@@ -3412,8 +3412,9 @@
 
   // ── File Upload ──
 
-  async function uploadFile(file) {
-    const url = `/api/dashboard/upload?agent=${encodeURIComponent(state.selected)}&filename=${encodeURIComponent(file.name)}`;
+  async function uploadFile(file, message) {
+    let url = `/api/dashboard/upload?agent=${encodeURIComponent(state.selected)}&filename=${encodeURIComponent(file.name)}`;
+    if (message) url += `&message=${encodeURIComponent(message)}`;
     const headers = { 'content-type': 'application/octet-stream' };
     const t = getToken();
     if (t) headers['authorization'] = `Bearer ${t}`;
@@ -3437,6 +3438,11 @@
     const files = Array.from(e.target.files);
     if (!files.length || !state.selected) return;
 
+    // Grab any text in the message input to send alongside the file
+    const msgInput = document.getElementById('threadInput');
+    const attachedMessage = msgInput?.value?.trim() || '';
+    if (attachedMessage) { msgInput.value = ''; }
+
     // Warn about large files
     const largeFiles = files.filter(f => f.size >= LARGE_FILE_THRESHOLD);
     if (largeFiles.length > 0) {
@@ -3455,12 +3461,14 @@
     const uploadIndicator = document.createElement('div');
     uploadIndicator.className = 'msg to-agent file-upload';
     const fileNames = files.map(f => `${f.name} (${formatFileSize(f.size)})`).join(', ');
-    uploadIndicator.innerHTML = `<div class="msg-header"><span class="msg-sender">you</span><span class="msg-meta"><span class="msg-status pending">\u2022\u2022\u2022 uploading</span></span></div><div class="file-info"><span class="file-icon">&#128206;</span> ${esc(fileNames)}</div>`;
+    const indicatorMsg = attachedMessage ? esc(attachedMessage) + '<br>' : '';
+    uploadIndicator.innerHTML = `<div class="msg-header"><span class="msg-sender">you</span><span class="msg-meta"><span class="msg-status pending">\u2022\u2022\u2022 uploading</span></span></div>${indicatorMsg}<div class="file-info"><span class="file-icon">&#128206;</span> ${esc(fileNames)}</div>`;
     messagesEl.appendChild(uploadIndicator);
     messagesEl.scrollTop = messagesEl.scrollHeight;
 
     try {
-      const results = await Promise.allSettled(files.map(uploadFile));
+      // Only attach the message to the first file upload to avoid duplicate messages
+      const results = await Promise.allSettled(files.map((f, i) => uploadFile(f, i === 0 ? attachedMessage : '')));
       const succeeded = results.filter(r => r.status === 'fulfilled' && r.value.ok).length;
       const failed = results.length - succeeded;
 
