@@ -1526,14 +1526,14 @@
 <script>
 (function() {
   // ── Auth ──
-  // Token stored in sessionStorage — cleared when tab closes
+  // Token persisted in localStorage across sessions
   function getToken() {
-    return sessionStorage.getItem('orchestrator_token') || '';
+    return localStorage.getItem('orchestrator_token') || '';
   }
 
   function setToken(token) {
-    if (token) sessionStorage.setItem('orchestrator_token', token);
-    else sessionStorage.removeItem('orchestrator_token');
+    if (token) localStorage.setItem('orchestrator_token', token);
+    else localStorage.removeItem('orchestrator_token');
   }
 
   function authHeaders() {
