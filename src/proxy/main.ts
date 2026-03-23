@@ -85,14 +85,12 @@ async function heartbeat(): Promise<void> {
     });
 
     if (!resp.ok) {
-      console.warn(`[proxy] Heartbeat rejected (${resp.status}), re-registering...`);
-      token = generateToken();
+      console.warn(`[proxy] Heartbeat rejected (${resp.status}), re-registering with existing token...`);
       await register();
     }
   } catch {
-    console.warn(`[proxy] Heartbeat failed, attempting re-register...`);
+    console.warn(`[proxy] Heartbeat failed, re-registering with existing token...`);
     try {
-      token = generateToken();
       await register();
     } catch (err) {
       console.warn(`[proxy] Re-register failed:`, (err as Error).message);
