@@ -1230,6 +1230,24 @@
     line-height: 1;
   }
   .agent-search .search-clear:hover { color: var(--text); }
+  .filter-chips {
+    display: flex;
+    gap: 6px;
+    padding: 0 12px 8px;
+    flex-wrap: wrap;
+  }
+  .filter-chip {
+    padding: 3px 10px;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-dim);
+    font-size: 11px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .filter-chip:hover { border-color: var(--accent); color: var(--accent); }
+  .filter-chip.active { background: var(--accent); border-color: var(--accent); color: #fff; }
 
   /* ── Persona frontmatter table ── */
   .persona-meta {
@@ -1415,6 +1433,7 @@
     .agent-actions { gap: 4px; }
     .agent-actions button { padding: 4px 8px; font-size: 11px; }
     .agent-search { padding: 8px; }
+    .filter-chips { padding: 0 8px 6px; }
     .agent-search .search-icon { left: 18px; }
     .agent-search .search-clear { right: 14px; }
     .agent-list { padding: 8px; overflow-x: hidden; }
@@ -1491,6 +1510,12 @@
       <span class="search-icon">&#128269;</span>
       <input type="text" id="agentSearch" placeholder="Filter agents..." autocomplete="off" />
       <button class="search-clear" id="agentSearchClear" type="button">&times;</button>
+    </div>
+    <div class="filter-chips" id="filterChips">
+      <button class="filter-chip" data-filter="active">Active</button>
+      <button class="filter-chip" data-filter="idle">Idle</button>
+      <button class="filter-chip" data-filter="unread">Unread</button>
+      <button class="filter-chip" data-filter="recent">Recent</button>
     </div>
     <div class="agent-list" id="agentList">
     </div>
@@ -1600,6 +1625,7 @@
     watchTimer: null,
     personaCache: {},  // { agentName: { content, fetched } }
     searchFilter: '',
+    quickFilter: null,  // null | 'active' | 'idle' | 'unread' | 'recent'
     engineUsage: {},  // { engine: EngineUsage }
     proxies: [],      // registered proxy list from init
     emptyGroups: [],  // groups created via + New Group (no agents yet)
@@ -1767,9 +1793,27 @@
     list.innerHTML = '';
 
     const filter = state.searchFilter.toLowerCase();
-    const filtered = filter
+    let filtered = filter
       ? state.agents.filter(a => a.name.toLowerCase().includes(filter) || a.engine.toLowerCase().includes(filter) || a.state.toLowerCase().includes(filter) || (a.agentGroup || '').toLowerCase().includes(filter))
       : state.agents;
+
+    // Apply quick filter chip
+    if (state.quickFilter === 'active') {
+      filtered = filtered.filter(a => a.state === 'active');
+    } else if (state.quickFilter === 'idle') {
+      filtered = filtered.filter(a => a.state === 'idle');
+    } else if (state.quickFilter === 'unread') {
+      filtered = filtered.filter(a => (state.unread[a.name] || 0) > 0);
+    } else if (state.quickFilter === 'recent') {
+      filtered = filtered.filter(a => a.lastActivity).sort((a, b) =>
+        new Date(b.lastActivity).getTime() - new Date(a.lastActivity).getTime()
+      ).slice(0, 10);
+    }
+
+    // Update chip active states
+    document.querySelectorAll('.filter-chip').forEach(c => {
+      c.classList.toggle('active', c.dataset.filter === state.quickFilter);
+    });
 
     // Group agents
     const groups = new Map();
@@ -3920,9 +3964,19 @@ You are a specialist agent. Describe your role and responsibilities here.
   searchClear.addEventListener('click', () => {
     searchInput.value = '';
     state.searchFilter = '';
+    state.quickFilter = null;
     searchClear.style.display = 'none';
     renderAgents();
     searchInput.focus();
+  });
+
+  // Filter chips — toggle on click, clear on re-click
+  document.getElementById('filterChips').addEventListener('click', (e) => {
+    const chip = e.target.closest('.filter-chip');
+    if (!chip) return;
+    const f = chip.dataset.filter;
+    state.quickFilter = state.quickFilter === f ? null : f;
+    renderAgents();
   });
 
   // ── Engine Usage Fetch ──
