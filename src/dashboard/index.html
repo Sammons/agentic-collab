@@ -4037,6 +4037,10 @@ You are a specialist agent. Describe your role and responsibilities here.
     function pttDown(e) {
       e.preventDefault();
       if (voiceState.mode !== 'ptt') return;
+      // Resume AudioContext synchronously within user gesture (required for iOS Safari)
+      if (voiceState.audioCtx && voiceState.audioCtx.state === 'suspended') {
+        voiceState.audioCtx.resume();
+      }
       startVoice();
     }
     function pttUp() {
