@@ -2,6 +2,30 @@
 
 All notable changes to agentic-collab are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## 2026-03-24
+
+### Added
+- **Quick filter chips** — Active, Idle, Unread, Recent one-tap filters in sidebar (#194)
+- **Create agent modal** — replaced inline form with full persona editor modal, engine template picker (Claude/Codex/OpenCode) (#184, #185)
+- **File upload with message** — type a message then upload a file, both sent together (#183)
+- **Markdown renderer tests** — extracted to `src/shared/markdown.ts` with 42 dedicated tests (#182)
+
+### Changed
+- **Search and create controls** pulled out of scroll container — always visible (#178, #179)
+- **Idle detection snapshot** bumped from 15 to 30 lines — prevents false idle with large task lists (#188)
+- **Auth token** persisted in localStorage instead of sessionStorage — survives tab close (#189)
+
+### Fixed
+- **Proxy token rotation** caused persistent 401s on heartbeat failure — token now stable for process lifetime (#191)
+- **SESSION_ID fallback** on resume — falls back to agent name when no session captured yet (#177)
+- **iOS Safari auto-zoom** prevented via viewport meta tag (#180, #190)
+- **PTT voice** reliability on iOS — AudioContext.resume() called synchronously in user gesture (#192)
+- **Upload error toast** now shows actual error reason instead of generic count (#193)
+- **Create modal stability** — pointer events + stopPropagation prevent accidental dismissal (#186, #187)
+- **Filter styling** — mobile padding, clear button, 16px font size (#180, #181)
+- **Persona scan** excludes `_`-prefixed files (templates no longer create phantom agents) (#176)
+- **Single-column table** rendering in markdown (#182)
+
 ## 2026-03-15
 
 ### Added
