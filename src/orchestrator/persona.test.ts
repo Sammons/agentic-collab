@@ -1014,6 +1014,114 @@ Now with buttons
     });
   });
 
+  describe('indicators frontmatter', () => {
+    it('parses indicators with regex, badge, style, actions', () => {
+      const raw = `---
+engine: claude
+cwd: /tmp
+indicators:
+  approval:
+    regex: '(Yes|No|Always allow)'
+    badge: Needs Approval
+    style: warning
+    actions:
+      approve:
+        - keystroke: y
+      deny:
+        - keystroke: n
+  low-context:
+    regex: 'Context left until'
+    badge: Low Context
+    style: danger
+---
+Persona body
+`;
+      const { frontmatter } = parseFrontmatter(raw);
+      const fm = frontmatter as { indicators?: Array<{ id: string; regex: string; badge: string; style: string; actions?: Record<string, unknown[]> }> };
+      assert.ok(fm.indicators, 'indicators should be parsed');
+      assert.equal(fm.indicators.length, 2);
+
+      const approval = fm.indicators[0]!;
+      assert.equal(approval.id, 'approval');
+      assert.equal(approval.regex, '(Yes|No|Always allow)');
+      assert.equal(approval.badge, 'Needs Approval');
+      assert.equal(approval.style, 'warning');
+      assert.ok(approval.actions, 'approval should have actions');
+      assert.ok(approval.actions!['approve'], 'should have approve action');
+      assert.ok(approval.actions!['deny'], 'should have deny action');
+      assert.deepEqual(approval.actions!['approve']![0], { type: 'keystroke', key: 'y' });
+      assert.deepEqual(approval.actions!['deny']![0], { type: 'keystroke', key: 'n' });
+
+      const lowCtx = fm.indicators[1]!;
+      assert.equal(lowCtx.id, 'low-context');
+      assert.equal(lowCtx.regex, 'Context left until');
+      assert.equal(lowCtx.badge, 'Low Context');
+      assert.equal(lowCtx.style, 'danger');
+      assert.equal(lowCtx.actions, undefined);
+    });
+
+    it('parses indicators without actions', () => {
+      const raw = `---
+engine: claude
+cwd: /tmp
+indicators:
+  stalled:
+    regex: 'Waiting for input'
+    badge: Stalled
+    style: info
+---
+Persona body
+`;
+      const { frontmatter } = parseFrontmatter(raw);
+      const fm = frontmatter as { indicators?: Array<{ id: string; regex: string; badge: string; style: string; actions?: unknown }> };
+      assert.ok(fm.indicators, 'indicators should be parsed');
+      assert.equal(fm.indicators.length, 1);
+      assert.equal(fm.indicators[0]!.id, 'stalled');
+      assert.equal(fm.indicators[0]!.badge, 'Stalled');
+      assert.equal(fm.indicators[0]!.style, 'info');
+      assert.equal(fm.indicators[0]!.actions, undefined);
+    });
+
+    it('syncs indicators to database', () => {
+      const personasDir = mkdtempSync(join(tmpdir(), 'persona-indicators-'));
+      const dbPath = join(personasDir, 'test.db');
+      const db = new Database(dbPath);
+      const origDir = process.env['PERSONAS_DIR'];
+      process.env['PERSONAS_DIR'] = personasDir;
+
+      try {
+        writeFileSync(join(personasDir, 'ind-agent.md'), `---
+engine: claude
+cwd: /tmp
+indicators:
+  approval:
+    regex: '(Yes|No)'
+    badge: Needs Approval
+    style: warning
+    actions:
+      approve:
+        - keystroke: y
+---
+Agent with indicators
+`);
+        syncPersonasToDb(db, personasDir);
+        const agent = db.getAgent('ind-agent')!;
+        assert.ok(agent.indicators, 'indicators should be stored');
+        const indicators = JSON.parse(agent.indicators!);
+        assert.equal(indicators.length, 1);
+        assert.equal(indicators[0].id, 'approval');
+        assert.equal(indicators[0].regex, '(Yes|No)');
+        assert.equal(indicators[0].badge, 'Needs Approval');
+        assert.ok(indicators[0].actions['approve']);
+      } finally {
+        db.close();
+        if (origDir === undefined) delete process.env['PERSONAS_DIR'];
+        else process.env['PERSONAS_DIR'] = origDir;
+        rmSync(personasDir, { recursive: true, force: true });
+      }
+    });
+  });
+
   describe('wait pipeline step', () => {
     it('parses wait step from frontmatter', () => {
       const raw = `---

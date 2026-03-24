@@ -20,7 +20,7 @@ import { getPersonasDir, parseFrontmatter, createPersonaAndAgent, syncSinglePers
 import {
   spawnAgent, resumeAgent, suspendAgent, destroyAgent,
   reloadAgent, interruptAgent, compactAgent, killAgent,
-  executeCustomButton,
+  executeCustomButton, executeIndicatorAction,
   type LifecycleContext,
 } from './lifecycle.ts';
 import { getAdapter } from './adapters/index.ts';
@@ -1067,6 +1067,22 @@ route('POST', '/api/agents/:name/custom/:button', async (_req, res, match, ctx) 
   try {
     const lifecycleCtx = makeLifecycleCtx(ctx);
     await executeCustomButton(lifecycleCtx, name, button);
+    json(res, 200, { ok: true });
+  } catch (err) {
+    json(res, 400, { error: (err as Error).message });
+  }
+});
+
+// ── Indicator Actions ──
+
+route('POST', '/api/agents/:name/indicator/:indicator/:action', async (_req, res, match, ctx) => {
+  const name = match.pathname.groups['name']!;
+  const indicator = match.pathname.groups['indicator']!;
+  const action = match.pathname.groups['action']!;
+
+  try {
+    const lifecycleCtx = makeLifecycleCtx(ctx);
+    await executeIndicatorAction(lifecycleCtx, name, indicator, action);
     json(res, 200, { ok: true });
   } catch (err) {
     json(res, 400, { error: (err as Error).message });

@@ -143,6 +143,9 @@ const healthMonitor = new HealthMonitor({
   onDashboardMessage: (msg) => {
     wss.broadcast(JSON.stringify({ type: 'message', msg }));
   },
+  onIndicatorUpdate: (agentName, indicators) => {
+    wss.broadcast(JSON.stringify({ type: 'indicator_update', agentName, indicators }));
+  },
 });
 healthMonitorRef = healthMonitor;
 
@@ -263,12 +266,19 @@ wss.onConnect((client) => {
     ...p,
     versionMatch: !!p.version && p.version === orchestratorVersion,
   }));
+  // Collect active indicators for all agents
+  const indicators: Record<string, unknown[]> = {};
+  for (const agent of agents) {
+    const active = healthMonitor.getActiveIndicators(agent.name);
+    if (active.length > 0) indicators[agent.name] = active;
+  }
   wss.send(client, JSON.stringify({
     type: 'init',
     agents,
     threads,
     proxies,
     unreadCounts,
+    indicators,
   }));
 });
 

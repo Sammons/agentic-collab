@@ -61,6 +61,25 @@ export type PipelineStep =
 /** A hook field value: flat string (legacy), structured object, or pipeline (array of steps). */
 export type HookValue = string | StructuredHook | PipelineStep[] | null;
 
+// ── Indicators ──
+
+export type IndicatorAction = PipelineStep[];
+
+export type IndicatorDefinition = {
+  id: string;
+  regex: string;
+  badge: string;
+  style: 'warning' | 'danger' | 'info';
+  actions?: Record<string, IndicatorAction>;
+};
+
+export type ActiveIndicator = {
+  id: string;
+  badge: string;
+  style: string;
+  actions?: Record<string, IndicatorAction>;
+};
+
 export type AgentRecord = {
   name: string;
   engine: EngineType;
@@ -102,6 +121,7 @@ export type AgentRecord = {
   failureReason: string | null;
   capturedVars: Record<string, string> | null;
   customButtons: string | null;
+  indicators: string | null;
   version: number;
   spawnCount: number;
   createdAt: string;
@@ -192,6 +212,7 @@ export type WsInitEvent = {
   threads: Record<string, DashboardMessage[]>;
   proxies: ProxyRegistration[];
   unreadCounts: Record<string, number>;
+  indicators?: Record<string, ActiveIndicator[]>;
 };
 
 export type WsAgentUpdateEvent = {
@@ -214,7 +235,13 @@ export type WsQueueUpdateEvent = {
   message: PendingMessage;
 };
 
-export type WsEvent = WsInitEvent | WsAgentUpdateEvent | WsMessageEvent | WsProxyEvent | WsQueueUpdateEvent;
+export type WsIndicatorUpdateEvent = {
+  type: 'indicator_update';
+  agentName: string;
+  indicators: ActiveIndicator[];
+};
+
+export type WsEvent = WsInitEvent | WsAgentUpdateEvent | WsMessageEvent | WsProxyEvent | WsQueueUpdateEvent | WsIndicatorUpdateEvent;
 
 // ── Proxy API ──
 

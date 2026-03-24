@@ -7,7 +7,7 @@
 
 import { readFileSync, readdirSync, realpathSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, resolve, relative, isAbsolute } from 'node:path';
-import type { StructuredHook, HookValue, SendAction, LaunchEnv, PipelineStep } from '../shared/types.ts';
+import type { StructuredHook, HookValue, SendAction, LaunchEnv, PipelineStep, IndicatorDefinition } from '../shared/types.ts';
 
 export const PERSONAS_DIR = process.env['PERSONAS_DIR'] ?? join(process.env['HOME'] ?? '/data', 'persistent-agents');
 
@@ -62,6 +62,8 @@ export type PersonaFrontmatter = {
   spawn?: HookValue;
   /** Custom dashboard buttons — named keys mapping to pipeline step arrays. */
   custom_buttons?: Record<string, PipelineStep[]>;
+  /** Indicators — regex patterns matched against tmux pane output. */
+  indicators?: IndicatorDefinition[];
 };
 
 export type ParsedPersona = {
@@ -141,6 +143,18 @@ export function parseFrontmatter(raw: string): { frontmatter: Record<string, unk
       const nextIndent = nextLine.length - nextLine.trimStart().length;
       if (nextIndent > 0) {
         const { value, nextLine: endLine } = parseCustomButtons(lines, i + 1, nextIndent);
+        frontmatter[key] = value;
+        i = endLine;
+        continue;
+      }
+    }
+
+    // indicators: named keys with regex/badge/style/actions
+    if (key === 'indicators' && trimmedVal === '' && i + 1 < lines.length) {
+      const nextLine = lines[i + 1]!;
+      const nextIndent = nextLine.length - nextLine.trimStart().length;
+      if (nextIndent > 0) {
+        const { value, nextLine: endLine } = parseIndicators(lines, i + 1, nextIndent);
         frontmatter[key] = value;
         i = endLine;
         continue;
@@ -460,6 +474,131 @@ function parseCustomButtons(
   }
 
   return { value: buttons, nextLine: i };
+}
+
+/**
+ * Parse indicators: a two-level structure of named keys → indicator definitions.
+ * Each indicator has scalar properties (regex, badge, style) and an optional
+ * actions sub-key containing named action keys mapping to pipeline step arrays.
+ *
+ * indicators:
+ *   approval:
+ *     regex: '(Yes|No|Always allow)'
+ *     badge: Needs Approval
+ *     style: warning
+ *     actions:
+ *       approve:
+ *         - keystroke: y
+ *       deny:
+ *         - keystroke: n
+ *   low-context:
+ *     regex: 'Context left until'
+ *     badge: Low Context
+ *     style: danger
+ */
+function parseIndicators(
+  lines: string[],
+  startLine: number,
+  baseIndent: number,
+): { value: IndicatorDefinition[]; nextLine: number } {
+  const indicators: IndicatorDefinition[] = [];
+  let i = startLine;
+
+  while (i < lines.length) {
+    const line = lines[i]!;
+    if (line.trim() === '') { i++; continue; }
+
+    const lineIndent = line.length - line.trimStart().length;
+    if (lineIndent < baseIndent) break;
+
+    // Expect an indicator name at baseIndent level: "  approval:"
+    if (lineIndent === baseIndent) {
+      const colonIdx = line.indexOf(':');
+      if (colonIdx === -1) { i++; continue; }
+      const indicatorName = line.slice(0, colonIdx).trim();
+      if (!indicatorName) { i++; continue; }
+
+      // Parse properties at baseIndent+2
+      const propIndent = baseIndent + 2;
+      i++;
+      let regex = '';
+      let badge = '';
+      let style: 'warning' | 'danger' | 'info' = 'info';
+      let actions: Record<string, PipelineStep[]> | undefined;
+
+      while (i < lines.length) {
+        const propLine = lines[i]!;
+        if (propLine.trim() === '') { i++; continue; }
+
+        const propLineIndent = propLine.length - propLine.trimStart().length;
+        if (propLineIndent < propIndent) break;
+
+        const propContent = propLine.trim();
+        const propColonIdx = propContent.indexOf(':');
+        if (propColonIdx === -1) { i++; continue; }
+
+        const propKey = propContent.slice(0, propColonIdx).trim();
+        const propVal = propContent.slice(propColonIdx + 1).trim();
+
+        if (propKey === 'regex') {
+          // Strip surrounding quotes if present
+          regex = propVal.replace(/^['"]|['"]$/g, '');
+          i++;
+        } else if (propKey === 'badge') {
+          badge = propVal;
+          i++;
+        } else if (propKey === 'style') {
+          if (propVal === 'warning' || propVal === 'danger' || propVal === 'info') {
+            style = propVal;
+          }
+          i++;
+        } else if (propKey === 'actions' && propVal === '') {
+          // Parse named action keys → pipeline step arrays (same structure as custom_buttons)
+          i++;
+          const actionIndent = propIndent + 2;
+          actions = {};
+          while (i < lines.length) {
+            const actionLine = lines[i]!;
+            if (actionLine.trim() === '') { i++; continue; }
+            const actionLineIndent = actionLine.length - actionLine.trimStart().length;
+            if (actionLineIndent < actionIndent) break;
+
+            if (actionLineIndent === actionIndent) {
+              const actionColonIdx = actionLine.indexOf(':');
+              if (actionColonIdx === -1) { i++; continue; }
+              const actionName = actionLine.slice(0, actionColonIdx).trim();
+              if (!actionName) { i++; continue; }
+
+              // Next lines should be pipeline steps
+              if (i + 1 < lines.length) {
+                const nextLine = lines[i + 1]!;
+                const nextIndent = nextLine.length - nextLine.trimStart().length;
+                if (nextIndent > actionIndent && nextLine.trim().startsWith('- ')) {
+                  const { value: steps, nextLine: endLine } = parsePipelineSteps(lines, i + 1, nextIndent);
+                  actions[actionName] = steps;
+                  i = endLine;
+                  continue;
+                }
+              }
+              i++;
+            } else {
+              break;
+            }
+          }
+        } else {
+          i++;
+        }
+      }
+
+      if (regex && badge) {
+        indicators.push({ id: indicatorName, regex, badge, style, ...(actions ? { actions } : {}) });
+      }
+    } else {
+      break;
+    }
+  }
+
+  return { value: indicators, nextLine: i };
 }
 
 /**
@@ -841,6 +980,12 @@ function serializeCustomButtons(value?: Record<string, PipelineStep[]>): string 
   return JSON.stringify(value);
 }
 
+/** Serialize indicators for database storage. */
+function serializeIndicators(value?: IndicatorDefinition[]): string | null {
+  if (value == null || value.length === 0) return null;
+  return JSON.stringify(value);
+}
+
 // ── Startup Sync ──
 
 import type { Database } from './database.ts';
@@ -890,6 +1035,7 @@ export function syncSinglePersona(db: Database, name: string, personasDir?: stri
     hookDetectSession: serializeHookValue(fm.detect_session),
     detectSessionRegex: fm.detect_session_regex as string | undefined,
     customButtons: serializeCustomButtons(fm.custom_buttons),
+    indicators: serializeIndicators(fm.indicators),
   });
   return true;
 }
@@ -935,6 +1081,7 @@ export function syncPersonasToDb(db: Database, personasDir?: string): number {
       hookDetectSession: serializeHookValue(frontmatter.detect_session),
       detectSessionRegex: frontmatter.detect_session_regex as string | undefined,
       customButtons: serializeCustomButtons(frontmatter.custom_buttons),
+      indicators: serializeIndicators(frontmatter.indicators),
     });
 
     synced++;
@@ -995,6 +1142,7 @@ export function syncPersonasWithDiff(db: Database, personasDir?: string): SyncDi
       hookDetectSession: serializeHookValue(frontmatter.detect_session),
       detectSessionRegex: frontmatter.detect_session_regex as string | undefined,
       customButtons: serializeCustomButtons(frontmatter.custom_buttons),
+      indicators: serializeIndicators(frontmatter.indicators),
     };
 
     if (!existing) {
@@ -1019,7 +1167,8 @@ export function syncPersonasWithDiff(db: Database, personasDir?: string): SyncDi
         !optionalScalarEquals(existing.hookSubmit, upsertOpts.hookSubmit) ||
         !optionalScalarEquals(existing.hookDetectSession, upsertOpts.hookDetectSession) ||
         !optionalScalarEquals(existing.detectSessionRegex, upsertOpts.detectSessionRegex) ||
-        !optionalScalarEquals(existing.customButtons, upsertOpts.customButtons);
+        !optionalScalarEquals(existing.customButtons, upsertOpts.customButtons) ||
+        !optionalScalarEquals(existing.indicators, upsertOpts.indicators);
 
       if (changed) {
         db.upsertAgentFromPersona(upsertOpts);
@@ -1081,6 +1230,7 @@ export function createPersonaAndAgent(
     hookDetectSession: serializeHookValue(fm.detect_session),
     detectSessionRegex: fm.detect_session_regex as string | undefined,
     customButtons: serializeCustomButtons(fm.custom_buttons),
+    indicators: serializeIndicators(fm.indicators),
   });
 
   return { name, frontmatter: fm, body };
