@@ -707,3 +707,113 @@ describe('HealthMonitor.takeSnapshot', () => {
     assert.equal(HealthMonitor.takeSnapshot('\n\n', 5), '\n\n');
   });
 });
+
+describe('HealthMonitor indicators', () => {
+  let db: Database;
+  let tmpDir: string;
+  let captureOutput: string;
+  let indicatorUpdates: Array<{ agentName: string; indicators: unknown[] }>;
+
+  before(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'health-ind-'));
+    db = new Database(join(tmpDir, 'test.db'));
+    db.registerProxy('p1', 'tok', 'localhost:3100');
+  });
+
+  after(() => {
+    db.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  beforeEach(() => {
+    captureOutput = '> \n';
+    indicatorUpdates = [];
+  });
+
+  function makeMonitorWithIndicators(): HealthMonitor {
+    const dispatch = async (_proxyId: string, command: ProxyCommand): Promise<ProxyResponse> => {
+      if (command.action === 'capture') {
+        return { ok: true, data: captureOutput };
+      }
+      if (command.action === 'has_session') {
+        return { ok: true, data: true };
+      }
+      return { ok: true };
+    };
+
+    const locks = new LockManager(db.rawDb);
+
+    return new HealthMonitor({
+      db,
+      locks,
+      proxyDispatch: dispatch,
+      orchestratorHost: 'http://localhost:3000',
+      pollIntervalMs: 100,
+      onIndicatorUpdate: (agentName, indicators) => {
+        indicatorUpdates.push({ agentName, indicators });
+      },
+    });
+  }
+
+  it('evaluates indicators against pane output', async () => {
+    const indicatorDefs = JSON.stringify([
+      { id: 'approval', regex: '(Yes|No|Always allow)', badge: 'Needs Approval', style: 'warning' },
+    ]);
+    db.createAgent({ name: 'ind-test-1', engine: 'claude', cwd: '/tmp', proxyId: 'p1', indicators: indicatorDefs });
+    const a = db.getAgent('ind-test-1')!;
+    db.updateAgentState('ind-test-1', 'active', a.version, {
+      tmuxSession: 'agent-ind-test-1',
+      proxyId: 'p1',
+    });
+
+    captureOutput = 'Do you want to continue? (Yes/No)\n> ';
+    const monitor = makeMonitorWithIndicators();
+    await monitor.pollAll();
+
+    assert.ok(indicatorUpdates.length > 0, 'should have indicator update');
+    const update = indicatorUpdates.find(u => u.agentName === 'ind-test-1');
+    assert.ok(update, 'should have update for ind-test-1');
+    assert.equal(update!.indicators.length, 1);
+    assert.equal((update!.indicators[0] as { badge: string }).badge, 'Needs Approval');
+  });
+
+  it('clears indicators when regex no longer matches', async () => {
+    captureOutput = 'Do you want to continue? (Yes/No)\n> ';
+    const monitor = makeMonitorWithIndicators();
+
+    // First poll — matches
+    await monitor.pollAll();
+    indicatorUpdates = [];
+
+    // Second poll — no match
+    captureOutput = 'Working on task...\n> ';
+    await monitor.pollAll();
+
+    const update = indicatorUpdates.find(u => u.agentName === 'ind-test-1');
+    assert.ok(update, 'should have clearance update');
+    assert.equal(update!.indicators.length, 0);
+  });
+
+  it('skips invalid regex gracefully', async () => {
+    const indicatorDefs = JSON.stringify([
+      { id: 'bad', regex: '([invalid', badge: 'Bad Regex', style: 'info' },
+      { id: 'good', regex: 'hello', badge: 'Hello', style: 'info' },
+    ]);
+    db.createAgent({ name: 'ind-test-2', engine: 'claude', cwd: '/tmp', proxyId: 'p1', indicators: indicatorDefs });
+    const a = db.getAgent('ind-test-2')!;
+    db.updateAgentState('ind-test-2', 'active', a.version, {
+      tmuxSession: 'agent-ind-test-2',
+      proxyId: 'p1',
+    });
+
+    captureOutput = 'hello world\n> ';
+    const monitor = makeMonitorWithIndicators();
+    await monitor.pollAll();
+
+    const update = indicatorUpdates.find(u => u.agentName === 'ind-test-2');
+    assert.ok(update, 'should have update for ind-test-2');
+    // Only the good regex should match; bad regex should be skipped
+    assert.equal(update!.indicators.length, 1);
+    assert.equal((update!.indicators[0] as { badge: string }).badge, 'Hello');
+  });
+});
