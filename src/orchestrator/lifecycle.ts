@@ -1080,9 +1080,9 @@ export async function executeIndicatorAction(
     if (!agent.indicators) throw new Error(`Agent "${name}" has no indicators`);
 
     const proxyId = requireProxy(agent);
-    let defs: Array<{ id: string; actions?: Record<string, unknown> }>;
+    let defs: Array<{ id: string; regex?: string; actions?: Record<string, unknown> }>;
     try {
-      defs = JSON.parse(agent.indicators) as Array<{ id: string; actions?: Record<string, unknown> }>;
+      defs = JSON.parse(agent.indicators) as Array<{ id: string; regex?: string; actions?: Record<string, unknown> }>;
     } catch {
       throw new Error(`Agent "${name}" has invalid indicators JSON`);
     }
@@ -1091,7 +1091,39 @@ export async function executeIndicatorAction(
     if (!indicator) throw new Error(`Indicator "${indicatorId}" not found for agent "${name}"`);
     if (!indicator.actions) throw new Error(`Indicator "${indicatorId}" has no actions`);
 
-    const steps = indicator.actions[actionName];
+    // Capture pane output and run the indicator regex to get capture groups for $N interpolation
+    let match: RegExpExecArray | null = null;
+    if (indicator.regex) {
+      try {
+        const captureResult = await ctx.proxyDispatch(proxyId, {
+          action: 'capture',
+          sessionName: sessionName(agent),
+          lines: 50,
+        });
+        if (captureResult.ok && typeof captureResult.data === 'string') {
+          match = new RegExp(indicator.regex).exec(captureResult.data);
+        }
+      } catch { /* best effort */ }
+    }
+
+    // Find the action — try exact match first, then try interpolated match
+    let steps = indicator.actions[actionName] as PipelineStep[] | undefined;
+    if ((!steps || !Array.isArray(steps)) && match) {
+      // The action key in the DB may be $1, $2, etc. — find the matching definition key
+      for (const [key, val] of Object.entries(indicator.actions)) {
+        const interpolatedKey = key.replace(/\$(\d+)/g, (_m, idx) => match![parseInt(idx, 10)] ?? '');
+        if (interpolatedKey === actionName && Array.isArray(val)) {
+          // Interpolate $N in the pipeline steps too
+          steps = (val as PipelineStep[]).map(step => {
+            if (step.type === 'keystroke') return { ...step, key: step.key.replace(/\$(\d+)/g, (_m, idx) => match![parseInt(idx, 10)] ?? '') };
+            if (step.type === 'shell') return { ...step, command: step.command.replace(/\$(\d+)/g, (_m, idx) => match![parseInt(idx, 10)] ?? '') };
+            return step;
+          });
+          break;
+        }
+      }
+    }
+
     if (!steps || !Array.isArray(steps)) {
       throw new Error(`Action "${actionName}" not found on indicator "${indicatorId}" for agent "${name}"`);
     }
@@ -1102,7 +1134,7 @@ export async function executeIndicatorAction(
       SESSION_ID: agent.currentSessionId ?? undefined,
       capturedVars: agent.capturedVars ?? undefined,
     };
-    const result = resolveHook('exit', steps as PipelineStep[], agent, { templateVars });
+    const result = resolveHook('exit', steps, agent, { templateVars });
     await dispatchHookResult(ctx, proxyId, sessionName(agent), result, { agentName: name });
 
     ctx.db.logEvent(name, 'indicator_action', undefined, { indicator: indicatorId, action: actionName });
