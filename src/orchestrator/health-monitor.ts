@@ -16,7 +16,7 @@
 
 import type { Database } from './database.ts';
 import type { LockManager } from '../shared/lock.ts';
-import type { ProxyCommand, ProxyResponse, AgentRecord, PendingMessage, DashboardMessage, IndicatorDefinition, ActiveIndicator } from '../shared/types.ts';
+import type { ProxyCommand, ProxyResponse, AgentRecord, PendingMessage, DashboardMessage, IndicatorDefinition, ActiveIndicator, PipelineStep } from '../shared/types.ts';
 import { sessionName, canSuspend } from '../shared/agent-entity.ts';
 import { getAdapter } from './adapters/index.ts';
 import { reloadAgent, type LifecycleContext } from './lifecycle.ts';
@@ -508,17 +508,22 @@ export class HealthMonitor {
     const active: ActiveIndicator[] = [];
 
     for (const { def, re } of compiled.entries) {
-      if (re.test(stripped)) {
-        active.push({ id: def.id, badge: def.badge, style: def.style, ...(def.actions ? { actions: def.actions } : {}) });
+      const match = re.exec(stripped);
+      if (match) {
+        // Interpolate $N capture group references in actions and badge
+        const interpolated = def.actions ? interpolateIndicatorActions(def.actions, match) : undefined;
+        const badge = interpolateCaptureGroups(def.badge, match);
+        active.push({ id: def.id, badge, style: def.style, ...(interpolated ? { actions: interpolated } : {}) });
       }
     }
 
     const prev = this.activeIndicators.get(agent.name) ?? [];
-    const prevIds = prev.map(i => i.id).join(',');
-    const newIds = active.map(i => i.id).join(',');
+    const fingerprint = (list: ActiveIndicator[]) => list.map(i =>
+      i.id + ':' + (i.actions ? Object.keys(i.actions).join('+') : '')
+    ).join(',');
 
     this.activeIndicators.set(agent.name, active);
-    if (prevIds !== newIds) {
+    if (fingerprint(prev) !== fingerprint(active)) {
       this.onIndicatorUpdate(agent.name, active);
     }
   }
@@ -531,4 +536,40 @@ export class HealthMonitor {
       orchestratorHost: this.orchestratorHost,
     };
   }
+}
+
+// ── Indicator capture group interpolation ──
+
+/** Replace $1, $2, etc. in a string with regex match capture groups. */
+function interpolateCaptureGroups(text: string, match: RegExpExecArray): string {
+  return text.replace(/\$(\d+)/g, (_m, idx) => {
+    const i = parseInt(idx, 10);
+    return match[i] ?? '';
+  });
+}
+
+/** Interpolate $N references in pipeline steps. */
+function interpolateStepGroups(steps: PipelineStep[], match: RegExpExecArray): PipelineStep[] {
+  return steps.map(step => {
+    if (step.type === 'keystroke') {
+      return { ...step, key: interpolateCaptureGroups(step.key, match) };
+    }
+    if (step.type === 'shell') {
+      return { ...step, command: interpolateCaptureGroups(step.command, match) };
+    }
+    return step;
+  });
+}
+
+/** Interpolate $N in both action keys and pipeline step values. */
+function interpolateIndicatorActions(
+  actions: Record<string, PipelineStep[]>,
+  match: RegExpExecArray,
+): Record<string, PipelineStep[]> {
+  const result: Record<string, PipelineStep[]> = {};
+  for (const [key, steps] of Object.entries(actions)) {
+    const interpolatedKey = interpolateCaptureGroups(key, match);
+    result[interpolatedKey] = interpolateStepGroups(steps, match);
+  }
+  return result;
 }
