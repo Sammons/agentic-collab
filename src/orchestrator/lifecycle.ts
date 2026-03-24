@@ -1065,6 +1065,51 @@ export async function executeCustomButton(
 }
 
 /**
+ * Execute an indicator action by parsing the agent's indicators JSON,
+ * finding the named indicator and action, and dispatching the pipeline steps.
+ */
+export async function executeIndicatorAction(
+  ctx: LifecycleContext,
+  name: string,
+  indicatorId: string,
+  actionName: string,
+): Promise<void> {
+  await ctx.locks.withLock(name, async () => {
+    const agent = ctx.db.getAgent(name);
+    if (!agent) throw new Error(`Agent "${name}" not found`);
+    if (!agent.indicators) throw new Error(`Agent "${name}" has no indicators`);
+
+    const proxyId = requireProxy(agent);
+    let defs: Array<{ id: string; actions?: Record<string, unknown> }>;
+    try {
+      defs = JSON.parse(agent.indicators) as Array<{ id: string; actions?: Record<string, unknown> }>;
+    } catch {
+      throw new Error(`Agent "${name}" has invalid indicators JSON`);
+    }
+
+    const indicator = defs.find(d => d.id === indicatorId);
+    if (!indicator) throw new Error(`Indicator "${indicatorId}" not found for agent "${name}"`);
+    if (!indicator.actions) throw new Error(`Indicator "${indicatorId}" has no actions`);
+
+    const steps = indicator.actions[actionName];
+    if (!steps || !Array.isArray(steps)) {
+      throw new Error(`Action "${actionName}" not found on indicator "${indicatorId}" for agent "${name}"`);
+    }
+
+    const templateVars = {
+      AGENT_NAME: name,
+      AGENT_CWD: agent.cwd,
+      SESSION_ID: agent.currentSessionId ?? undefined,
+      capturedVars: agent.capturedVars ?? undefined,
+    };
+    const result = resolveHook('exit', steps as PipelineStep[], agent, { templateVars });
+    await dispatchHookResult(ctx, proxyId, sessionName(agent), result, { agentName: name });
+
+    ctx.db.logEvent(name, 'indicator_action', undefined, { indicator: indicatorId, action: actionName });
+  });
+}
+
+/**
  * Deliver a message to an agent via proxy paste, under lock.
  * Returns null on success, or an error string on failure.
  * Single-phase lock — fast operation.

@@ -16,7 +16,7 @@
 
 import type { Database } from './database.ts';
 import type { LockManager } from '../shared/lock.ts';
-import type { ProxyCommand, ProxyResponse, AgentRecord, PendingMessage, DashboardMessage } from '../shared/types.ts';
+import type { ProxyCommand, ProxyResponse, AgentRecord, PendingMessage, DashboardMessage, IndicatorDefinition, ActiveIndicator } from '../shared/types.ts';
 import { sessionName, canSuspend } from '../shared/agent-entity.ts';
 import { getAdapter } from './adapters/index.ts';
 import { reloadAgent, type LifecycleContext } from './lifecycle.ts';
@@ -29,6 +29,7 @@ export type HealthMonitorOptions = {
   onAgentUpdate?: (agentName: string) => void;
   onQueueUpdate?: (message: PendingMessage) => void;
   onDashboardMessage?: (message: DashboardMessage) => void;
+  onIndicatorUpdate?: (agentName: string, indicators: ActiveIndicator[]) => void;
   pollIntervalMs?: number;
   idleSuspendMs?: number;        // ms of idle before suspend (default 5 minutes)
 };
@@ -70,6 +71,9 @@ export class HealthMonitor {
   private readonly onAgentUpdate: (agentName: string) => void;
   private readonly onQueueUpdate: (message: PendingMessage) => void;
   private readonly onDashboardMessage: (message: DashboardMessage) => void;
+  private readonly onIndicatorUpdate: (agentName: string, indicators: ActiveIndicator[]) => void;
+  private readonly activeIndicators = new Map<string, ActiveIndicator[]>();
+  private readonly compiledIndicators = new Map<string, { json: string; entries: Array<{ def: IndicatorDefinition; re: RegExp }> }>();
 
   constructor(opts: HealthMonitorOptions) {
     this.db = opts.db;
@@ -79,6 +83,7 @@ export class HealthMonitor {
     this.onAgentUpdate = opts.onAgentUpdate ?? (() => {});
     this.onQueueUpdate = opts.onQueueUpdate ?? (() => {});
     this.onDashboardMessage = opts.onDashboardMessage ?? (() => {});
+    this.onIndicatorUpdate = opts.onIndicatorUpdate ?? (() => {});
     this.pollIntervalMs = opts.pollIntervalMs ?? DEFAULT_POLL_MS;
     this.idleSuspendMs = opts.idleSuspendMs ?? DEFAULT_IDLE_SUSPEND_MS;
   }
@@ -196,6 +201,7 @@ export class HealthMonitor {
       try {
         const paneOutput = await this.capturePaneOutput(agent);
         if (paneOutput === null) continue;
+        this.evaluateIndicators(agent, paneOutput);
         const isIdle = this.checkScreenDiff(agent.name, paneOutput);
         this.handleIdleTransitions(agent, isIdle);
       } catch (err) {
@@ -235,6 +241,7 @@ export class HealthMonitor {
     if (this.detectCliExit(agent, paneOutput)) return;
 
     this.recordContextPercent(agent, paneOutput);
+    this.evaluateIndicators(agent, paneOutput);
 
     const isIdle = this.checkScreenDiff(agent.name, paneOutput);
     this.handleIdleTransitions(agent, isIdle);
@@ -456,6 +463,63 @@ export class HealthMonitor {
     } catch (err) {
       console.error(`[health] Reload failed for ${agent.name}:`, err);
       this.onAgentUpdate(agent.name);
+    }
+  }
+
+  /** Get currently active indicators for an agent. */
+  getActiveIndicators(agentName: string): ActiveIndicator[] {
+    return this.activeIndicators.get(agentName) ?? [];
+  }
+
+  /**
+   * Evaluate indicator definitions against pane output.
+   * Compiles regexes once and caches them, invalidating when the indicators JSON changes.
+   * Only fires the onIndicatorUpdate callback when the set of matched indicators changes.
+   */
+  private evaluateIndicators(agent: AgentRecord, paneOutput: string): void {
+    if (!agent.indicators) {
+      if (this.activeIndicators.has(agent.name)) {
+        this.activeIndicators.delete(agent.name);
+        this.compiledIndicators.delete(agent.name);
+        this.onIndicatorUpdate(agent.name, []);
+      }
+      return;
+    }
+
+    // Compile regexes once, invalidate if indicators JSON changed
+    const cached = this.compiledIndicators.get(agent.name);
+    if (!cached || cached.json !== agent.indicators) {
+      try {
+        const defs: IndicatorDefinition[] = JSON.parse(agent.indicators);
+        const entries: Array<{ def: IndicatorDefinition; re: RegExp }> = [];
+        for (const d of defs) {
+          try {
+            entries.push({ def: d, re: new RegExp(d.regex) });
+          } catch { /* skip invalid regex */ }
+        }
+        this.compiledIndicators.set(agent.name, { json: agent.indicators, entries });
+      } catch { return; }
+    }
+
+    const compiled = this.compiledIndicators.get(agent.name);
+    if (!compiled) return;
+
+    const stripped = HealthMonitor.stripAnsi(paneOutput);
+    const active: ActiveIndicator[] = [];
+
+    for (const { def, re } of compiled.entries) {
+      if (re.test(stripped)) {
+        active.push({ id: def.id, badge: def.badge, style: def.style, ...(def.actions ? { actions: def.actions } : {}) });
+      }
+    }
+
+    const prev = this.activeIndicators.get(agent.name) ?? [];
+    const prevIds = prev.map(i => i.id).join(',');
+    const newIds = active.map(i => i.id).join(',');
+
+    this.activeIndicators.set(agent.name, active);
+    if (prevIds !== newIds) {
+      this.onIndicatorUpdate(agent.name, active);
     }
   }
 
