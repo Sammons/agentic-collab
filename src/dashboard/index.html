@@ -3826,6 +3826,22 @@ interrupt:
   - keystroke: Escape
 compact:
   shell: /compact
+indicators:
+  approval:
+    regex: '(Yes)\\s*/\\s*(No)\\s*/\\s*(Always allow)'
+    badge: Needs Approval
+    style: warning
+    actions:
+      $1:
+        - keystroke: $1
+      $2:
+        - keystroke: $2
+      $3:
+        - keystroke: $3
+  low-context:
+    regex: 'Context left until'
+    badge: Low Context
+    style: danger
 ---
 # Agent Name
 
