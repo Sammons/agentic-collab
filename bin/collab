@@ -169,7 +169,7 @@ async function dispatchSend({ target, topic, message, replyReminder, inReplyTo }
   }
 
   const formattedMessage = formatReplyContext(message, inReplyTo);
-  if (target === 'operator') {
+  if (target === 'operator' || target === 'dashboard') {
     if (replyReminder) {
       console.error('error: --reply-reminder is only supported when messaging another agent');
       process.exit(1);
