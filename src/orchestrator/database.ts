@@ -217,6 +217,12 @@ export class Database {
         created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
       )
     `);
+
+    // Add skip_if_active column to reminders if not present
+    const reminderColumns = this.db.prepare('PRAGMA table_info(reminders)').all() as Array<Record<string, unknown>>;
+    if (!reminderColumns.some((c) => c['name'] === 'skip_if_active')) {
+      this.db.exec('ALTER TABLE reminders ADD COLUMN skip_if_active INTEGER NOT NULL DEFAULT 0');
+    }
   }
 
   /** Expose raw handle for LockManager (shares same DB connection). */
@@ -719,7 +725,7 @@ export class Database {
 
   // ── Reminders ──
 
-  createReminder(opts: { agentName: string; createdBy?: string; prompt: string; cadenceMinutes: number }): Reminder {
+  createReminder(opts: { agentName: string; createdBy?: string; prompt: string; cadenceMinutes: number; skipIfActive?: boolean }): Reminder {
     if (opts.cadenceMinutes < 5) {
       throw new Error('cadenceMinutes must be >= 5');
     }
@@ -730,9 +736,9 @@ export class Database {
     const nextOrder = ((maxRow['max_order'] as number) ?? -1) + 1;
 
     this.db.prepare(`
-      INSERT INTO reminders (agent_name, created_by, prompt, cadence_minutes, sort_order)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(opts.agentName, opts.createdBy ?? null, opts.prompt, opts.cadenceMinutes, nextOrder);
+      INSERT INTO reminders (agent_name, created_by, prompt, cadence_minutes, sort_order, skip_if_active)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(opts.agentName, opts.createdBy ?? null, opts.prompt, opts.cadenceMinutes, nextOrder, opts.skipIfActive ? 1 : 0);
 
     const row = this.db.prepare('SELECT * FROM reminders WHERE id = last_insert_rowid()').get() as Record<string, unknown>;
     return mapReminderRow(row);
@@ -795,7 +801,7 @@ export class Database {
     return mapReminderRow(row);
   }
 
-  updateReminder(id: number, opts: { prompt?: string; cadenceMinutes?: number }): Reminder | undefined {
+  updateReminder(id: number, opts: { prompt?: string; cadenceMinutes?: number; skipIfActive?: boolean }): Reminder | undefined {
     const sets: string[] = [];
     const params: unknown[] = [];
     if (opts.prompt !== undefined) { sets.push('prompt = ?'); params.push(opts.prompt); }
@@ -803,6 +809,7 @@ export class Database {
       if (opts.cadenceMinutes < 5) throw new Error('cadenceMinutes must be >= 5');
       sets.push('cadence_minutes = ?'); params.push(opts.cadenceMinutes);
     }
+    if (opts.skipIfActive !== undefined) { sets.push('skip_if_active = ?'); params.push(opts.skipIfActive ? 1 : 0); }
     if (sets.length === 0) return this.getReminder(id);
     params.push(id);
     this.db.prepare(`UPDATE reminders SET ${sets.join(', ')} WHERE id = ?`).run(...params);
@@ -927,6 +934,7 @@ function mapReminderRow(row: Record<string, unknown>): Reminder {
     createdBy: row['created_by'] as string | null,
     prompt: row['prompt'] as string,
     cadenceMinutes: row['cadence_minutes'] as number,
+    skipIfActive: (row['skip_if_active'] as number) === 1,
     sortOrder: row['sort_order'] as number,
     status: row['status'] as ReminderStatus,
     lastDeliveredAt: row['last_delivered_at'] as string | null,
