@@ -1220,6 +1220,7 @@ route('POST', '/api/reminders', async (req, res, _match, ctx) => {
     createdBy: (body.createdBy as string | undefined) ?? undefined,
     prompt: body.prompt as string,
     cadenceMinutes: body.cadenceMinutes as number,
+    skipIfActive: typeof body.skipIfActive === 'boolean' ? body.skipIfActive : undefined,
   });
 
   broadcastReminderUpdate(ctx);
@@ -1269,9 +1270,10 @@ route('PATCH', '/api/reminders/:id', async (req, res, match, ctx) => {
   if (isNaN(id)) return json(res, 400, { error: 'Invalid reminder ID' });
 
   const body = await readJson(req);
-  const opts: { prompt?: string; cadenceMinutes?: number } = {};
+  const opts: { prompt?: string; cadenceMinutes?: number; skipIfActive?: boolean } = {};
   if (typeof body.prompt === 'string') opts.prompt = body.prompt;
   if (typeof body.cadenceMinutes === 'number') opts.cadenceMinutes = body.cadenceMinutes;
+  if (typeof body.skipIfActive === 'boolean') opts.skipIfActive = body.skipIfActive;
 
   try {
     const updated = ctx.db.updateReminder(id, opts);

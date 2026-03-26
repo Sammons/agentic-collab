@@ -1060,6 +1060,40 @@
   .reminder-actions button.danger:hover { border-color: var(--red); color: var(--red); }
   .reminder-actions button.complete:hover { border-color: var(--green); color: var(--green); }
 
+  .reminder-edit-overlay {
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.6); z-index: 100;
+    display: flex; align-items: center; justify-content: center; padding: 20px;
+  }
+  .reminder-edit-modal {
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    width: 100%; max-width: 480px; padding: 16px; display: flex; flex-direction: column; gap: 12px;
+  }
+  .reminder-edit-modal textarea {
+    width: 100%; min-height: 80px; background: var(--bg); color: var(--text);
+    border: 1px solid var(--border); border-radius: 4px; padding: 10px;
+    font-size: 16px; font-family: inherit; resize: vertical; outline: none; box-sizing: border-box;
+  }
+  .reminder-edit-modal textarea:focus { border-color: var(--accent); }
+  .reminder-edit-modal .edit-row {
+    display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+  }
+  .reminder-edit-modal label {
+    display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-dim); cursor: pointer;
+  }
+  .reminder-edit-modal input[type="number"] {
+    width: 70px; padding: 8px; border: 1px solid var(--border); border-radius: 4px;
+    background: var(--bg); color: var(--text); font-size: 16px; outline: none;
+  }
+  .reminder-edit-modal .actions {
+    display: flex; gap: 8px; justify-content: flex-end;
+  }
+  .reminder-edit-modal .actions button {
+    padding: 8px 16px; border-radius: 6px; font-size: 14px; font-weight: 600; cursor: pointer;
+  }
+  .reminder-edit-modal .actions .save { background: var(--green); color: #fff; border: none; }
+  .reminder-edit-modal .actions .cancel { background: transparent; color: var(--text-dim); border: 1px solid var(--border); }
+
   /* ── Toast ── */
   .toast {
     position: fixed;
@@ -2479,7 +2513,7 @@
         let actionBtns = '';
         if (r.status === 'pending') {
           actionBtns += `<button class="complete" data-action="complete" data-id="${r.id}" title="Complete">\u2713</button>`;
-          actionBtns += `<button data-action="edit" data-id="${r.id}" data-prompt="${esc(r.prompt)}" data-cadence="${r.cadenceMinutes}" title="Edit">\u270E</button>`;
+          actionBtns += `<button data-action="edit" data-id="${r.id}" data-prompt="${esc(r.prompt)}" data-cadence="${r.cadenceMinutes}" data-skip-if-active="${r.skipIfActive ? '1' : '0'}" title="Edit">\u270E</button>`;
         }
         if (prevPending && r.status === 'pending') {
           actionBtns += `<button data-action="move-up" data-id="${r.id}" data-swap="${prevPending.id}" title="Move up">\u2191</button>`;
@@ -2494,6 +2528,7 @@
             <div class="reminder-prompt">${isActive ? '\u25b6 ' : ''}${esc(r.prompt)}</div>
             <div class="reminder-meta">
               <span>${cadenceLabel}</span>
+              ${r.skipIfActive ? '<span style="font-size:11px;color:var(--yellow,#d29922);font-weight:600">skip if active</span>' : ''}
               <span class="reminder-badge ${isActive ? 'active' : r.status}">${isActive ? 'active' : r.status === 'pending' ? 'queued' : r.status}</span>
               ${createdByHtml}
               ${completedHtml}
@@ -2509,6 +2544,7 @@
         <div class="reminder-form-row">
           <input type="number" id="reminderCadence" min="5" placeholder="Minutes" value="30" />
           <span style="color:var(--text-dim);font-size:12px">min cadence</span>
+          <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--text-dim);cursor:pointer;margin-left:4px"><input type="checkbox" id="reminderSkipIfActive" /> Skip if active</label>
           <button id="reminderAddBtn">Add</button>
         </div>
       </div>`;
@@ -2543,6 +2579,7 @@
         addBtn.onclick = async () => {
           const prompt = document.getElementById('reminderPrompt').value.trim();
           const cadence = parseInt(document.getElementById('reminderCadence').value, 10);
+          const skipIfActive = document.getElementById('reminderSkipIfActive').checked;
           if (!prompt) return;
           try {
             await fetch('/api/reminders', {
@@ -2552,6 +2589,7 @@
                 agentName: state.selected,
                 prompt,
                 cadenceMinutes: cadence || 30,
+                skipIfActive,
               }),
             });
             renderReminders();
@@ -2578,32 +2616,53 @@
                 headers: authHeaders(),
               });
             } else if (action === 'edit') {
-              const card = btn.closest('.reminder-item');
-              const promptEl = card.querySelector('.reminder-prompt');
               const oldPrompt = btn.dataset.prompt;
               const oldCadence = parseInt(btn.dataset.cadence, 10);
-              // Replace prompt text with inline edit form
-              promptEl.innerHTML = `<textarea class="edit-prompt" style="width:100%;min-height:40px;background:var(--bg);color:var(--text);border:1px solid var(--accent);border-radius:4px;padding:6px;font-size:12px;font-family:inherit;resize:vertical">${esc(oldPrompt)}</textarea>
-                <div style="display:flex;gap:6px;margin-top:4px;align-items:center">
-                  <input type="number" class="edit-cadence" value="${oldCadence}" min="5" style="width:60px;padding:4px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text);font-size:12px" />
-                  <span style="font-size:11px;color:var(--text-dim)">min</span>
-                  <button class="edit-save" style="padding:3px 10px;border:none;border-radius:4px;background:var(--green);color:#fff;font-size:11px;cursor:pointer">Save</button>
-                  <button class="edit-cancel" style="padding:3px 10px;border:1px solid var(--border);border-radius:4px;background:transparent;color:var(--text-dim);font-size:11px;cursor:pointer">Cancel</button>
-                </div>`;
-              promptEl.querySelector('.edit-save').onclick = async () => {
-                const newPrompt = promptEl.querySelector('.edit-prompt').value.trim();
-                const newCadence = parseInt(promptEl.querySelector('.edit-cadence').value, 10);
+              const oldSkip = btn.dataset.skipIfActive === '1';
+
+              const overlay = document.createElement('div');
+              overlay.className = 'reminder-edit-overlay';
+              overlay.innerHTML = `
+                <div class="reminder-edit-modal">
+                  <textarea id="editReminderPrompt">${esc(oldPrompt)}</textarea>
+                  <div class="edit-row">
+                    <input type="number" id="editReminderCadence" value="${oldCadence}" min="5" />
+                    <span style="font-size:13px;color:var(--text-dim)">min cadence</span>
+                  </div>
+                  <div class="edit-row">
+                    <label><input type="checkbox" id="editSkipIfActive" ${oldSkip ? 'checked' : ''} /> Skip if agent is active</label>
+                  </div>
+                  <div class="actions">
+                    <button class="cancel" id="editReminderCancel">Cancel</button>
+                    <button class="save" id="editReminderSave">Save</button>
+                  </div>
+                </div>
+              `;
+              document.body.appendChild(overlay);
+
+              overlay.querySelector('#editReminderCancel').onclick = () => overlay.remove();
+              overlay.addEventListener('pointerdown', (e) => { if (e.target === overlay) overlay.remove(); });
+
+              overlay.querySelector('#editReminderSave').onclick = async () => {
+                const newPrompt = overlay.querySelector('#editReminderPrompt').value.trim();
+                const newCadence = parseInt(overlay.querySelector('#editReminderCadence').value, 10);
+                const newSkip = overlay.querySelector('#editSkipIfActive').checked;
                 if (!newPrompt) return;
                 await fetch(`/api/reminders/${id}`, {
                   method: 'PATCH',
                   headers: authHeaders(),
-                  body: JSON.stringify({ prompt: newPrompt, cadenceMinutes: isNaN(newCadence) ? undefined : newCadence }),
+                  body: JSON.stringify({
+                    prompt: newPrompt,
+                    cadenceMinutes: isNaN(newCadence) ? undefined : newCadence,
+                    skipIfActive: newSkip,
+                  }),
                 });
+                overlay.remove();
                 renderReminders();
               };
-              promptEl.querySelector('.edit-cancel').onclick = () => renderReminders();
-              promptEl.querySelector('.edit-prompt').focus();
-              return; // Don't re-render yet
+
+              setTimeout(() => overlay.querySelector('#editReminderPrompt').focus(), 50);
+              return;
             } else if (action === 'move-up' || action === 'move-down') {
               const swapId = btn.dataset.swap;
               await fetch('/api/reminders/swap', {
