@@ -2479,6 +2479,7 @@
         let actionBtns = '';
         if (r.status === 'pending') {
           actionBtns += `<button class="complete" data-action="complete" data-id="${r.id}" title="Complete">\u2713</button>`;
+          actionBtns += `<button data-action="edit" data-id="${r.id}" data-prompt="${esc(r.prompt)}" data-cadence="${r.cadenceMinutes}" title="Edit">\u270E</button>`;
         }
         if (prevPending && r.status === 'pending') {
           actionBtns += `<button data-action="move-up" data-id="${r.id}" data-swap="${prevPending.id}" title="Move up">\u2191</button>`;
@@ -2576,6 +2577,33 @@
                 method: 'DELETE',
                 headers: authHeaders(),
               });
+            } else if (action === 'edit') {
+              const card = btn.closest('.reminder-item');
+              const promptEl = card.querySelector('.reminder-prompt');
+              const oldPrompt = btn.dataset.prompt;
+              const oldCadence = parseInt(btn.dataset.cadence, 10);
+              // Replace prompt text with inline edit form
+              promptEl.innerHTML = `<textarea class="edit-prompt" style="width:100%;min-height:40px;background:var(--bg);color:var(--text);border:1px solid var(--accent);border-radius:4px;padding:6px;font-size:12px;font-family:inherit;resize:vertical">${esc(oldPrompt)}</textarea>
+                <div style="display:flex;gap:6px;margin-top:4px;align-items:center">
+                  <input type="number" class="edit-cadence" value="${oldCadence}" min="5" style="width:60px;padding:4px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text);font-size:12px" />
+                  <span style="font-size:11px;color:var(--text-dim)">min</span>
+                  <button class="edit-save" style="padding:3px 10px;border:none;border-radius:4px;background:var(--green);color:#fff;font-size:11px;cursor:pointer">Save</button>
+                  <button class="edit-cancel" style="padding:3px 10px;border:1px solid var(--border);border-radius:4px;background:transparent;color:var(--text-dim);font-size:11px;cursor:pointer">Cancel</button>
+                </div>`;
+              promptEl.querySelector('.edit-save').onclick = async () => {
+                const newPrompt = promptEl.querySelector('.edit-prompt').value.trim();
+                const newCadence = parseInt(promptEl.querySelector('.edit-cadence').value, 10);
+                if (!newPrompt) return;
+                await fetch(`/api/reminders/${id}`, {
+                  method: 'PATCH',
+                  headers: authHeaders(),
+                  body: JSON.stringify({ prompt: newPrompt, cadenceMinutes: isNaN(newCadence) ? undefined : newCadence }),
+                });
+                renderReminders();
+              };
+              promptEl.querySelector('.edit-cancel').onclick = () => renderReminders();
+              promptEl.querySelector('.edit-prompt').focus();
+              return; // Don't re-render yet
             } else if (action === 'move-up' || action === 'move-down') {
               const swapId = btn.dataset.swap;
               await fetch('/api/reminders/swap', {

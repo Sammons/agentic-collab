@@ -1264,6 +1264,25 @@ route('POST', '/api/reminders/:id/complete', async (_req, res, match, ctx) => {
   json(res, 200, { ok: true, deleted: id });
 });
 
+route('PATCH', '/api/reminders/:id', async (req, res, match, ctx) => {
+  const id = parseInt(match.pathname.groups['id']!, 10);
+  if (isNaN(id)) return json(res, 400, { error: 'Invalid reminder ID' });
+
+  const body = await readJson(req);
+  const opts: { prompt?: string; cadenceMinutes?: number } = {};
+  if (typeof body.prompt === 'string') opts.prompt = body.prompt;
+  if (typeof body.cadenceMinutes === 'number') opts.cadenceMinutes = body.cadenceMinutes;
+
+  try {
+    const updated = ctx.db.updateReminder(id, opts);
+    if (!updated) return json(res, 404, { error: 'Reminder not found' });
+    broadcastReminderUpdate(ctx);
+    json(res, 200, updated);
+  } catch (err) {
+    json(res, 400, { error: (err as Error).message });
+  }
+});
+
 route('DELETE', '/api/reminders/:id', async (_req, res, match, ctx) => {
   const id = parseInt(match.pathname.groups['id']!, 10);
   if (isNaN(id)) return json(res, 400, { error: 'Invalid reminder ID' });
