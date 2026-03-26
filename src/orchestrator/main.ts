@@ -165,6 +165,9 @@ const reminderDispatcher = new ReminderDispatcher({
   onQueueUpdate: (message) => {
     wss.broadcast(JSON.stringify({ type: 'queue_update', message }));
   },
+  onDashboardMessage: (msg) => {
+    wss.broadcast(JSON.stringify({ type: 'message', msg }));
+  },
 });
 
 const lifecycleCtx: LifecycleContext = {
