@@ -120,6 +120,19 @@ const messageDispatcher = new MessageDispatcher({
     wss.broadcast(JSON.stringify({ type: 'message', msg }));
   },
   onMessageDelivered: (agentName) => {
+    // Immediately mark idle agents as active for instant dashboard feedback
+    try {
+      const agent = db.getAgent(agentName);
+      if (agent && agent.state === 'idle') {
+        db.updateAgentState(agentName, 'active', agent.version, {
+          lastActivity: new Date().toISOString(),
+        });
+        const updated = db.getAgent(agentName);
+        if (updated) {
+          wss.broadcast(JSON.stringify({ type: 'agent_update', agent: updated }));
+        }
+      }
+    } catch { /* best effort — health monitor will catch up */ }
     healthMonitorRef?.scheduleQuickPoll(agentName);
   },
 });
