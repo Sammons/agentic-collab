@@ -42,6 +42,14 @@ export class ReminderDispatcher {
   tick(): void {
     const due = this.db.listDueReminders();
     for (const reminder of due) {
+      // Skip delivery if the agent is currently active and skipIfActive is enabled
+      if (reminder.skipIfActive) {
+        const agent = this.db.getAgent(reminder.agentName);
+        if (agent && agent.state === 'active') {
+          continue;
+        }
+      }
+
       const creator = reminder.createdBy || 'system';
       const envelope = `[reminder #${reminder.id} from ${creator}]: ${reminder.prompt}\nMark done when complete: collab reminder done ${reminder.id}`;
 
