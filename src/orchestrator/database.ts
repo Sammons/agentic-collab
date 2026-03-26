@@ -795,6 +795,20 @@ export class Database {
     return mapReminderRow(row);
   }
 
+  updateReminder(id: number, opts: { prompt?: string; cadenceMinutes?: number }): Reminder | undefined {
+    const sets: string[] = [];
+    const params: unknown[] = [];
+    if (opts.prompt !== undefined) { sets.push('prompt = ?'); params.push(opts.prompt); }
+    if (opts.cadenceMinutes !== undefined) {
+      if (opts.cadenceMinutes < 5) throw new Error('cadenceMinutes must be >= 5');
+      sets.push('cadence_minutes = ?'); params.push(opts.cadenceMinutes);
+    }
+    if (sets.length === 0) return this.getReminder(id);
+    params.push(id);
+    this.db.prepare(`UPDATE reminders SET ${sets.join(', ')} WHERE id = ?`).run(...params);
+    return this.getReminder(id);
+  }
+
   updateReminderDelivery(id: number): void {
     this.db.prepare(
       "UPDATE reminders SET last_delivered_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?"
