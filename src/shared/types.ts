@@ -185,6 +185,7 @@ export type Reminder = {
   createdBy: string | null;
   prompt: string;
   cadenceMinutes: number;
+  skipIfActive: boolean;
   sortOrder: number;
   status: ReminderStatus;
   lastDeliveredAt: string | null;
