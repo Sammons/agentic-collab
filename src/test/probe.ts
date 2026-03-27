@@ -87,6 +87,40 @@
           break;
         }
 
+        case 'snapshot': {
+          var state = window.__dashboardState || {};
+
+          var descriptor = {
+            url: location.href,
+            title: document.title,
+            timestamp: new Date().toISOString(),
+            viewport: { width: window.innerWidth, height: window.innerHeight },
+            agentCards: Array.from(document.querySelectorAll('[data-agent]')).map(function(card) {
+              return {
+                name: card.dataset.agent,
+                stateText: card.querySelector('.state-badge') ? card.querySelector('.state-badge').textContent : '',
+                hasUnread: !!card.querySelector('.unread-badge'),
+                indicators: Array.from(card.querySelectorAll('.indicator-badge')).map(function(b) { return b.textContent; }),
+                indicatorActions: Array.from(card.querySelectorAll('.indicator-action')).map(function(b) { return b.textContent; }),
+                customButtons: Array.from(card.querySelectorAll('[data-action^="custom/"]')).map(function(b) { return b.textContent; }),
+                visible: card.offsetParent !== null,
+              };
+            }),
+            selectedAgent: state.selected || null,
+            threadView: state.threadView || null,
+            threadMessageCount: document.querySelectorAll('.msg').length,
+            filterChipsActive: Array.from(document.querySelectorAll('.filter-chip.active')).map(function(c) { return c.textContent; }),
+            modalVisible: !!document.querySelector('.create-modal-overlay, .reminder-edit-overlay'),
+            createFormVisible: !!document.querySelector('.create-agent-btn'),
+            searchValue: document.getElementById('agentSearch') ? document.getElementById('agentSearch').value : '',
+          };
+
+          var html = document.documentElement.outerHTML;
+
+          ws.send(JSON.stringify({ id: id, ok: true, data: { descriptor: descriptor, html: html } }));
+          break;
+        }
+
         default:
           ws.send(JSON.stringify({ id: id, ok: false, error: 'Unknown command: ' + msg.cmd }));
       }

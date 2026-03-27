@@ -3,6 +3,8 @@
  */
 
 import { createServer, type Server } from 'node:http';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { startMockServer, type MockServer } from './mock-server.ts';
 import { WebSocketServer, type WsClient } from '../shared/websocket-server.ts';
@@ -163,6 +165,24 @@ export class TestContext {
 
   async count(selector: string): Promise<number> {
     return (await this.sendProbeCommand('count', { selector })) as number;
+  }
+
+  // ── Snapshots ──
+
+  async snapshot(name: string): Promise<{ descriptor: Record<string, unknown>; htmlPath: string; jsonPath: string }> {
+    const result = await this.sendProbeCommand('snapshot', {});
+    const { descriptor, html } = result as { descriptor: Record<string, unknown>; html: string };
+
+    const snapshotDir = join(import.meta.dirname, 'ui', 'snapshots');
+    mkdirSync(snapshotDir, { recursive: true });
+
+    const htmlPath = join(snapshotDir, `${name}.html`);
+    const jsonPath = join(snapshotDir, `${name}.json`);
+
+    writeFileSync(htmlPath, html, 'utf-8');
+    writeFileSync(jsonPath, JSON.stringify(descriptor, null, 2), 'utf-8');
+
+    return { descriptor, htmlPath, jsonPath };
   }
 
   // ── Lifecycle ──
