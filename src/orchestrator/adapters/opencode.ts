@@ -103,12 +103,13 @@ export class OpenCodeAdapter implements EngineAdapter {
       return { contextPct: parseInt(pctMatch[1]!, 10), confident: true };
     }
 
-    // Also shows "NNN tokens" — can't convert to % without knowing the max,
-    // but the presence indicates context is being tracked
+    // Also shows "NNN tokens" — estimate percentage from token count
     const tokenMatch = paneOutput.match(/([\d,]+)\s+tokens/);
     if (tokenMatch) {
-      // Can't compute percentage without knowing model context window
-      return { contextPct: null, confident: false };
+      const tokens = parseInt(tokenMatch[1]!.replace(/,/g, ''), 10);
+      const maxTokens = 200_000; // estimated context window
+      const pct = Math.min(100, Math.round((tokens / maxTokens) * 100));
+      return { contextPct: pct, confident: false }; // confident: false since we don't know exact max
     }
 
     return { contextPct: null, confident: false };

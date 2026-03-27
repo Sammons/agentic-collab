@@ -225,7 +225,7 @@ route('DELETE', '/api/agents/:name', async (_req, res, match, ctx) => {
       await ctx.proxyDispatch(agent.proxyId, {
         action: 'remove_codex_profile',
         profileName: name,
-      }).catch(() => {}); // Best-effort cleanup
+      }).catch((err) => { console.warn('[cleanup] Config profile removal failed:', (err as Error).message); });
     }
   }
 
@@ -1296,11 +1296,14 @@ route('DELETE', '/api/reminders/:id', async (_req, res, match, ctx) => {
 
 route('POST', '/api/reminders/swap', async (req, res, _match, ctx) => {
   const body = await readJson(req);
-  if (typeof body.id1 !== 'number' || typeof body.id2 !== 'number') {
-    return json(res, 400, { error: 'id1 and id2 required' });
+  // Accept both { a, b } (dashboard) and { id1, id2 } (API) field names
+  const id1 = typeof body.a === 'number' ? body.a : body.id1;
+  const id2 = typeof body.b === 'number' ? body.b : body.id2;
+  if (typeof id1 !== 'number' || typeof id2 !== 'number') {
+    return json(res, 400, { error: 'id1/id2 (or a/b) required' });
   }
 
-  const ok = ctx.db.swapReminderOrder(body.id1 as number, body.id2 as number);
+  const ok = ctx.db.swapReminderOrder(id1 as number, id2 as number);
   if (!ok) return json(res, 400, { error: 'Swap failed — reminders must exist and belong to same agent' });
 
   broadcastReminderUpdate(ctx);

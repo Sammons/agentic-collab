@@ -693,7 +693,7 @@ export async function destroyAgent(
         await ctx.proxyDispatch(agent.proxyId, {
           action: 'remove_codex_profile',
           profileName: name,
-        }).catch(() => {}); // Best-effort cleanup
+        }).catch((err) => { console.warn('[cleanup] Config profile removal failed:', (err as Error).message); });
       }
     }
 

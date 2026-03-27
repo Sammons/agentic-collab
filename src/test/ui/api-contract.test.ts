@@ -261,4 +261,67 @@ describe('API Contract', () => {
     const res = await fetch(`${ctx.baseUrl}/totally/unknown/path`);
     assert.equal(res.status, 404);
   });
+
+  // ── Request Log ──
+
+  it('GET /test/request-log captures request/response entries', async () => {
+    // Make a few requests to populate the log
+    await fetch(`${ctx.baseUrl}/api/agents`);
+    await fetch(`${ctx.baseUrl}/api/proxies`);
+    await fetch(`${ctx.baseUrl}/test/send-message`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ agent: 'test-claude', message: 'log test' }),
+    });
+
+    const logRes = await fetch(`${ctx.baseUrl}/test/request-log`);
+    assert.equal(logRes.status, 200);
+    const log = (await logRes.json()) as {
+      timestamp: string;
+      method: string;
+      path: string;
+      requestBody: unknown;
+      responseStatus: number;
+      responseBody: unknown;
+    }[];
+    assert.ok(Array.isArray(log), 'request log should be an array');
+    assert.ok(log.length >= 3, 'should have at least 3 entries');
+
+    // Verify entry structure
+    for (const entry of log) {
+      assert.equal(typeof entry.timestamp, 'string');
+      assert.equal(typeof entry.method, 'string');
+      assert.equal(typeof entry.path, 'string');
+      assert.equal(typeof entry.responseStatus, 'number');
+    }
+
+    // Verify specific entries exist
+    const agentsEntry = log.find(e => e.path === '/api/agents' && e.method === 'GET');
+    assert.ok(agentsEntry, 'should have logged GET /api/agents');
+    assert.equal(agentsEntry!.responseStatus, 200);
+    assert.ok(Array.isArray(agentsEntry!.responseBody), 'response body should be agents array');
+
+    const sendEntry = log.find(e => e.path === '/test/send-message' && e.method === 'POST');
+    assert.ok(sendEntry, 'should have logged POST /test/send-message');
+    assert.equal(sendEntry!.responseStatus, 200);
+    assert.ok(sendEntry!.requestBody !== null, 'POST request body should be captured');
+  });
+
+  it('POST /test/reset clears request log', async () => {
+    // Generate some log entries
+    await fetch(`${ctx.baseUrl}/api/agents`);
+
+    // Verify log is non-empty
+    const beforeRes = await fetch(`${ctx.baseUrl}/test/request-log`);
+    const before = (await beforeRes.json()) as unknown[];
+    assert.ok(before.length > 0, 'log should have entries before reset');
+
+    // Reset
+    await fetch(`${ctx.baseUrl}/test/reset`, { method: 'POST' });
+
+    // Verify log is cleared
+    const afterRes = await fetch(`${ctx.baseUrl}/test/request-log`);
+    const after = (await afterRes.json()) as unknown[];
+    assert.equal(after.length, 0, 'log should be empty after reset');
+  });
 });

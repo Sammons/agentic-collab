@@ -135,7 +135,7 @@
             agentCards: Array.from(document.querySelectorAll('[data-agent]')).map(function(card) {
               return {
                 name: card.dataset.agent,
-                stateText: card.querySelector('.state-badge') ? card.querySelector('.state-badge').textContent : '',
+                stateText: (function() { var b = card.querySelector('.state-badge'); return b ? b.textContent : ''; })(),
                 hasUnread: !!card.querySelector('.unread-badge'),
                 indicators: Array.from(card.querySelectorAll('.indicator-badge')).map(function(b) { return b.textContent; }),
                 indicatorActions: Array.from(card.querySelectorAll('.indicator-action')).map(function(b) { return b.textContent; }),
