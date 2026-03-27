@@ -185,6 +185,20 @@ export class TestContext {
     return { descriptor, htmlPath, jsonPath };
   }
 
+  async screenshot(name: string): Promise<string> {
+    const result = await this.sendProbeCommand('screenshot', {});
+    const { base64, width, height } = result as { base64: string; width: number; height: number };
+
+    const snapshotDir = join(import.meta.dirname, 'ui', 'snapshots');
+    mkdirSync(snapshotDir, { recursive: true });
+
+    const pngPath = join(snapshotDir, `${name}.png`);
+    writeFileSync(pngPath, Buffer.from(base64, 'base64'));
+
+    console.log(`[screenshot] ${name}.png saved (${width}x${height})`);
+    return pngPath;
+  }
+
   // ── Lifecycle ──
 
   async close(): Promise<void> {
