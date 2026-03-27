@@ -1685,6 +1685,11 @@
     indicators: {},   // { agentName: ActiveIndicator[] }
   };
 
+  // Expose state for test probe when running in test mode
+  if (new URLSearchParams(location.search).has('test')) {
+    window.__dashboardState = state;
+  }
+
   const VOICE_TO_TEXT_PREFIX = 'sent via voice-to-text: ';
 
   let ws = null;
