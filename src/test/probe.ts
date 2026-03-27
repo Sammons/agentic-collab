@@ -87,6 +87,43 @@
           break;
         }
 
+        case 'screenshot': {
+          var w = window.innerWidth;
+          var h = window.innerHeight;
+          // Clone the document and inline all computed styles for accurate rendering
+          var clone = document.documentElement.cloneNode(true);
+          // Build SVG with foreignObject containing the page HTML
+          var svgXml = '<svg xmlns="http://www.w3.org/2000/svg" width="' + w + '" height="' + h + '">' +
+            '<foreignObject width="100%" height="100%">' +
+            new XMLSerializer().serializeToString(document.documentElement) +
+            '</foreignObject></svg>';
+          var svgBlob = new Blob([svgXml], { type: 'image/svg+xml;charset=utf-8' });
+          var svgUrl = URL.createObjectURL(svgBlob);
+          var img = new Image();
+          img.onload = function() {
+            var canvas = document.createElement('canvas');
+            canvas.width = w;
+            canvas.height = h;
+            var ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0);
+            URL.revokeObjectURL(svgUrl);
+            try {
+              var dataUrl = canvas.toDataURL('image/png');
+              // Strip the data:image/png;base64, prefix
+              var base64 = dataUrl.split(',')[1] || '';
+              ws.send(JSON.stringify({ id: id, ok: true, data: { base64: base64, width: w, height: h } }));
+            } catch (canvasErr) {
+              ws.send(JSON.stringify({ id: id, ok: false, error: 'Canvas tainted: ' + canvasErr }));
+            }
+          };
+          img.onerror = function() {
+            URL.revokeObjectURL(svgUrl);
+            ws.send(JSON.stringify({ id: id, ok: false, error: 'SVG render failed' }));
+          };
+          img.src = svgUrl;
+          break;
+        }
+
         case 'snapshot': {
           var state = window.__dashboardState || {};
 
