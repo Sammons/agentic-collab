@@ -6,7 +6,7 @@ import { createServer, type Server } from 'node:http';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { startMockServer, type MockServer } from './mock-server.ts';
+import { startMockServer, type MockServer, type RequestLogEntry } from './mock-server.ts';
 import { WebSocketServer, type WsClient } from '../shared/websocket-server.ts';
 import type { AgentRecord, ActiveIndicator } from '../shared/types.ts';
 
@@ -197,6 +197,23 @@ export class TestContext {
 
     console.log(`[screenshot] ${name}.png saved (${width}x${height})`);
     return pngPath;
+  }
+
+  // ── Request Log ──
+
+  async getRequestLog(): Promise<RequestLogEntry[]> {
+    const res = await fetch(`${this.mock.url}/test/request-log`);
+    if (!res.ok) throw new Error(`getRequestLog failed: ${res.status}`);
+    return (await res.json()) as RequestLogEntry[];
+  }
+
+  async saveRequestLog(name: string): Promise<string> {
+    const log = await this.getRequestLog();
+    const snapshotDir = join(import.meta.dirname, 'ui', 'snapshots');
+    mkdirSync(snapshotDir, { recursive: true });
+    const filePath = join(snapshotDir, `${name}.requests.json`);
+    writeFileSync(filePath, JSON.stringify(log, null, 2), 'utf-8');
+    return filePath;
   }
 
   // ── Lifecycle ──

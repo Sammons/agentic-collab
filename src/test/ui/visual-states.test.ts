@@ -29,6 +29,7 @@ describe('Visual State Snapshots', () => {
   it('captures initial load state', { skip: !probeConnected ? 'no browser connected' : false }, async () => {
     const { descriptor } = await ctx.snapshot('01-initial-load');
     await ctx.screenshot('01-initial-load');
+    await ctx.saveRequestLog('01-initial-load');
     const cards = descriptor['agentCards'] as unknown[];
     assert.ok(cards.length >= 3, 'should show agent cards');
     assert.ok(descriptor['createFormVisible'], 'create button should be visible');
@@ -44,6 +45,7 @@ describe('Visual State Snapshots', () => {
     await new Promise(r => setTimeout(r, 500));
     const { descriptor } = await ctx.snapshot('02-indicator-active');
     await ctx.screenshot('02-indicator-active');
+    await ctx.saveRequestLog('02-indicator-active');
     const cards = descriptor['agentCards'] as { name: string; indicators: string[]; indicatorActions: string[] }[];
     const claude = cards.find(c => c.name === 'test-claude');
     assert.ok(claude, 'test-claude card should exist');
@@ -59,6 +61,7 @@ describe('Visual State Snapshots', () => {
     await new Promise(r => setTimeout(r, 500));
     const { descriptor } = await ctx.snapshot('03-message-thread');
     await ctx.screenshot('03-message-thread');
+    await ctx.saveRequestLog('03-message-thread');
     assert.ok((descriptor['threadMessageCount'] as number) >= 2, 'should show messages');
   });
 
@@ -67,6 +70,7 @@ describe('Visual State Snapshots', () => {
     await new Promise(r => setTimeout(r, 300));
     const { descriptor } = await ctx.snapshot('04-failed-agent');
     await ctx.screenshot('04-failed-agent');
+    await ctx.saveRequestLog('04-failed-agent');
     const cards = descriptor['agentCards'] as { name: string; stateText: string }[];
     const failed = cards.find(c => c.name === 'test-failed');
     assert.ok(failed, 'test-failed card should exist');
@@ -78,6 +82,7 @@ describe('Visual State Snapshots', () => {
     await new Promise(r => setTimeout(r, 300));
     const { descriptor } = await ctx.snapshot('05-filter-active');
     await ctx.screenshot('05-filter-active');
+    await ctx.saveRequestLog('05-filter-active');
     const chips = descriptor['filterChipsActive'] as string[];
     assert.ok(chips.length > 0, 'should have active filter');
   });
@@ -87,6 +92,7 @@ describe('Visual State Snapshots', () => {
     await new Promise(r => setTimeout(r, 300));
     const { descriptor } = await ctx.snapshot('06-create-modal');
     await ctx.screenshot('06-create-modal');
+    await ctx.saveRequestLog('06-create-modal');
     assert.ok(descriptor['modalVisible'], 'modal should be visible');
   });
 });
