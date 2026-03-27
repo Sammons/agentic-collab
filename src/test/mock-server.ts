@@ -145,6 +145,23 @@ const DEFAULT_PROXIES: ProxyRegistration[] = [
   },
 ];
 
+// ── Request/Response & WebSocket Logging ──
+
+export type RequestLogEntry = {
+  timestamp: string;
+  method: string;
+  path: string;
+  requestBody: unknown | null;
+  responseStatus: number;
+  responseBody: unknown | null;
+};
+
+export type WsLogEntry = {
+  timestamp: string;
+  direction: 'sent' | 'received';
+  data: unknown;
+};
+
 // ── Fixture State ──
 
 type FixtureState = {
@@ -153,6 +170,8 @@ type FixtureState = {
   proxies: ProxyRegistration[];
   indicators: Record<string, ActiveIndicator[]>;
   messageIdCounter: number;
+  requestLog: RequestLogEntry[];
+  wsLog: WsLogEntry[];
 };
 
 function createFixtureState(): FixtureState {
@@ -162,6 +181,8 @@ function createFixtureState(): FixtureState {
     proxies: [...DEFAULT_PROXIES],
     indicators: {},
     messageIdCounter: 1,
+    requestLog: [],
+    wsLog: [],
   };
 }
 
@@ -216,10 +237,44 @@ export async function startMockServer(port: number): Promise<MockServer> {
     return raw.replace('__PROBE_PORT__', String(probePort));
   }
 
+  // Wrap wss.broadcast to log WS messages
+  const origBroadcast = wss.broadcast.bind(wss);
+  wss.broadcast = (data: string) => {
+    try {
+      fixtures.wsLog.push({ timestamp: new Date().toISOString(), direction: 'sent', data: JSON.parse(data) });
+    } catch {
+      fixtures.wsLog.push({ timestamp: new Date().toISOString(), direction: 'sent', data });
+    }
+    return origBroadcast(data);
+  };
+
+  // Logging-aware json helper — captures response data for the request log
+  function logJson(r: ServerResponse, data: unknown, status = 200): void {
+    (r as ServerResponse & { __logBody: unknown }).__logBody = data;
+    (r as ServerResponse & { __logStatus: number }).__logStatus = status;
+    json(r, data, status);
+  }
+
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     const url = new URL(req.url ?? '/', `http://localhost:${port}`);
     const path = url.pathname;
     const method = req.method ?? 'GET';
+
+    // Capture request body for logging (stored once, used below and by handler)
+    let parsedRequestBody: unknown = null;
+
+    // Log every completed request/response pair (except test control endpoints for the log itself)
+    res.on('finish', () => {
+      if (path === '/test/request-log' || path === '/test/reset') return; // don't log meta-queries or resets
+      fixtures.requestLog.push({
+        timestamp: new Date().toISOString(),
+        method,
+        path,
+        requestBody: parsedRequestBody,
+        responseStatus: (res as ServerResponse & { __logStatus?: number }).__logStatus ?? res.statusCode,
+        responseBody: (res as ServerResponse & { __logBody?: unknown }).__logBody ?? null,
+      });
+    });
 
     // ── CORS preflight ──
     if (method === 'OPTIONS') {
@@ -256,43 +311,51 @@ export async function startMockServer(port: number): Promise<MockServer> {
 
     // ── API: agents ──
     if (method === 'GET' && path === '/api/agents') {
-      json(res, fixtures.agents);
+      logJson(res, fixtures.agents);
       return;
     }
 
     // ── API: dashboard threads ──
     if (method === 'GET' && path === '/api/dashboard/threads') {
-      json(res, fixtures.threads);
+      logJson(res, fixtures.threads);
       return;
     }
 
     // ── API: proxies ──
     if (method === 'GET' && path === '/api/proxies') {
-      json(res, fixtures.proxies);
+      logJson(res, fixtures.proxies);
       return;
     }
 
     // ── API: reminders ──
     if (method === 'GET' && path === '/api/reminders') {
-      json(res, []);
+      logJson(res, []);
       return;
     }
 
     // ── API: personas ──
     if (method === 'GET' && path.startsWith('/api/personas/')) {
-      json(res, { error: 'not found' }, 404);
+      logJson(res, { error: 'not found' }, 404);
       return;
     }
 
     // ── API: voice status ──
     if (method === 'GET' && path === '/api/voice/status') {
-      json(res, { enabled: false });
+      logJson(res, { enabled: false });
+      return;
+    }
+
+    // ── Test Control: request-log ──
+    if (method === 'GET' && path === '/test/request-log') {
+      json(res, fixtures.requestLog);
       return;
     }
 
     // ── Test Control: set-agents ──
     if (method === 'POST' && path === '/test/set-agents') {
-      const body = JSON.parse(await readBody(req)) as Partial<AgentRecord>[];
+      const rawBody = await readBody(req);
+      const body = JSON.parse(rawBody) as Partial<AgentRecord>[];
+      parsedRequestBody = body;
       for (const partial of body) {
         if (!partial.name) continue;
         const existing = fixtures.agents.find((a) => a.name === partial.name);
@@ -307,18 +370,20 @@ export async function startMockServer(port: number): Promise<MockServer> {
           wss.broadcast(JSON.stringify(event));
         }
       }
-      json(res, { ok: true });
+      logJson(res, { ok: true });
       return;
     }
 
     // ── Test Control: send-message ──
     if (method === 'POST' && path === '/test/send-message') {
-      const body = JSON.parse(await readBody(req)) as {
+      const rawBody = await readBody(req);
+      const body = JSON.parse(rawBody) as {
         agent: string;
         direction?: string;
         message: string;
         topic?: string;
       };
+      parsedRequestBody = body;
       const msg: DashboardMessage = {
         id: fixtures.messageIdCounter++,
         agent: body.agent,
@@ -339,16 +404,18 @@ export async function startMockServer(port: number): Promise<MockServer> {
       fixtures.threads[body.agent]!.push(msg);
       const event: WsMessageEvent = { type: 'message', msg };
       wss.broadcast(JSON.stringify(event));
-      json(res, { ok: true });
+      logJson(res, { ok: true });
       return;
     }
 
     // ── Test Control: trigger-indicator ──
     if (method === 'POST' && path === '/test/trigger-indicator') {
-      const body = JSON.parse(await readBody(req)) as {
+      const rawBody = await readBody(req);
+      const body = JSON.parse(rawBody) as {
         agentName: string;
         indicators: ActiveIndicator[];
       };
+      parsedRequestBody = body;
       fixtures.indicators[body.agentName] = body.indicators;
       const event: WsIndicatorUpdateEvent = {
         type: 'indicator_update',
@@ -356,7 +423,7 @@ export async function startMockServer(port: number): Promise<MockServer> {
         indicators: body.indicators,
       };
       wss.broadcast(JSON.stringify(event));
-      json(res, { ok: true });
+      logJson(res, { ok: true });
       return;
     }
 
@@ -368,15 +435,18 @@ export async function startMockServer(port: number): Promise<MockServer> {
       fixtures.proxies = fresh.proxies;
       fixtures.indicators = fresh.indicators;
       fixtures.messageIdCounter = fresh.messageIdCounter;
-      json(res, { ok: true });
+      fixtures.requestLog = fresh.requestLog;
+      fixtures.wsLog = fresh.wsLog;
+      logJson(res, { ok: true });
       return;
     }
 
     // ── POST catch-all ──
     if (method === 'POST') {
       // Drain body before responding
-      await readBody(req);
-      json(res, { ok: true });
+      const rawBody = await readBody(req);
+      try { parsedRequestBody = JSON.parse(rawBody); } catch { parsedRequestBody = rawBody || null; }
+      logJson(res, { ok: true });
       return;
     }
 

@@ -306,10 +306,15 @@ export class HealthMonitor {
     const contextResult = adapter.parseContextPercent(paneOutput);
     if (contextResult.contextPct === null) return;
 
-    this.db.updateAgentState(agent.name, agent.state, agent.version, {
-      lastContextPct: contextResult.contextPct,
-      lastActivity: new Date().toISOString(),
-    });
+    // Re-read the agent to avoid stale version conflicts from the poll snapshot
+    const latest = this.db.getAgent(agent.name);
+    if (!latest || (latest.state !== 'active' && latest.state !== 'idle')) return;
+    try {
+      this.db.updateAgentState(agent.name, latest.state, latest.version, {
+        lastContextPct: contextResult.contextPct,
+        lastActivity: new Date().toISOString(),
+      });
+    } catch { /* version conflict — another operation changed the agent, skip this update */ }
     this.onAgentUpdate(agent.name);
   }
 
@@ -423,9 +428,21 @@ export class HealthMonitor {
     });
     this.db.logEvent(agent.name, 'cli_exit_detected', undefined, { reason, lastLine });
     this.onAgentUpdate(agent.name);
-    this.consecutiveFailures.delete(key);
-    this.lastPaneSnapshot.delete(agent.name);
+    this.cleanupAgent(agent.name);
     return true;
+  }
+
+  /**
+   * Clean up all per-agent tracking maps to prevent memory leaks
+   * when an agent is removed or transitions to a terminal state.
+   */
+  cleanupAgent(name: string): void {
+    this.lastPaneSnapshot.delete(name);
+    this.unchangedCount.delete(name);
+    this.consecutiveFailures.delete(name);
+    this.consecutiveFailures.delete(`shell_${name}`);
+    this.activeIndicators.delete(name);
+    this.compiledIndicators.delete(name);
   }
 
   private checkIdleSuspendTimeout(agentName: string): void {
