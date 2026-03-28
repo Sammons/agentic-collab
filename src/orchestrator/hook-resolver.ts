@@ -20,7 +20,7 @@
  */
 
 import { readFileSync } from 'node:fs';
-import { resolve, relative, isAbsolute } from 'node:path';
+import { resolve, isAbsolute } from 'node:path';
 import type { EngineAdapter, SpawnOptions, ResumeOptions } from './adapters/types.ts';
 import type { AgentRecord, HookValue, StructuredHook, SendAction, PresetHook, ShellHook, SendHook, KeystrokesHook, PipelineStep } from '../shared/types.ts';
 import { getAdapter } from './adapters/index.ts';
@@ -184,7 +184,7 @@ function resolveStructuredHook(
     const interpolated = interpolateTemplateVars(value.shell, context?.templateVars);
 
     // Hook-local env only (COLLAB_AGENT is injected by the lifecycle layer via
-    // withLaunchEnv/withAgentEnv — adding it here would cause duplicate exports)
+    // withLaunchEnv — adding it here would cause duplicate exports)
     if (value.env && Object.keys(value.env).length > 0) {
       const envParts: string[] = [];
       for (const [k, v] of Object.entries(value.env)) {

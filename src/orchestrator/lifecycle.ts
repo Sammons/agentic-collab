@@ -52,15 +52,6 @@ function prependExports(cmd: string, entries: Array<[string, string]>): string {
   return `export ${assignments} && ${cmd}`;
 }
 
-/** Wrap a command with base agent exports used by non-launch custom hooks. */
-function withAgentEnv(name: string, cmd: string, personaFile?: string | null): string {
-  const entries: Array<[string, string]> = [['COLLAB_AGENT', name]];
-  if (personaFile) {
-    entries.push(['COLLAB_PERSONA_FILE', personaFile]);
-  }
-  return prependExports(cmd, entries);
-}
-
 /** Wrap a launch command with base exports plus persona-defined launch env. */
 function withLaunchEnv(agent: AgentRecord, cmd: string, personaFile: string): string {
   const baseEntries: Array<[string, string]> = [
@@ -81,6 +72,17 @@ function wrapFirstShellStep(steps: PipelineStep[], agent: AgentRecord, personaFi
   const wrapped = [...steps];
   wrapped[idx] = { type: 'shell', command: withLaunchEnv(agent, step.command, personaFile) };
   return wrapped;
+}
+
+/** Wrap a resolved hook result with agent env vars for launch operations (spawn/resume/reload). */
+function wrapLaunchResult(result: HookResult, agent: AgentRecord, personaFile: string): HookResult {
+  if (result.mode === 'paste') {
+    return { mode: 'paste', text: withLaunchEnv(agent, result.text, personaFile) };
+  }
+  if (result.mode === 'pipeline') {
+    return { ...result, steps: wrapFirstShellStep(result.steps, agent, personaFile) };
+  }
+  return result;
 }
 
 /**
@@ -355,11 +357,7 @@ export async function spawnAgent(
     });
 
     // Wrap launch command with agent env vars
-    const wrappedStart = startResult.mode === 'paste'
-      ? { mode: 'paste' as const, text: withLaunchEnv(phase1.current, startResult.text, personaFile) }
-      : startResult.mode === 'pipeline'
-        ? { ...startResult, steps: wrapFirstShellStep(startResult.steps, phase1.current, personaFile) }
-        : startResult;
+    const wrappedStart = wrapLaunchResult(startResult, phase1.current, personaFile);
 
     await dispatchHookResult(ctx, opts.proxyId, tmuxSession, wrappedStart, { agentName: opts.name });
 
@@ -529,11 +527,7 @@ export async function resumeAgent(
     }
 
     // Wrap launch command with agent env vars
-    const wrappedResume = resumeResult.mode === 'paste'
-      ? { mode: 'paste' as const, text: withLaunchEnv(phase1.current, resumeResult.text, personaFile) }
-      : resumeResult.mode === 'pipeline'
-        ? { ...resumeResult, steps: wrapFirstShellStep(resumeResult.steps, phase1.current, personaFile) }
-        : resumeResult;
+    const wrappedResume = wrapLaunchResult(resumeResult, phase1.current, personaFile);
 
     await dispatchHookResult(ctx, proxyId, tmuxSession, wrappedResume, { agentName: name });
 
@@ -871,11 +865,7 @@ export async function reloadAgent(
     }
 
     // Wrap launch command with agent env vars
-    const wrappedReload = reloadResult.mode === 'paste'
-      ? { mode: 'paste' as const, text: withLaunchEnv(phase1.current, reloadResult.text, personaFile) }
-      : reloadResult.mode === 'pipeline'
-        ? { ...reloadResult, steps: wrapFirstShellStep(reloadResult.steps, phase1.current, personaFile) }
-        : reloadResult;
+    const wrappedReload = wrapLaunchResult(reloadResult, phase1.current, personaFile);
 
     await dispatchHookResult(ctx, proxyId, tmuxSession, wrappedReload, { agentName: name });
 
