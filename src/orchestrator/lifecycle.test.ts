@@ -1200,4 +1200,201 @@ describe('Lifecycle', () => {
       );
     });
   });
+
+  describe('hook dispatch output validation', () => {
+    // Golden output tests: verify the exact commands dispatched for each hook type.
+    // These catch env wrapping, template interpolation, and pipeline dispatch bugs.
+
+    it('compact dispatches bare command without env wrapping', async () => {
+      db.createAgent({
+        name: 'golden-compact',
+        engine: 'claude',
+        cwd: '/tmp',
+        proxyId: 'p1',
+        hookCompact: '/compact',
+      });
+      const a = db.getAgent('golden-compact')!;
+      db.updateAgentState('golden-compact', 'active', a.version, {
+        tmuxSession: 'agent-golden-compact',
+        proxyId: 'p1',
+      });
+
+      proxyCommands = [];
+      await compactAgent(ctx, 'golden-compact');
+
+      const paste = proxyCommands.find(c => c.action === 'paste') as Extract<ProxyCommand, { action: 'paste' }>;
+      assert.ok(paste, 'should dispatch paste command');
+      assert.equal(paste.text, '/compact', 'compact should dispatch bare command, no env wrapping');
+      assert.equal(paste.pressEnter, true, 'compact should press enter');
+    });
+
+    it('compact pipeline dispatches steps without env wrapping', async () => {
+      const pipeline = JSON.stringify([
+        { type: 'keystroke', key: 'Escape' },
+        { type: 'shell', command: '/compact' },
+      ]);
+      db.createAgent({
+        name: 'golden-compact-pipeline',
+        engine: 'claude',
+        cwd: '/tmp',
+        proxyId: 'p1',
+        hookCompact: pipeline,
+      });
+      const a = db.getAgent('golden-compact-pipeline')!;
+      db.updateAgentState('golden-compact-pipeline', 'active', a.version, {
+        tmuxSession: 'agent-golden-compact-pipeline',
+        proxyId: 'p1',
+      });
+
+      proxyCommands = [];
+      await compactAgent(ctx, 'golden-compact-pipeline');
+
+      const keys = proxyCommands.filter(c => c.action === 'send_keys');
+      const pastes = proxyCommands.filter(c => c.action === 'paste');
+      assert.ok(keys.some(c => 'keys' in c && (c as { keys: string }).keys === 'Escape'), 'should send Escape');
+      assert.ok(pastes.length >= 1, 'should have paste');
+      const compactPaste = pastes.find(c => 'text' in c && (c as { text: string }).text === '/compact');
+      assert.ok(compactPaste, 'compact paste should be bare /compact without env');
+    });
+
+    it('interrupt dispatches bare keystrokes without env wrapping', async () => {
+      db.createAgent({
+        name: 'golden-interrupt',
+        engine: 'claude',
+        cwd: '/tmp',
+        proxyId: 'p1',
+      });
+      const a = db.getAgent('golden-interrupt')!;
+      db.updateAgentState('golden-interrupt', 'active', a.version, {
+        tmuxSession: 'agent-golden-interrupt',
+        proxyId: 'p1',
+      });
+
+      proxyCommands = [];
+      await interruptAgent(ctx, 'golden-interrupt');
+
+      // Interrupt should only send keystrokes — no paste, no env
+      const pastes = proxyCommands.filter(c => c.action === 'paste');
+      assert.equal(pastes.length, 0, 'interrupt should not paste anything');
+      const keys = proxyCommands.filter(c => c.action === 'send_keys');
+      assert.ok(keys.length >= 1, 'interrupt should send at least one keystroke');
+    });
+
+    it('exit dispatches bare command without env wrapping', async () => {
+      db.createAgent({
+        name: 'golden-exit',
+        engine: 'claude',
+        cwd: '/tmp',
+        proxyId: 'p1',
+        hookExit: '/exit',
+      });
+      const a = db.getAgent('golden-exit')!;
+      db.updateAgentState('golden-exit', 'active', a.version, {
+        tmuxSession: 'agent-golden-exit',
+        proxyId: 'p1',
+      });
+
+      proxyCommands = [];
+      await suspendAgent(ctx, 'golden-exit');
+
+      const paste = proxyCommands.find(c => c.action === 'paste' && 'text' in c && (c as { text: string }).text === '/exit') as Extract<ProxyCommand, { action: 'paste' }> | undefined;
+      assert.ok(paste, 'exit should dispatch bare /exit');
+      // Should NOT have env wrapping
+      const envPastes = proxyCommands.filter(c => c.action === 'paste' && 'text' in c && (c as { text: string }).text.includes('COLLAB_AGENT='));
+      assert.equal(envPastes.length, 0, 'exit should not have env wrapping');
+    });
+
+    it('exit pipeline dispatches steps without env wrapping', async () => {
+      const pipeline = JSON.stringify([
+        { type: 'keystroke', key: 'Escape' },
+        { type: 'shell', command: '/exit' },
+      ]);
+      db.createAgent({
+        name: 'golden-exit-pipeline',
+        engine: 'claude',
+        cwd: '/tmp',
+        proxyId: 'p1',
+        hookExit: pipeline,
+      });
+      const a = db.getAgent('golden-exit-pipeline')!;
+      db.updateAgentState('golden-exit-pipeline', 'active', a.version, {
+        tmuxSession: 'agent-golden-exit-pipeline',
+        proxyId: 'p1',
+      });
+
+      proxyCommands = [];
+      await suspendAgent(ctx, 'golden-exit-pipeline');
+
+      const exitPaste = proxyCommands.find(c => c.action === 'paste' && 'text' in c && (c as { text: string }).text === '/exit');
+      assert.ok(exitPaste, 'exit pipeline should paste bare /exit');
+    });
+
+    it('custom button dispatches bare command without env wrapping', async () => {
+      const buttons = { myaction: [{ type: 'shell', command: '/my-command' }] };
+      db.createAgent({
+        name: 'golden-custom',
+        engine: 'claude',
+        cwd: '/tmp',
+        proxyId: 'p1',
+        customButtons: JSON.stringify(buttons),
+      });
+      const a = db.getAgent('golden-custom')!;
+      db.updateAgentState('golden-custom', 'active', a.version, {
+        tmuxSession: 'agent-golden-custom',
+        proxyId: 'p1',
+      });
+
+      proxyCommands = [];
+      await executeCustomButton(ctx, 'golden-custom', 'myaction');
+
+      const paste = proxyCommands.find(c => c.action === 'paste') as Extract<ProxyCommand, { action: 'paste' }>;
+      assert.ok(paste, 'custom button should dispatch paste');
+      assert.equal(paste.text, '/my-command', 'custom button should paste bare command');
+    });
+
+    it('start dispatches command WITH env wrapping', async () => {
+      db.createAgent({
+        name: 'golden-start',
+        engine: 'claude',
+        cwd: '/tmp',
+        proxyId: 'p1',
+        hookStart: 'claude --model opus',
+      });
+
+      proxyCommands = [];
+      await spawnAgent(ctx, {
+        name: 'golden-start',
+        engine: 'claude',
+        cwd: '/tmp',
+        proxyId: 'p1',
+      });
+
+      const paste = proxyCommands.find(c => c.action === 'paste' && 'text' in c && (c as { text: string }).text.includes('claude --model opus')) as Extract<ProxyCommand, { action: 'paste' }>;
+      assert.ok(paste, 'start should dispatch paste with launch command');
+      assert.ok(paste.text.includes('COLLAB_AGENT='), 'start SHOULD have env wrapping');
+      assert.ok(paste.text.includes('COLLAB_PERSONA_FILE='), 'start SHOULD include persona file');
+    });
+
+    it('resume dispatches command WITH env wrapping', async () => {
+      db.createAgent({
+        name: 'golden-resume',
+        engine: 'claude',
+        cwd: '/tmp',
+        proxyId: 'p1',
+        hookResume: 'claude --resume test-session',
+      });
+      const a = db.getAgent('golden-resume')!;
+      db.updateAgentState('golden-resume', 'suspended', a.version, {
+        currentSessionId: 'test-session',
+        proxyId: 'p1',
+      });
+
+      proxyCommands = [];
+      await resumeAgent(ctx, 'golden-resume');
+
+      const paste = proxyCommands.find(c => c.action === 'paste' && 'text' in c && (c as { text: string }).text.includes('claude --resume')) as Extract<ProxyCommand, { action: 'paste' }>;
+      assert.ok(paste, 'resume should dispatch paste');
+      assert.ok(paste.text.includes('COLLAB_AGENT='), 'resume SHOULD have env wrapping');
+    });
+  });
 });
