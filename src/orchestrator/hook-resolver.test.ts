@@ -255,21 +255,23 @@ describe('hook-resolver', () => {
   });
 
   describe('structured shell hook', () => {
-    it('returns paste with env prefix and command', () => {
+    it('returns paste with bare command (no COLLAB_AGENT — lifecycle layer handles that)', () => {
       const agent = makeAgent({ name: 'my-agent' });
       const result = resolveHook('start', { shell: './run.sh' }, agent);
       assert.equal(result.mode, 'paste');
       const text = (result as { text: string }).text;
-      assert.ok(text.includes('COLLAB_AGENT=my-agent'));
-      assert.ok(text.includes('./run.sh'));
+      assert.ok(!text.includes('COLLAB_AGENT='), 'ShellHook should not inject COLLAB_AGENT');
+      assert.equal(text, './run.sh', 'bare shell hook without env should return just the command');
     });
 
-    it('includes custom env vars', () => {
+    it('includes custom env vars (shell-quoted, no COLLAB_AGENT)', () => {
       const agent = makeAgent({ name: 'my-agent' });
-      const result = resolveHook('start', { shell: './run.sh', env: { FOO: 'bar', BAZ: 'qux' } }, agent);
+      const result = resolveHook('start', { shell: './run.sh', env: { FOO: 'bar', BAZ: 'hello world' } }, agent);
       const text = (result as { text: string }).text;
-      assert.ok(text.includes('FOO=bar'));
-      assert.ok(text.includes('BAZ=qux'));
+      assert.ok(text.includes("FOO='bar'"), 'env values should be shell-quoted');
+      assert.ok(text.includes("BAZ='hello world'"), 'env values with spaces should be shell-quoted');
+      assert.ok(!text.includes('COLLAB_AGENT='), 'should not include COLLAB_AGENT');
+      assert.ok(text.includes('./run.sh'), 'should include the command');
     });
   });
 
@@ -409,8 +411,8 @@ describe('hook-resolver', () => {
       const result = resolveHook('start', jsonValue, agent);
       assert.equal(result.mode, 'paste');
       const text = (result as { text: string }).text;
-      assert.ok(text.includes('COLLAB_AGENT=db-agent'));
-      assert.ok(text.includes('./run.sh'));
+      assert.ok(!text.includes('COLLAB_AGENT='), 'deserialized shell hook should not inject COLLAB_AGENT');
+      assert.equal(text, './run.sh');
     });
 
     it('deserializes JSON send hook from string', () => {
@@ -530,7 +532,7 @@ describe('hook-resolver', () => {
       assert.equal(result.mode, 'paste');
       const text = (result as { text: string }).text;
       assert.ok(text.includes('claude --session-id uuid-123'), `Expected interpolated command, got: ${text}`);
-      assert.ok(text.includes('COLLAB_AGENT=my-agent'), `Expected env prefix, got: ${text}`);
+      assert.ok(!text.includes('COLLAB_AGENT='), 'ShellHook should not inject COLLAB_AGENT (lifecycle handles it)');
     });
 
     it('shell hook without templateVars passes command through unchanged', () => {

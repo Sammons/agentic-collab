@@ -183,16 +183,17 @@ function resolveStructuredHook(
     // Interpolate $TEMPLATE_VARS in the shell command
     const interpolated = interpolateTemplateVars(value.shell, context?.templateVars);
 
-    // Build env var prefix from agent identity + custom env
-    const envParts: string[] = [];
-    envParts.push(`COLLAB_AGENT=${agent.name}`);
-    if (value.env) {
+    // Hook-local env only (COLLAB_AGENT is injected by the lifecycle layer via
+    // withLaunchEnv/withAgentEnv — adding it here would cause duplicate exports)
+    if (value.env && Object.keys(value.env).length > 0) {
+      const envParts: string[] = [];
       for (const [k, v] of Object.entries(value.env)) {
-        envParts.push(`${k}=${v}`);
+        envParts.push(`${k}=${shellQuote(v)}`);
       }
+      const envPrefix = `export ${envParts.join(' ')}`;
+      return { mode: 'paste', text: `${envPrefix} && ${interpolated}` };
     }
-    const envPrefix = `export ${envParts.join(' ')}`;
-    return { mode: 'paste', text: `${envPrefix} && ${interpolated}` };
+    return { mode: 'paste', text: interpolated };
   }
 
   if (isSendHook(value)) {
