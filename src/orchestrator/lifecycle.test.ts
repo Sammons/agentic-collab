@@ -728,7 +728,8 @@ describe('Lifecycle', () => {
       const paste = proxyCommands.find(c => c.action === 'paste') as Extract<ProxyCommand, { action: 'paste' }>;
       assert.ok(paste, 'should have paste command');
       assert.ok(paste.text.includes('my-compact-cmd'), 'should use hookCompact');
-      assert.ok(paste.text.includes('COLLAB_PERSONA_FILE='), 'should export COLLAB_PERSONA_FILE');
+      // Compact is not a launch hook — no env wrapping
+      assert.ok(!paste.text.includes('COLLAB_AGENT='), 'compact should not have env wrapping');
       assert.ok(!paste.text.includes('GIT_CONFIG_GLOBAL='), 'top-level launch env should not apply to compact hooks');
     });
 

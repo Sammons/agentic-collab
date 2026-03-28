@@ -976,13 +976,9 @@ export async function compactAgent(
       return;
     }
 
-    // Wrap custom hook paste commands with agent env vars
-    let wrappedCompact = compactResult;
-    if (agent.hookCompact && compactResult.mode === 'paste') {
-      const personaFile = resolvePersonaFilePath(name, agent.persona);
-      wrappedCompact = { mode: 'paste', text: withAgentEnv(name, compactResult.text, personaFile) };
-    }
-    await dispatchHookResult(ctx, proxyId, sessionName(agent), wrappedCompact, { agentName: name });
+    // Compact is not a launch hook — no env wrapping needed.
+    // COLLAB_AGENT is already set in the tmux session env from spawn.
+    await dispatchHookResult(ctx, proxyId, sessionName(agent), compactResult, { agentName: name });
 
     // Transition to active so the agent doesn't appear idle during compaction.
     // The health monitor will detect idle again once compaction finishes.
