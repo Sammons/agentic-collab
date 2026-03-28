@@ -820,20 +820,6 @@ export function loadPersona(path: string): string | null {
 }
 
 /**
- * Load persona with frontmatter from file. Returns both parsed frontmatter and body.
- */
-export function loadPersonaFull(path: string): ParsedPersona | null {
-  try {
-    const raw = readFileSync(path, 'utf-8');
-    const { frontmatter, body } = parseFrontmatter(raw);
-    const name = path.split('/').pop()?.replace(/\.md$/, '') ?? '';
-    return { name, frontmatter: frontmatter as PersonaFrontmatter, body };
-  } catch {
-    return null;
-  }
-}
-
-/**
  * Update a single frontmatter field in a persona file.
  * If the field exists, replaces its value. If not, adds it.
  * If value is empty/null, removes the field.
@@ -993,6 +979,31 @@ import type { EngineType } from '../shared/types.ts';
 
 const VALID_ENGINES = new Set<string>(['claude', 'codex', 'opencode']);
 
+function buildUpsertOpts(name: string, fm: PersonaFrontmatter): Parameters<Database['upsertAgentFromPersona']>[0] {
+  return {
+    name,
+    engine: fm.engine as EngineType,
+    model: fm.model as string | undefined,
+    thinking: fm.thinking as string | undefined,
+    cwd: fm.cwd!,
+    persona: name,
+    permissions: fm.permissions as string | undefined,
+    proxyHost: fm.proxy_host as string | undefined,
+    agentGroup: fm.group as string | undefined,
+    launchEnv: normalizeLaunchEnv(fm.env),
+    hookStart: serializeHookValue(fm.start ?? fm.spawn),
+    hookResume: serializeHookValue(fm.resume),
+    hookCompact: serializeHookValue(fm.compact),
+    hookExit: serializeHookValue(fm.exit),
+    hookInterrupt: serializeHookValue(fm.interrupt),
+    hookSubmit: serializeHookValue(fm.submit),
+    hookDetectSession: serializeHookValue(fm.detect_session),
+    detectSessionRegex: fm.detect_session_regex as string | undefined,
+    customButtons: serializeCustomButtons(fm.custom_buttons),
+    indicators: serializeIndicators(fm.indicators),
+  };
+}
+
 /**
  * Re-sync a single agent's persona from disk.
  * Call before spawn/resume to pick up config changes (engine, model, etc.).
@@ -1015,28 +1026,7 @@ export function syncSinglePersona(db: Database, name: string, personasDir?: stri
   const cwd = fm.cwd;
   if (!engine || !VALID_ENGINES.has(engine) || !cwd) return false;
 
-  db.upsertAgentFromPersona({
-    name,
-    engine: engine as EngineType,
-    model: fm.model as string | undefined,
-    thinking: fm.thinking as string | undefined,
-    cwd,
-    persona: name,
-    permissions: fm.permissions as string | undefined,
-    proxyHost: fm.proxy_host as string | undefined,
-    agentGroup: fm.group as string | undefined,
-    launchEnv: normalizeLaunchEnv(fm.env),
-    hookStart: serializeHookValue(fm.start ?? fm.spawn),
-    hookResume: serializeHookValue(fm.resume),
-    hookCompact: serializeHookValue(fm.compact),
-    hookExit: serializeHookValue(fm.exit),
-    hookInterrupt: serializeHookValue(fm.interrupt),
-    hookSubmit: serializeHookValue(fm.submit),
-    hookDetectSession: serializeHookValue(fm.detect_session),
-    detectSessionRegex: fm.detect_session_regex as string | undefined,
-    customButtons: serializeCustomButtons(fm.custom_buttons),
-    indicators: serializeIndicators(fm.indicators),
-  });
+  db.upsertAgentFromPersona(buildUpsertOpts(name, fm));
   return true;
 }
 
@@ -1061,28 +1051,7 @@ export function syncPersonasToDb(db: Database, personasDir?: string): number {
       continue;
     }
 
-    db.upsertAgentFromPersona({
-      name,
-      engine: engine as EngineType,
-      model: frontmatter.model as string | undefined,
-      thinking: frontmatter.thinking as string | undefined,
-      cwd,
-      persona: name,
-      permissions: frontmatter.permissions as string | undefined,
-      proxyHost: frontmatter.proxy_host as string | undefined,
-      agentGroup: frontmatter.group as string | undefined,
-      launchEnv: normalizeLaunchEnv(frontmatter.env),
-      hookStart: serializeHookValue(frontmatter.start ?? frontmatter.spawn),
-      hookResume: serializeHookValue(frontmatter.resume),
-      hookCompact: serializeHookValue(frontmatter.compact),
-      hookExit: serializeHookValue(frontmatter.exit),
-      hookInterrupt: serializeHookValue(frontmatter.interrupt),
-      hookSubmit: serializeHookValue(frontmatter.submit),
-      hookDetectSession: serializeHookValue(frontmatter.detect_session),
-      detectSessionRegex: frontmatter.detect_session_regex as string | undefined,
-      customButtons: serializeCustomButtons(frontmatter.custom_buttons),
-      indicators: serializeIndicators(frontmatter.indicators),
-    });
+    db.upsertAgentFromPersona(buildUpsertOpts(name, frontmatter));
 
     synced++;
   }
@@ -1122,28 +1091,7 @@ export function syncPersonasWithDiff(db: Database, personasDir?: string): SyncDi
     }
 
     const existing = db.getAgent(name);
-    const upsertOpts = {
-      name,
-      engine: engine as EngineType,
-      model: frontmatter.model as string | undefined,
-      thinking: frontmatter.thinking as string | undefined,
-      cwd,
-      persona: name,
-      permissions: frontmatter.permissions as string | undefined,
-      proxyHost: frontmatter.proxy_host as string | undefined,
-      agentGroup: frontmatter.group as string | undefined,
-      launchEnv: normalizeLaunchEnv(frontmatter.env),
-      hookStart: serializeHookValue(frontmatter.start ?? frontmatter.spawn),
-      hookResume: serializeHookValue(frontmatter.resume),
-      hookCompact: serializeHookValue(frontmatter.compact),
-      hookExit: serializeHookValue(frontmatter.exit),
-      hookInterrupt: serializeHookValue(frontmatter.interrupt),
-      hookSubmit: serializeHookValue(frontmatter.submit),
-      hookDetectSession: serializeHookValue(frontmatter.detect_session),
-      detectSessionRegex: frontmatter.detect_session_regex as string | undefined,
-      customButtons: serializeCustomButtons(frontmatter.custom_buttons),
-      indicators: serializeIndicators(frontmatter.indicators),
-    };
+    const upsertOpts = buildUpsertOpts(name, frontmatter);
 
     if (!existing) {
       db.upsertAgentFromPersona(upsertOpts);
@@ -1210,28 +1158,7 @@ export function createPersonaAndAgent(
   writeFileSync(join(dir, `${name}.md`), content, 'utf-8');
 
   // Upsert agent
-  db.upsertAgentFromPersona({
-    name,
-    engine: engine as EngineType,
-    model: fm.model as string | undefined,
-    thinking: fm.thinking as string | undefined,
-    cwd,
-    persona: name,
-    permissions: fm.permissions as string | undefined,
-    proxyHost: fm.proxy_host as string | undefined,
-    agentGroup: fm.group as string | undefined,
-    launchEnv: normalizeLaunchEnv(fm.env),
-    hookStart: serializeHookValue(fm.start ?? fm.spawn),
-    hookResume: serializeHookValue(fm.resume),
-    hookCompact: serializeHookValue(fm.compact),
-    hookExit: serializeHookValue(fm.exit),
-    hookInterrupt: serializeHookValue(fm.interrupt),
-    hookSubmit: serializeHookValue(fm.submit),
-    hookDetectSession: serializeHookValue(fm.detect_session),
-    detectSessionRegex: fm.detect_session_regex as string | undefined,
-    customButtons: serializeCustomButtons(fm.custom_buttons),
-    indicators: serializeIndicators(fm.indicators),
-  });
+  db.upsertAgentFromPersona(buildUpsertOpts(name, fm));
 
   return { name, frontmatter: fm, body };
 }
