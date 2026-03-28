@@ -643,7 +643,7 @@ describe('Lifecycle', () => {
       const paste = proxyCommands.find(c => c.action === 'paste') as Extract<ProxyCommand, { action: 'paste' }>;
       assert.ok(paste, 'should have paste command');
       assert.ok(paste.text.includes(`GIT_CONFIG_GLOBAL=${shellQuote('./agent-shell.gitconfig')}`), 'should inject top-level launch env');
-      assert.ok(paste.text.includes('MY_VAR=hello'), 'should preserve hook-local shell env');
+      assert.ok(paste.text.includes("MY_VAR='hello'"), 'should preserve hook-local shell env (shell-quoted)');
       assert.ok(!paste.text.includes('/tmp/bad-persona.md'), 'reserved COLLAB_PERSONA_FILE should not be overridden');
       assert.ok(paste.text.includes('./run.sh'), 'should still execute the shell hook command');
     });
@@ -1395,6 +1395,35 @@ describe('Lifecycle', () => {
       const paste = proxyCommands.find(c => c.action === 'paste' && 'text' in c && (c as { text: string }).text.includes('claude --resume')) as Extract<ProxyCommand, { action: 'paste' }>;
       assert.ok(paste, 'resume should dispatch paste');
       assert.ok(paste.text.includes('COLLAB_AGENT='), 'resume SHOULD have env wrapping');
+    });
+
+    it('start with ShellHook env does NOT duplicate COLLAB_AGENT', async () => {
+      // ShellHook format: { shell: "...", env: { CUSTOM: "val" } }
+      const hookStart = JSON.stringify({ shell: 'claude --model opus', env: { MY_VAR: 'hello world' } });
+      db.createAgent({
+        name: 'golden-shell-env',
+        engine: 'claude',
+        cwd: '/tmp',
+        proxyId: 'p1',
+        hookStart,
+      });
+
+      proxyCommands = [];
+      await spawnAgent(ctx, {
+        name: 'golden-shell-env',
+        engine: 'claude',
+        cwd: '/tmp',
+        proxyId: 'p1',
+      });
+
+      const paste = proxyCommands.find(c => c.action === 'paste' && 'text' in c && (c as { text: string }).text.includes('claude --model opus')) as Extract<ProxyCommand, { action: 'paste' }>;
+      assert.ok(paste, 'should dispatch paste with claude command');
+      // Count COLLAB_AGENT occurrences — should be exactly 1 (from withLaunchEnv, not from ShellHook resolver)
+      const matches = paste.text.match(/COLLAB_AGENT=/g) || [];
+      assert.equal(matches.length, 1, `COLLAB_AGENT should appear exactly once, got ${matches.length}: ${paste.text}`);
+      // Custom env should be present and shell-quoted
+      assert.ok(paste.text.includes('MY_VAR='), 'custom env should be present');
+      assert.ok(paste.text.includes("'hello world'"), 'custom env values should be shell-quoted');
     });
   });
 });
