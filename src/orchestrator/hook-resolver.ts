@@ -196,14 +196,12 @@ function resolveStructuredHook(
     return { mode: 'paste', text: interpolated };
   }
 
-  if (isSendHook(value)) {
-    if (!value.send || value.send.length === 0) return { mode: 'skip' };
-    return { mode: 'send', actions: value.send };
-  }
-
-  if (isKeystrokesHook(value)) {
-    if (!value.keystrokes || value.keystrokes.length === 0) return { mode: 'skip' };
-    return { mode: 'send', actions: value.keystrokes };
+  // send and keystrokes are structurally identical — both resolve to { mode: 'send', actions }.
+  // "keystrokes" is the preferred key name; "send" is kept for backward compat.
+  if (isSendHook(value) || isKeystrokesHook(value)) {
+    const actions = 'keystrokes' in value ? value.keystrokes : value.send;
+    if (!actions || actions.length === 0) return { mode: 'skip' };
+    return { mode: 'send', actions };
   }
 
   // Unknown structure — skip
@@ -353,6 +351,8 @@ function resolvePresetWithAdapter(
     }
 
     case 'detect_session': {
+      // Deprecated: session detection now uses capture steps in exit pipelines.
+      // Kept for type exhaustiveness and backward compat with existing hook definitions.
       const cmd = adapter.buildDetectSessionCommand(context?.cwd ?? '.');
       if (!cmd) return { mode: 'skip' };
       return { mode: 'paste', text: cmd };
@@ -388,6 +388,8 @@ function resolveFile(filePath: string): HookResult {
 }
 
 // ── Convenience: get hook value from agent record ──
+// NOTE: HOOK_FIELD_MAP and resolveAgentHook are exported for test use only.
+// Production code calls resolveHook() directly with explicit hook values.
 
 const HOOK_FIELD_MAP: Record<HookField, keyof AgentRecord> = {
   start: 'hookStart',
