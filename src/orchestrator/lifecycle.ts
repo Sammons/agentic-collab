@@ -65,9 +65,9 @@ function withLaunchEnv(agent: AgentRecord, cmd: string, personaFile: string): st
 }
 
 /** Wrap the first shell step in a pipeline with agent env vars (same as withLaunchEnv for paste mode). */
-function wrapFirstShellStep(steps: PipelineStep[], agent: AgentRecord, personaFile: string | null): PipelineStep[] {
+function wrapFirstShellStep(steps: PipelineStep[], agent: AgentRecord, personaFile: string): PipelineStep[] {
   const idx = steps.findIndex(s => s.type === 'shell');
-  if (idx === -1 || !personaFile) return steps;
+  if (idx === -1) return steps;
   const step = steps[idx] as { type: 'shell'; command: string };
   const wrapped = [...steps];
   wrapped[idx] = { type: 'shell', command: withLaunchEnv(agent, step.command, personaFile) };
@@ -376,11 +376,6 @@ export async function spawnAgent(
     // Let the CLI fully initialize before finalizing state
     await sleep(POST_SPAWN_ACTIVE_DELAY_MS);
 
-    // 6. Session ID: use the pre-generated one from --session-id.
-    // Session detection is now handled by capture steps in exit/start pipelines
-    // (deprecated: detectSessionId / detect_session_regex).
-    const capturedSessionId: string | null = generatedSessionId;
-
     // ── Phase 3: finalize (lock) ──
     return await ctx.locks.withLock(opts.name, async () => {
       const latest = ctx.db.getAgent(opts.name);
@@ -396,12 +391,12 @@ export async function spawnAgent(
         lastActivity: new Date().toISOString(),
         spawnCount: spawnCount + 1,
         lastContextPct: 0,
-        currentSessionId: capturedSessionId,
+        currentSessionId: generatedSessionId,
       });
       ctx.db.logEvent(opts.name, 'spawned', undefined, {
         engine,
         model: opts.model,
-        sessionId: capturedSessionId,
+        sessionId: generatedSessionId,
       });
       return updated;
     });
@@ -554,9 +549,6 @@ export async function resumeAgent(
         pressEnter: true,
       });
     }
-
-    // 6. Session detection is now handled by capture steps in pipelines.
-    // (deprecated: detectSessionId / detect_session_regex)
 
     // ── Phase 3: finalize (lock) ──
     return await ctx.locks.withLock(name, async () => {

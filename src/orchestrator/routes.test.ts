@@ -129,6 +129,20 @@ describe('API Routes', () => {
     assert.equal((data as Record<string, unknown>).agentGroup, 'infra');
   });
 
+  it('PATCH /api/agents/:name/group updates and returns the agent', async () => {
+    // Ensure agent exists (created in earlier test)
+    const { status, data } = await api('PATCH', '/api/agents/api-agent-grouped/group', { group: 'platform' });
+    assert.equal(status, 200);
+    // Verify the group actually persisted
+    const { data: agent } = await api('GET', '/api/agents/api-agent-grouped');
+    assert.equal((agent as Record<string, unknown>).agentGroup, 'platform');
+  });
+
+  it('PATCH /api/agents/:name/group returns 404 for unknown agent', async () => {
+    const { status } = await api('PATCH', '/api/agents/nonexistent-agent/group', { group: 'x' });
+    assert.equal(status, 404);
+  });
+
   it('POST /api/agents rejects duplicate', async () => {
     const { status } = await api('POST', '/api/agents', {
       name: 'api-agent-1',
