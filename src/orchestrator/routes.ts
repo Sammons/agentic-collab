@@ -771,42 +771,11 @@ route('POST', '/api/agents/:name/reload', async (req, res, match, ctx) => {
   }
 });
 
-route('POST', '/api/agents/:name/interrupt', async (_req, res, match, ctx) => {
-  const name = match.pathname.groups['name']!;
+route('POST', '/api/agents/:name/interrupt', lifecycleRoute(interruptAgent));
 
-  try {
-    const lifecycleCtx = makeLifecycleCtx(ctx);
-    await interruptAgent(lifecycleCtx, name);
-    json(res, 200, { ok: true });
-  } catch (err) {
-    json(res, 400, { error: (err as Error).message });
-  }
-});
+route('POST', '/api/agents/:name/compact', lifecycleRoute(compactAgent));
 
-route('POST', '/api/agents/:name/compact', async (_req, res, match, ctx) => {
-  const name = match.pathname.groups['name']!;
-
-  try {
-    const lifecycleCtx = makeLifecycleCtx(ctx);
-    await compactAgent(lifecycleCtx, name);
-    json(res, 200, { ok: true });
-  } catch (err) {
-    json(res, 400, { error: (err as Error).message });
-  }
-});
-
-route('POST', '/api/agents/:name/kill', async (_req, res, match, ctx) => {
-  const name = match.pathname.groups['name']!;
-
-  try {
-    const lifecycleCtx = makeLifecycleCtx(ctx);
-    await killAgent(lifecycleCtx, name);
-    broadcastAgentUpdate(ctx, name);
-    json(res, 200, { ok: true });
-  } catch (err) {
-    json(res, 400, { error: (err as Error).message });
-  }
-});
+route('POST', '/api/agents/:name/kill', lifecycleRoute(killAgent, { broadcast: true }));
 
 route('GET', '/api/agents/:name/peek', async (_req, res, match, ctx) => {
   const name = match.pathname.groups['name']!;
@@ -1015,18 +984,7 @@ route('POST', '/api/agents/:name/resize', async (req, res, match, ctx) => {
   json(res, 200, { ok: true });
 });
 
-route('POST', '/api/agents/:name/destroy', async (_req, res, match, ctx) => {
-  const name = match.pathname.groups['name']!;
-
-  try {
-    const lifecycleCtx = makeLifecycleCtx(ctx);
-    await destroyAgent(lifecycleCtx, name);
-    ctx.wss.broadcast(JSON.stringify({ type: 'agent_destroyed', name }));
-    json(res, 200, { ok: true });
-  } catch (err) {
-    json(res, 400, { error: (err as Error).message });
-  }
-});
+route('POST', '/api/agents/:name/destroy', lifecycleRoute(destroyAgent, { broadcast: 'destroyed' }));
 
 // ── Custom Buttons ──
 
@@ -1510,6 +1468,33 @@ function enrichProxiesWithVersionMatch(proxies: ProxyRegistration[]): ProxyRegis
     ...p,
     versionMatch: !!p.version && p.version === orchestratorVersion,
   }));
+}
+
+/**
+ * Factory for simple lifecycle route handlers that follow the pattern:
+ * extract name → makeLifecycleCtx → call lifecycle fn → optionally broadcast → json 200/400.
+ *
+ * Keeps the handler inline noise to a single line per route.
+ */
+function lifecycleRoute(
+  lifecycleFn: (ctx: LifecycleContext, name: string) => Promise<unknown>,
+  opts?: { broadcast?: boolean | 'destroyed' },
+): RouteHandler {
+  return async (_req, res, match, ctx) => {
+    const name = match.pathname.groups['name']!;
+    try {
+      const lifecycleCtx = makeLifecycleCtx(ctx);
+      await lifecycleFn(lifecycleCtx, name);
+      if (opts?.broadcast === 'destroyed') {
+        ctx.wss.broadcast(JSON.stringify({ type: 'agent_destroyed', name }));
+      } else if (opts?.broadcast) {
+        broadcastAgentUpdate(ctx, name);
+      }
+      json(res, 200, { ok: true });
+    } catch (err) {
+      json(res, 400, { error: (err as Error).message });
+    }
+  };
 }
 
 function makeLifecycleCtx(ctx: RouteContext): LifecycleContext {
