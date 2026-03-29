@@ -286,6 +286,18 @@
     white-space: nowrap;
     font-weight: 600;
   }
+  .msg-copy {
+    font-size: 10px;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.15s;
+    color: var(--text-dim);
+    background: none;
+    border: none;
+    padding: 0 2px;
+  }
+  .msg-copy:hover { color: var(--accent); }
+  .msg:hover .msg-copy { opacity: 1; }
   .msg-time {
     font-size: 10px;
     white-space: nowrap;
@@ -1837,6 +1849,7 @@
       setTimeout(() => card.classList.remove('flash'), 600);
     }
     renderAgents();
+    updatePageTitle();
   }
 
   function handleMessageWithdrawn(msg) {
@@ -2009,6 +2022,7 @@
             ${agent.engine !== 'codex' ? '<button data-action="compact">Compact</button>' : ''}
             <button data-action="exit">Exit</button>
             <button class="danger" data-action="kill">Kill</button>
+            ${agent.tmuxSession ? `<button class="secondary" data-copy-tmux="tmux attach -t ${esc(agent.tmuxSession)}">Copy tmux</button>` : ''}
           ` : ''}
           ${suspendedFailed ? `
             <button data-action="resume">Resume</button>
@@ -2216,12 +2230,21 @@
         : '';
       const canWithdraw = msg.direction === 'to_agent' && !isSystem && !msg.withdrawn && (!msg.sourceAgent || msg.sourceAgent === 'dashboard');
       const withdrawHtml = canWithdraw ? `<span class="msg-withdraw" data-msg-id="${msg.id}" title="Withdraw message">unsend</span>` : '';
-      const headerHtml = `<div class="msg-header"><span class="msg-sender">${routeStr}</span>${topicBadge}<span class="msg-meta">${withdrawHtml}<span class="msg-time">${time}</span>${statusHtml}</span></div>`;
+      const copyBtn = `<button class="msg-copy" title="Copy message">&#128203;</button>`;
+      const headerHtml = `<div class="msg-header"><span class="msg-sender">${routeStr}</span>${topicBadge}<span class="msg-meta">${copyBtn}${withdrawHtml}<span class="msg-time">${time}</span>${statusHtml}</span></div>`;
       if (isUpload) {
         div.innerHTML = `${headerHtml}<div class="file-info"><span class="file-icon">&#128206;</span> ${esc(displayMsg)}</div>`;
       } else {
         div.innerHTML = `${headerHtml}<div class="msg-body">${renderMarkdown(esc(displayMsg))}</div>`;
       }
+      div.querySelector('.msg-copy')?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        navigator.clipboard.writeText(displayMsg).then(() => {
+          const btn = e.target;
+          btn.textContent = '\u2713';
+          setTimeout(() => { btn.innerHTML = '&#128203;'; }, 1500);
+        });
+      });
       messages.appendChild(div);
     }
     messages.scrollTop = messages.scrollHeight;
@@ -2265,6 +2288,16 @@
     document.getElementById('msgInput')?.focus();
   });
 
+  function updatePageTitle() {
+    const totalUnread = Object.values(state.unread).reduce((sum, n) => sum + (n || 0), 0);
+    const prefix = totalUnread > 0 ? `(${totalUnread}) ` : '';
+    if (state.selected) {
+      document.title = `${prefix}${state.selected} — Agentic Collab`;
+    } else {
+      document.title = `${prefix}Dashboard — Agentic Collab`;
+    }
+  }
+
   function selectAgent(name) {
     state.editingPersona = false;
     // Save draft for previous agent
@@ -2276,6 +2309,7 @@
     }
     state.selected = name;
     state.unread[name] = 0;
+    updatePageTitle();
     // Auto-select most recent topic for this agent if none saved
     if (!state.topicPerAgent[name]) {
       const thread = state.threads[name] || [];
@@ -3127,6 +3161,16 @@
     // Ignore taps on drag handle (mobile touch-drag)
     if (e.target.closest('.drag-handle')) return;
 
+    const copyBtn = e.target.closest('button[data-copy-tmux]');
+    if (copyBtn) {
+      e.stopPropagation();
+      navigator.clipboard.writeText(copyBtn.dataset.copyTmux).then(() => {
+        const orig = copyBtn.textContent;
+        copyBtn.textContent = 'Copied!';
+        setTimeout(() => { copyBtn.textContent = orig; }, 1500);
+      });
+      return;
+    }
     const btn = e.target.closest('button[data-action]');
     if (btn) {
       e.stopPropagation();
@@ -3564,7 +3608,7 @@
   const msgTextarea = document.getElementById('msgInput');
   const isMobile = window.matchMedia('(max-width: 768px)').matches;
   msgTextarea.onkeydown = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey && !isMobile) {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
       sendMessage();
     }

@@ -26,8 +26,10 @@ export function renderMarkdown(escaped: string): string {
   text = text.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
   // Italic (single asterisk, not inside words)
   text = text.replace(/(?<!\w)\*(.+?)\*(?!\w)/g, '<em>$1</em>');
-  // Links
+  // Links (markdown-style)
   text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" style="color:var(--accent)">$1</a>');
+  // Auto-link bare URLs (not already inside an <a> tag)
+  text = text.replace(/(?<!href="|">)(https?:\/\/[^\s<)]+)/g, '<a href="$1" target="_blank" style="color:var(--accent)">$1</a>');
   // Lists, tables, and paragraphs: line-based parser for proper nesting
   {
     const lines = text.split('\n');

@@ -77,6 +77,23 @@ describe('renderMarkdown', () => {
     it('opens links in new tab', () => {
       has(renderMarkdown('[x](http://y.com)'), 'target="_blank"');
     });
+
+    it('auto-links bare URLs', () => {
+      const out = renderMarkdown('visit https://example.com for details');
+      has(out, '<a href="https://example.com"');
+      has(out, '>https://example.com</a>');
+    });
+
+    it('does not double-link markdown links', () => {
+      const out = renderMarkdown('[click](https://example.com)');
+      // Should have exactly one <a> tag, not nested
+      const matches = out.match(/<a /g) || [];
+      assert.equal(matches.length, 1);
+    });
+
+    it('auto-links http URLs', () => {
+      has(renderMarkdown('see http://localhost:3000/test'), '<a href="http://localhost:3000/test"');
+    });
   });
 
   // ── Unordered lists ──
