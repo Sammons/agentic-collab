@@ -1695,6 +1695,7 @@
   let ws = null;
   let reconnectTimer = null;
   let reconnectDelay = 1000;
+  let hasEverConnected = false;
 
   // ── WebSocket ──
   function connect() {
@@ -1706,6 +1707,7 @@
 
     ws.onopen = () => {
       opened = true;
+      hasEverConnected = true;
       state.connected = true;
       reconnectDelay = 1000;
       updateConnStatus();
@@ -1716,10 +1718,13 @@
       state.connected = false;
       updateConnStatus();
       if (!opened) {
-        // Never connected — likely auth failure (401 on upgrade)
-        setToken('');
-        promptForToken('Connection rejected — enter your orchestrator token.');
-        return;
+        if (!hasEverConnected) {
+          // First connect attempt failed — likely auth failure (401 on upgrade)
+          setToken('');
+          promptForToken('Connection rejected — enter your orchestrator token.');
+          return;
+        }
+        // Previously connected but reconnect failed — network issue, keep retrying
       }
       const jitter = Math.random() * 1000;
       reconnectTimer = setTimeout(connect, reconnectDelay + jitter);
