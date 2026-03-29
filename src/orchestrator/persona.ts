@@ -421,9 +421,10 @@ function parsePipelineSteps(
 }
 
 /**
- * Parse custom_buttons: a two-level structure of named keys → pipeline step arrays.
+ * Parse a map of named keys → pipeline step arrays.
+ * Shared primitive for custom_buttons and indicator actions.
  *
- * custom_buttons:
+ * Example structure (at baseIndent=2):
  *   compact:
  *     - shell: /compact
  *     - keystrokes:
@@ -433,12 +434,12 @@ function parsePipelineSteps(
  *       - keystroke: Escape
  *     - shell: /clear
  */
-function parseCustomButtons(
+function parseNamedPipelineMap(
   lines: string[],
   startLine: number,
   baseIndent: number,
 ): { value: Record<string, PipelineStep[]>; nextLine: number } {
-  const buttons: Record<string, PipelineStep[]> = {};
+  const result: Record<string, PipelineStep[]> = {};
   let i = startLine;
 
   while (i < lines.length) {
@@ -448,12 +449,12 @@ function parseCustomButtons(
     const lineIndent = line.length - line.trimStart().length;
     if (lineIndent < baseIndent) break;
 
-    // Expect a button name at baseIndent level: "  compact:"
+    // Expect a named key at baseIndent level: "  compact:"
     if (lineIndent === baseIndent) {
       const colonIdx = line.indexOf(':');
       if (colonIdx === -1) { i++; continue; }
-      const buttonName = line.slice(0, colonIdx).trim();
-      if (!buttonName) { i++; continue; }
+      const name = line.slice(0, colonIdx).trim();
+      if (!name) { i++; continue; }
 
       // Next lines should be pipeline steps at deeper indent
       if (i + 1 < lines.length) {
@@ -461,12 +462,12 @@ function parseCustomButtons(
         const nextIndent = nextLine.length - nextLine.trimStart().length;
         if (nextIndent > baseIndent && nextLine.trim().startsWith('- ')) {
           const { value: steps, nextLine: endLine } = parsePipelineSteps(lines, i + 1, nextIndent);
-          buttons[buttonName] = steps;
+          result[name] = steps;
           i = endLine;
           continue;
         }
       }
-      // Button with no steps — skip
+      // Named key with no steps — skip
       i++;
     } else {
       // Deeper indent line that doesn't belong to us — stop
@@ -474,7 +475,16 @@ function parseCustomButtons(
     }
   }
 
-  return { value: buttons, nextLine: i };
+  return { value: result, nextLine: i };
+}
+
+/** Parse custom_buttons — thin wrapper around parseNamedPipelineMap. */
+function parseCustomButtons(
+  lines: string[],
+  startLine: number,
+  baseIndent: number,
+): { value: Record<string, PipelineStep[]>; nextLine: number } {
+  return parseNamedPipelineMap(lines, startLine, baseIndent);
 }
 
 /**
@@ -554,38 +564,11 @@ function parseIndicators(
           }
           i++;
         } else if (propKey === 'actions' && propVal === '') {
-          // Parse named action keys → pipeline step arrays (same structure as custom_buttons)
-          i++;
+          // Parse named action keys → pipeline step arrays (delegates to shared primitive)
           const actionIndent = propIndent + 2;
-          actions = {};
-          while (i < lines.length) {
-            const actionLine = lines[i]!;
-            if (actionLine.trim() === '') { i++; continue; }
-            const actionLineIndent = actionLine.length - actionLine.trimStart().length;
-            if (actionLineIndent < actionIndent) break;
-
-            if (actionLineIndent === actionIndent) {
-              const actionColonIdx = actionLine.indexOf(':');
-              if (actionColonIdx === -1) { i++; continue; }
-              const actionName = actionLine.slice(0, actionColonIdx).trim();
-              if (!actionName) { i++; continue; }
-
-              // Next lines should be pipeline steps
-              if (i + 1 < lines.length) {
-                const nextLine = lines[i + 1]!;
-                const nextIndent = nextLine.length - nextLine.trimStart().length;
-                if (nextIndent > actionIndent && nextLine.trim().startsWith('- ')) {
-                  const { value: steps, nextLine: endLine } = parsePipelineSteps(lines, i + 1, nextIndent);
-                  actions[actionName] = steps;
-                  i = endLine;
-                  continue;
-                }
-              }
-              i++;
-            } else {
-              break;
-            }
-          }
+          const { value: actionMap, nextLine: actionEnd } = parseNamedPipelineMap(lines, i + 1, actionIndent);
+          actions = Object.keys(actionMap).length > 0 ? actionMap : undefined;
+          i = actionEnd;
         } else {
           i++;
         }
