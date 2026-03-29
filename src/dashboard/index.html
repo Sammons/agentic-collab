@@ -3608,7 +3608,7 @@
   const msgTextarea = document.getElementById('msgInput');
   const isMobile = window.matchMedia('(max-width: 768px)').matches;
   msgTextarea.onkeydown = (e) => {
-    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+    if (e.key === 'Enter' && !e.shiftKey && !isMobile) {
       e.preventDefault();
       sendMessage();
     }
