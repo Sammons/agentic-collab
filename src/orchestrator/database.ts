@@ -18,6 +18,16 @@ import type {
   Reminder,
   ReminderStatus,
 } from '../shared/types.ts';
+import {
+  configColumnMap,
+  mapConfigFromRow,
+  configInsertColumns,
+  serializeConfigParams,
+  configUpsertColumns,
+  configUpdateSetClause,
+  serializeUpsertParams,
+  buildMigrationStatements,
+} from './field-registry.ts';
 
 const SCHEMA = `
   PRAGMA journal_mode = WAL;
@@ -118,61 +128,31 @@ export class Database {
       this.db.exec('ALTER TABLE dashboard_messages ADD COLUMN queue_id INTEGER REFERENCES pending_messages(id)');
     }
 
-    // Add permissions and proxy_host to agents if not present
+    // Migrate agent columns — special cases first, then registry-driven bulk
     const agentColumns = this.db.prepare('PRAGMA table_info(agents)').all() as Array<Record<string, unknown>>;
     const agentColNames = new Set(agentColumns.map(c => c['name'] as string));
-    if (!agentColNames.has('permissions')) {
-      this.db.exec('ALTER TABLE agents ADD COLUMN permissions TEXT');
-    }
-    if (!agentColNames.has('proxy_host')) {
-      this.db.exec('ALTER TABLE agents ADD COLUMN proxy_host TEXT');
-    }
-    if (!agentColNames.has('agent_group')) {
-      this.db.exec('ALTER TABLE agents ADD COLUMN agent_group TEXT');
-    }
-    if (!agentColNames.has('launch_env')) {
-      this.db.exec('ALTER TABLE agents ADD COLUMN launch_env TEXT');
-    }
+
+    // Special: sort_order has NOT NULL DEFAULT 0 (not a simple TEXT column)
     if (!agentColNames.has('sort_order')) {
       this.db.exec('ALTER TABLE agents ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0');
     }
+    // Special: hook_spawn → hook_start data migration
     if (!agentColNames.has('hook_spawn')) {
       this.db.exec('ALTER TABLE agents ADD COLUMN hook_spawn TEXT');
     }
-    // Rename hook_spawn → hook_start (migrate data, keep old column for safety)
     if (!agentColNames.has('hook_start')) {
       this.db.exec('ALTER TABLE agents ADD COLUMN hook_start TEXT');
       this.db.exec('UPDATE agents SET hook_start = hook_spawn WHERE hook_spawn IS NOT NULL');
+      agentColNames.add('hook_start'); // track so registry doesn't re-add
     }
-    if (!agentColNames.has('hook_resume')) {
-      this.db.exec('ALTER TABLE agents ADD COLUMN hook_resume TEXT');
-    }
-    if (!agentColNames.has('hook_compact')) {
-      this.db.exec('ALTER TABLE agents ADD COLUMN hook_compact TEXT');
-    }
-    if (!agentColNames.has('hook_exit')) {
-      this.db.exec('ALTER TABLE agents ADD COLUMN hook_exit TEXT');
-    }
-    if (!agentColNames.has('hook_interrupt')) {
-      this.db.exec('ALTER TABLE agents ADD COLUMN hook_interrupt TEXT');
-    }
-    if (!agentColNames.has('hook_submit')) {
-      this.db.exec('ALTER TABLE agents ADD COLUMN hook_submit TEXT');
-    }
-    if (!agentColNames.has('hook_detect_session')) {
-      this.db.exec('ALTER TABLE agents ADD COLUMN hook_detect_session TEXT');
-    }
-    if (!agentColNames.has('detect_session_regex')) {
-      this.db.exec('ALTER TABLE agents ADD COLUMN detect_session_regex TEXT');
-    }
+    // Special: captured_vars is a runtime field, not in the config registry
     if (!agentColNames.has('captured_vars')) {
       this.db.exec('ALTER TABLE agents ADD COLUMN captured_vars TEXT');
     }
-    if (!agentColNames.has('custom_buttons')) {
-      this.db.exec('ALTER TABLE agents ADD COLUMN custom_buttons TEXT');
-    }
-    if (!agentColNames.has('indicators')) {
-      this.db.exec('ALTER TABLE agents ADD COLUMN indicators TEXT');
+
+    // Registry-driven: adds any remaining missing config columns
+    for (const stmt of buildMigrationStatements(agentColNames)) {
+      this.db.exec(stmt);
     }
 
     // Add withdrawn column to dashboard_messages
@@ -259,32 +239,12 @@ export class Database {
     customButtons?: string;
     indicators?: string;
   }): AgentRecord {
-    this.db.prepare(`
-      INSERT INTO agents (name, engine, model, thinking, cwd, persona, permissions, proxy_host, proxy_id, agent_group, launch_env, hook_start, hook_resume, hook_compact, hook_exit, hook_interrupt, hook_submit, hook_detect_session, detect_session_regex, custom_buttons, indicators, state)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'void')
-    `).run(
-      opts.name,
-      opts.engine,
-      opts.model ?? null,
-      opts.thinking ?? null,
-      opts.cwd,
-      opts.persona ?? null,
-      opts.permissions ?? null,
-      opts.proxyHost ?? null,
-      opts.proxyId ?? null,
-      opts.agentGroup ?? null,
-      serializeLaunchEnv(opts.launchEnv),
-      opts.hookStart ?? null,
-      opts.hookResume ?? null,
-      opts.hookCompact ?? null,
-      opts.hookExit ?? null,
-      opts.hookInterrupt ?? null,
-      opts.hookSubmit ?? null,
-      opts.hookDetectSession ?? null,
-      opts.detectSessionRegex ?? null,
-      opts.customButtons ?? null,
-      opts.indicators ?? null,
-    );
+    const cols = configInsertColumns();
+    const allCols = ['name', ...cols, 'state'].join(', ');
+    const placeholders = ['?', ...cols.map(() => '?'), "'void'"].join(', ');
+    this.db.prepare(
+      `INSERT INTO agents (${allCols}) VALUES (${placeholders})`,
+    ).run(opts.name, ...serializeConfigParams(opts));
     return this.getAgent(opts.name)!;
   }
 
@@ -319,36 +279,9 @@ export class Database {
       return this.createAgent(opts);
     }
     // Update config fields only — preserve runtime state
-    this.db.prepare(`
-      UPDATE agents SET engine = ?, model = ?, thinking = ?, cwd = ?,
-        persona = ?, permissions = ?, proxy_host = ?, agent_group = ?, launch_env = ?,
-        hook_start = ?, hook_resume = ?, hook_compact = ?,
-        hook_exit = ?, hook_interrupt = ?, hook_submit = ?,
-        hook_detect_session = ?, detect_session_regex = ?, custom_buttons = ?,
-        indicators = ?
-      WHERE name = ?
-    `).run(
-      opts.engine,
-      opts.model ?? null,
-      opts.thinking ?? null,
-      opts.cwd,
-      opts.persona ?? null,
-      opts.permissions ?? null,
-      opts.proxyHost ?? null,
-      opts.agentGroup ?? null,
-      serializeLaunchEnv(opts.launchEnv),
-      opts.hookStart ?? null,
-      opts.hookResume ?? null,
-      opts.hookCompact ?? null,
-      opts.hookExit ?? null,
-      opts.hookInterrupt ?? null,
-      opts.hookSubmit ?? null,
-      opts.hookDetectSession ?? null,
-      opts.detectSessionRegex ?? null,
-      opts.customButtons ?? null,
-      opts.indicators ?? null,
-      opts.name,
-    );
+    this.db.prepare(
+      `UPDATE agents SET ${configUpdateSetClause()} WHERE name = ?`,
+    ).run(...serializeUpsertParams(opts), opts.name);
     return this.getAgent(opts.name)!;
   }
 
@@ -843,26 +776,14 @@ export class Database {
 // ── Row Mappers ──
 
 function mapAgentRow(row: Record<string, unknown>): AgentRecord {
+  // Config fields from registry (engine, model, hooks, customButtons, etc.)
+  const config = mapConfigFromRow(row);
   return {
+    ...config,
+    // Primary key
     name: row['name'] as string,
-    engine: row['engine'] as EngineType,
-    model: row['model'] as string | null,
-    thinking: row['thinking'] as string | null,
-    cwd: row['cwd'] as string,
-    persona: row['persona'] as string | null,
-    permissions: row['permissions'] as string | null,
-    proxyHost: row['proxy_host'] as string | null,
-    agentGroup: row['agent_group'] as string | null,
-    launchEnv: deserializeLaunchEnv(row['launch_env']),
+    // Runtime state fields (not in registry)
     sortOrder: (row['sort_order'] as number) ?? 0,
-    hookStart: row['hook_start'] as string | null,
-    hookResume: row['hook_resume'] as string | null,
-    hookCompact: row['hook_compact'] as string | null,
-    hookExit: row['hook_exit'] as string | null,
-    hookInterrupt: row['hook_interrupt'] as string | null,
-    hookSubmit: row['hook_submit'] as string | null,
-    hookDetectSession: row['hook_detect_session'] as string | null,
-    detectSessionRegex: row['detect_session_regex'] as string | null,
     state: row['state'] as AgentState,
     stateBeforeShutdown: row['state_before_shutdown'] as string | null,
     currentSessionId: row['current_session_id'] as string | null,
@@ -875,12 +796,10 @@ function mapAgentRow(row: Record<string, unknown>): AgentRecord {
     failedAt: row['failed_at'] as string | null,
     failureReason: row['failure_reason'] as string | null,
     capturedVars: deserializeCapturedVars(row['captured_vars']),
-    customButtons: row['custom_buttons'] as string | null,
-    indicators: row['indicators'] as string | null,
     version: row['version'] as number,
     spawnCount: row['spawn_count'] as number,
     createdAt: row['created_at'] as string,
-  };
+  } as AgentRecord;
 }
 
 function mapEventRow(row: Record<string, unknown>): EventRecord {
@@ -955,7 +874,9 @@ function mapProxyRow(row: Record<string, unknown>): ProxyRegistration {
   };
 }
 
+/** camelCase → snake_case for updateAgentState extra fields. */
 const COLUMN_MAP: Record<string, string> = {
+  // Runtime fields (not in config registry)
   currentSessionId: 'current_session_id',
   tmuxSession: 'tmux_session',
   proxyId: 'proxy_id',
@@ -967,49 +888,15 @@ const COLUMN_MAP: Record<string, string> = {
   failureReason: 'failure_reason',
   stateBeforeShutdown: 'state_before_shutdown',
   spawnCount: 'spawn_count',
-  agentGroup: 'agent_group',
-  launchEnv: 'launch_env',
-  hookStart: 'hook_start',
-  hookResume: 'hook_resume',
-  hookCompact: 'hook_compact',
-  hookExit: 'hook_exit',
-  hookInterrupt: 'hook_interrupt',
-  hookSubmit: 'hook_submit',
-  hookDetectSession: 'hook_detect_session',
-  detectSessionRegex: 'detect_session_regex',
   capturedVars: 'captured_vars',
-  customButtons: 'custom_buttons',
-  indicators: 'indicators',
+  // Config fields from registry
+  ...configColumnMap(),
 };
 
 function toColumnName(key: string): string {
   const col = COLUMN_MAP[key];
   if (!col) throw new Error(`Unknown agent column: "${key}"`);
   return col;
-}
-
-function serializeLaunchEnv(value?: LaunchEnv | null): string | null {
-  if (value == null) return null;
-  return JSON.stringify(value);
-}
-
-function deserializeLaunchEnv(value: unknown): LaunchEnv | null {
-  if (typeof value !== 'string' || value.length === 0) return null;
-  try {
-    const parsed = JSON.parse(value);
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      return null;
-    }
-
-    const env: Record<string, string> = {};
-    for (const [key, raw] of Object.entries(parsed)) {
-      if (typeof raw !== 'string') return null;
-      env[key] = raw;
-    }
-    return env;
-  } catch {
-    return null;
-  }
 }
 
 function deserializeCapturedVars(value: unknown): Record<string, string> | null {

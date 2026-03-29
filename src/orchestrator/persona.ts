@@ -72,8 +72,10 @@ export type ParsedPersona = {
   body: string;
 };
 
+import { nestedPersonaKeys, configFieldsChanged, buildUpsertOptsFromFrontmatter } from './field-registry.ts';
+
 /** Frontmatter field names that support structured (nested) values. */
-const NESTED_FIELDS = new Set(['env', 'start', 'resume', 'compact', 'exit', 'interrupt', 'submit', 'detect_session', 'spawn']);
+const NESTED_FIELDS = new Set([...nestedPersonaKeys(), 'env', 'spawn']);
 
 /**
  * Parse YAML-like frontmatter from a markdown string.
@@ -964,29 +966,7 @@ import type { EngineType } from '../shared/types.ts';
 const VALID_ENGINES = new Set<string>(['claude', 'codex', 'opencode']);
 
 function buildUpsertOpts(name: string, fm: PersonaFrontmatter): Parameters<Database['upsertAgentFromPersona']>[0] {
-  return {
-    name,
-    engine: fm.engine as EngineType,
-    model: fm.model as string | undefined,
-    thinking: fm.thinking as string | undefined,
-    cwd: fm.cwd!,
-    persona: name,
-    permissions: fm.permissions as string | undefined,
-    proxyHost: fm.proxy_host as string | undefined,
-    agentGroup: fm.group as string | undefined,
-    launchEnv: normalizeLaunchEnv(fm.env),
-    // Legacy alias — no active personas use spawn: anymore. Kept for backward compat.
-    hookStart: serializeHookValue(fm.start ?? fm.spawn),
-    hookResume: serializeHookValue(fm.resume),
-    hookCompact: serializeHookValue(fm.compact),
-    hookExit: serializeHookValue(fm.exit),
-    hookInterrupt: serializeHookValue(fm.interrupt),
-    hookSubmit: serializeHookValue(fm.submit),
-    hookDetectSession: serializeHookValue(fm.detect_session),
-    detectSessionRegex: fm.detect_session_regex as string | undefined,
-    customButtons: serializeCustomButtons(fm.custom_buttons),
-    indicators: serializeIndicators(fm.indicators),
-  };
+  return buildUpsertOptsFromFrontmatter(name, fm) as Parameters<Database['upsertAgentFromPersona']>[0];
 }
 
 /**
@@ -1082,28 +1062,8 @@ export function syncPersonasWithDiff(db: Database, personasDir?: string): SyncDi
       db.upsertAgentFromPersona(upsertOpts);
       result.created.push(name);
     } else {
-      // Check if any config fields differ
-      const changed =
-        existing.engine !== upsertOpts.engine ||
-        !optionalScalarEquals(existing.model, upsertOpts.model) ||
-        !optionalScalarEquals(existing.thinking, upsertOpts.thinking) ||
-        existing.cwd !== upsertOpts.cwd ||
-        !optionalScalarEquals(existing.permissions, upsertOpts.permissions) ||
-        !optionalScalarEquals(existing.proxyHost, upsertOpts.proxyHost) ||
-        !optionalScalarEquals(existing.agentGroup, upsertOpts.agentGroup) ||
-        !launchEnvEquals(existing.launchEnv, upsertOpts.launchEnv) ||
-        !optionalScalarEquals(existing.hookStart, upsertOpts.hookStart) ||
-        !optionalScalarEquals(existing.hookResume, upsertOpts.hookResume) ||
-        !optionalScalarEquals(existing.hookCompact, upsertOpts.hookCompact) ||
-        !optionalScalarEquals(existing.hookExit, upsertOpts.hookExit) ||
-        !optionalScalarEquals(existing.hookInterrupt, upsertOpts.hookInterrupt) ||
-        !optionalScalarEquals(existing.hookSubmit, upsertOpts.hookSubmit) ||
-        !optionalScalarEquals(existing.hookDetectSession, upsertOpts.hookDetectSession) ||
-        !optionalScalarEquals(existing.detectSessionRegex, upsertOpts.detectSessionRegex) ||
-        !optionalScalarEquals(existing.customButtons, upsertOpts.customButtons) ||
-        !optionalScalarEquals(existing.indicators, upsertOpts.indicators);
-
-      if (changed) {
+      // Check if any config fields differ (registry-driven comparison)
+      if (configFieldsChanged(existing, upsertOpts)) {
         db.upsertAgentFromPersona(upsertOpts);
         result.updated.push(name);
       } else {

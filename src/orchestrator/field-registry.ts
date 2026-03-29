@@ -167,11 +167,16 @@ export function configInsertColumns(): string[] {
 /**
  * Serialize opts values for INSERT (config portion).
  * Returns params in CONFIG_FIELDS order.
+ *
+ * Values that are already strings pass through unchanged — this supports
+ * both pre-serialized opts (from buildUpsertOpts) and raw objects.
  */
 export function serializeConfigParams(opts: Record<string, unknown>): unknown[] {
   return CONFIG_FIELDS.map(f => {
     const value = opts[f.name];
     if (f.kind === 'json' && f.serialize) {
+      // Skip serialization if already a string (pre-serialized by buildUpsertOpts)
+      if (typeof value === 'string') return value;
       return f.serialize(value);
     }
     if (f.kind === 'hook') {
@@ -200,6 +205,7 @@ export function serializeUpsertParams(opts: Record<string, unknown>): unknown[] 
   return CONFIG_FIELDS.filter(f => f.upsertable).map(f => {
     const value = opts[f.name];
     if (f.kind === 'json' && f.serialize) {
+      if (typeof value === 'string') return value;
       return f.serialize(value);
     }
     if (f.kind === 'hook') {
