@@ -205,6 +205,137 @@ async function dispatchHookResult(
   });
 }
 
+// ── Shared launch-sequence helpers ──
+// Extracted from spawn/resume/reload to reduce duplication.
+
+/** Sleep, then inject the engine's /rename command (if any) into the tmux session. */
+async function injectRename(
+  ctx: LifecycleContext,
+  proxyId: string,
+  tmuxSession: string,
+  adapter: ReturnType<typeof getAdapter>,
+  name: string,
+): Promise<void> {
+  await sleep(RENAME_DELAY_MS);
+  const renameCmd = adapter.buildRenameCommand(name);
+  if (renameCmd) {
+    await ctx.proxyDispatch(proxyId, {
+      action: 'paste',
+      sessionName: tmuxSession,
+      text: renameCmd,
+      pressEnter: true,
+    });
+  }
+}
+
+/** Create a tmux session and write a config profile for engines that use one (e.g. Codex). */
+async function createSessionAndWriteProfile(
+  ctx: LifecycleContext,
+  proxyId: string,
+  tmuxSession: string,
+  cwd: string,
+  adapter: ReturnType<typeof getAdapter>,
+  name: string,
+  systemPrompt: string | null,
+): Promise<ProxyResponse> {
+  const createResult = await ctx.proxyDispatch(proxyId, {
+    action: 'create_session',
+    sessionName: tmuxSession,
+    cwd,
+  });
+  if (createResult.ok && adapter.usesConfigProfile && systemPrompt) {
+    await ctx.proxyDispatch(proxyId, {
+      action: 'write_codex_profile',
+      profileName: name,
+      developerInstructions: systemPrompt,
+    });
+  }
+  return createResult;
+}
+
+/**
+ * Re-lock the agent, verify it is still in the expected intermediate state,
+ * and transition to 'active'. Returns the updated record, or the current
+ * record unchanged if the state was altered concurrently.
+ */
+async function finalizeToActive(
+  ctx: LifecycleContext,
+  name: string,
+  intermediateState: string,
+  interruptedEventName: string,
+  updateExtra: Record<string, unknown>,
+  eventName: string,
+  eventMeta?: Record<string, unknown>,
+  operationLabel?: string,
+): Promise<AgentRecord> {
+  const label = operationLabel ?? intermediateState;
+  return await ctx.locks.withLock(name, async () => {
+    const latest = ctx.db.getAgent(name);
+    if (!latest) throw new Error(`Agent "${name}" disappeared during ${label}`);
+    if (latest.state !== intermediateState) {
+      ctx.db.logEvent(name, interruptedEventName, undefined, { finalState: latest.state });
+      return latest;
+    }
+    const updated = ctx.db.updateAgentState(name, 'active', latest.version, updateExtra);
+    ctx.db.logEvent(name, eventName, undefined, eventMeta);
+    return updated;
+  });
+}
+
+/**
+ * Resolve whether to use the resume hook (existing session) or start hook (fresh spawn).
+ * Shared by resumeAgent and reloadAgent.
+ *
+ * When sessionId is non-null, uses hookResume with resumeTask.
+ * Otherwise generates a new UUID (for Claude) and uses hookStart with startTask.
+ *
+ * Mutates templateVars.SESSION_ID in the fresh-spawn branch.
+ * Returns the hook result and the (possibly new) sessionId.
+ */
+function resolveResumeOrStartHook(params: {
+  adapter: ReturnType<typeof getAdapter>;
+  hookResume: AgentRecord['hookResume'];
+  hookStart: AgentRecord['hookStart'];
+  agentRecord: AgentRecord;
+  sessionId: string | null;
+  name: string;
+  cwd: string;
+  resumeTask: string | undefined;
+  startTask: string | undefined;
+  systemPrompt: string | null;
+  permissions: string | null;
+  templateVars: TemplateVars;
+}): { result: HookResult; sessionId: string | null } {
+  if (params.sessionId) {
+    const result = resolveHook('resume', params.hookResume, params.agentRecord, {
+      resumeOpts: {
+        name: params.name,
+        sessionId: params.sessionId,
+        cwd: params.cwd,
+        task: params.resumeTask,
+        appendSystemPrompt: params.systemPrompt,
+      },
+      templateVars: params.templateVars,
+    });
+    return { result, sessionId: params.sessionId };
+  }
+  // No stored session — spawn fresh. Only Claude uses --session-id.
+  const newSessionId = params.adapter.engine === 'claude' ? randomUUID() : null;
+  params.templateVars.SESSION_ID = newSessionId ?? undefined;
+  const result = resolveHook('start', params.hookStart, params.agentRecord, {
+    spawnOpts: {
+      name: params.name,
+      cwd: params.cwd,
+      task: params.startTask,
+      appendSystemPrompt: params.systemPrompt,
+      dangerouslySkipPermissions: params.permissions === 'skip',
+      sessionId: newSessionId,
+    },
+    templateVars: params.templateVars,
+  });
+  return { result, sessionId: newSessionId };
+}
+
 // ── Watchdog helper ──
 
 /**
@@ -296,12 +427,13 @@ export async function spawnAgent(
     // ── Phase 2: slow proxy work (no lock) ──
     const adapter = getAdapter(engine);
 
-    // 1. Create tmux session
-    const createResult = await ctx.proxyDispatch(opts.proxyId, {
-      action: 'create_session',
-      sessionName: tmuxSession,
-      cwd: opts.cwd,
-    });
+    // 1. Compose system prompt with persona (no proxy dependency)
+    const systemPrompt = buildSystemPrompt(ctx, opts.name, peers, opts.persona);
+
+    // 2. Create tmux session + write config profile
+    const createResult = await createSessionAndWriteProfile(
+      ctx, opts.proxyId, tmuxSession, opts.cwd, adapter, opts.name, systemPrompt,
+    );
     if (!createResult.ok) {
       // Re-acquire lock to mark failed
       await ctx.locks.withLock(opts.name, async () => {
@@ -315,18 +447,6 @@ export async function spawnAgent(
         }
       });
       throw new Error(`Spawn failed: ${createResult.error}`);
-    }
-
-    // 2. Compose system prompt with persona
-    const systemPrompt = buildSystemPrompt(ctx, opts.name, peers, opts.persona);
-
-    // 2b. Write config profile for engines that use it (e.g. Codex)
-    if (adapter.usesConfigProfile && systemPrompt) {
-      await ctx.proxyDispatch(opts.proxyId, {
-        action: 'write_codex_profile',
-        profileName: opts.name,
-        developerInstructions: systemPrompt,
-      });
     }
 
     // 3. Generate session ID for engines that support it (Claude --session-id)
@@ -362,44 +482,22 @@ export async function spawnAgent(
     await dispatchHookResult(ctx, opts.proxyId, tmuxSession, wrappedStart, { agentName: opts.name });
 
     // 5. Wait for CLI init, then inject /rename
-    await sleep(RENAME_DELAY_MS);
-    const renameCmd = adapter.buildRenameCommand(opts.name);
-    if (renameCmd) {
-      await ctx.proxyDispatch(opts.proxyId, {
-        action: 'paste',
-        sessionName: tmuxSession,
-        text: renameCmd,
-        pressEnter: true,
-      });
-    }
+    await injectRename(ctx, opts.proxyId, tmuxSession, adapter, opts.name);
 
     // Let the CLI fully initialize before finalizing state
     await sleep(POST_SPAWN_ACTIVE_DELAY_MS);
 
     // ── Phase 3: finalize (lock) ──
-    return await ctx.locks.withLock(opts.name, async () => {
-      const latest = ctx.db.getAgent(opts.name);
-      if (!latest) throw new Error(`Agent "${opts.name}" disappeared during spawn`);
-
-      // If state changed (e.g. killed during spawn), return current state
-      if (latest.state !== 'spawning') {
-        ctx.db.logEvent(opts.name, 'spawn_interrupted', undefined, { finalState: latest.state });
-        return latest;
-      }
-
-      const updated = ctx.db.updateAgentState(opts.name, 'active', latest.version, {
-        lastActivity: new Date().toISOString(),
-        spawnCount: spawnCount + 1,
-        lastContextPct: 0,
-        currentSessionId: generatedSessionId,
-      });
-      ctx.db.logEvent(opts.name, 'spawned', undefined, {
-        engine,
-        model: opts.model,
-        sessionId: generatedSessionId,
-      });
-      return updated;
-    });
+    return await finalizeToActive(ctx, opts.name, 'spawning', 'spawn_interrupted', {
+      lastActivity: new Date().toISOString(),
+      spawnCount: spawnCount + 1,
+      lastContextPct: 0,
+      currentSessionId: generatedSessionId,
+    }, 'spawned', {
+      engine,
+      model: opts.model,
+      sessionId: generatedSessionId,
+    }, 'spawn');
   } finally {
     clearTimeout(watchdog);
   }
@@ -454,30 +552,15 @@ export async function resumeAgent(
     // ── Phase 2: slow proxy work (no lock) ──
     const adapter = getAdapter(engine);
 
-    // 1. Create new tmux session
-    await ctx.proxyDispatch(proxyId, {
-      action: 'create_session',
-      sessionName: tmuxSession,
-      cwd,
-    });
-
-    // 2. Compose system prompt
+    // 1. Compose system prompt (no proxy dependency)
     const systemPrompt = buildSystemPrompt(ctx, name, peers, persona);
 
-    // 2b. Write config profile for engines that use it (e.g. Codex)
-    if (adapter.usesConfigProfile && systemPrompt) {
-      await ctx.proxyDispatch(proxyId, {
-        action: 'write_codex_profile',
-        profileName: name,
-        developerInstructions: systemPrompt,
-      });
-    }
+    // 2. Create new tmux session + write config profile
+    await createSessionAndWriteProfile(ctx, proxyId, tmuxSession, cwd, adapter, name, systemPrompt);
 
     // 3. Build and paste resume command (or spawn with new session ID if none)
     //    Use hook resolver: hookResume for existing session, hookStart for fresh spawn.
     const personaFile = resolvePersonaFilePath(name, persona);
-    let resumeSessionId = currentSessionId;
-    let resumeResult: HookResult;
 
     // SESSION_ID resolution: DB currentSessionId → capturedVars.SESSION_ID → agent name fallback
     const resolvedSessionId = currentSessionId
@@ -492,34 +575,20 @@ export async function resumeAgent(
       capturedVars: phase1.current.capturedVars ?? undefined,
     };
 
-    if (currentSessionId) {
-      resumeResult = resolveHook('resume', hookResume, phase1.current, {
-        resumeOpts: {
-          name,
-          sessionId: currentSessionId,
-          cwd,
-          task: adapter.supportsResumePrompt ? opts?.task : undefined,
-          appendSystemPrompt: systemPrompt,
-        },
-        templateVars: resumeTemplateVars,
-      });
-    } else {
-      // No stored session ID — spawn fresh.
-      // Only Claude uses --session-id; other engines ignore it.
-      resumeSessionId = adapter.engine === 'claude' ? randomUUID() : null;
-      resumeTemplateVars.SESSION_ID = resumeSessionId ?? undefined;
-      resumeResult = resolveHook('start', hookStart, phase1.current, {
-        spawnOpts: {
-          name,
-          cwd,
-          task: opts?.task,
-          appendSystemPrompt: systemPrompt,
-          dangerouslySkipPermissions: permissions === 'skip',
-          sessionId: resumeSessionId,
-        },
-        templateVars: resumeTemplateVars,
-      });
-    }
+    const { result: resumeResult, sessionId: resumeSessionId } = resolveResumeOrStartHook({
+      adapter,
+      hookResume,
+      hookStart,
+      agentRecord: phase1.current,
+      sessionId: currentSessionId,
+      name,
+      cwd,
+      resumeTask: adapter.supportsResumePrompt ? opts?.task : undefined,
+      startTask: opts?.task,
+      systemPrompt,
+      permissions,
+      templateVars: resumeTemplateVars,
+    });
 
     // Wrap launch command with agent env vars
     const wrappedResume = wrapLaunchResult(resumeResult, phase1.current, personaFile);
@@ -527,16 +596,7 @@ export async function resumeAgent(
     await dispatchHookResult(ctx, proxyId, tmuxSession, wrappedResume, { agentName: name });
 
     // 4. /rename injection
-    await sleep(RENAME_DELAY_MS);
-    const renameCmd = adapter.buildRenameCommand(name);
-    if (renameCmd) {
-      await ctx.proxyDispatch(proxyId, {
-        action: 'paste',
-        sessionName: tmuxSession,
-        text: renameCmd,
-        pressEnter: true,
-      });
-    }
+    await injectRename(ctx, proxyId, tmuxSession, adapter, name);
 
     // 5. Paste task if provided (and resuming existing session).
     // Skip if the engine consumed the task inline via buildResumeCommand.
@@ -551,25 +611,13 @@ export async function resumeAgent(
     }
 
     // ── Phase 3: finalize (lock) ──
-    return await ctx.locks.withLock(name, async () => {
-      const latest = ctx.db.getAgent(name);
-      if (!latest) throw new Error(`Agent "${name}" disappeared during resume`);
-
-      if (latest.state !== 'resuming') {
-        ctx.db.logEvent(name, 'resume_interrupted', undefined, { finalState: latest.state });
-        return latest;
-      }
-
-      const updated = ctx.db.updateAgentState(name, 'active', latest.version, {
-        tmuxSession,
-        lastActivity: new Date().toISOString(),
-        stateBeforeShutdown: null,
-        lastContextPct: 0,
-        currentSessionId: resumeSessionId,
-      });
-      ctx.db.logEvent(name, 'resumed', undefined, { sessionId: resumeSessionId });
-      return updated;
-    });
+    return await finalizeToActive(ctx, name, 'resuming', 'resume_interrupted', {
+      tmuxSession,
+      lastActivity: new Date().toISOString(),
+      stateBeforeShutdown: null,
+      lastContextPct: 0,
+      currentSessionId: resumeSessionId,
+    }, 'resumed', { sessionId: resumeSessionId }, 'resume');
   } finally {
     clearTimeout(watchdog);
   }
@@ -785,25 +833,12 @@ export async function reloadAgent(
       sessionName: oldTmuxSession,
     });
 
-    // 4. Create fresh tmux session
-    const tmuxSession = `agent-${name}`;
-    await ctx.proxyDispatch(proxyId, {
-      action: 'create_session',
-      sessionName: tmuxSession,
-      cwd,
-    });
-
-    // 5. Build resume command (or fresh spawn with new session ID if none exists)
+    // 4. Compose system prompt (no proxy dependency)
     const systemPrompt = buildSystemPrompt(ctx, name, peers, persona);
 
-    // 5b. Write config profile for engines that use it (e.g. Codex)
-    if (adapter.usesConfigProfile && systemPrompt) {
-      await ctx.proxyDispatch(proxyId, {
-        action: 'write_codex_profile',
-        profileName: name,
-        developerInstructions: systemPrompt,
-      });
-    }
+    // 5. Create fresh tmux session + write config profile
+    const tmuxSession = `agent-${name}`;
+    await createSessionAndWriteProfile(ctx, proxyId, tmuxSession, cwd, adapter, name, systemPrompt);
 
     const taskText = opts?.task ?? reloadTask;
     // For engines that support inline resume prompts (e.g. Codex), pass the task
@@ -816,45 +851,31 @@ export async function reloadAgent(
     const personaFile = resolvePersonaFilePath(name, persona);
     // Check if the exit pipeline captured a session ID via capture step
     const postExitAgent = ctx.db.getAgent(name);
-    let reloadSessionId = postExitAgent?.capturedVars?.['SESSION_ID'] ?? currentSessionId;
-    let reloadResult: HookResult;
+    const existingSessionId = postExitAgent?.capturedVars?.['SESSION_ID'] ?? currentSessionId;
 
     const reloadTemplateVars: TemplateVars = {
       AGENT_NAME: name,
       AGENT_CWD: cwd,
-      SESSION_ID: reloadSessionId ?? name,
+      SESSION_ID: existingSessionId ?? name,
       PERSONA_PROMPT: systemPrompt,
       PERSONA_PROMPT_FILEPATH: personaFile ?? undefined,
       capturedVars: phase1.current.capturedVars ?? undefined,
     };
 
-    if (reloadSessionId) {
-      reloadResult = resolveHook('resume', hookResume, phase1.current, {
-        resumeOpts: {
-          name,
-          sessionId: reloadSessionId,
-          cwd,
-          task: inlineTask,
-          appendSystemPrompt: systemPrompt,
-        },
-        templateVars: reloadTemplateVars,
-      });
-    } else {
-      // No session to resume — spawn fresh.
-      reloadSessionId = adapter.engine === 'claude' ? randomUUID() : null;
-      reloadTemplateVars.SESSION_ID = reloadSessionId ?? undefined;
-      reloadResult = resolveHook('start', hookStart, phase1.current, {
-        spawnOpts: {
-          name,
-          cwd,
-          task: inlineTask,
-          appendSystemPrompt: systemPrompt,
-          dangerouslySkipPermissions: permissions === 'skip',
-          sessionId: reloadSessionId,
-        },
-        templateVars: reloadTemplateVars,
-      });
-    }
+    const { result: reloadResult, sessionId: reloadSessionId } = resolveResumeOrStartHook({
+      adapter,
+      hookResume,
+      hookStart,
+      agentRecord: phase1.current,
+      sessionId: existingSessionId,
+      name,
+      cwd,
+      resumeTask: inlineTask,
+      startTask: inlineTask,
+      systemPrompt,
+      permissions,
+      templateVars: reloadTemplateVars,
+    });
 
     // Wrap launch command with agent env vars
     const wrappedReload = wrapLaunchResult(reloadResult, phase1.current, personaFile);
@@ -862,16 +883,7 @@ export async function reloadAgent(
     await dispatchHookResult(ctx, proxyId, tmuxSession, wrappedReload, { agentName: name });
 
     // 6. /rename injection
-    await sleep(RENAME_DELAY_MS);
-    const renameCmd = adapter.buildRenameCommand(name);
-    if (renameCmd) {
-      await ctx.proxyDispatch(proxyId, {
-        action: 'paste',
-        sessionName: tmuxSession,
-        text: renameCmd,
-        pressEnter: true,
-      });
-    }
+    await injectRename(ctx, proxyId, tmuxSession, adapter, name);
 
     // 7. Paste reload task if provided (skip if already passed as inline CLI prompt)
     if (taskText && !inlineTask) {
@@ -885,32 +897,18 @@ export async function reloadAgent(
     }
 
     // ── Phase 3: finalize (lock) ──
-    return await ctx.locks.withLock(name, async () => {
-      const latest = ctx.db.getAgent(name);
-      if (!latest) throw new Error(`Agent "${name}" disappeared during reload`);
-
-      if (latest.state !== 'suspending') {
-        ctx.db.logEvent(name, 'reload_interrupted', undefined, { finalState: latest.state });
-        return latest;
-      }
-
-      const updated = ctx.db.updateAgentState(name, 'active', latest.version, {
-        tmuxSession: `agent-${name}`,
-        reloadQueued: 0,
-        reloadTask: null,
-        spawnCount: spawnCount + 1,
-        lastContextPct: 0,
-        lastActivity: new Date().toISOString(),
-        currentSessionId: reloadSessionId,
-      });
-
-      ctx.db.logEvent(name, 'reloaded', undefined, {
-        previousContextPct,
-        sessionId: reloadSessionId,
-      });
-
-      return updated;
-    });
+    return await finalizeToActive(ctx, name, 'suspending', 'reload_interrupted', {
+      tmuxSession: `agent-${name}`,
+      reloadQueued: 0,
+      reloadTask: null,
+      spawnCount: spawnCount + 1,
+      lastContextPct: 0,
+      lastActivity: new Date().toISOString(),
+      currentSessionId: reloadSessionId,
+    }, 'reloaded', {
+      previousContextPct,
+      sessionId: reloadSessionId,
+    }, 'reload');
   } finally {
     clearTimeout(watchdog);
   }
