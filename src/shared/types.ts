@@ -104,9 +104,9 @@ export type AgentRecord = {
   hookInterrupt: string | null;
   /** Hook value for submitting messages to the agent. */
   hookSubmit: string | null;
-  /** Hook value for detecting the agent's session ID after spawn/resume. */
+  /** @deprecated Use capture pipeline steps instead. Kept for DB backward compat. */
   hookDetectSession: string | null;
-  /** Regex to extract session ID from pane output on exit. First capture group = session ID. */
+  /** @deprecated Use capture pipeline steps instead. Kept for DB backward compat. */
   detectSessionRegex: string | null;
   state: AgentState;
   stateBeforeShutdown: string | null;

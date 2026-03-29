@@ -345,7 +345,8 @@ function parsePipelineSteps(
       steps.push({ type: 'shell', command: stepVal });
       i++;
     } else if (stepKey === 'keystrokes' || stepKey === 'send') {
-      // Parse the sub-array of SendAction items
+      // "keystrokes" and "send" are aliases — both parse the same SendAction sub-array.
+      // "keystrokes" is preferred; "send" is kept for backward compat.
       i++;
       const actions: SendAction[] = [];
       while (i < lines.length) {
@@ -991,6 +992,7 @@ function buildUpsertOpts(name: string, fm: PersonaFrontmatter): Parameters<Datab
     proxyHost: fm.proxy_host as string | undefined,
     agentGroup: fm.group as string | undefined,
     launchEnv: normalizeLaunchEnv(fm.env),
+    // Legacy alias — no active personas use spawn: anymore. Kept for backward compat.
     hookStart: serializeHookValue(fm.start ?? fm.spawn),
     hookResume: serializeHookValue(fm.resume),
     hookCompact: serializeHookValue(fm.compact),
