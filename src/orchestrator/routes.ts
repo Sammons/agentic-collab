@@ -29,6 +29,9 @@ import { sessionName } from '../shared/agent-entity.ts';
 import type { MessageDispatcher } from './message-dispatcher.ts';
 import type { UsagePoller } from './usage-poller.ts';
 
+/** Validates agent and persona names: 1-63 chars, alphanumeric start, [a-zA-Z0-9_-]. */
+const NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$/;
+
 /**
  * Shared context injected into all route handlers.
  *
@@ -632,7 +635,6 @@ route('GET', '/api/queue', async (req, res, _match, ctx) => {
 
 // ── Personas ──
 
-const PERSONA_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$/;
 
 route('GET', '/api/personas', async (_req, res) => {
   try {
@@ -647,7 +649,7 @@ route('GET', '/api/personas', async (_req, res) => {
 
 route('GET', '/api/personas/:name', async (_req, res, match) => {
   const name = match.pathname.groups['name']!;
-  if (!PERSONA_NAME_RE.test(name)) return json(res, 400, { error: 'Invalid persona name' });
+  if (!NAME_RE.test(name)) return json(res, 400, { error: 'Invalid persona name' });
   try {
     const filePath = join(getPersonasDir(), `${name}.md`);
     const raw = readFileSync(filePath, 'utf-8');
@@ -660,7 +662,7 @@ route('GET', '/api/personas/:name', async (_req, res, match) => {
 
 route('PUT', '/api/personas/:name', async (req, res, match) => {
   const name = match.pathname.groups['name']!;
-  if (!PERSONA_NAME_RE.test(name)) return json(res, 400, { error: 'Invalid persona name' });
+  if (!NAME_RE.test(name)) return json(res, 400, { error: 'Invalid persona name' });
   const body = await readJson(req);
   if (typeof body.content !== 'string') return json(res, 400, { error: 'content (string) required' });
   try {
@@ -683,7 +685,7 @@ route('POST', '/api/personas', async (req, res, _match, ctx) => {
   }
 
   const name = body.name as string;
-  if (!PERSONA_NAME_RE.test(name)) return json(res, 400, { error: 'Invalid persona name' });
+  if (!NAME_RE.test(name)) return json(res, 400, { error: 'Invalid persona name' });
 
   try {
     const persona = createPersonaAndAgent(ctx.db, name, body.content as string);
@@ -1119,13 +1121,10 @@ route('PATCH', '/api/agents/:name/group', async (req, res, match, ctx) => {
     updateFrontmatterField(personaPath, 'group', group || null);
   }
 
-  // Update DB
-  const current = ctx.db.getAgent(name);
-  if (current) {
-    ctx.db.updateAgentState(name, current.state, current.version, {
-      agentGroup: group || null,
-    });
-  }
+  // Update DB (reuse the agent fetched above)
+  ctx.db.updateAgentState(name, agent.state, agent.version, {
+    agentGroup: group || null,
+  });
 
   ctx.wss.broadcast(JSON.stringify({
     type: 'agent_update',
@@ -1457,11 +1456,9 @@ function broadcastAgentUpdate(ctx: RouteContext, agentName: string): void {
   }
 }
 
-const AGENT_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$/;
-
 function validateAgentName(name: string): string | null {
   if (typeof name !== 'string') return 'name must be a string';
-  if (!AGENT_NAME_RE.test(name)) return 'name must be 1-63 chars, start with alphanumeric, contain only [a-zA-Z0-9_-]';
+  if (!NAME_RE.test(name)) return 'name must be 1-63 chars, start with alphanumeric, contain only [a-zA-Z0-9_-]';
   return null;
 }
 
