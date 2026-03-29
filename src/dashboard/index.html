@@ -1770,6 +1770,7 @@
           }
           renderAgents();
           renderThread();
+          updatePageTitle();
           break;
         case 'agent_update':
           updateAgent(data.agent);
@@ -2239,9 +2240,12 @@
       }
       div.querySelector('.msg-copy')?.addEventListener('click', (e) => {
         e.stopPropagation();
+        const btn = e.target;
         navigator.clipboard.writeText(displayMsg).then(() => {
-          const btn = e.target;
           btn.textContent = '\u2713';
+          setTimeout(() => { btn.innerHTML = '&#128203;'; }, 1500);
+        }).catch(() => {
+          btn.textContent = '\u2717';
           setTimeout(() => { btn.innerHTML = '&#128203;'; }, 1500);
         });
       });
@@ -3168,9 +3172,12 @@
     const copyBtn = e.target.closest('button[data-copy-tmux]');
     if (copyBtn) {
       e.stopPropagation();
+      const orig = copyBtn.textContent;
       navigator.clipboard.writeText(copyBtn.dataset.copyTmux).then(() => {
-        const orig = copyBtn.textContent;
         copyBtn.textContent = 'Copied!';
+        setTimeout(() => { copyBtn.textContent = orig; }, 1500);
+      }).catch(() => {
+        copyBtn.textContent = 'Failed';
         setTimeout(() => { copyBtn.textContent = orig; }, 1500);
       });
       return;

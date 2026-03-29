@@ -15,8 +15,12 @@ export function renderMarkdown(escaped: string): string {
     codeBlocks.push(code.replace(/\n$/, ''));
     return '\x00CB' + (codeBlocks.length - 1) + '\x00';
   });
-  // Inline code
-  text = text.replace(/`([^`\n]+)`/g, '<code>$1</code>');
+  // Inline code — extract as placeholders to protect from further transforms
+  const inlineCodes: string[] = [];
+  text = text.replace(/`([^`\n]+)`/g, (_m: string, code: string) => {
+    inlineCodes.push(code);
+    return '\x00IC' + (inlineCodes.length - 1) + '\x00';
+  });
   // Headings (must be at start of line)
   text = text.replace(/^(#{1,6})\s+(.+)$/gm, (_m: string, hashes: string, content: string) => {
     const level = hashes.length;
@@ -28,8 +32,8 @@ export function renderMarkdown(escaped: string): string {
   text = text.replace(/(?<!\w)\*(.+?)\*(?!\w)/g, '<em>$1</em>');
   // Links (markdown-style)
   text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" style="color:var(--accent)">$1</a>');
-  // Auto-link bare URLs (not already inside an <a> tag)
-  text = text.replace(/(?<!href="|">)(https?:\/\/[^\s<)]+)/g, '<a href="$1" target="_blank" style="color:var(--accent)">$1</a>');
+  // Auto-link bare URLs (not already inside an <a> tag, strip trailing punctuation)
+  text = text.replace(/(?<!href="|">)(https?:\/\/[^\s<)]+[^\s<).,;:!?])/g, '<a href="$1" target="_blank" style="color:var(--accent)">$1</a>');
   // Lists, tables, and paragraphs: line-based parser for proper nesting
   {
     const lines = text.split('\n');
@@ -128,7 +132,11 @@ export function renderMarkdown(escaped: string): string {
     closeTable();
     text = out.join('\n');
   }
-  // Restore code blocks
+  // Restore inline code
+  text = text.replace(/\x00IC(\d+)\x00/g, (_m: string, idx: string) => {
+    return `<code>${inlineCodes[parseInt(idx)]}</code>`;
+  });
+  // Restore fenced code blocks
   text = text.replace(/\x00CB(\d+)\x00/g, (_m: string, idx: string) => {
     return `<pre style="background:var(--bg);padding:8px;border-radius:4px;overflow-x:auto;margin:4px 0;font-size:12px"><code>${codeBlocks[parseInt(idx)]}</code></pre>`;
   });
