@@ -295,6 +295,30 @@ describe('Lifecycle', () => {
       assert.ok(paste.text.includes("COLLAB_PERSONA_FILE='"), 'should include COLLAB_PERSONA_FILE during resume');
       assert.ok(paste.text.includes(`GIT_AUTHOR_EMAIL=${shellQuote('resume agent@example.com')}`), 'should shell-quote launch env during resume');
     });
+
+    it('marks agent failed when create_session returns ok:false', async () => {
+      db.createAgent({ name: 'resume-fail-session', engine: 'claude', cwd: '/tmp', proxyId: 'p1' });
+      const a = db.getAgent('resume-fail-session')!;
+      db.updateAgentState('resume-fail-session', 'suspended', a.version, {
+        tmuxSession: 'agent-resume-fail-session',
+        proxyId: 'p1',
+        currentSessionId: 'some-session',
+      });
+
+      const failCtx: LifecycleContext = {
+        ...ctx,
+        proxyDispatch: async () => ({ ok: false, error: 'session exists' }),
+      };
+
+      await assert.rejects(
+        resumeAgent(failCtx, 'resume-fail-session'),
+        /Resume failed/,
+      );
+
+      const agent = db.getAgent('resume-fail-session');
+      assert.equal(agent?.state, 'failed');
+      assert.ok(agent?.failureReason?.includes('Failed to create tmux session'));
+    });
   });
 
   describe('destroyAgent', () => {

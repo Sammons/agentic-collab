@@ -556,7 +556,20 @@ export async function resumeAgent(
     const systemPrompt = buildSystemPrompt(ctx, name, peers, persona);
 
     // 2. Create new tmux session + write config profile
-    await createSessionAndWriteProfile(ctx, proxyId, tmuxSession, cwd, adapter, name, systemPrompt);
+    const createResult = await createSessionAndWriteProfile(ctx, proxyId, tmuxSession, cwd, adapter, name, systemPrompt);
+    if (!createResult.ok) {
+      await ctx.locks.withLock(name, async () => {
+        const latest = ctx.db.getAgent(name);
+        if (latest && latest.state === 'resuming') {
+          ctx.db.updateAgentState(name, 'failed', latest.version, {
+            failedAt: new Date().toISOString(),
+            failureReason: `Failed to create tmux session: ${createResult.error ?? 'unknown'}`,
+          });
+          ctx.db.logEvent(name, 'resume_failed', undefined, { reason: createResult.error });
+        }
+      });
+      throw new Error(`Resume failed: could not create tmux session for "${name}": ${createResult.error ?? 'unknown'}`);
+    }
 
     // 3. Build and paste resume command (or spawn with new session ID if none)
     //    Use hook resolver: hookResume for existing session, hookStart for fresh spawn.
@@ -849,7 +862,11 @@ export async function reloadAgent(
       : undefined;
 
     const personaFile = resolvePersonaFilePath(name, persona);
-    // Check if the exit pipeline captured a session ID via capture step
+    // Read-after-write outside lock: the exit pipeline's capture step wrote
+    // capturedVars atomically via updateAgentCapturedVar (SQL UPDATE) during
+    // Phase 2's dispatchHookResult. This read is intentionally outside the
+    // Phase 3 lock — the captured var is already persisted, and no concurrent
+    // operation clears capturedVars between exit dispatch and this point.
     const postExitAgent = ctx.db.getAgent(name);
     const existingSessionId = postExitAgent?.capturedVars?.['SESSION_ID'] ?? currentSessionId;
 
@@ -859,7 +876,7 @@ export async function reloadAgent(
       SESSION_ID: existingSessionId ?? name,
       PERSONA_PROMPT: systemPrompt,
       PERSONA_PROMPT_FILEPATH: personaFile ?? undefined,
-      capturedVars: phase1.current.capturedVars ?? undefined,
+      capturedVars: postExitAgent?.capturedVars ?? phase1.current.capturedVars ?? undefined,
     };
 
     const { result: reloadResult, sessionId: reloadSessionId } = resolveResumeOrStartHook({
