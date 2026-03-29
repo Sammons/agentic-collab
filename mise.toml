@@ -4,10 +4,33 @@ min_version = "2024.0.0"
 age = "latest"
 node = "24"
 
-[tasks]
-test = "node --test 'src/**/*.test.ts'"
-"test:watch" = "node --test --watch 'src/**/*.test.ts'"
-typecheck = "npx tsc --noEmit"
+[tasks.test]
+description = "Run all tests (~3s)"
+run = "node --test 'src/**/*.test.ts'"
+
+[tasks."test:watch"]
+description = "Run tests in watch mode"
+run = "node --test --watch 'src/**/*.test.ts'"
+
+[tasks.typecheck]
+description = "TypeScript type check (no emit)"
+run = "npx tsc --noEmit"
+
+[tasks.help]
+description = "Show available commands"
+run = """
+echo "agentic-collab — zero-dependency agent orchestrator"
+echo ""
+echo "Usage: mise run <task>"
+echo ""
+mise tasks
+echo ""
+echo "Quick start:"
+echo "  mise run doctor    # check prerequisites"
+echo "  mise run up        # start orchestrator (Docker)"
+echo "  mise run proxy     # start proxy (tmux)"
+echo "  mise run test      # run all tests"
+"""
 
 [tasks.proxy]
 description = "Start the proxy in detached tmux session agentic-proxy"
