@@ -12,7 +12,7 @@ import { join } from 'node:path';
 import { hostname } from 'node:os';
 import type { Database } from './database.ts';
 import type { WebSocketServer } from '../shared/websocket-server.ts';
-import type { AgentState, EngineType, ProxyCommand, ProxyResponse, ProxyRegistration } from '../shared/types.ts';
+import type { AgentState, DashboardMessage, EngineType, PendingMessage, ProxyCommand, ProxyResponse, ProxyRegistration } from '../shared/types.ts';
 import { sanitizeMessage, generateMessageId } from '../shared/sanitize.ts';
 import { getVersion } from '../shared/version.ts';
 import type { LockManager } from '../shared/lock.ts';
@@ -324,30 +324,16 @@ route('POST', '/api/dashboard/send', async (req, res, _match, ctx) => {
   const sanitized = sanitizeMessage(body.message);
   const topicStr = body.topic as string;
 
-  // Format envelope with topic for agent
   const envelope = buildReplyEnvelope('dashboard', topicStr, sanitized);
-
-  // Store in dashboard messages
-  const msg = ctx.db.addDashboardMessage(body.agent as string, 'to_agent', sanitized, {
+  const { msg, pending } = enqueueAndDeliver(ctx, {
+    agentName: body.agent as string,
+    displayMessage: sanitized,
+    envelope,
     topic: topicStr,
     sourceAgent: 'dashboard',
     targetAgent: body.agent as string,
+    queueSourceAgent: null,
   });
-
-  // Enqueue for async delivery
-  const pending = ctx.db.enqueueMessage({
-    sourceAgent: null, // dashboard
-    targetAgent: body.agent as string,
-    envelope,
-  });
-
-  // Link dashboard message to queue entry
-  ctx.db.linkDashboardMessageToQueue(msg.id, pending.id);
-
-  // Broadcast with linked queueId so dashboard can track delivery status
-  const linkedMsg = { ...msg, queueId: pending.id, deliveryStatus: 'pending' };
-  ctx.wss.broadcast(JSON.stringify({ type: 'message', msg: linkedMsg }));
-  ctx.wss.broadcast(JSON.stringify({ type: 'queue_update', message: pending }));
 
   // Auto-create reply reminder if requested
   if (body.replyReminder) {
@@ -355,11 +341,6 @@ route('POST', '/api/dashboard/send', async (req, res, _match, ctx) => {
     const prompt = `[reply-reminder] topic: ${topicStr} | from: dashboard | "${sanitized}" — Please respond if you haven't already.`;
     ctx.db.createReminder({ agentName: body.agent as string, createdBy: 'dashboard', prompt, cadenceMinutes: Math.max(cadence, 5) });
   }
-
-  // Event-driven delivery — attempt immediately, don't block response
-  ctx.messageDispatcher.tryDeliver(body.agent as string).catch((err) => {
-    console.error(`[routes] Immediate delivery failed for ${body.agent}:`, (err as Error).message);
-  });
 
   json(res, 202, { ok: true, msg, queueId: pending.id, status: 'pending' });
 });
@@ -445,20 +426,15 @@ route('POST', '/api/dashboard/upload', async (req, res, _match, ctx) => {
     ? `${userMessage}\n\nUploaded ${filename} (${formatBytes(fileSize)})`
     : `Uploaded ${filename} (${formatBytes(fileSize)})`;
 
-  const msg = ctx.db.addDashboardMessage(agentName, 'to_agent', displayMessage, { topic: 'file-upload', sourceAgent: 'dashboard', targetAgent: agentName });
-  const pending = ctx.db.enqueueMessage({
-    sourceAgent: null,
-    targetAgent: agentName,
+  const { msg, pending } = enqueueAndDeliver(ctx, {
+    agentName,
+    displayMessage,
     envelope,
-  });
-  ctx.db.linkDashboardMessageToQueue(msg.id, pending.id);
-
-  ctx.wss.broadcast(JSON.stringify({ type: 'message', msg }));
-  ctx.wss.broadcast(JSON.stringify({ type: 'queue_update', message: pending }));
-
-  // Event-driven delivery — attempt immediately, don't block response
-  ctx.messageDispatcher.tryDeliver(agentName).catch((err) => {
-    console.error(`[routes] Immediate delivery failed for ${agentName}:`, (err as Error).message);
+    topic: 'file-upload',
+    sourceAgent: 'dashboard',
+    targetAgent: agentName,
+    queueSourceAgent: null,
+    broadcastLinked: false,
   });
 
   json(res, 202, { ok: true, msg, queueId: pending.id, path: writtenPath, size: fileSize });
@@ -532,29 +508,21 @@ route('POST', '/api/dashboard/messages/:id/withdraw', async (_req, res, match, c
   // Mark the original message as withdrawn
   ctx.db.withdrawMessage(id);
 
-  // Send a follow-up withdrawal notice to the agent
-  const withdrawalText = `[system] the user withdrew this message: "${msg.message}"`;
-  const withdrawMsg = ctx.db.addDashboardMessage(msg.agent, 'to_agent', withdrawalText, { topic: msg.topic ?? 'system', sourceAgent: 'dashboard', targetAgent: msg.agent });
-
-  const envelope = buildReplyEnvelope('dashboard', msg.topic ?? 'system', sanitizeMessage(withdrawalText));
-  const pending = ctx.db.enqueueMessage({
-    sourceAgent: null,
-    targetAgent: msg.agent,
-    envelope,
-  });
-  ctx.db.linkDashboardMessageToQueue(withdrawMsg.id, pending.id);
-
-  // Broadcast updates
+  // Broadcast withdrawal of the original message before sending the notice
   const updatedOriginal = ctx.db.getDashboardMessageById(id)!;
   ctx.wss.broadcast(JSON.stringify({ type: 'message_withdrawn', msg: updatedOriginal }));
 
-  const linkedWithdrawMsg = { ...withdrawMsg, queueId: pending.id, deliveryStatus: 'pending' };
-  ctx.wss.broadcast(JSON.stringify({ type: 'message', msg: linkedWithdrawMsg }));
-  ctx.wss.broadcast(JSON.stringify({ type: 'queue_update', message: pending }));
-
-  // Attempt delivery
-  ctx.messageDispatcher.tryDeliver(msg.agent).catch((err) => {
-    console.error(`[routes] Withdrawal delivery failed for ${msg.agent}:`, (err as Error).message);
+  // Send a follow-up withdrawal notice to the agent
+  const withdrawalText = `[system] the user withdrew this message: "${msg.message}"`;
+  const envelope = buildReplyEnvelope('dashboard', msg.topic ?? 'system', sanitizeMessage(withdrawalText));
+  const { linkedMsg: linkedWithdrawMsg } = enqueueAndDeliver(ctx, {
+    agentName: msg.agent,
+    displayMessage: withdrawalText,
+    envelope,
+    topic: msg.topic ?? 'system',
+    sourceAgent: 'dashboard',
+    targetAgent: msg.agent,
+    queueSourceAgent: null,
   });
 
   json(res, 200, { ok: true, withdrawnMsg: updatedOriginal, noticeMsg: linkedWithdrawMsg });
@@ -1468,6 +1436,62 @@ function replyHint(from: string, topic: string): string {
 
 function buildReplyEnvelope(from: string, topic: string, message: string): string {
   return `[from: ${from}, ${replyHint(from, topic)}]: '${message}'`;
+}
+
+/**
+ * Shared enqueue→link→broadcast→tryDeliver pipeline.
+ *
+ * Creates a dashboard message, enqueues a pending message, links them,
+ * broadcasts both to the WebSocket, and fires async delivery.
+ *
+ * Returns the created dashboard message (with linked queueId/deliveryStatus)
+ * and the pending queue entry so callers can reference their IDs.
+ */
+function enqueueAndDeliver(
+  ctx: RouteContext,
+  opts: {
+    agentName: string;
+    displayMessage: string;
+    envelope: string;
+    topic?: string;
+    /** sourceAgent stored on the dashboard message (for display). */
+    sourceAgent?: string | null;
+    targetAgent?: string;
+    /** sourceAgent stored on the queue entry. Defaults to opts.sourceAgent. */
+    queueSourceAgent?: string | null;
+    direction?: 'to_agent' | 'from_agent';
+    /** Whether to broadcast the linked msg (with queueId/deliveryStatus) or the raw msg. Defaults to true. */
+    broadcastLinked?: boolean;
+  },
+): { msg: DashboardMessage; pending: PendingMessage; linkedMsg: DashboardMessage & { queueId: number; deliveryStatus: string } } {
+  const direction = opts.direction ?? 'to_agent';
+  const deliverTo = opts.targetAgent ?? opts.agentName;
+
+  const msg = ctx.db.addDashboardMessage(opts.agentName, direction, opts.displayMessage, {
+    topic: opts.topic ?? undefined,
+    sourceAgent: opts.sourceAgent ?? undefined,
+    targetAgent: opts.targetAgent ?? undefined,
+  });
+
+  const queueSource = opts.queueSourceAgent !== undefined ? opts.queueSourceAgent : (opts.sourceAgent ?? null);
+  const pending = ctx.db.enqueueMessage({
+    sourceAgent: queueSource,
+    targetAgent: deliverTo,
+    envelope: opts.envelope,
+  });
+
+  ctx.db.linkDashboardMessageToQueue(msg.id, pending.id);
+
+  const linkedMsg = { ...msg, queueId: pending.id, deliveryStatus: 'pending' as const };
+  const broadcastLinked = opts.broadcastLinked ?? true;
+  ctx.wss.broadcast(JSON.stringify({ type: 'message', msg: broadcastLinked ? linkedMsg : msg }));
+  ctx.wss.broadcast(JSON.stringify({ type: 'queue_update', message: pending }));
+
+  ctx.messageDispatcher.tryDeliver(deliverTo).catch((err) => {
+    console.error(`[routes] Delivery failed for ${deliverTo}:`, (err as Error).message);
+  });
+
+  return { msg, pending, linkedMsg };
 }
 
 function broadcastReminderUpdate(ctx: RouteContext): void {
