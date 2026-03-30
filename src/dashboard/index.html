@@ -225,6 +225,7 @@
     flex: 1;
     min-height: 0;
     overflow-y: auto;
+    overflow-anchor: auto;
     padding: 16px 20px;
     display: flex;
     flex-direction: column;
@@ -2325,39 +2326,15 @@
       return;
     }
 
-    // Render messages in batches to avoid blocking the main thread.
-    // First batch renders immediately (last N visible), rest render async.
-    const INITIAL_BATCH = 50;
+    // Build all messages into a DocumentFragment (off-screen, no layout),
+    // then insert once. Single DOM write, single paint.
     messages.innerHTML = '';
-    state._renderedAgent = state.selected;
-
-    const startIdx = Math.max(0, thread.length - INITIAL_BATCH);
-    for (let i = startIdx; i < thread.length; i++) {
-      messages.appendChild(buildMessageEl(thread[i], state.selected));
+    const frag = document.createDocumentFragment();
+    for (const msg of thread) {
+      frag.appendChild(buildMessageEl(msg, state.selected));
     }
+    messages.appendChild(frag);
     messages.scrollTop = messages.scrollHeight;
-
-    // Prepend older messages in idle callbacks so they're available on scroll-up
-    if (startIdx > 0) {
-      let idx = startIdx - 1;
-      const agent = state.selected;
-      function prependBatch(deadline) {
-        if (state.selected !== agent) return; // agent switched, abort
-        const frag = document.createDocumentFragment();
-        const batchStart = Math.max(0, idx - 30);
-        // Build in forward order so fragment is correct
-        for (let i = batchStart; i <= idx; i++) {
-          frag.appendChild(buildMessageEl(thread[i], agent));
-        }
-        const prevHeight = messages.scrollHeight;
-        messages.prepend(frag);
-        // Maintain scroll position after prepend
-        messages.scrollTop += messages.scrollHeight - prevHeight;
-        idx = batchStart - 1;
-        if (idx >= 0) requestIdleCallback(prependBatch);
-      }
-      requestIdleCallback(prependBatch);
-    }
   }
 
   // Build a single message DOM element — used by both renderThread and addMessage
