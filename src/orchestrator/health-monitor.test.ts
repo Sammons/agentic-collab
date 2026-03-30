@@ -665,7 +665,8 @@ describe('HealthMonitor', () => {
       failureReason: 'CLI exited to shell prompt',
     });
 
-    // Pane now shows Claude Code UI — CLI was manually restarted
+    // Pane now shows DIFFERENT Claude Code UI — CLI was manually restarted
+    // (different from failure snapshot which defaults to undefined/empty for manually failed agents)
     captureOutput = 'bypass permissions\n❯ \n';
 
     const monitor = makeMonitor();
@@ -680,6 +681,30 @@ describe('HealthMonitor', () => {
     assert.equal(healed.state, 'active');
     assert.equal(healed.failedAt, null);
     assert.equal(healed.failureReason, null);
+  });
+
+  it('does not heal when pane output matches failure snapshot (stale)', async () => {
+    const agentName = 'health-no-heal-stale';
+    db.createAgent({ name: agentName, engine: 'claude', cwd: '/tmp', proxyId: 'p1' });
+    const a = db.getAgent(agentName)!;
+    db.updateAgentState(agentName, 'active', a.version, {
+      tmuxSession: `agent-${agentName}`,
+    });
+
+    // Simulate CLI exit detection which captures failure snapshot
+    captureOutput = 'sammons@crankshaft:~/Desktop$ \n';
+    const monitor = makeMonitor();
+    await monitor.pollAgent(db.getAgent(agentName)!);
+    ensureActive(agentName);
+    await monitor.pollAgent(db.getAgent(agentName)!);
+    assert.equal(db.getAgent(agentName)!.state, 'failed');
+
+    // Now change pane output to CLI-alive signals but SAME as what was there
+    // before failure — simulate stale pane by using the exact failure snapshot
+    captureOutput = 'sammons@crankshaft:~/Desktop$ \n';
+    await monitor.pollAll();
+    await monitor.pollAll();
+    assert.equal(db.getAgent(agentName)!.state, 'failed', 'should not heal on stale pane');
   });
 
   it('heals failed agent on context percentage signal', async () => {

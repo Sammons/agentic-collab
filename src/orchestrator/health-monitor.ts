@@ -44,6 +44,9 @@ export class HealthMonitor {
   /** Consecutive health check failure count per agent. */
   private readonly consecutiveFailures = new Map<string, number>();
   private static readonly FAILURE_THRESHOLD = 3; // failures before marking agent as failed
+  /** Pane snapshot captured at the moment an agent was marked failed.
+   *  Used to distinguish stale pane output from a genuinely revived CLI. */
+  private readonly failureSnapshot = new Map<string, string>();
   /**
    * Last captured pane snapshot (ANSI-stripped, last N lines) per agent.
    * Used for screen-diff idle detection.
@@ -289,6 +292,9 @@ export class HealthMonitor {
       console.warn(`[health] Cannot capture ${agent.name} (${failures}/${HealthMonitor.FAILURE_THRESHOLD}): ${captureResult.error}`);
 
       if (failures >= HealthMonitor.FAILURE_THRESHOLD) {
+        // No pane output available (capture failed) — store last known snapshot
+        const lastKnown = this.lastPaneSnapshot.get(agent.name) ?? '';
+        this.failureSnapshot.set(agent.name, lastKnown);
         this.db.updateAgentState(agent.name, 'failed', agent.version, {
           failedAt: new Date().toISOString(),
           failureReason: `Health check failed ${failures}x: ${captureResult.error}`,
@@ -432,6 +438,8 @@ export class HealthMonitor {
     }
 
     console.warn(`[health] ${agent.name}: ${reason}`);
+    // Snapshot pane at failure time so heal detection can distinguish stale output
+    this.failureSnapshot.set(agent.name, paneOutput);
     this.db.updateAgentState(agent.name, 'failed', agent.version, {
       failedAt: new Date().toISOString(),
       failureReason: reason,
@@ -497,6 +505,13 @@ export class HealthMonitor {
       return false;
     }
 
+    // Pane must differ from failure snapshot — stale output can't trigger healing
+    const failSnap = this.failureSnapshot.get(agent.name);
+    if (failSnap !== undefined && paneOutput === failSnap) {
+      this.consecutiveFailures.delete(key);
+      return false;
+    }
+
     // CLI-alive signals anywhere in the pane output
     const cliAlivePatterns = [
       /bypass permissions/i,           // Claude Code permission mode
@@ -520,6 +535,7 @@ export class HealthMonitor {
     if (count < 2) return false;
 
     this.consecutiveFailures.delete(key);
+    this.failureSnapshot.delete(agent.name);
     console.log(`[health] ${agent.name}: CLI detected alive in tmux — healing`);
     this.db.updateAgentState(agent.name, 'active', agent.version, {
       failedAt: null,
@@ -542,8 +558,11 @@ export class HealthMonitor {
     this.unchangedCount.delete(name);
     this.consecutiveFailures.delete(name);
     this.consecutiveFailures.delete(`shell_${name}`);
+    this.consecutiveFailures.delete(`heal_${name}`);
     this.activeIndicators.delete(name);
     this.compiledIndicators.delete(name);
+    // Note: failureSnapshot intentionally NOT deleted here — it's needed
+    // by detectCliHealed() after the agent transitions to failed state.
   }
 
   private checkIdleSuspendTimeout(agentName: string): void {
