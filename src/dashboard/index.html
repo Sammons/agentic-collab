@@ -1615,25 +1615,9 @@
   </div>
 </div>
 
-<script>
-(function() {
-  // ── Auth ──
-  // Token persisted in localStorage across sessions
-  function getToken() {
-    return localStorage.getItem('orchestrator_token') || '';
-  }
-
-  function setToken(token) {
-    if (token) localStorage.setItem('orchestrator_token', token);
-    else localStorage.removeItem('orchestrator_token');
-  }
-
-  function authHeaders() {
-    const token = getToken();
-    const headers = { 'content-type': 'application/json' };
-    if (token) headers['authorization'] = `Bearer ${token}`;
-    return headers;
-  }
+<script type="module">
+import { state, on, emit, getToken, setToken, authHeaders } from '/dashboard/assets/state.js';
+{
 
   function handleAuthError() {
     setToken('');
@@ -1682,25 +1666,7 @@
   }
 
   // ── State ──
-  const state = {
-    agents: [],
-    threads: {},
-    selected: null,
-    connected: false,
-    unread: {},  // { agentName: count }
-    threadView: 'messages',  // 'messages' | 'persona' | 'watch'
-    watchTimer: null,
-    personaCache: {},  // { agentName: { content, fetched } }
-    searchFilter: '',
-    quickFilter: null,  // null | 'active' | 'idle' | 'unread' | 'recent'
-    engineUsage: {},  // { engine: EngineUsage }
-    proxies: [],      // registered proxy list from init
-    emptyGroups: [],  // groups created via + New Group (no agents yet)
-    drafts: {},       // { agentName: draftText }
-    topicPerAgent: {},  // { agentName: selectedTopic } — persists across agent switches
-    editingPersona: false,
-    indicators: {},   // { agentName: ActiveIndicator[] }
-  };
+  // State imported from /dashboard/assets/state.js
 
   // Expose state for test probe when running in test mode
   if (new URLSearchParams(location.search).has('test')) {
@@ -4879,7 +4845,7 @@ You are a specialist agent. Describe your role and responsibilities here.
   // Fetch engine usage every 2 minutes (poller runs server-side every 10min)
   fetchEngineUsage();
   setInterval(fetchEngineUsage, 120_000);
-})();
+}
 </script>
 </body>
 </html>

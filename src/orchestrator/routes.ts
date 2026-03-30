@@ -148,6 +148,26 @@ route('GET', '/dashboard', async (_req, res, _match, ctx) => {
   res.end(ctx.getDashboardHtml());
 });
 
+// Serve dashboard ES module assets (*.js files under src/dashboard/)
+route('GET', '/dashboard/assets/:path+', async (req, res, match) => {
+  const filePath = match.pathname.groups['path'] ?? '';
+  // Restrict to .js files, no path traversal
+  if (filePath.includes('..') || !filePath.endsWith('.js')) {
+    res.writeHead(400); res.end('Bad request'); return;
+  }
+  try {
+    const fullPath = join(import.meta.dirname!, '..', 'dashboard', filePath);
+    const content = readFileSync(fullPath, 'utf-8');
+    res.writeHead(200, {
+      'content-type': 'application/javascript; charset=utf-8',
+      'cache-control': 'no-cache, no-store, must-revalidate',
+    });
+    res.end(content);
+  } catch {
+    res.writeHead(404); res.end('Not found');
+  }
+});
+
 // ── Agent CRUD ──
 
 route('GET', '/api/agents', async (_req, res, _match, ctx) => {
