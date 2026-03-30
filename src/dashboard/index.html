@@ -289,15 +289,14 @@
   .msg-copy {
     font-size: 10px;
     cursor: pointer;
-    opacity: 0;
+    opacity: 0.5;
     transition: opacity 0.15s;
     color: var(--text-dim);
     background: none;
     border: none;
     padding: 0 2px;
   }
-  .msg-copy:hover { color: var(--accent); }
-  .msg:hover .msg-copy { opacity: 1; }
+  .msg-copy:hover { opacity: 1; color: var(--accent); }
   .msg-time {
     font-size: 10px;
     white-space: nowrap;
@@ -4163,21 +4162,57 @@ You are a specialist agent. Describe your role and responsibilities here.
   }
 
   // ── Search Filter ──
+  // Lightweight filter: toggle visibility on existing DOM cards instead of
+  // tearing down and rebuilding the entire agent list on every keystroke.
+  function applySearchFilter() {
+    const filter = state.searchFilter.toLowerCase();
+    const list = document.getElementById('agentList');
+    const cards = list.querySelectorAll('.agent-card[data-agent]');
+    const groupCounts = new Map(); // groupHeader element → visible count
+    // First pass: show/hide cards
+    for (const card of cards) {
+      const name = card.dataset.agent;
+      const agent = state.agents.find(a => a.name === name);
+      let visible = true;
+      if (filter && agent) {
+        visible = agent.name.toLowerCase().includes(filter)
+          || agent.engine.toLowerCase().includes(filter)
+          || agent.state.toLowerCase().includes(filter)
+          || (agent.agentGroup || '').toLowerCase().includes(filter);
+      }
+      if (visible && state.quickFilter) {
+        if (state.quickFilter === 'active') visible = agent && agent.state === 'active';
+        else if (state.quickFilter === 'idle') visible = agent && agent.state === 'idle';
+        else if (state.quickFilter === 'unread') visible = agent && (state.unread[agent.name] || 0) > 0;
+        else if (state.quickFilter === 'recent') visible = agent && !!agent.lastActivity;
+      }
+      card.style.display = visible ? '' : 'none';
+      // Track per-group visibility
+      let prev = card.previousElementSibling;
+      while (prev && !prev.classList.contains('agent-group-header')) prev = prev.previousElementSibling;
+      if (prev) {
+        groupCounts.set(prev, (groupCounts.get(prev) || 0) + (visible ? 1 : 0));
+      }
+    }
+    // Second pass: hide group headers with zero visible cards
+    for (const [header, count] of groupCounts) {
+      header.style.display = count > 0 ? '' : 'none';
+    }
+  }
+
   const searchInput = document.getElementById('agentSearch');
   const searchClear = document.getElementById('agentSearchClear');
-  let searchDebounce = 0;
   searchInput.addEventListener('input', (e) => {
     state.searchFilter = e.target.value;
     searchClear.style.display = e.target.value ? 'block' : 'none';
-    clearTimeout(searchDebounce);
-    searchDebounce = setTimeout(renderAgents, 150);
+    applySearchFilter();
   });
   searchClear.addEventListener('click', () => {
     searchInput.value = '';
     state.searchFilter = '';
     state.quickFilter = null;
     searchClear.style.display = 'none';
-    renderAgents();
+    applySearchFilter();
     searchInput.focus();
   });
 
@@ -4187,7 +4222,10 @@ You are a specialist agent. Describe your role and responsibilities here.
     if (!chip) return;
     const f = chip.dataset.filter;
     state.quickFilter = state.quickFilter === f ? null : f;
-    renderAgents();
+    document.querySelectorAll('.filter-chip').forEach(c => {
+      c.classList.toggle('active', c.dataset.filter === state.quickFilter);
+    });
+    applySearchFilter();
   });
 
   // ── Engine Usage Fetch ──
