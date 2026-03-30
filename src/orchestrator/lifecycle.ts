@@ -151,6 +151,10 @@ async function dispatchHookResult(
           sessionName: tmuxSession,
           keys: step.key,
         });
+        // Brief delay after keystrokes to let terminal process them before
+        // the next step — prevents Escape from eating the first character of
+        // a subsequent paste (e.g. "/exit" → "xit")
+        await sleep(100);
       } else if (step.type === 'shell') {
         await ctx.proxyDispatch(proxyId, {
           action: 'paste',
@@ -680,17 +684,16 @@ export async function suspendAgent(
     // If the exit hook included a capture step with var=SESSION_ID, it's already
     // stored in captured_vars and currentSessionId by dispatchHookResult.
 
+    // Check if session is still alive — but don't kill it.
+    // Preserve the tmux session so the user can inspect final state via Watch tab.
+    // The session will be cleaned up on next spawn or destroy.
     const sessionGone = await ctx.proxyDispatch(proxyId, {
       action: 'has_session',
       sessionName: tmuxSession,
     });
     const exited = !sessionGone.ok || sessionGone.data !== true;
     if (!exited) {
-      console.warn(`[lifecycle] ${name}: session still alive after exit command, killing`);
-      await ctx.proxyDispatch(proxyId, {
-        action: 'kill_session',
-        sessionName: tmuxSession,
-      });
+      console.log(`[lifecycle] ${name}: session still alive after exit — preserving for inspection`);
     }
 
     // ── Phase 3: finalize (lock) ──

@@ -798,7 +798,7 @@ describe('Lifecycle', () => {
 
       await suspendAgent(ctx, 'pipeline-exit');
 
-      // Should have: send_keys(Escape), paste(/exit), send_keys(Enter), then kill_session
+      // Should have: send_keys(Escape), paste(/exit), send_keys(Enter) — session preserved for inspection
       const sendKeys = proxyCommands.filter(c => c.action === 'send_keys');
       const pastes = proxyCommands.filter(c => c.action === 'paste');
       assert.ok(sendKeys.length >= 2, `expected at least 2 send_keys, got ${sendKeys.length}`);
