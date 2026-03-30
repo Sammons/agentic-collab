@@ -396,6 +396,11 @@
     order: 3;
     margin-left: auto;
   }
+  .thread-input #interruptBtn {
+    order: 4;
+    background: var(--red, #e53935);
+    display: none;
+  }
   .thread-input button {
     padding: 8px 16px;
     border-radius: 6px;
@@ -1606,6 +1611,7 @@
         <span class="voice-partial" id="voicePartial"></span>
       </div>
       <button id="sendBtn" disabled>Send</button>
+      <button id="interruptBtn" style="display:none">Interrupt</button>
     </div>
   </div>
 </div>
@@ -1897,7 +1903,7 @@
       const isVoid = agent.state === 'void';
       let actionsHtml = '';
       if (activeIdle) {
-        actionsHtml = `<button data-action="interrupt">Interrupt</button>${agent.engine !== 'codex' ? '<button data-action="compact">Compact</button>' : ''}<button data-action="exit">Exit</button><button class="danger" data-action="kill">Kill</button>${agent.tmuxSession ? `<button class="secondary" data-copy-tmux="tmux attach -t ${esc(agent.tmuxSession)}">Copy tmux</button>` : ''}`;
+        actionsHtml = `${agent.engine !== 'codex' ? '<button data-action="compact">Compact</button>' : ''}<button data-action="exit">Exit</button><button class="danger" data-action="kill">Kill</button>${agent.tmuxSession ? `<button class="secondary" data-copy-tmux="tmux attach -t ${esc(agent.tmuxSession)}">Copy tmux</button>` : ''}`;
       } else if (suspendedFailed) {
         actionsHtml = '<button data-action="resume">Resume</button><button class="danger" data-action="destroy">Destroy</button>';
       } else if (transitioning) {
@@ -2142,7 +2148,6 @@
         <div class="drag-handle" title="Drag to reorder or move to group">\u2261</div>
         <div class="agent-actions">
           ${activeIdle ? `
-            <button data-action="interrupt">Interrupt</button>
             ${agent.engine !== 'codex' ? '<button data-action="compact">Compact</button>' : ''}
             <button data-action="exit">Exit</button>
             <button class="danger" data-action="kill">Kill</button>
@@ -2243,6 +2248,9 @@
     }
     engineSummary.innerHTML = engineHtml;
     list.appendChild(engineSummary);
+
+    // Re-apply search/quick filter after full rebuild
+    if (state.searchFilter || state.quickFilter) applySearchFilter();
   }
 
   function renderThread() {
@@ -3142,6 +3150,7 @@
     const msgInput = document.getElementById('msgInput');
     const sendBtn = document.getElementById('sendBtn');
     const uploadBtn = document.getElementById('uploadBtn');
+    const interruptBtn = document.getElementById('interruptBtn');
     if (!state.selected) return;
     const agent = state.agents.find(a => a.name === state.selected);
     const blocked = agent && CANT_RECEIVE.has(agent.state);
@@ -3153,6 +3162,9 @@
     msgInput.placeholder = blocked
       ? `Agent is ${agent ? agent.state : 'unavailable'} — cannot receive messages`
       : 'Type a message...';
+    // Show interrupt button only for active/idle agents
+    const canInterrupt = agent && (agent.state === 'active' || agent.state === 'idle');
+    interruptBtn.style.display = canInterrupt ? '' : 'none';
   }
 
   // ── Queue Updates ──
@@ -3766,6 +3778,9 @@
   }
 
   document.getElementById('sendBtn').onclick = sendMessage;
+  document.getElementById('interruptBtn').onclick = () => {
+    if (state.selected) agentAction(state.selected, 'interrupt');
+  };
   const msgTextarea = document.getElementById('msgInput');
   const isMobile = window.matchMedia('(max-width: 768px)').matches;
   msgTextarea.onkeydown = (e) => {
@@ -4860,7 +4875,7 @@ You are a specialist agent. Describe your role and responsibilities here.
   // a token, the WebSocket will close with 401 and we'll show the auth modal.
   connect();
   initVoice();
-  // Refresh relative timestamps every 30s
+  // Refresh relative timestamps in engine summary every 30s
   setInterval(() => { if (state.agents.length > 0) renderAgents(); }, 30000);
   // Fetch engine usage every 2 minutes (poller runs server-side every 10min)
   fetchEngineUsage();
