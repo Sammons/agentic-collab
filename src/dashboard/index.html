@@ -1588,9 +1588,9 @@
   </div>
   <div class="thread-panel" id="threadPanel">
     <div class="thread-header" id="threadHeader">Select an agent</div>
-    <div class="thread-messages" id="threadMessages">
+    <message-list class="thread-messages" id="threadMessages">
       <div class="thread-empty">Select an agent to view messages</div>
-    </div>
+    </message-list>
     <div class="persona-panel" id="personaPanel" style="display:none"></div>
     <div class="reminder-panel" id="reminderPanel" style="display:none"></div>
     <div class="watch-panel" id="watchPanel" style="display:none"></div>
@@ -1618,6 +1618,7 @@
 <script type="module">
 import { state, on, emit, getToken, setToken, authHeaders } from '/dashboard/assets/state.js';
 import '/dashboard/assets/agent-card.js';
+import '/dashboard/assets/message-list.js';
 {
 
   function handleAuthError() {
@@ -1842,13 +1843,9 @@ import '/dashboard/assets/agent-card.js';
     if (!state.threads[msg.agent]) state.threads[msg.agent] = [];
     state.threads[msg.agent].push(msg);
     if (state.selected === msg.agent && state.threadView === 'messages') {
-      // Append single message — no full re-render
+      // Append single message via component — no full re-render
       const messages = document.getElementById('threadMessages');
-      const emptyMsg = messages.querySelector('.thread-empty');
-      if (emptyMsg) emptyMsg.remove();
-      const el = buildMessageEl(msg, msg.agent);
-      messages.appendChild(el);
-      messages.scrollTop = messages.scrollHeight;
+      messages.appendMessage(msg, msg.agent);
     } else if (state.selected !== msg.agent) {
       // Track unread for non-selected agents
       state.unread[msg.agent] = (state.unread[msg.agent] || 0) + 1;
@@ -2151,90 +2148,11 @@ import '/dashboard/assets/agent-card.js';
     }
 
     const thread = state.threads[state.selected] || [];
-    if (thread.length === 0) {
-      messages.innerHTML = '<div class="thread-empty">No messages yet</div>';
-      return;
-    }
-
-    // Render only the last PAGE_SIZE messages. Older messages load on scroll-up.
-    const PAGE_SIZE = 30;
-    messages.innerHTML = '';
-    const agent = state.selected;
-    const startIdx = Math.max(0, thread.length - PAGE_SIZE);
-    state._threadRenderedFrom = startIdx; // track how far back we've rendered
-
-    const frag = document.createDocumentFragment();
-    for (let i = startIdx; i < thread.length; i++) {
-      frag.appendChild(buildMessageEl(thread[i], agent));
-    }
-    messages.appendChild(frag);
-    messages.scrollTop = messages.scrollHeight;
-
-    // Progressive loading: prepend older messages when user scrolls near top
-    messages.onscroll = () => {
-      if (state.selected !== agent) return;
-      if (messages.scrollTop > 80 || state._threadRenderedFrom <= 0) return;
-      const from = state._threadRenderedFrom;
-      const loadFrom = Math.max(0, from - PAGE_SIZE);
-      const olderFrag = document.createDocumentFragment();
-      for (let i = loadFrom; i < from; i++) {
-        olderFrag.appendChild(buildMessageEl(thread[i], agent));
-      }
-      const prevHeight = messages.scrollHeight;
-      messages.prepend(olderFrag);
-      messages.scrollTop += messages.scrollHeight - prevHeight;
-      state._threadRenderedFrom = loadFrom;
-    };
+    messages.setMarkdownRenderer(renderMarkdown);
+    messages.loadThread(thread, state.selected);
   }
 
-  // Build a single message DOM element — used by both renderThread and addMessage
-  function buildMessageEl(msg, agentName) {
-    const div = document.createElement('div');
-    const isSystem = msg.message && msg.message.startsWith('[system]');
-    const isUpload = msg.topic === 'file-upload' && msg.direction === 'to_agent';
-    if (isSystem) {
-      div.className = 'msg system-msg';
-    } else if (isUpload) {
-      div.className = 'msg to-agent file-upload';
-    } else {
-      div.className = `msg ${msg.direction === 'to_agent' ? 'to-agent' : 'from-agent'}`;
-    }
-    if (msg.withdrawn) div.classList.add('withdrawn');
-    const fromLabel = isSystem ? 'system' : (msg.sourceAgent || (msg.direction === 'to_agent' ? 'dashboard' : agentName));
-    const toLabel = msg.targetAgent || (msg.direction === 'to_agent' ? agentName : 'dashboard');
-    const time = new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    const topicBadge = msg.topic ? `<span class="msg-topic">${esc(msg.topic)}</span>` : '';
-    const routeStr = `${esc(fromLabel)} \u2192 ${esc(toLabel)}`;
-    const displayMsg = isSystem ? msg.message.replace(/^\[system\]\s*/, '') : msg.message;
-    const statusHtml = (msg.direction === 'to_agent' && msg.queueId)
-      ? `<span class="msg-status ${msg.deliveryStatus || 'pending'}" data-queue-id="${msg.queueId}">${
-          msg.deliveryStatus === 'delivered' ? '\u2713 delivered' :
-          msg.deliveryStatus === 'failed' ? '\u2717 failed' :
-          '\u2022\u2022\u2022 sending'
-        }</span>`
-      : '';
-    const canWithdraw = msg.direction === 'to_agent' && !isSystem && !msg.withdrawn && (!msg.sourceAgent || msg.sourceAgent === 'dashboard');
-    const withdrawHtml = canWithdraw ? `<span class="msg-withdraw" data-msg-id="${msg.id}" title="Withdraw message">unsend</span>` : '';
-    const copyBtn = `<button class="msg-copy" title="Copy message">&#128203;</button>`;
-    const headerHtml = `<div class="msg-header"><span class="msg-sender">${routeStr}</span>${topicBadge}<span class="msg-meta">${copyBtn}${withdrawHtml}<span class="msg-time">${time}</span>${statusHtml}</span></div>`;
-    if (isUpload) {
-      div.innerHTML = `${headerHtml}<div class="file-info"><span class="file-icon">&#128206;</span> ${esc(displayMsg)}</div>`;
-    } else {
-      div.innerHTML = `${headerHtml}<div class="msg-body">${renderMarkdown(esc(displayMsg))}</div>`;
-    }
-    div.querySelector('.msg-copy')?.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const btn = e.target;
-      navigator.clipboard.writeText(displayMsg).then(() => {
-        btn.textContent = '\u2713';
-        setTimeout(() => { btn.innerHTML = '&#128203;'; }, 1500);
-      }).catch(() => {
-        btn.textContent = '\u2717';
-        setTimeout(() => { btn.innerHTML = '&#128203;'; }, 1500);
-      });
-    });
-    return div;
-  }
+  // buildMessageEl moved to message-list.js component
 
   function getActiveTopic() {
     if (!state.selected) return 'general';
