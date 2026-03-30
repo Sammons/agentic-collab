@@ -384,9 +384,9 @@
     font-family: inherit;
     outline: none;
     resize: none;
-    overflow-y: hidden;
-    min-height: 36px;
-    max-height: 120px;
+    overflow-y: auto;
+    height: 36px;
+    max-height: 36px;
     line-height: 1.4;
   }
   .thread-input textarea:focus { border-color: var(--accent); }
@@ -2452,8 +2452,6 @@
     const freshInput = document.getElementById('msgInput');
     if (freshInput) {
       freshInput.value = state.drafts[name] || '';
-      freshInput.style.height = 'auto';
-      freshInput.style.height = freshInput.scrollHeight + 'px';
     }
     updateSendability();
     freshInput?.focus();
@@ -3740,15 +3738,8 @@
       sendMessage();
     }
   };
-  msgTextarea.oninput = () => {
-    // Reset to 1-row to measure natural content height without forcing
-    // a full layout invalidation cycle. Single reflow per input event.
-    msgTextarea.style.height = '0';
-    const sh = msgTextarea.scrollHeight;
-    const h = Math.min(sh, 120);
-    msgTextarea.style.height = h + 'px';
-    msgTextarea.style.overflowY = sh > 120 ? 'auto' : 'hidden';
-  };
+  // No oninput handler — textarea has fixed height with overflow scroll.
+  // Auto-resize via scrollHeight caused 48ms reflow per keystroke.
 
   // ── File Upload ──
 
