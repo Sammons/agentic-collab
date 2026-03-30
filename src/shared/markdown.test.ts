@@ -77,6 +77,45 @@ describe('renderMarkdown', () => {
     it('opens links in new tab', () => {
       has(renderMarkdown('[x](http://y.com)'), 'target="_blank"');
     });
+
+    it('auto-links bare URLs', () => {
+      const out = renderMarkdown('visit https://example.com for details');
+      has(out, '<a href="https://example.com"');
+      has(out, '>https://example.com</a>');
+    });
+
+    it('does not double-link markdown links', () => {
+      const out = renderMarkdown('[click](https://example.com)');
+      // Should have exactly one <a> tag, not nested
+      const matches = out.match(/<a /g) || [];
+      assert.equal(matches.length, 1);
+    });
+
+    it('auto-links http URLs', () => {
+      has(renderMarkdown('see http://localhost:3000/test'), '<a href="http://localhost:3000/test"');
+    });
+
+    it('strips trailing punctuation from auto-linked URLs', () => {
+      const out = renderMarkdown('visit https://example.com.');
+      has(out, '<a href="https://example.com"');
+      // Period should be outside the link
+      has(out, '</a>.');
+    });
+
+    it('does not auto-link URLs inside inline code', () => {
+      const out = renderMarkdown('run `https://example.com/api` to test');
+      // URL should be inside <code>, not wrapped in <a>
+      has(out, '<code>https://example.com/api</code>');
+      // Should not contain an <a> tag
+      const linkMatches = out.match(/<a /g) || [];
+      assert.equal(linkMatches.length, 0);
+    });
+
+    it('auto-links URL followed by comma', () => {
+      const out = renderMarkdown('see https://example.com, then continue');
+      has(out, '<a href="https://example.com"');
+      has(out, '</a>,');
+    });
   });
 
   // ── Unordered lists ──
