@@ -187,6 +187,7 @@
   }
   .thread-input button {
     padding: 8px 16px;
+    min-width: 88px;
     border-radius: 6px;
     border: none;
     background: var(--accent);
@@ -194,6 +195,7 @@
     font-weight: 600;
     font-size: 13px;
     cursor: pointer;
+    text-align: center;
   }
   .thread-input button:hover { opacity: 0.9; }
   .thread-input button:disabled { opacity: 0.5; cursor: not-allowed; }
