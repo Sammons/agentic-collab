@@ -3624,10 +3624,15 @@
       sendMessage();
     }
   };
+  let resizeRaf = 0;
   msgTextarea.oninput = () => {
-    msgTextarea.style.height = 'auto';
-    msgTextarea.style.height = Math.min(msgTextarea.scrollHeight, 120) + 'px';
-    msgTextarea.style.overflowY = msgTextarea.scrollHeight > 120 ? 'auto' : 'hidden';
+    cancelAnimationFrame(resizeRaf);
+    resizeRaf = requestAnimationFrame(() => {
+      msgTextarea.style.height = 'auto';
+      const sh = msgTextarea.scrollHeight;
+      msgTextarea.style.height = Math.min(sh, 120) + 'px';
+      msgTextarea.style.overflowY = sh > 120 ? 'auto' : 'hidden';
+    });
   };
 
   // ── File Upload ──
@@ -4160,10 +4165,12 @@ You are a specialist agent. Describe your role and responsibilities here.
   // ── Search Filter ──
   const searchInput = document.getElementById('agentSearch');
   const searchClear = document.getElementById('agentSearchClear');
+  let searchDebounce = 0;
   searchInput.addEventListener('input', (e) => {
     state.searchFilter = e.target.value;
     searchClear.style.display = e.target.value ? 'block' : 'none';
-    renderAgents();
+    clearTimeout(searchDebounce);
+    searchDebounce = setTimeout(renderAgents, 150);
   });
   searchClear.addEventListener('click', () => {
     searchInput.value = '';
