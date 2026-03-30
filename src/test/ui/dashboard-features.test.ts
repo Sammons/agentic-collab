@@ -1,5 +1,5 @@
 /**
- * Travis feature request UI tests.
+ * Dashboard feature UI tests.
  * Tests: page title (REQ-003), copy buttons (REQ-011), auto-link URLs (REQ-014),
  * copy tmux button (REQ-007), watch panel keys (REQ-009).
  * Browser-dependent tests skip gracefully when no probe is connected.
@@ -9,7 +9,7 @@ import { describe, it, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createTestContext, type TestContext } from '../runner.ts';
 
-describe('Travis Feature Requests', () => {
+describe('Dashboard Features', () => {
   let ctx: TestContext;
   let probeConnected = false;
 
@@ -19,7 +19,7 @@ describe('Travis Feature Requests', () => {
       await ctx.waitForProbe(3000);
       probeConnected = true;
     } catch {
-      console.log('[travis] No browser connected — skipping browser tests. Open:', ctx.url);
+      console.log('[dashboard-features] No browser connected — skipping browser tests. Open:', ctx.url);
     }
   });
 
@@ -37,7 +37,7 @@ describe('Travis Feature Requests', () => {
     it('initial title is "Dashboard — Agentic Collab"', { skip: !probeConnected ? 'no browser' : false }, async () => {
       // Wait for init to complete
       await ctx.waitFor('[data-agent]');
-      const { descriptor } = await ctx.snapshot('travis-page-title-initial');
+      const { descriptor } = await ctx.snapshot('dash-page-title-initial');
       assert.equal(descriptor['title'], 'Dashboard — Agentic Collab');
     });
 
@@ -46,7 +46,7 @@ describe('Travis Feature Requests', () => {
       await ctx.click('[data-agent="test-claude"]');
       // Small delay for title update
       await new Promise(r => setTimeout(r, 200));
-      const { descriptor } = await ctx.snapshot('travis-page-title-selected');
+      const { descriptor } = await ctx.snapshot('dash-page-title-selected');
       assert.equal(descriptor['title'], 'test-claude — Agentic Collab');
     });
 
@@ -57,7 +57,7 @@ describe('Travis Feature Requests', () => {
       await new Promise(r => setTimeout(r, 200));
       await ctx.sendMessage('test-codex', 'hello from codex', { direction: 'from_agent' });
       await new Promise(r => setTimeout(r, 500));
-      const { descriptor } = await ctx.snapshot('travis-page-title-unread');
+      const { descriptor } = await ctx.snapshot('dash-page-title-unread');
       const title = descriptor['title'] as string;
       assert.ok(title.startsWith('(1)'), `title should start with (1), got: ${title}`);
     });
@@ -71,7 +71,7 @@ describe('Travis Feature Requests', () => {
       await ctx.click('[data-agent="test-claude"]');
       await ctx.sendMessage('test-claude', 'hello world', { direction: 'from_agent' });
       await new Promise(r => setTimeout(r, 300));
-      const { descriptor } = await ctx.snapshot('travis-copy-buttons');
+      const { descriptor } = await ctx.snapshot('dash-copy-buttons');
       assert.ok((descriptor['messageCopyButtons'] as number) >= 1, 'should have at least one copy button');
     });
 
@@ -95,7 +95,7 @@ describe('Travis Feature Requests', () => {
       await ctx.click('[data-agent="test-claude"]');
       await ctx.sendMessage('test-claude', 'check https://example.com for details', { direction: 'from_agent' });
       await new Promise(r => setTimeout(r, 300));
-      const { descriptor } = await ctx.snapshot('travis-auto-link');
+      const { descriptor } = await ctx.snapshot('dash-auto-link');
       const links = descriptor['messageLinks'] as Array<{ href: string; text: string }>;
       const exampleLink = links.find(l => l.href === 'https://example.com');
       assert.ok(exampleLink, 'should have a clickable link for https://example.com');
@@ -116,7 +116,7 @@ describe('Travis Feature Requests', () => {
   describe('copy tmux button (REQ-007)', () => {
     it('active agents show copy tmux button with session name', { skip: !probeConnected ? 'no browser' : false }, async () => {
       await ctx.waitFor('[data-agent]');
-      const { descriptor } = await ctx.snapshot('travis-tmux-copy');
+      const { descriptor } = await ctx.snapshot('dash-tmux-copy');
       const cards = descriptor['agentCards'] as Array<Record<string, unknown>>;
       // test-claude is active with tmuxSession: 'agent-test-claude'
       const claude = cards.find(c => c['name'] === 'test-claude');
@@ -127,7 +127,7 @@ describe('Travis Feature Requests', () => {
 
     it('failed agents do not show copy tmux button', { skip: !probeConnected ? 'no browser' : false }, async () => {
       await ctx.waitFor('[data-agent]');
-      const { descriptor } = await ctx.snapshot('travis-tmux-no-failed');
+      const { descriptor } = await ctx.snapshot('dash-tmux-no-failed');
       const cards = descriptor['agentCards'] as Array<Record<string, unknown>>;
       const failed = cards.find(c => c['name'] === 'test-failed');
       assert.ok(failed, 'test-failed card should exist');
