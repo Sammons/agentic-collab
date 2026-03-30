@@ -2326,15 +2326,35 @@
       return;
     }
 
-    // Build all messages into a DocumentFragment (off-screen, no layout),
-    // then insert once. Single DOM write, single paint.
+    // Render only the last PAGE_SIZE messages. Older messages load on scroll-up.
+    const PAGE_SIZE = 30;
     messages.innerHTML = '';
+    const agent = state.selected;
+    const startIdx = Math.max(0, thread.length - PAGE_SIZE);
+    state._threadRenderedFrom = startIdx; // track how far back we've rendered
+
     const frag = document.createDocumentFragment();
-    for (const msg of thread) {
-      frag.appendChild(buildMessageEl(msg, state.selected));
+    for (let i = startIdx; i < thread.length; i++) {
+      frag.appendChild(buildMessageEl(thread[i], agent));
     }
     messages.appendChild(frag);
     messages.scrollTop = messages.scrollHeight;
+
+    // Progressive loading: prepend older messages when user scrolls near top
+    messages.onscroll = () => {
+      if (state.selected !== agent) return;
+      if (messages.scrollTop > 80 || state._threadRenderedFrom <= 0) return;
+      const from = state._threadRenderedFrom;
+      const loadFrom = Math.max(0, from - PAGE_SIZE);
+      const olderFrag = document.createDocumentFragment();
+      for (let i = loadFrom; i < from; i++) {
+        olderFrag.appendChild(buildMessageEl(thread[i], agent));
+      }
+      const prevHeight = messages.scrollHeight;
+      messages.prepend(olderFrag);
+      messages.scrollTop += messages.scrollHeight - prevHeight;
+      state._threadRenderedFrom = loadFrom;
+    };
   }
 
   // Build a single message DOM element — used by both renderThread and addMessage
