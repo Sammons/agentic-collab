@@ -1592,8 +1592,8 @@
       <div class="thread-empty">Select an agent to view messages</div>
     </message-list>
     <div class="persona-panel" id="personaPanel" style="display:none"></div>
-    <div class="reminder-panel" id="reminderPanel" style="display:none"></div>
-    <div class="watch-panel" id="watchPanel" style="display:none"></div>
+    <reminder-panel class="reminder-panel" id="reminderPanel" style="display:none"></reminder-panel>
+    <watch-panel class="watch-panel" id="watchPanel" style="display:none"></watch-panel>
     <div class="topic-breadcrumbs" id="topicBreadcrumbs" style="display:none"></div>
     <message-input class="thread-input" id="threadInput" style="display:none">
     </message-input>
@@ -1610,9 +1610,13 @@
 
 <script type="module">
 import { state, on, emit, getToken, setToken, authHeaders } from '/dashboard/assets/state.js';
+import { esc, renderMarkdown, timeAgo, formatFileSize, showToast, promptInput, confirmAction } from '/dashboard/assets/utils.js';
 import '/dashboard/assets/agent-card.js';
 import '/dashboard/assets/message-list.js';
 import '/dashboard/assets/message-input.js';
+import '/dashboard/assets/watch-panel.js';
+import '/dashboard/assets/reminder-panel.js';
+import '/dashboard/assets/archive-panel.js';
 {
 
   function handleAuthError() {
@@ -2078,10 +2082,8 @@ import '/dashboard/assets/message-input.js';
     const input = document.getElementById('threadInput');
 
     // Stop watch polling when leaving the tab
-    if (state.watchTimer) {
-      clearInterval(state.watchTimer);
-      state.watchTimer = null;
-    }
+    const watchEl = document.getElementById('watchPanel');
+    watchEl.stop();
 
     if (!state.selected) {
       header.textContent = 'Select an agent';
@@ -2127,12 +2129,12 @@ import '/dashboard/assets/message-input.js';
     }
 
     if (view === 'reminders') {
-      renderReminders();
+      document.getElementById('reminderPanel').load(state.selected);
       return;
     }
 
     if (view === 'watch') {
-      startWatchPolling();
+      document.getElementById('watchPanel').start(state.selected);
       return;
     }
 
@@ -2410,370 +2412,8 @@ import '/dashboard/assets/message-input.js';
     }
   }
 
-  // ── Reminders View ──
-
-  async function renderReminders() {
-    const panel = document.getElementById('reminderPanel');
-    if (!state.selected) return;
-    const agent = state.selected;
-    panel.innerHTML = '<div class="reminder-empty">Loading...</div>';
-    try {
-      const res = await fetch(`/api/reminders?agent=${encodeURIComponent(agent)}`, {
-        headers: authHeaders(),
-      });
-      if (state.selected !== agent || state.threadView !== 'reminders') return;
-      if (!res.ok) {
-        panel.innerHTML = '<div class="reminder-empty">Failed to load reminders</div>';
-        return;
-      }
-      const reminders = await res.json();
-      const pendingReminders = reminders
-        .filter(r => r.status === 'pending')
-        .sort((a, b) => a.sortOrder - b.sortOrder);
-      const completedReminders = reminders
-        .filter(r => r.status === 'completed')
-        .sort((a, b) => (b.completedAt || '').localeCompare(a.completedAt || ''));
-
-      const renderReminderCard = (r, opts = {}) => {
-        const { isActive = false, prevPending = null, nextPending = null } = opts;
-        const classes = ['reminder-item'];
-        if (isActive) classes.push('active');
-        if (r.status === 'completed') classes.push('completed');
-
-        const cadenceLabel = r.cadenceMinutes >= 60
-          ? `every ${Math.round(r.cadenceMinutes / 60)}h`
-          : `every ${r.cadenceMinutes}m`;
-        const createdByHtml = r.createdBy
-          ? `<span>by ${esc(r.createdBy)}</span>`
-          : '';
-        const completedHtml = r.completedAt
-          ? `<span>completed ${esc(new Date(r.completedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }))}</span>`
-          : '';
-
-        let actionBtns = '';
-        if (r.status === 'pending') {
-          actionBtns += `<button class="complete" data-action="complete" data-id="${r.id}" title="Complete">\u2713</button>`;
-          actionBtns += `<button data-action="edit" data-id="${r.id}" data-prompt="${esc(r.prompt)}" data-cadence="${r.cadenceMinutes}" data-skip-if-active="${r.skipIfActive ? '1' : '0'}" title="Edit">\u270E</button>`;
-        }
-        if (prevPending && r.status === 'pending') {
-          actionBtns += `<button data-action="move-up" data-id="${r.id}" data-swap="${prevPending.id}" title="Move up">\u2191</button>`;
-        }
-        if (nextPending && r.status === 'pending') {
-          actionBtns += `<button data-action="move-down" data-id="${r.id}" data-swap="${nextPending.id}" title="Move down">\u2193</button>`;
-        }
-        actionBtns += `<button class="danger" data-action="delete" data-id="${r.id}" title="Delete">\u00d7</button>`;
-
-        return `<div class="${classes.join(' ')}">
-          <div class="reminder-content">
-            <div class="reminder-prompt">${isActive ? '\u25b6 ' : ''}${esc(r.prompt)}</div>
-            <div class="reminder-meta">
-              <span>${cadenceLabel}</span>
-              ${r.skipIfActive ? '<span style="font-size:11px;color:var(--yellow,#d29922);font-weight:600">skip if active</span>' : ''}
-              <span class="reminder-badge ${isActive ? 'active' : r.status}">${isActive ? 'active' : r.status === 'pending' ? 'queued' : r.status}</span>
-              ${createdByHtml}
-              ${completedHtml}
-            </div>
-          </div>
-          <div class="reminder-actions">${actionBtns}</div>
-        </div>`;
-      };
-
-      // Build the form
-      let html = `<div class="reminder-add-form">
-        <textarea id="reminderPrompt" placeholder="Reminder prompt..." rows="2"></textarea>
-        <div class="reminder-form-row">
-          <input type="number" id="reminderCadence" min="5" placeholder="Minutes" value="30" />
-          <span style="color:var(--text-dim);font-size:12px">min cadence</span>
-          <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--text-dim);cursor:pointer;margin-left:4px"><input type="checkbox" id="reminderSkipIfActive" /> Skip if active</label>
-          <button id="reminderAddBtn">Add</button>
-        </div>
-      </div>`;
-
-      if (pendingReminders.length === 0 && completedReminders.length === 0) {
-        html += '<div class="reminder-empty">No reminders for this agent</div>';
-      } else {
-        if (pendingReminders.length > 0) {
-          for (let i = 0; i < pendingReminders.length; i++) {
-            const r = pendingReminders[i];
-            html += renderReminderCard(r, {
-              isActive: i === 0,
-              prevPending: pendingReminders[i - 1] || null,
-              nextPending: pendingReminders[i + 1] || null,
-            });
-          }
-        }
-
-        if (completedReminders.length > 0) {
-          html += '<div class="reminder-section-label">Recently completed</div>';
-          for (const r of completedReminders) {
-            html += renderReminderCard(r);
-          }
-        }
-      }
-
-      panel.innerHTML = html;
-
-      // Add reminder handler
-      const addBtn = document.getElementById('reminderAddBtn');
-      if (addBtn) {
-        addBtn.onclick = async () => {
-          const prompt = document.getElementById('reminderPrompt').value.trim();
-          const cadence = parseInt(document.getElementById('reminderCadence').value, 10);
-          const skipIfActive = document.getElementById('reminderSkipIfActive').checked;
-          if (!prompt) return;
-          try {
-            await fetch('/api/reminders', {
-              method: 'POST',
-              headers: authHeaders(),
-              body: JSON.stringify({
-                agentName: state.selected,
-                prompt,
-                cadenceMinutes: cadence || 30,
-                skipIfActive,
-              }),
-            });
-            renderReminders();
-          } catch (err) {
-            console.error('Add reminder failed:', err);
-          }
-        };
-      }
-
-      // Action button handlers (complete, delete, move)
-      panel.querySelectorAll('.reminder-actions button[data-action]').forEach(btn => {
-        btn.onclick = async () => {
-          const action = btn.dataset.action;
-          const id = btn.dataset.id;
-          try {
-            if (action === 'complete') {
-              await fetch(`/api/reminders/${id}/complete`, {
-                method: 'POST',
-                headers: authHeaders(),
-              });
-            } else if (action === 'delete') {
-              await fetch(`/api/reminders/${id}`, {
-                method: 'DELETE',
-                headers: authHeaders(),
-              });
-            } else if (action === 'edit') {
-              const oldPrompt = btn.dataset.prompt;
-              const oldCadence = parseInt(btn.dataset.cadence, 10);
-              const oldSkip = btn.dataset.skipIfActive === '1';
-
-              const overlay = document.createElement('div');
-              overlay.className = 'reminder-edit-overlay';
-              overlay.innerHTML = `
-                <div class="reminder-edit-modal">
-                  <textarea id="editReminderPrompt">${esc(oldPrompt)}</textarea>
-                  <div class="edit-row">
-                    <input type="number" id="editReminderCadence" value="${oldCadence}" min="5" />
-                    <span style="font-size:13px;color:var(--text-dim)">min cadence</span>
-                  </div>
-                  <div class="edit-row">
-                    <label><input type="checkbox" id="editSkipIfActive" ${oldSkip ? 'checked' : ''} /> Skip if agent is active</label>
-                  </div>
-                  <div class="actions">
-                    <button class="cancel" id="editReminderCancel">Cancel</button>
-                    <button class="save" id="editReminderSave">Save</button>
-                  </div>
-                </div>
-              `;
-              document.body.appendChild(overlay);
-
-              overlay.querySelector('#editReminderCancel').onclick = () => overlay.remove();
-              overlay.addEventListener('pointerdown', (e) => { if (e.target === overlay) overlay.remove(); });
-
-              overlay.querySelector('#editReminderSave').onclick = async () => {
-                const newPrompt = overlay.querySelector('#editReminderPrompt').value.trim();
-                const newCadence = parseInt(overlay.querySelector('#editReminderCadence').value, 10);
-                const newSkip = overlay.querySelector('#editSkipIfActive').checked;
-                if (!newPrompt) return;
-                await fetch(`/api/reminders/${id}`, {
-                  method: 'PATCH',
-                  headers: authHeaders(),
-                  body: JSON.stringify({
-                    prompt: newPrompt,
-                    cadenceMinutes: isNaN(newCadence) ? undefined : newCadence,
-                    skipIfActive: newSkip,
-                  }),
-                });
-                overlay.remove();
-                renderReminders();
-              };
-
-              setTimeout(() => overlay.querySelector('#editReminderPrompt').focus(), 50);
-              return;
-            } else if (action === 'move-up' || action === 'move-down') {
-              const swapId = btn.dataset.swap;
-              await fetch('/api/reminders/swap', {
-                method: 'POST',
-                headers: authHeaders(),
-                body: JSON.stringify({ a: parseInt(id, 10), b: parseInt(swapId, 10) }),
-              });
-            }
-            renderReminders();
-          } catch (err) {
-            console.error('Reminder action failed:', err);
-          }
-        };
-      });
-    } catch (err) {
-      console.error('Reminder load failed:', err);
-      panel.innerHTML = '<div class="reminder-empty">Failed to load reminders</div>';
-    }
-  }
-
-  // ── Watch View ──
-
-  async function fetchPaneOutput(agentName) {
-    try {
-      const resp = await fetch(`/api/agents/${encodeURIComponent(agentName)}/peek`, {
-        headers: getToken() ? { 'Authorization': `Bearer ${getToken()}` } : {},
-      });
-      if (!resp.ok) return null;
-      const data = await resp.json();
-      return data.output ?? null;
-    } catch { return null; }
-  }
-
-  function startWatchPolling() {
-    const panel = document.getElementById('watchPanel');
-    if (!state.selected) return;
-
-    const keyButtons = [
-      { label: '\u2191', key: 'Up' },
-      { label: '\u2193', key: 'Down' },
-      { label: '\u2190', key: 'Left' },
-      { label: '\u2192', key: 'Right' },
-      { label: '\u232b', key: 'BSpace' },
-      { label: 'Enter', key: 'Enter' },
-      { label: 'Esc', key: 'Escape' },
-      { label: 'Tab', key: 'Tab' },
-      { label: 'S-Tab', key: 'S-Tab' },
-      { label: 'Space', key: 'Space' },
-      { label: 'C-c', key: 'C-c' },
-      { label: 'C-x', key: 'C-x' },
-      { label: 'C-z', key: 'C-z' },
-      { label: 'y', key: 'y' },
-      { label: 'n', key: 'n' },
-      { label: 'q', key: 'q' },
-    ];
-
-    const keysHtml = keyButtons.map(b =>
-      `<button data-key="${b.key}" title="Send ${b.key}">${b.label}</button>`
-    ).join('');
-
-    panel.innerHTML = `
-      <div class="watch-output"><div class="watch-status">Connecting...</div></div>
-      <div class="watch-keys">${keysHtml}<button class="watch-resize-btn" title="Resize tmux pane to match viewport">\u2922 Resize</button></div>
-      <div class="watch-type">
-        <input type="text" class="watch-type-input" placeholder="Type literal text..." />
-        <button class="watch-type-send" title="Send text (no Enter)">Send</button>
-        <button class="watch-type-enter" title="Send text + Enter">Send+\u21b5</button>
-      </div>
-    `;
-
-    const outputEl = panel.querySelector('.watch-output');
-
-    // Key button handlers
-    panel.querySelector('.watch-keys').addEventListener('click', async (e) => {
-      const btn = e.target.closest('button[data-key]');
-      if (!btn || !state.selected) return;
-      const key = btn.dataset.key;
-      try {
-        await fetch(`/api/agents/${encodeURIComponent(state.selected)}/keys`, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json', ...authHeaders() },
-          body: JSON.stringify({ keys: key }),
-        });
-      } catch (err) {
-        console.error('[watch] Key send failed:', err);
-      }
-    });
-
-    // Resize button handler
-    panel.querySelector('.watch-resize-btn').addEventListener('click', async () => {
-      if (!state.selected) return;
-      // Measure character dimensions inside the output container so the probe
-      // inherits the actual font, font-size, and line-height
-      const probe = document.createElement('span');
-      probe.style.cssText = 'position:absolute;visibility:hidden;white-space:pre';
-      probe.textContent = 'M';
-      outputEl.appendChild(probe);
-      // Use getBoundingClientRect for sub-pixel accuracy — offsetWidth rounds
-      // to integer pixels, understating the true character width and inflating
-      // the column count (e.g. 7px vs 7.23px → 211 cols vs 204 cols).
-      const probeRect = probe.getBoundingClientRect();
-      const charW = probeRect.width || 7.2;
-      const charH = probeRect.height || 16;
-      outputEl.removeChild(probe);
-      // Account for line-height and padding
-      const style = getComputedStyle(outputEl);
-      const lineH = parseFloat(style.lineHeight) || charH;
-      const padX = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
-      const padY = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
-      const statusEl = outputEl.querySelector('.watch-status');
-      const statusH = statusEl ? statusEl.offsetHeight + parseFloat(getComputedStyle(statusEl).marginBottom || '0') : 0;
-      const cols = Math.floor((outputEl.clientWidth - padX) / charW);
-      const rows = Math.floor((outputEl.clientHeight - padY - statusH) / lineH);
-      if (cols < 1 || rows < 1) return;
-      try {
-        await fetch(`/api/agents/${encodeURIComponent(state.selected)}/resize`, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json', ...authHeaders() },
-          body: JSON.stringify({ width: cols, height: rows }),
-        });
-      } catch (err) {
-        console.error('[watch] Resize failed:', err);
-      }
-    });
-
-    // Literal text input handlers
-    const typeInput = panel.querySelector('.watch-type-input');
-    const typeSend = panel.querySelector('.watch-type-send');
-    const typeEnter = panel.querySelector('.watch-type-enter');
-
-    async function sendLiteral(pressEnter) {
-      const text = typeInput.value;
-      if (!text || !state.selected) return;
-      try {
-        await fetch(`/api/agents/${encodeURIComponent(state.selected)}/type`, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json', ...authHeaders() },
-          body: JSON.stringify({ text, pressEnter }),
-        });
-        typeInput.value = '';
-      } catch (err) {
-        console.error('[watch] Type send failed:', err);
-      }
-    }
-
-    typeSend.addEventListener('click', () => sendLiteral(false));
-    typeEnter.addEventListener('click', () => sendLiteral(true));
-    typeInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        sendLiteral(e.shiftKey ? false : true);
-      }
-    });
-
-    async function poll() {
-      if (state.threadView !== 'watch' || !state.selected) return;
-      const output = await fetchPaneOutput(state.selected);
-      if (state.threadView !== 'watch' || !state.selected) return;
-      if (output === null) {
-        outputEl.innerHTML = '<div class="watch-status">Agent has no active session</div>';
-      } else {
-        const now = new Date().toLocaleTimeString();
-        const wasAtBottom = outputEl.scrollTop + outputEl.clientHeight >= outputEl.scrollHeight - 20;
-        outputEl.innerHTML = `<div class="watch-status">Last capture: ${now}</div>${esc(output)}`;
-        if (wasAtBottom) outputEl.scrollTop = outputEl.scrollHeight;
-      }
-    }
-
-    poll().then(() => { outputEl.scrollTop = outputEl.scrollHeight; });
-    state.watchTimer = setInterval(poll, 3000);
-  }
+  // renderReminders — moved to reminder-panel.js component
+  // startWatchPolling, fetchPaneOutput — moved to watch-panel.js component
 
   function enterPersonaEdit(agentName, rawContent) {
     state.editingPersona = true;
@@ -2866,16 +2506,7 @@ import '/dashboard/assets/message-input.js';
     };
   }
 
-  // ── Toast ──
-  function showToast(message, type = 'error') {
-    const existing = document.querySelector('.toast');
-    if (existing) existing.remove();
-    const t = document.createElement('div');
-    t.className = `toast ${type}`;
-    t.textContent = message;
-    document.body.appendChild(t);
-    setTimeout(() => t.remove(), 3000);
-  }
+  // showToast, promptInput, confirmAction — imported from utils.js
 
   // ── Send enable/disable based on agent state ──
   const CANT_RECEIVE = new Set(['void', 'failed', 'spawning']);
@@ -2910,61 +2541,7 @@ import '/dashboard/assets/message-input.js';
     }
   }
 
-  // ── Prompt Dialog (themed replacement for browser prompt()) ──
-  function promptInput(label, defaultValue) {
-    return new Promise((resolve) => {
-      const overlay = document.createElement('div');
-      overlay.className = 'confirm-overlay';
-      overlay.innerHTML = `
-        <div class="confirm-box">
-          <p>${esc(label)}</p>
-          <input type="text" value="${esc(defaultValue || '')}" style="width:100%;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px;box-sizing:border-box;margin-bottom:16px" autocomplete="off" />
-          <div class="actions">
-            <button class="cancel-btn">Cancel</button>
-            <button class="danger-btn" style="background:var(--accent);border-color:var(--accent)">OK</button>
-          </div>
-        </div>
-      `;
-      const input = overlay.querySelector('input');
-      const submit = () => { const v = input.value.trim(); overlay.remove(); resolve(v || null); };
-      overlay.querySelector('.cancel-btn').onclick = () => { overlay.remove(); resolve(null); };
-      overlay.querySelector('.danger-btn').onclick = submit;
-      input.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') submit();
-        if (e.key === 'Escape') { overlay.remove(); resolve(null); }
-      });
-      overlay.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape') { overlay.remove(); resolve(null); }
-      });
-      document.body.appendChild(overlay);
-      input.focus();
-      input.select();
-    });
-  }
-
-  // ── Confirm Dialog ──
-  function confirmAction(message) {
-    return new Promise((resolve) => {
-      const overlay = document.createElement('div');
-      overlay.className = 'confirm-overlay';
-      overlay.innerHTML = `
-        <div class="confirm-box">
-          <p>${esc(message)}</p>
-          <div class="actions">
-            <button class="cancel-btn">Cancel</button>
-            <button class="danger-btn">Confirm</button>
-          </div>
-        </div>
-      `;
-      overlay.querySelector('.cancel-btn').onclick = () => { overlay.remove(); resolve(false); };
-      overlay.querySelector('.danger-btn').onclick = () => { overlay.remove(); resolve(true); };
-      overlay.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape') { overlay.remove(); resolve(false); }
-      });
-      document.body.appendChild(overlay);
-      overlay.querySelector('.danger-btn').focus();
-    });
-  }
+  // promptInput, confirmAction — imported from utils.js
 
   const DESTRUCTIVE_ACTIONS = new Set(['kill', 'destroy']);
   const ACTION_LABELS = { kill: 'Kill', destroy: 'Destroy', exit: 'Exit', resume: 'Resume', interrupt: 'Interrupt', compact: 'Compact', spawn: 'Spawn' };
@@ -3508,12 +3085,7 @@ import '/dashboard/assets/message-input.js';
 
   const LARGE_FILE_THRESHOLD = 100 * 1024 * 1024; // 100 MB
 
-  function formatFileSize(bytes) {
-    if (bytes < 1024) return bytes + 'B';
-    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + 'KB';
-    if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + 'MB';
-    return (bytes / (1024 * 1024 * 1024)).toFixed(1) + 'GB';
-  }
+  // formatFileSize — imported from utils.js
 
   async function handleFileUpload(files, attachedMessage) {
     if (!files.length || !state.selected) return;
@@ -3632,165 +3204,13 @@ import '/dashboard/assets/message-input.js';
     }
   });
 
-  // ── Helpers ──
-  function esc(s) {
-    if (!s) return '';
-    const div = document.createElement('div');
-    div.textContent = s;
-    return div.innerHTML;
-  }
+  // esc, renderMarkdown, timeAgo — imported from utils.js
 
   function proxyVersionWarning(proxyId) {
     const proxy = (state.proxies || []).find(p => p.proxyId === proxyId);
     if (!proxy || proxy.versionMatch !== false) return '';
     const ver = proxy.version ? ` (${esc(proxy.version)})` : '';
-    return ` <span class="version-mismatch" title="Proxy version${ver} does not match orchestrator. Restart the proxy.">⚠ stale proxy</span>`;
-  }
-
-  /**
-   * Minimal zero-dependency markdown renderer.
-   * Input must already be HTML-escaped via esc().
-   * Supports: headings, bold, italic, code blocks, inline code, lists, links, tables, paragraphs.
-   */
-  function renderMarkdown(escaped) {
-    if (!escaped) return '';
-    // Preserve code blocks first — extract and replace with placeholders
-    const codeBlocks = [];
-    let text = escaped.replace(/```(?:\w*)\n([\s\S]*?)```/g, (_m, code) => {
-      codeBlocks.push(code.replace(/\n$/, ''));
-      return '\x00CB' + (codeBlocks.length - 1) + '\x00';
-    });
-    // Inline code
-    text = text.replace(/`([^`\n]+)`/g, '<code>$1</code>');
-    // Headings (must be at start of line)
-    text = text.replace(/^(#{1,6})\s+(.+)$/gm, (_m, hashes, content) => {
-      const level = hashes.length;
-      return `<h${level} style="margin:8px 0 4px;font-size:${18 - level * 1.5}px">${content}</h${level}>`;
-    });
-    // Bold
-    text = text.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-    // Italic (single asterisk, not inside words)
-    text = text.replace(/(?<!\w)\*(.+?)\*(?!\w)/g, '<em>$1</em>');
-    // Links
-    text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" style="color:var(--accent)">$1</a>');
-    // Lists, tables, and paragraphs: line-based parser for proper nesting
-    {
-      const lines = text.split('\n');
-      const out = [];
-      const listStack = []; // stack of { tag: 'ul'|'ol', indent: number }
-      let inPara = false;
-      let inTable = false;
-
-      function closeListsTo(indent) {
-        while (listStack.length > 0 && listStack[listStack.length - 1].indent >= indent) {
-          out.push('</' + listStack.pop().tag + '>');
-        }
-      }
-      function closeAllLists() { closeListsTo(-1); }
-      function closePara() { if (inPara) { out.push('</p>'); inPara = false; } }
-      function closeTable() { if (inTable) { out.push('</tbody></table>'); inTable = false; } }
-
-      function parseTableRow(line) {
-        // Split on | and trim — ignore leading/trailing empty cells from outer pipes
-        const cells = line.split('|').map(c => c.trim());
-        if (cells[0] === '') cells.shift();
-        if (cells.length > 0 && cells[cells.length - 1] === '') cells.pop();
-        return cells;
-      }
-
-      function isSeparatorRow(line) {
-        return /^\|?[\s:]*-{2,}[\s:]*(\|[\s:]*-{2,}[\s:]*)*\|?\s*$/.test(line) && line.includes('-');
-      }
-
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i];
-        const hrMatch = line.match(/^---+$/);
-        if (hrMatch) {
-          closePara(); closeAllLists();
-          out.push('<hr style="border:none;border-top:1px solid var(--border);margin:8px 0">');
-          continue;
-        }
-
-        // Table detection: header row + separator row starts a table
-        if (!inTable && line.includes('|') && i + 1 < lines.length && isSeparatorRow(lines[i + 1])) {
-          closePara(); closeAllLists();
-          const headers = parseTableRow(line);
-          out.push('<table><thead><tr>' + headers.map(h => '<th>' + h + '</th>').join('') + '</tr></thead><tbody>');
-          i++; // skip separator row
-          inTable = true;
-          continue;
-        }
-        if (inTable) {
-          if (line.includes('|')) {
-            const cells = parseTableRow(line);
-            out.push('<tr>' + cells.map(c => '<td>' + c + '</td>').join('') + '</tr>');
-            continue;
-          } else {
-            closeTable();
-            // fall through to process this line normally
-          }
-        }
-
-        const ulMatch = line.match(/^(\s*)([-*])\s+(.+)$/);
-        const olMatch = !ulMatch && line.match(/^(\s*)\d+\.\s+(.+)$/);
-
-        if (ulMatch || olMatch) {
-          closePara();
-          const indent = (ulMatch || olMatch)[1].length;
-          const tag = ulMatch ? 'ul' : 'ol';
-          const content = ulMatch ? ulMatch[3] : olMatch[2];
-
-          if (listStack.length === 0 || indent > listStack[listStack.length - 1].indent) {
-            out.push('<' + tag + '>');
-            listStack.push({ tag, indent });
-          } else if (indent < listStack[listStack.length - 1].indent) {
-            closeListsTo(indent);
-            if (listStack.length === 0 || listStack[listStack.length - 1].indent < indent) {
-              out.push('<' + tag + '>');
-              listStack.push({ tag, indent });
-            }
-          }
-          out.push('<li>' + content + '</li>');
-          continue;
-        }
-
-        // Non-list line
-        closeAllLists();
-
-        if (line.trim() === '') {
-          closePara();
-        } else if (line.startsWith('<h') || line.startsWith('<hr')) {
-          closePara();
-          out.push(line);
-        } else {
-          if (!inPara) { out.push('<p style="margin:4px 0">'); inPara = true; }
-          else { out.push('<br>'); }
-          out.push(line);
-        }
-      }
-      closePara();
-      closeAllLists();
-      closeTable();
-      text = out.join('\n');
-    }
-    // Restore code blocks
-    text = text.replace(/\x00CB(\d+)\x00/g, (_m, idx) => {
-      return `<pre style="background:var(--bg);padding:8px;border-radius:4px;overflow-x:auto;margin:4px 0;font-size:12px"><code>${codeBlocks[parseInt(idx)]}</code></pre>`;
-    });
-    return text;
-  }
-
-  function timeAgo(isoStr) {
-    if (!isoStr) return '';
-    const diff = Math.max(0, Date.now() - new Date(isoStr).getTime());
-    const secs = Math.floor(diff / 1000);
-    if (secs < 60) return `${secs}s ago`;
-    const mins = Math.floor(secs / 60);
-    if (mins < 60) return `${mins}m ago`;
-    const hrs = Math.floor(mins / 60);
-    if (hrs < 24) return `${hrs}h ago`;
-    const days = Math.floor(hrs / 24);
-    return `${days}d ago`;
+    return ` <span class="version-mismatch" title="Proxy version${ver} does not match orchestrator. Restart the proxy.">\u26a0 stale proxy</span>`;
   }
 
   // ── Create Agent Modal ──
