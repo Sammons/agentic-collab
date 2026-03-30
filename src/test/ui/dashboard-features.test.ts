@@ -135,6 +135,35 @@ describe('Dashboard Features', () => {
     });
   });
 
+  // ── Progressive Message Loading (Performance Regression Guard) ──
+
+  describe('progressive message loading', () => {
+    it('renders at most 30 messages on agent switch', { skip: !probeConnected ? 'no browser' : false }, async () => {
+      await ctx.waitFor('[data-agent]');
+      // Send 50 messages to test-claude
+      for (let i = 0; i < 50; i++) {
+        await ctx.sendMessage('test-claude', `message ${i}`, { direction: 'from_agent' });
+      }
+      // Select the agent — should only render last 30
+      await ctx.click('[data-agent="test-claude"]');
+      await new Promise(r => setTimeout(r, 300));
+      const msgCount = await ctx.count('.msg');
+      assert.ok(msgCount <= 35, `should render at most ~30 messages initially, got ${msgCount}`);
+      assert.ok(msgCount >= 25, `should render at least 25 messages, got ${msgCount}`);
+    });
+
+    it('new message appends without full re-render', { skip: !probeConnected ? 'no browser' : false }, async () => {
+      await ctx.waitFor('[data-agent]');
+      await ctx.click('[data-agent="test-claude"]');
+      await new Promise(r => setTimeout(r, 200));
+      const before = await ctx.count('.msg');
+      await ctx.sendMessage('test-claude', 'one more message', { direction: 'from_agent' });
+      await new Promise(r => setTimeout(r, 300));
+      const after = await ctx.count('.msg');
+      assert.equal(after, before + 1, 'should append exactly one message');
+    });
+  });
+
   // ── REQ-009: Watch Panel Keys ──
   // These are server-side API tests (no browser needed)
 
