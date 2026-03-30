@@ -1784,7 +1784,15 @@
           handleMessageWithdrawn(data.msg);
           break;
         case 'proxy_update':
-          if (data.proxies) { state.proxies = data.proxies; renderAgents(); }
+          if (data.proxies) {
+            state.proxies = data.proxies;
+            // Patch only agents that have a proxyId — no full rebuild
+            for (const agent of state.agents) {
+              if (!agent.proxyId) continue;
+              const card = document.querySelector(`[data-agent="${agent.name}"]`);
+              if (card) patchAgentCard(card, agent);
+            }
+          }
           break;
         case 'agent_destroyed':
           state.agents = state.agents.filter(a => a.name !== data.name);
@@ -1798,7 +1806,10 @@
           break;
         case 'indicator_update':
           state.indicators[data.agentName] = data.indicators;
-          renderAgents();
+          { const card = document.querySelector(`[data-agent="${data.agentName}"]`);
+            const agent = state.agents.find(a => a.name === data.agentName);
+            if (card && agent) patchAgentCard(card, agent);
+            else renderAgents(); }
           break;
         case 'reminder_update':
           if (state.threadView === 'reminders') renderReminders();
@@ -1815,19 +1826,120 @@
   }
 
   // ── State Updates ──
+
+  // Patch an existing agent card in-place — no DOM teardown/rebuild.
+  // Only touches the sub-elements that actually change between updates.
+  function patchAgentCard(card, agent) {
+    // State badge
+    const badge = card.querySelector('.state-badge');
+    if (badge) {
+      badge.className = `state-badge state-${agent.state}`;
+      badge.textContent = agent.state;
+    }
+    // Agent name + unread badge
+    const nameEl = card.querySelector('.agent-name');
+    if (nameEl) {
+      const unreadCount = state.unread[agent.name] || 0;
+      const unreadBadge = unreadCount > 0 ? `<span class="unread-badge">${unreadCount}</span>` : '';
+      nameEl.innerHTML = `${esc(agent.name)}${unreadBadge}`;
+    }
+    // Meta line (engine/model, context %)
+    const meta = card.querySelector('.agent-meta');
+    if (meta) {
+      const modelStr = [agent.engine, agent.model, agent.thinking].filter(Boolean).join(' ');
+      const ctxStr = agent.lastContextPct != null ? `${agent.lastContextPct}%` : '--';
+      meta.innerHTML = `<span>${esc(modelStr)}</span><span>ctx: ${ctxStr}</span>${agent.proxyId ? `<span title="proxy: ${esc(agent.proxyId)}">${esc(agent.proxyId)}${proxyVersionWarning(agent.proxyId)}</span>` : ''}`;
+    }
+    // Failure info
+    let failEl = card.querySelector('.agent-failure');
+    if (agent.state === 'failed' && agent.failureReason) {
+      if (!failEl) {
+        failEl = document.createElement('div');
+        failEl.className = 'agent-failure';
+        const meta = card.querySelector('.agent-meta');
+        if (meta) meta.after(failEl);
+      }
+      failEl.title = agent.failureReason;
+      failEl.textContent = agent.failureReason;
+    } else if (failEl) {
+      failEl.remove();
+    }
+    // Indicators
+    let indEl = card.querySelector('.indicator-badges');
+    const inds = state.indicators[agent.name] || [];
+    if (inds.length) {
+      const indHtml = inds.map(ind => {
+        let html = '<span class="indicator-badge ' + esc(ind.style) + '">' + esc(ind.badge) + '</span>';
+        if (ind.actions) {
+          html += Object.keys(ind.actions).map(a =>
+            '<button class="indicator-action" data-action="indicator/' + esc(ind.id) + '/' + esc(a) + '">' + esc(a) + '</button>'
+          ).join('');
+        }
+        return html;
+      }).join('');
+      if (!indEl) {
+        indEl = document.createElement('div');
+        indEl.className = 'indicator-badges';
+        const handle = card.querySelector('.drag-handle');
+        if (handle) handle.before(indEl);
+      }
+      indEl.innerHTML = indHtml;
+    } else if (indEl) {
+      indEl.remove();
+    }
+    // Actions — only rebuild if state category changed
+    const actions = card.querySelector('.agent-actions');
+    if (actions) {
+      const activeIdle = agent.state === 'active' || agent.state === 'idle';
+      const suspendedFailed = agent.state === 'suspended' || agent.state === 'failed';
+      const transitioning = agent.state === 'spawning' || agent.state === 'suspending' || agent.state === 'resuming';
+      const isVoid = agent.state === 'void';
+      let actionsHtml = '';
+      if (activeIdle) {
+        actionsHtml = `<button data-action="interrupt">Interrupt</button>${agent.engine !== 'codex' ? '<button data-action="compact">Compact</button>' : ''}<button data-action="exit">Exit</button><button class="danger" data-action="kill">Kill</button>${agent.tmuxSession ? `<button class="secondary" data-copy-tmux="tmux attach -t ${esc(agent.tmuxSession)}">Copy tmux</button>` : ''}`;
+      } else if (suspendedFailed) {
+        actionsHtml = '<button data-action="resume">Resume</button><button class="danger" data-action="destroy">Destroy</button>';
+      } else if (transitioning) {
+        actionsHtml = '<button class="danger" data-action="kill">Kill</button>';
+      } else if (isVoid) {
+        actionsHtml = '<button data-action="spawn">Spawn</button><button class="danger" data-action="destroy">Destroy</button>';
+      }
+      if (activeIdle && agent.customButtons) {
+        try {
+          const btns = JSON.parse(agent.customButtons);
+          actionsHtml += Object.keys(btns).map(b =>
+            `<button class="secondary" data-action="custom/${esc(b)}">${esc(b)}</button>`
+          ).join('');
+        } catch {}
+      }
+      actions.innerHTML = actionsHtml;
+    }
+    // Selected state
+    card.classList.toggle('selected', state.selected === agent.name);
+  }
+
   function updateAgent(agent) {
     const idx = state.agents.findIndex(a => a.name === agent.name);
+    const isNew = idx < 0;
     if (idx >= 0) state.agents[idx] = agent;
     else state.agents.push(agent);
-    renderAgents();
+    if (isNew) {
+      // Structural change — need full rebuild
+      renderAgents();
+    } else {
+      // Patch existing card in-place — no DOM teardown
+      const card = document.querySelector(`[data-agent="${agent.name}"]`);
+      if (card) patchAgentCard(card, agent);
+      else renderAgents(); // card not found (collapsed group?), fallback
+    }
     if (agent.name === state.selected) {
       updateSendability();
-      // Update state badge without wiping tabs/buttons from the header
+      // Update state badge in thread header too
       const header = document.getElementById('threadHeader');
-      const badge = header.querySelector('.state-badge');
-      if (badge) {
-        badge.className = `state-badge state-${agent.state}`;
-        badge.textContent = agent.state;
+      const hBadge = header.querySelector('.state-badge');
+      if (hBadge) {
+        hBadge.className = `state-badge state-${agent.state}`;
+        hBadge.textContent = agent.state;
       }
     }
   }
@@ -1842,13 +1954,16 @@
       state.unread[msg.agent] = (state.unread[msg.agent] || 0) + 1;
     }
 
-    // Flash the agent card
+    // Flash the agent card + patch unread badge in-place
     const card = document.querySelector(`[data-agent="${msg.agent}"]`);
-    if (card && state.selected !== msg.agent) {
-      card.classList.add('flash');
-      setTimeout(() => card.classList.remove('flash'), 600);
+    if (card) {
+      const agent = state.agents.find(a => a.name === msg.agent);
+      if (agent) patchAgentCard(card, agent);
+      if (state.selected !== msg.agent) {
+        card.classList.add('flash');
+        setTimeout(() => card.classList.remove('flash'), 600);
+      }
     }
-    renderAgents();
     updatePageTitle();
   }
 
@@ -1864,16 +1979,9 @@
 
   // ── Render ──
 
-  // Coalesce rapid renderAgents() calls (WebSocket bursts, state updates)
-  // into a single paint frame. Callers still call renderAgents() normally.
-  let _renderQueued = false;
+  // Full DOM rebuild — only called for structural changes (add/remove agent,
+  // group changes, init). Routine updates use patchAgentCard() in-place.
   function renderAgents() {
-    if (!_renderQueued) {
-      _renderQueued = true;
-      requestAnimationFrame(() => { _renderQueued = false; _renderAgentsNow(); });
-    }
-  }
-  function _renderAgentsNow() {
     const list = document.getElementById('agentList');
 
     // Preserve create form input values and focus before clearing
