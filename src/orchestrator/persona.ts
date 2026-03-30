@@ -5,7 +5,7 @@
  * Parses YAML-like frontmatter for agent configuration.
  */
 
-import { readFileSync, readdirSync, realpathSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, readdirSync, realpathSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join, resolve, relative, isAbsolute } from 'node:path';
 import type { StructuredHook, HookValue, SendAction, LaunchEnv, PipelineStep, IndicatorDefinition } from '../shared/types.ts';
 
@@ -1041,6 +1041,22 @@ export type SyncDiffResult = {
  * - SKIPPED: file missing engine/cwd → skipped
  * - DELETED personas (DB record, no file) are intentionally ignored.
  */
+
+/** Validate cwd and proxy_host, logging warnings for invalid values. */
+function validateFrontmatter(name: string, fm: PersonaFrontmatter): string[] {
+  const warnings: string[] = [];
+  if (fm.cwd && !existsSync(fm.cwd)) {
+    warnings.push(`cwd "${fm.cwd}" does not exist`);
+  }
+  if (fm.proxy_host && typeof fm.proxy_host === 'string' && fm.proxy_host.includes(' ')) {
+    warnings.push(`proxy_host "${fm.proxy_host}" contains spaces`);
+  }
+  for (const w of warnings) {
+    console.warn(`[persona] ${name}: ${w}`);
+  }
+  return warnings;
+}
+
 export function syncPersonasWithDiff(db: Database, personasDir?: string): SyncDiffResult {
   const personas = scanPersonas(personasDir);
   const result: SyncDiffResult = { created: [], updated: [], unchanged: [], skipped: [] };
@@ -1054,6 +1070,8 @@ export function syncPersonasWithDiff(db: Database, personasDir?: string): SyncDi
       result.skipped.push(name);
       continue;
     }
+
+    validateFrontmatter(name, frontmatter);
 
     const existing = db.getAgent(name);
     const upsertOpts = buildUpsertOpts(name, frontmatter);
@@ -1097,6 +1115,7 @@ export function createPersonaAndAgent(
   if (!engine || !VALID_ENGINES.has(engine) || !cwd) {
     throw new Error(`engine and cwd are required in frontmatter (got engine=${engine ?? 'undefined'}, cwd=${cwd ?? 'undefined'})`);
   }
+  validateFrontmatter(name, fm);
 
   // Write file
   mkdirSync(dir, { recursive: true });
