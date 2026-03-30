@@ -214,15 +214,25 @@ export class HealthMonitor {
    * Poll all active/idle agents.
    */
   async pollAll(): Promise<void> {
-    const agents = this.db.listAgents().filter(
-      (a) => canSuspend(a) && a.proxyId,
-    );
+    const allAgents = this.db.listAgents();
 
-    for (const agent of agents) {
+    // Poll active/idle agents for health, idle detection, indicators
+    const liveAgents = allAgents.filter(a => canSuspend(a) && a.proxyId);
+    for (const agent of liveAgents) {
       try {
         await this.pollAgent(agent);
       } catch (err) {
         console.error(`[health] Error polling ${agent.name}:`, err);
+      }
+    }
+
+    // Poll failed agents for recovery — CLI may have been resumed via tmux injection
+    const failedAgents = allAgents.filter(a => a.state === 'failed' && a.proxyId && a.tmuxSession);
+    for (const agent of failedAgents) {
+      try {
+        await this.pollFailedAgent(agent);
+      } catch (err) {
+        console.error(`[health] Error polling failed ${agent.name}:`, err);
       }
     }
   }
@@ -429,6 +439,97 @@ export class HealthMonitor {
     this.db.logEvent(agent.name, 'cli_exit_detected', undefined, { reason, lastLine });
     this.onAgentUpdate(agent.name);
     this.cleanupAgent(agent.name);
+    return true;
+  }
+
+  /**
+   * Poll a failed agent to see if its CLI has been manually revived in tmux.
+   * Only captures pane output and checks for healing — no idle detection or indicators.
+   */
+  private async pollFailedAgent(agentSnapshot: AgentRecord): Promise<void> {
+    const agent = this.db.getAgent(agentSnapshot.name);
+    if (!agent || agent.state !== 'failed' || !agent.proxyId) return;
+
+    const captureResult = await this.proxyDispatch(agent.proxyId, {
+      action: 'capture',
+      sessionName: sessionName(agent),
+      lines: 50,
+    });
+
+    if (!captureResult.ok) return; // can't reach pane — still failed
+
+    const paneOutput = (captureResult.data as string) ?? '';
+    this.detectCliHealed(agent, paneOutput);
+  }
+
+  /**
+   * Detect if a failed agent's CLI has been revived (e.g. manual tmux injection).
+   * Mirrors detectCliExit() structure: checks for CLI-alive signals, requires 2
+   * consecutive detections to avoid false positives during pane transitions.
+   *
+   * CLI-alive signals (any one sufficient):
+   * - Claude Code status bar text: "bypass permissions", "tokens", "current:"
+   * - Active input prompt (❯) without a shell prompt at bottom
+   * - Known CLI UI patterns in the pane output
+   *
+   * Counter-signal (blocks healing):
+   * - Shell prompt patterns at the bottom of the pane (same as detectCliExit)
+   */
+  private detectCliHealed(agent: AgentRecord, paneOutput: string): boolean {
+    const key = `heal_${agent.name}`;
+    const lines = paneOutput.split('\n');
+
+    // Find the last non-empty line
+    let lastLine = '';
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const trimmed = lines[i]!.trim();
+      if (trimmed) { lastLine = trimmed; break; }
+    }
+
+    // Shell prompt at bottom means CLI is NOT alive
+    const shellPromptPatterns = [
+      /\w+@\w+[:\s].*[$%#>]\s*$/,
+      /^\[?\w+@\w+\s.*\]?[$%#]\s*$/,
+      /^(?:ba)?sh[\d.-]*[$#]\s*$/,
+    ];
+    if (shellPromptPatterns.some(re => re.test(lastLine))) {
+      this.consecutiveFailures.delete(key);
+      return false;
+    }
+
+    // CLI-alive signals anywhere in the pane output
+    const cliAlivePatterns = [
+      /bypass permissions/i,           // Claude Code permission mode
+      /\btokens?$/m,                   // status bar token count
+      /current:\s*\d+(\.\d+)?/,       // context usage display
+      /\bcontext\s+\d+%/i,            // context percentage
+      /❯/,                             // Claude Code input prompt
+      /^>\s+/m,                        // Claude Code continuation prompt
+    ];
+    const hasCliSignal = cliAlivePatterns.some(re => re.test(paneOutput));
+
+    if (!hasCliSignal) {
+      this.consecutiveFailures.delete(key);
+      return false;
+    }
+
+    // Require 2 consecutive detections (same pattern as detectCliExit)
+    const count = (this.consecutiveFailures.get(key) ?? 0) + 1;
+    this.consecutiveFailures.set(key, count);
+
+    if (count < 2) return false;
+
+    this.consecutiveFailures.delete(key);
+    console.log(`[health] ${agent.name}: CLI detected alive in tmux — healing`);
+    this.db.updateAgentState(agent.name, 'active', agent.version, {
+      failedAt: null,
+      failureReason: null,
+    });
+    this.db.logEvent(agent.name, 'cli_healed', undefined, {
+      reason: 'CLI detected alive in tmux pane',
+      lastLine,
+    });
+    this.onAgentUpdate(agent.name);
     return true;
   }
 

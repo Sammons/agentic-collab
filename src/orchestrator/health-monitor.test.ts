@@ -652,6 +652,110 @@ describe('HealthMonitor', () => {
     await monitor.pollAgent(db.getAgent(agentName)!);
     assert.notEqual(db.getAgent(agentName)!.state, 'failed');
   });
+
+  // ── CLI Recovery Detection ──
+
+  it('heals failed agent when CLI is detected alive in tmux', async () => {
+    const agentName = 'health-heal-basic';
+    db.createAgent({ name: agentName, engine: 'claude', cwd: '/tmp', proxyId: 'p1' });
+    const a = db.getAgent(agentName)!;
+    db.updateAgentState(agentName, 'failed', a.version, {
+      tmuxSession: `agent-${agentName}`,
+      failedAt: new Date().toISOString(),
+      failureReason: 'CLI exited to shell prompt',
+    });
+
+    // Pane now shows Claude Code UI — CLI was manually restarted
+    captureOutput = 'bypass permissions\n❯ \n';
+
+    const monitor = makeMonitor();
+
+    // First poll: increments heal counter but doesn't heal yet
+    await monitor.pollAll();
+    assert.equal(db.getAgent(agentName)!.state, 'failed');
+
+    // Second poll: confirms CLI alive, heals to active
+    await monitor.pollAll();
+    const healed = db.getAgent(agentName)!;
+    assert.equal(healed.state, 'active');
+    assert.equal(healed.failedAt, null);
+    assert.equal(healed.failureReason, null);
+  });
+
+  it('heals failed agent on context percentage signal', async () => {
+    const agentName = 'health-heal-ctx';
+    db.createAgent({ name: agentName, engine: 'claude', cwd: '/tmp', proxyId: 'p1' });
+    const a = db.getAgent(agentName)!;
+    db.updateAgentState(agentName, 'failed', a.version, {
+      tmuxSession: `agent-${agentName}`,
+      failedAt: new Date().toISOString(),
+      failureReason: 'Health check failed',
+    });
+
+    captureOutput = 'current: 12.5\ntokens\n';
+
+    const monitor = makeMonitor();
+    await monitor.pollAll();
+    await monitor.pollAll();
+    assert.equal(db.getAgent(agentName)!.state, 'active');
+  });
+
+  it('does not heal when shell prompt is still present', async () => {
+    const agentName = 'health-no-heal-shell';
+    db.createAgent({ name: agentName, engine: 'claude', cwd: '/tmp', proxyId: 'p1' });
+    const a = db.getAgent(agentName)!;
+    db.updateAgentState(agentName, 'failed', a.version, {
+      tmuxSession: `agent-${agentName}`,
+      failedAt: new Date().toISOString(),
+      failureReason: 'CLI exited',
+    });
+
+    // Shell prompt still at bottom — CLI not restarted
+    captureOutput = 'sammons@crankshaft:~/Desktop$ \n';
+
+    const monitor = makeMonitor();
+    await monitor.pollAll();
+    await monitor.pollAll();
+    assert.equal(db.getAgent(agentName)!.state, 'failed');
+  });
+
+  it('does not heal without proxyId or tmuxSession', async () => {
+    const agentName = 'health-no-heal-noprxy';
+    db.createAgent({ name: agentName, engine: 'claude', cwd: '/tmp' });
+    const a = db.getAgent(agentName)!;
+    db.updateAgentState(agentName, 'failed', a.version, {
+      failedAt: new Date().toISOString(),
+      failureReason: 'no proxy',
+    });
+
+    captureOutput = 'bypass permissions\n❯ \n';
+
+    const monitor = makeMonitor();
+    await monitor.pollAll();
+    await monitor.pollAll();
+    assert.equal(db.getAgent(agentName)!.state, 'failed'); // no proxy, can't heal
+  });
+
+  it('logs cli_healed event on recovery', async () => {
+    const agentName = 'health-heal-event';
+    db.createAgent({ name: agentName, engine: 'claude', cwd: '/tmp', proxyId: 'p1' });
+    const a = db.getAgent(agentName)!;
+    db.updateAgentState(agentName, 'failed', a.version, {
+      tmuxSession: `agent-${agentName}`,
+      failedAt: new Date().toISOString(),
+      failureReason: 'CLI exited',
+    });
+
+    captureOutput = 'context 45%\n❯ \n';
+
+    const monitor = makeMonitor();
+    await monitor.pollAll();
+    await monitor.pollAll();
+
+    const events = db.getEvents(agentName, 10);
+    const healEvent = events.find(e => e.event === 'cli_healed');
+    assert.ok(healEvent, 'should log cli_healed event');
+  });
 });
 
 describe('HealthMonitor.stripAnsi', () => {
