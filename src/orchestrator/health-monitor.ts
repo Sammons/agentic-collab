@@ -47,6 +47,10 @@ export class HealthMonitor {
   /** Pane snapshot captured at the moment an agent was marked failed.
    *  Used to distinguish stale pane output from a genuinely revived CLI. */
   private readonly failureSnapshot = new Map<string, string>();
+  /** Last tmux window_activity timestamp per agent. When unchanged between
+   *  polls, the pane has received no output — agent is definitively idle
+   *  without needing to capture and diff pane content. */
+  private readonly lastActivityTs = new Map<string, number>();
   /**
    * Last captured pane snapshot (ANSI-stripped, last N lines) per agent.
    * Used for screen-diff idle detection.
@@ -59,7 +63,7 @@ export class HealthMonitor {
   private readonly unchangedCount = new Map<string, number>();
   /**
    * Number of consecutive unchanged polls required before marking idle.
-   * With 5s fast-poll, 2 consecutive (after baseline) = 15s to detect idle.
+   * With 2s fast-poll, 2 consecutive (after baseline) = 6s to detect idle.
    */
   static readonly IDLE_THRESHOLD = 2;
   /** Number of trailing pane lines to capture for screen-diff. */
@@ -70,7 +74,7 @@ export class HealthMonitor {
   private readonly orchestratorHost: string;
   private readonly pollIntervalMs: number;
   private readonly idleSuspendMs: number;
-  static readonly FAST_POLL_MS = 5_000;
+  static readonly FAST_POLL_MS = 2_000;
   private readonly onAgentUpdate: (agentName: string) => void;
   private readonly onQueueUpdate: (message: PendingMessage) => void;
   private readonly onDashboardMessage: (message: DashboardMessage) => void;
@@ -246,6 +250,24 @@ export class HealthMonitor {
   async pollAgent(agentSnapshot: AgentRecord): Promise<void> {
     const agent = this.db.getAgent(agentSnapshot.name);
     if (!agent || !agent.proxyId || !canSuspend(agent)) return;
+
+    // Fast path: check tmux window_activity timestamp before expensive capture.
+    // If pane hasn't received output since last poll, it's definitively idle.
+    const activityResult = await this.proxyDispatch(agent.proxyId, {
+      action: 'pane_activity',
+      sessionName: sessionName(agent),
+    } as ProxyCommand);
+    if (activityResult.ok) {
+      const currentTs = activityResult.data as number;
+      const prevTs = this.lastActivityTs.get(agent.name);
+      this.lastActivityTs.set(agent.name, currentTs);
+      if (prevTs !== undefined && currentTs === prevTs) {
+        // Pane unchanged — definitively idle, skip expensive capture
+        this.handleIdleTransitions(agent, true);
+        this.checkIdleSuspendTimeout(agent.name);
+        return;
+      }
+    }
 
     const paneOutput = await this.capturePaneOutput(agent);
     if (paneOutput === null) return;
@@ -559,6 +581,7 @@ export class HealthMonitor {
     this.consecutiveFailures.delete(name);
     this.consecutiveFailures.delete(`shell_${name}`);
     this.consecutiveFailures.delete(`heal_${name}`);
+    this.lastActivityTs.delete(name);
     this.activeIndicators.delete(name);
     this.compiledIndicators.delete(name);
     // Note: failureSnapshot intentionally NOT deleted here — it's needed
