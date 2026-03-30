@@ -1,0 +1,213 @@
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --text-dim: #8b949e;
+    --accent: #58a6ff;
+    --green: #3fb950;
+    --yellow: #d29922;
+    --red: #f85149;
+    --orange: #d18616;
+    --purple: #bc8cff;
+    --radius: 8px;
+    --shadow: 0 2px 8px rgba(0,0,0,0.3);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    min-height: 100dvh;
+  }
+  /* ── Header ── */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 20px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+  }
+  header h1 { font-size: 16px; font-weight: 600; }
+  .hotkey-hints {
+    display: flex;
+    gap: 12px;
+    font-size: 11px;
+    color: var(--text-dim);
+    opacity: 0.6;
+  }
+  .hotkey-hints kbd {
+    background: var(--bg);
+    padding: 1px 5px;
+    border-radius: 3px;
+    border: 1px solid var(--border);
+    font-size: 10px;
+    font-family: inherit;
+    margin-right: 2px;
+  }
+  .conn-status {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+  .conn-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--red);
+  }
+  .conn-dot.connected { background: var(--green); }
+
+  /* ── Layout ── */
+  .layout {
+    display: grid;
+    grid-template-columns: 340px 1fr;
+    height: calc(100vh - 49px);
+    height: calc(100dvh - 49px);
+  }
+  /* ── Confirm Dialog ── */
+  .confirm-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10000;
+  }
+  .confirm-box {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px 24px;
+    max-width: 360px;
+    box-shadow: var(--shadow);
+  }
+  .confirm-box p { margin-bottom: 16px; font-size: 14px; line-height: 1.5; }
+  .confirm-box .actions { display: flex; gap: 8px; justify-content: flex-end; }
+  .confirm-box button {
+    padding: 6px 16px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text);
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .confirm-box button.danger-btn {
+    background: var(--red);
+    border-color: var(--red);
+    color: #fff;
+  }
+  .confirm-box button:hover { opacity: 0.9; }
+
+  /* ── Unread Badge ── */
+  .unread-badge {
+    background: var(--accent);
+    color: #fff;
+    font-size: 10px;
+    font-weight: 700;
+    min-width: 18px;
+    height: 18px;
+    border-radius: 9px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 5px;
+    margin-left: 6px;
+  }
+
+  .version-mismatch {
+    color: #e8a735;
+    font-size: 10px;
+    font-weight: 600;
+  }
+
+  /* ── Toast ── */
+  .toast {
+    position: fixed;
+    top: 16px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 9999;
+    padding: 10px 18px;
+    border-radius: var(--radius);
+    font-size: 13px;
+    font-weight: 500;
+    color: #fff;
+    box-shadow: var(--shadow);
+    pointer-events: none;
+    animation: toast-in 0.2s ease;
+  }
+  .toast.error   { background: var(--red); }
+  .toast.warning { background: var(--orange); }
+  .toast.success { background: var(--green); }
+
+  @keyframes toast-in {
+    from { opacity: 0; transform: translateX(-50%) translateY(-8px); }
+    to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+  }
+
+  /* ── Auth Modal ── */
+  .auth-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.7);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10001;
+  }
+  .auth-box {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 24px 28px;
+    max-width: 380px;
+    width: 90%;
+    box-shadow: var(--shadow);
+  }
+  .auth-box h2 { font-size: 16px; font-weight: 600; margin-bottom: 4px; }
+  .auth-box p { font-size: 13px; color: var(--text-dim); margin-bottom: 16px; line-height: 1.5; }
+  .auth-box input {
+    width: 100%;
+    padding: 10px 12px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+    outline: none;
+    margin-bottom: 12px;
+  }
+  .auth-box input:focus { border-color: var(--accent); }
+  .auth-box .auth-actions { display: flex; gap: 8px; justify-content: flex-end; }
+  .auth-box button {
+    padding: 8px 20px;
+    border-radius: 6px;
+    border: none;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .auth-box button.primary { background: var(--accent); color: #fff; }
+  .auth-box button.secondary { background: transparent; border: 1px solid var(--border); color: var(--text-dim); }
+  .auth-box button:hover { opacity: 0.9; }
+  /* ── Indicators ── */
+  .indicator-badges { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; }
+  .indicator-badge {
+    font-size: 10px; padding: 2px 8px; border-radius: 10px;
+    font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px;
+  }
+  .indicator-badge.warning { background: rgba(210,153,34,0.15); color: var(--yellow); }
+  .indicator-badge.danger { background: rgba(248,81,73,0.15); color: var(--red); }
+  .indicator-badge.info { background: rgba(88,166,255,0.15); color: var(--accent); }
+  .indicator-action {
+    font-size: 10px; padding: 2px 8px; border-radius: 10px;
+    border: 1px solid var(--border); background: transparent;
+    color: var(--text-dim); cursor: pointer; text-transform: capitalize;
+  }
+  .indicator-action:hover { border-color: var(--accent); color: var(--accent); }

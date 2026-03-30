@@ -1,0 +1,194 @@
+  /* ── Create Agent Modal ── */
+  .create-modal-overlay {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.6);
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+  }
+  .create-modal {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    width: 100%;
+    max-width: 640px;
+    max-height: 90vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .create-modal-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .create-modal-header input {
+    flex: 1;
+    padding: 8px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text);
+    font-size: 16px;
+    outline: none;
+    box-sizing: border-box;
+  }
+  .create-modal-header input:focus { border-color: var(--accent); }
+  .create-modal-body {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    padding: 0 16px 16px;
+  }
+  .create-modal-body textarea {
+    flex: 1;
+    width: 100%;
+    min-height: 300px;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 12px;
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    font-size: 12px;
+    resize: none;
+    outline: none;
+    box-sizing: border-box;
+    margin-top: 12px;
+  }
+  .create-modal-body textarea:focus { border-color: var(--accent); }
+  .create-modal-actions {
+    display: flex;
+    gap: 8px;
+    padding: 12px 16px;
+    border-top: 1px solid var(--border);
+  }
+  .create-modal-actions button {
+    padding: 8px 16px;
+    border-radius: 6px;
+    border: none;
+    font-weight: 600;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .create-modal-actions .primary { background: var(--accent); color: #fff; }
+  .create-modal-actions .primary:hover { opacity: 0.9; }
+  .create-modal-actions .primary:disabled { opacity: 0.4; cursor: not-allowed; }
+  .create-modal-actions .secondary {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+  }
+  .create-modal-actions .secondary:hover { border-color: var(--accent); color: var(--accent); }
+  .create-modal-actions .cancel { background: transparent; border: none; color: var(--text-dim); margin-left: auto; }
+  .create-modal-actions .cancel:hover { color: var(--text); }
+  .create-form-actions button.secondary:hover { border-color: var(--accent); color: var(--accent); }
+  /* ── Auth Modal ── */
+  .auth-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.7);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10001;
+  }
+  .auth-box {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 24px 28px;
+    max-width: 380px;
+    width: 90%;
+    box-shadow: var(--shadow);
+  }
+  .auth-box h2 { font-size: 16px; font-weight: 600; margin-bottom: 4px; }
+  .auth-box p { font-size: 13px; color: var(--text-dim); margin-bottom: 16px; line-height: 1.5; }
+  .auth-box input {
+    width: 100%;
+    padding: 10px 12px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+    outline: none;
+    margin-bottom: 12px;
+  }
+  .auth-box input:focus { border-color: var(--accent); }
+  .auth-box .auth-actions { display: flex; gap: 8px; justify-content: flex-end; }
+  .auth-box button {
+    padding: 8px 20px;
+    border-radius: 6px;
+    border: none;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .auth-box button.primary { background: var(--accent); color: #fff; }
+  .auth-box button.secondary { background: transparent; border: 1px solid var(--border); color: var(--text-dim); }
+  .auth-box button:hover { opacity: 0.9; }
+
+  /* ── Command Palette (cmd+k) ── */
+  .cmd-palette-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.6);
+    display: flex;
+    justify-content: center;
+    padding-top: 20vh;
+    z-index: 10000;
+  }
+  .cmd-palette {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    width: 90%;
+    max-width: 480px;
+    max-height: 400px;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+    align-self: flex-start;
+  }
+  .cmd-palette input {
+    width: 100%;
+    padding: 12px 16px;
+    border: none;
+    border-bottom: 1px solid var(--border);
+    background: transparent;
+    color: var(--text);
+    font-size: 15px;
+    outline: none;
+    border-radius: var(--radius) var(--radius) 0 0;
+  }
+  .cmd-palette-results {
+    overflow-y: auto;
+    flex: 1;
+    padding: 4px 0;
+  }
+  .cmd-palette-item {
+    padding: 8px 16px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+  }
+  .cmd-palette-item:hover, .cmd-palette-item.selected {
+    background: rgba(88,166,255,0.1);
+  }
+  .cmd-palette-item .cp-name { flex: 1; color: var(--text); }
+  .cmd-palette-item .cp-name mark { background: transparent; color: var(--accent); font-weight: 600; }
+  .cmd-palette-item .cp-state { font-size: 11px; padding: 2px 6px; border-radius: 4px; }
+  .cmd-palette-item .cp-engine { font-size: 11px; color: var(--text-dim); }
+  .cmd-palette-item .cp-unread { background: var(--accent); color: #fff; font-size: 10px; padding: 1px 5px; border-radius: 8px; font-weight: 600; }
+  .cmd-palette-empty { padding: 16px; text-align: center; color: var(--text-dim); font-size: 13px; }
+  .cmd-palette-hint { padding: 6px 16px; border-top: 1px solid var(--border); font-size: 11px; color: var(--text-dim); display: flex; gap: 12px; }
+  .cmd-palette-hint kbd { background: var(--bg); padding: 1px 5px; border-radius: 3px; border: 1px solid var(--border); font-size: 10px; }
