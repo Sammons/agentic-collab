@@ -1595,22 +1595,15 @@
     <div class="reminder-panel" id="reminderPanel" style="display:none"></div>
     <div class="watch-panel" id="watchPanel" style="display:none"></div>
     <div class="topic-breadcrumbs" id="topicBreadcrumbs" style="display:none"></div>
-    <div class="thread-input" id="threadInput" style="display:none">
-      <textarea id="msgInput" placeholder="Type a message..." rows="1" autocomplete="off" autocorrect="on" autocapitalize="sentences" spellcheck="false" name="msg-no-autofill"></textarea>
-      <div class="upload-wrap" id="uploadWrap">
-        <input type="file" id="fileInput" multiple disabled />
-        <span class="upload-btn" id="uploadBtn">+</span>
+    <message-input class="thread-input" id="threadInput" style="display:none">
+    </message-input>
+    <div class="voice-controls" id="voiceControls" style="display:none">
+      <div class="voice-toggle" id="voiceToggle">
+        <button data-mode="off" class="active">Off</button>
+        <button data-mode="ptt">PTT</button>
       </div>
-      <div class="voice-controls" id="voiceControls" style="display:none">
-        <div class="voice-toggle" id="voiceToggle">
-          <button data-mode="off" class="active">Off</button>
-          <button data-mode="ptt">PTT</button>
-        </div>
-        <button class="voice-btn inactive" id="voiceBtn" title="Hold to talk (or hold Spacebar)">&#127908;</button>
-        <span class="voice-partial" id="voicePartial"></span>
-      </div>
-      <button id="sendBtn" disabled>Send</button>
-      <button id="interruptBtn" style="display:none">Interrupt</button>
+      <button class="voice-btn inactive" id="voiceBtn" title="Hold to talk (or hold Spacebar)">&#127908;</button>
+      <span class="voice-partial" id="voicePartial"></span>
     </div>
   </div>
 </div>
@@ -1619,6 +1612,7 @@
 import { state, on, emit, getToken, setToken, authHeaders } from '/dashboard/assets/state.js';
 import '/dashboard/assets/agent-card.js';
 import '/dashboard/assets/message-list.js';
+import '/dashboard/assets/message-input.js';
 {
 
   function handleAuthError() {
@@ -2189,7 +2183,7 @@ import '/dashboard/assets/message-list.js';
     if (!chip) return;
     setActiveTopic(chip.dataset.topic);
     renderTopicBreadcrumbs();
-    document.getElementById('msgInput')?.focus();
+    document.getElementById('threadInput')?.focus();
   });
 
   function updatePageTitle() {
@@ -2204,10 +2198,10 @@ import '/dashboard/assets/message-list.js';
 
   function selectAgent(name) {
     state.editingPersona = false;
-    // Save draft for previous agent
-    const input = document.getElementById('msgInput');
-    if (state.selected && input) {
-      const text = input.value;
+    // Save draft for previous agent via component
+    const prevInput = document.getElementById('threadInput');
+    if (state.selected && prevInput && prevInput.getDraft) {
+      const text = prevInput.getDraft();
       if (text) state.drafts[state.selected] = text;
       else delete state.drafts[state.selected];
     }
@@ -2232,13 +2226,13 @@ import '/dashboard/assets/message-list.js';
     // Preserve current tab (messages/persona/watch) when switching agents
     renderAgents();
     renderThread();
-    // Restore draft for new agent (re-query since renderThread rebuilds DOM)
-    const freshInput = document.getElementById('msgInput');
-    if (freshInput) {
-      freshInput.value = state.drafts[name] || '';
+    // Restore draft and focus via component
+    const freshInput = document.getElementById('threadInput');
+    if (freshInput && freshInput.setDraft) {
+      freshInput.setDraft(state.drafts[name] || '');
     }
     updateSendability();
-    freshInput?.focus();
+    if (freshInput && freshInput.focus) freshInput.focus();
   }
 
   function mobileBack() {
@@ -2887,24 +2881,10 @@ import '/dashboard/assets/message-list.js';
   const CANT_RECEIVE = new Set(['void', 'failed', 'spawning']);
 
   function updateSendability() {
-    const msgInput = document.getElementById('msgInput');
-    const sendBtn = document.getElementById('sendBtn');
-    const uploadBtn = document.getElementById('uploadBtn');
-    const interruptBtn = document.getElementById('interruptBtn');
     if (!state.selected) return;
     const agent = state.agents.find(a => a.name === state.selected);
-    const blocked = agent && CANT_RECEIVE.has(agent.state);
-    sendBtn.disabled = blocked;
-    const fileInput = document.getElementById('fileInput');
-    fileInput.disabled = blocked;
-    uploadBtn.classList.toggle('disabled', !!blocked);
-    msgInput.disabled = blocked;
-    msgInput.placeholder = blocked
-      ? `Agent is ${agent ? agent.state : 'unavailable'} — cannot receive messages`
-      : 'Type a message...';
-    // Show interrupt button only for active/idle agents
-    const canInterrupt = agent && (agent.state === 'active' || agent.state === 'idle');
-    interruptBtn.style.display = canInterrupt ? '' : 'none';
+    const inputEl = document.getElementById('threadInput');
+    if (inputEl && inputEl.updateAgent) inputEl.updateAgent(agent);
   }
 
   // ── Queue Updates ──
@@ -3471,18 +3451,11 @@ import '/dashboard/assets/message-list.js';
 
   async function sendMessage() {
     if (!state.selected) return;
-    const input = document.getElementById('msgInput');
-    const sendBtn = document.getElementById('sendBtn');
-    const text = input.value.trim();
+    const inputEl = document.getElementById('threadInput');
+    const text = inputEl.getDraft().trim();
     const topic = getActiveTopic();
     if (!text) return;
 
-    // Clear any previous error state
-    input.style.borderColor = '';
-    const existingErr = document.getElementById('sendError');
-    if (existingErr) existingErr.remove();
-
-    sendBtn.disabled = true;
     const message = voiceState.usedSinceSend ? VOICE_TO_TEXT_PREFIX + text : text;
     voiceState.usedSinceSend = false;
     try {
@@ -3496,41 +3469,27 @@ import '/dashboard/assets/message-list.js';
         let body = null;
         try { body = await res.json(); } catch (_) {}
         if (body && body.msg) {
-          input.value = '';
-          input.style.height = 'auto';
-          delete state.drafts[state.selected];
+          inputEl.clear();
         } else {
           console.error('Send failed: HTTP', res.status);
-          showSendError(input, sendBtn);
+          showToast('Send failed', 'error');
         }
       } else {
-        input.value = '';
-        input.style.height = 'auto';
-        delete state.drafts[state.selected];
-        // Keep topic — user often sends multiple messages on same topic
+        inputEl.clear();
       }
     } catch (err) {
       console.error('Send failed:', err);
-      showSendError(input, sendBtn);
+      showToast('Send failed — network error', 'error');
     } finally {
       updateSendability();
     }
   }
 
-  document.getElementById('sendBtn').onclick = sendMessage;
-  document.getElementById('interruptBtn').onclick = () => {
-    if (state.selected) agentAction(state.selected, 'interrupt');
-  };
-  const msgTextarea = document.getElementById('msgInput');
-  const isMobile = window.matchMedia('(max-width: 768px)').matches;
-  msgTextarea.onkeydown = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey && !isMobile) {
-      e.preventDefault();
-      sendMessage();
-    }
-  };
-  // No oninput handler — textarea has fixed height with overflow scroll.
-  // Auto-resize via scrollHeight caused 48ms reflow per keystroke.
+  // Wire message-input component events
+  const msgInputEl = document.getElementById('threadInput');
+  msgInputEl.addEventListener('msg-send', (e) => sendMessage());
+  msgInputEl.addEventListener('msg-interrupt', (e) => agentAction(e.detail.agent, 'interrupt'));
+  msgInputEl.addEventListener('msg-upload', (e) => handleFileUpload(e.detail.files, e.detail.message));
 
   // ── File Upload ──
 
@@ -3556,14 +3515,12 @@ import '/dashboard/assets/message-list.js';
     return (bytes / (1024 * 1024 * 1024)).toFixed(1) + 'GB';
   }
 
-  document.getElementById('fileInput').onchange = async (e) => {
-    const files = Array.from(e.target.files);
+  async function handleFileUpload(files, attachedMessage) {
     if (!files.length || !state.selected) return;
-
-    // Grab any text in the message input to send alongside the file
-    const msgInput = document.getElementById('threadInput');
-    const attachedMessage = msgInput?.value?.trim() || '';
-    if (attachedMessage) { msgInput.value = ''; }
+    if (attachedMessage) {
+      const inputEl = document.getElementById('threadInput');
+      if (inputEl) inputEl.clear();
+    }
 
     // Warn about large files
     const largeFiles = files.filter(f => f.size >= LARGE_FILE_THRESHOLD);
@@ -3572,11 +3529,11 @@ import '/dashboard/assets/message-list.js';
       const confirmed = await confirmAction(
         `${largeFiles.length} file${largeFiles.length > 1 ? 's are' : ' is'} large (total ${formatFileSize(totalSize)}). Upload may take a while. Continue?`
       );
-      if (!confirmed) { e.target.value = ''; return; }
+      if (!confirmed) return;
     }
 
-    const uploadWrap = document.getElementById('uploadWrap');
-    uploadWrap.classList.add('uploading');
+    const uploadWrap = document.querySelector('#threadInput .upload-wrap');
+    if (uploadWrap) uploadWrap.classList.add('uploading');
 
     // Show uploading indicator in thread
     const messagesEl = document.getElementById('threadMessages');
@@ -3589,7 +3546,6 @@ import '/dashboard/assets/message-list.js';
     messagesEl.scrollTop = messagesEl.scrollHeight;
 
     try {
-      // Only attach the message to the first file upload to avoid duplicate messages
       const results = await Promise.allSettled(files.map((f, i) => uploadFile(f, i === 0 ? attachedMessage : '')));
       const succeeded = results.filter(r => r.status === 'fulfilled' && r.value.ok).length;
       const failed = results.length - succeeded;
@@ -3597,7 +3553,6 @@ import '/dashboard/assets/message-list.js';
       if (failed === 0) {
         showToast(`Uploaded ${succeeded} file${succeeded > 1 ? 's' : ''}`, 'success');
       } else {
-        // Show the first error reason if available
         const firstError = results.find(r => r.status === 'fulfilled' && !r.value.ok)?.value?.error
           || results.find(r => r.status === 'rejected')?.reason?.message
           || 'unknown error';
@@ -3606,14 +3561,13 @@ import '/dashboard/assets/message-list.js';
     } catch (err) {
       if (err.message !== 'auth') showToast('Upload failed', 'error');
     } finally {
-      uploadWrap.classList.remove('uploading');
-      uploadIndicator.remove(); // real message appears via WebSocket
-      e.target.value = '';
+      if (uploadWrap) uploadWrap.classList.remove('uploading');
+      uploadIndicator.remove();
     }
-  };
+  }
 
-  // Paste image/file from clipboard
-  document.getElementById('msgInput').addEventListener('paste', (e) => {
+  // Paste image/file from clipboard — delegate to component via event
+  document.getElementById('threadInput').addEventListener('paste', (e) => {
     const items = e.clipboardData?.items;
     if (!items || !state.selected) return;
 
@@ -3626,14 +3580,11 @@ import '/dashboard/assets/message-list.js';
       }
     }
 
-    if (files.length === 0) return; // plain text paste, let default handle it
+    if (files.length === 0) return;
     e.preventDefault();
-
-    const dt = new DataTransfer();
-    for (const f of files) dt.items.add(f);
-    const fileInput = document.getElementById('fileInput');
-    fileInput.files = dt.files;
-    fileInput.dispatchEvent(new Event('change'));
+    const inputEl = document.getElementById('threadInput');
+    const message = inputEl.getDraft ? inputEl.getDraft().trim() : '';
+    handleFileUpload(files, message);
   });
 
   // Drag-and-drop on thread messages
@@ -3650,13 +3601,9 @@ import '/dashboard/assets/message-list.js';
     threadMsgs.classList.remove('drag-over');
     const droppedFiles = e.dataTransfer?.files;
     if (droppedFiles && droppedFiles.length > 0 && state.selected) {
-      // Use DataTransfer to build a synthetic FileList (Firefox doesn't allow
-      // assigning to input.files from a drop event's FileList directly)
-      const dt = new DataTransfer();
-      for (let i = 0; i < droppedFiles.length; i++) dt.items.add(droppedFiles[i]);
-      const fileInput = document.getElementById('fileInput');
-      fileInput.files = dt.files;
-      fileInput.dispatchEvent(new Event('change'));
+      const inputEl = document.getElementById('threadInput');
+      const message = inputEl?.getDraft ? inputEl.getDraft().trim() : '';
+      handleFileUpload(Array.from(droppedFiles), message);
     }
   });
 
@@ -4235,7 +4182,7 @@ You are a specialist agent. Describe your role and responsibilities here.
       const b = e.target.closest('button[data-mode]');
       if (!b || b.classList.contains('active')) return;
       setVoiceMode(b.dataset.mode);
-      document.getElementById('msgInput')?.focus();
+      document.getElementById('threadInput')?.focus();
     });
 
     // Push-to-talk: hold button (pointer + touch events for mobile compatibility)
@@ -4344,20 +4291,19 @@ You are a specialist agent. Describe your role and responsibilities here.
       try {
         const msg = JSON.parse(e.data);
         const partial = document.getElementById('voicePartial');
-        const input = document.getElementById('msgInput');
+        const inputEl = document.getElementById('threadInput');
 
         if (msg.type === 'partial') {
           partial.textContent = msg.text || '';
         } else if (msg.type === 'committed') {
           partial.textContent = '';
           if (msg.text && msg.text.trim()) {
-            // Append to textarea and flag for the voice-to-text prefix at send time
-            const sep = input.value && !input.value.endsWith('\n') && !input.value.endsWith(' ') ? ' ' : '';
-            input.value += sep + msg.text.trim();
+            // Append to textarea via component and flag for voice-to-text prefix
+            const current = inputEl.getDraft ? inputEl.getDraft() : '';
+            const sep = current && !current.endsWith('\n') && !current.endsWith(' ') ? ' ' : '';
+            inputEl.setDraft(current + sep + msg.text.trim());
             voiceState.usedSinceSend = true;
-            input.dispatchEvent(new Event('input'));
-            // Enable send button
-            document.getElementById('sendBtn').disabled = !input.value.trim() || !state.selected;
+            updateSendability();
           }
         } else if (msg.type === 'error') {
           console.error('[voice] Error:', msg.error);
