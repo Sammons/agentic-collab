@@ -29,7 +29,6 @@ const ENGINE_TEMPLATES = {
   claude: `---
 engine: claude
 cwd: /home/user/project
-proxy_host: crankshaft
 group: general
 start:
   - shell: claude --dangerously-skip-permissions --model opus --effort max --append-system-prompt $PERSONA_PROMPT
@@ -82,7 +81,6 @@ You are a specialist agent. Describe your role and responsibilities here.
   codex: `---
 engine: codex
 cwd: /home/user/project
-proxy_host: crankshaft
 group: general
 start:
   - shell: codex --dangerously-bypass-approvals-and-sandbox --no-alt-screen -p $AGENT_NAME
@@ -106,7 +104,6 @@ You are a specialist agent. Describe your role and responsibilities here.
   opencode: `---
 engine: opencode
 cwd: /home/user/project
-proxy_host: crankshaft
 group: general
 start:
   - shell: opencode
@@ -167,6 +164,9 @@ export function openCreateAgentModal() {
   const overlay = document.createElement('div');
   overlay.className = 'create-modal-overlay';
   const hasProxies = state.proxies && state.proxies.length > 0;
+  const proxyOptions = (state.proxies || []).map(p =>
+    `<option value="${esc(p.proxyId)}">${esc(p.proxyId)}</option>`
+  ).join('');
   overlay.innerHTML = `
     <div class="create-modal">
       <div class="create-modal-header">
@@ -174,6 +174,9 @@ export function openCreateAgentModal() {
           <option value="claude" selected>Claude</option>
           <option value="codex">Codex</option>
           <option value="opencode">OpenCode</option>
+        </select>
+        <select id="createProxySelect" style="padding:8px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:14px;outline:none" ${hasProxies ? '' : 'disabled'}>
+          ${hasProxies ? proxyOptions : '<option>No proxies</option>'}
         </select>
         <input type="text" id="createAgentName" placeholder="agent-name (kebab-case)" autocomplete="off" />
       </div>
@@ -235,13 +238,14 @@ export function openCreateAgentModal() {
         return;
       }
 
+      const selectedProxy = overlay.querySelector('#createProxySelect')?.value || '';
       overlay.remove();
 
       if (spawn) {
         const spawnRes = await fetch(`/api/agents/${encodeURIComponent(name)}/spawn`, {
           method: 'POST',
           headers: authHeaders(),
-          body: JSON.stringify({}),
+          body: JSON.stringify(selectedProxy ? { proxyId: selectedProxy } : {}),
         });
         if (spawnRes.ok) {
           showToast(`Agent "${name}" created and spawning`, 'success');

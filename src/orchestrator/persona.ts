@@ -1048,8 +1048,8 @@ function validateFrontmatter(name: string, fm: PersonaFrontmatter): string[] {
   if (fm.cwd && !existsSync(fm.cwd)) {
     warnings.push(`cwd "${fm.cwd}" does not exist`);
   }
-  if (fm.proxy_host && typeof fm.proxy_host === 'string' && fm.proxy_host.includes(' ')) {
-    warnings.push(`proxy_host "${fm.proxy_host}" contains spaces`);
+  if (fm.proxy_host) {
+    warnings.push(`proxy_host is deprecated — use the proxy dropdown in Create Agent instead. Field will be ignored.`);
   }
   for (const w of warnings) {
     console.warn(`[persona] ${name}: ${w}`);

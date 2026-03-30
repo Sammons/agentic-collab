@@ -91,7 +91,7 @@ export function mobileBack() {
 
 const FM_CONFIG_LABELS = {
   engine: 'Engine', model: 'Model', thinking: 'Thinking',
-  cwd: 'Working Dir', proxy_host: 'Proxy Host', permissions: 'Permissions',
+  cwd: 'Working Dir', permissions: 'Permissions',
   group: 'Group',
 };
 const FM_HOOK_FIELDS = ['start', 'resume', 'exit', 'compact', 'interrupt', 'submit'];
@@ -282,7 +282,6 @@ function enterPersonaEdit(agentName, rawContent) {
               <dt>model</dt><dd>Model name (e.g. opus, sonnet, o3)</dd>
               <dt>thinking</dt><dd>low | medium | high</dd>
               <dt>permissions</dt><dd>skip (bypass permission prompts)</dd>
-              <dt>proxy_host</dt><dd>Pin agent to a specific proxy hostname</dd>
               <dt>group</dt><dd>Group label for sidebar organization</dd>
               <dt>start</dt><dd>Hook for spawning (flat string or nested preset/shell)</dd>
               <dt>resume</dt><dd>Hook for resuming (flat string or nested preset/shell)</dd>
