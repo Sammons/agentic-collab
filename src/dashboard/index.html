@@ -71,53 +71,10 @@ import '/dashboard/assets/archive-panel.js';
 import { agentAction, openCreateAgentModal, setup as setupLifecycle } from '/dashboard/assets/agent-lifecycle.js';
 import { sendMessage, uploadFile, handleFileUpload, updateSendability, handleQueueUpdate, archiveChat, unarchiveChat, renderArchive, setup as setupMessageIO } from '/dashboard/assets/message-io.js';
 import { voiceState, initVoice, initCommandPalette, setup as setupVoicePalette } from '/dashboard/assets/voice-palette.js';
+import { handleAuthError, connect, fetchEngineUsage, setup as setupConnection } from '/dashboard/assets/connection.js';
 {
 
-  function handleAuthError() {
-    setToken('');
-    promptForToken('Authentication failed. Please re-enter your token.');
-  }
-
-  function promptForToken(message) {
-    // Remove existing overlay if present
-    const existing = document.querySelector('.auth-overlay');
-    if (existing) existing.remove();
-
-    const overlay = document.createElement('div');
-    overlay.className = 'auth-overlay';
-    overlay.innerHTML = `
-      <div class="auth-box">
-        <h2>Agentic Collab</h2>
-        <p>${esc(message || 'Enter your orchestrator token to connect, or skip for dev mode (no auth).')}</p>
-        <input type="password" id="authTokenInput" placeholder="Orchestrator token" autocomplete="off" />
-        <div class="auth-actions">
-          <button class="secondary" id="authSkipBtn">Dev Mode</button>
-          <button class="primary" id="authConnectBtn">Connect</button>
-        </div>
-      </div>
-    `;
-
-    function submit(token) {
-      setToken(token);
-      overlay.remove();
-      // Reconnect with new token
-      if (ws) { ws.onclose = null; ws.close(); }
-      connect();
-    }
-
-    overlay.querySelector('#authConnectBtn').onclick = () => {
-      const val = document.getElementById('authTokenInput').value.trim();
-      if (!val) { document.getElementById('authTokenInput').style.borderColor = 'var(--red)'; return; }
-      submit(val);
-    };
-    overlay.querySelector('#authSkipBtn').onclick = () => submit('');
-    overlay.querySelector('#authTokenInput').onkeydown = (e) => {
-      if (e.key === 'Enter') overlay.querySelector('#authConnectBtn').click();
-    };
-
-    document.body.appendChild(overlay);
-    setTimeout(() => document.getElementById('authTokenInput')?.focus(), 50);
-  }
+  // handleAuthError, promptForToken — imported from connection.js
 
   // ── State ──
   // State imported from /dashboard/assets/state.js
@@ -128,128 +85,7 @@ import { voiceState, initVoice, initCommandPalette, setup as setupVoicePalette }
   }
 
   // VOICE_TO_TEXT_PREFIX — moved to message-io.js
-
-  let ws = null;
-  let reconnectTimer = null;
-  let reconnectDelay = 1000;
-  let hasEverConnected = false;
-
-  // ── WebSocket ──
-  function connect() {
-    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    const token = getToken();
-    const tokenParam = token ? `?token=${encodeURIComponent(token)}` : '';
-    let opened = false;
-    ws = new WebSocket(`${proto}://${location.host}/ws${tokenParam}`);
-
-    ws.onopen = () => {
-      opened = true;
-      hasEverConnected = true;
-      state.connected = true;
-      reconnectDelay = 1000;
-      updateConnStatus();
-      if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
-    };
-
-    ws.onclose = () => {
-      state.connected = false;
-      updateConnStatus();
-      if (!opened) {
-        if (!hasEverConnected) {
-          // First connect attempt failed — likely auth failure (401 on upgrade)
-          setToken('');
-          promptForToken('Connection rejected — enter your orchestrator token.');
-          return;
-        }
-        // Previously connected but reconnect failed — network issue, keep retrying
-      }
-      const jitter = Math.random() * 1000;
-      reconnectTimer = setTimeout(connect, reconnectDelay + jitter);
-      reconnectDelay = Math.min(reconnectDelay * 2, 30000);
-    };
-
-    ws.onerror = () => ws.close();
-
-    ws.onmessage = (evt) => {
-      let data;
-      try {
-        data = JSON.parse(evt.data);
-      } catch (err) {
-        console.warn('Malformed WebSocket frame:', err);
-        return;
-      }
-      switch (data.type) {
-        case 'init':
-          state.agents = data.agents;
-          state.threads = data.threads;
-          state.proxies = data.proxies || [];
-          state.indicators = data.indicators || {};
-          // Restore unread counts from server, preserving any live increments
-          if (data.unreadCounts) {
-            for (const [agent, count] of Object.entries(data.unreadCounts)) {
-              // Only set if not already tracked (preserves counts from messages received this session)
-              if (state.unread[agent] === undefined) {
-                state.unread[agent] = count;
-              }
-            }
-          }
-          renderAgents();
-          renderThread();
-          updatePageTitle();
-          break;
-        case 'agent_update':
-          updateAgent(data.agent);
-          break;
-        case 'message':
-          addMessage(data.msg);
-          break;
-        case 'queue_update':
-          handleQueueUpdate(data.message);
-          break;
-        case 'message_withdrawn':
-          handleMessageWithdrawn(data.msg);
-          break;
-        case 'proxy_update':
-          if (data.proxies) {
-            state.proxies = data.proxies;
-            // Patch only agents that have a proxyId — no full rebuild
-            for (const agent of state.agents) {
-              if (!agent.proxyId) continue;
-              const card = document.querySelector(`[data-agent="${agent.name}"]`);
-              if (card) patchAgentCard(card, agent);
-            }
-          }
-          break;
-        case 'agent_destroyed':
-          state.agents = state.agents.filter(a => a.name !== data.name);
-          delete state.threads[data.name];
-          delete state.unread[data.name];
-          if (state.selected === data.name) {
-            state.selected = null;
-            renderThread();
-          }
-          renderAgents();
-          break;
-        case 'indicator_update':
-          state.indicators[data.agentName] = data.indicators;
-          { const card = document.querySelector(`[data-agent="${data.agentName}"]`);
-            const agent = state.agents.find(a => a.name === data.agentName);
-            if (card && agent) patchAgentCard(card, agent);
-            else renderAgents(); }
-          break;
-        case 'reminder_update':
-          if (state.threadView === 'reminders') renderReminders();
-          break;
-      }
-    };
-  }
-
-  function updateConnStatus() {
-    const dot = document.getElementById('connDot');
-    const label = document.getElementById('connLabel');
-    dot.classList.toggle('connected', state.connected);
-    label.textContent = state.connected ? 'Connected' : 'Disconnected';
-  }
+  // ws, connect, updateConnStatus, promptForToken — moved to connection.js
 
   // ── State Updates ──
 
@@ -694,6 +530,9 @@ import { voiceState, initVoice, initCommandPalette, setup as setupVoicePalette }
   function mobileBack() {
     document.querySelector('.layout').classList.remove('mobile-thread');
   }
+
+  // Wire connection module dependencies (must precede lifecycle + message-io which depend on handleAuthError)
+  setupConnection({ renderAgents, renderThread, updatePageTitle, updateAgent, addMessage, handleMessageWithdrawn, handleQueueUpdate, patchAgentCard });
 
   // Wire agent-lifecycle module dependencies
   setupLifecycle({ handleAuthError, selectAgent });
@@ -1463,20 +1302,7 @@ import { voiceState, initVoice, initCommandPalette, setup as setupVoicePalette }
     applySearchFilter();
   });
 
-  // ── Engine Usage Fetch ──
-  async function fetchEngineUsage() {
-    try {
-      const resp = await fetch('/api/engines/status', {
-        headers: getToken() ? { 'Authorization': `Bearer ${getToken()}` } : {},
-      });
-      if (!resp.ok) return;
-      const data = await resp.json();
-      if (data.usage) {
-        state.engineUsage = data.usage;
-        renderAgents();
-      }
-    } catch { /* ignore */ }
-  }
+  // fetchEngineUsage — imported from connection.js
 
   // voiceState, initVoice, initCommandPalette — imported from voice-palette.js
 
