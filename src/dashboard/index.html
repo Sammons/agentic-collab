@@ -1947,9 +1947,15 @@
   function addMessage(msg) {
     if (!state.threads[msg.agent]) state.threads[msg.agent] = [];
     state.threads[msg.agent].push(msg);
-    if (state.selected === msg.agent) {
-      renderThread();
-    } else {
+    if (state.selected === msg.agent && state.threadView === 'messages') {
+      // Append single message — no full re-render
+      const messages = document.getElementById('threadMessages');
+      const emptyMsg = messages.querySelector('.thread-empty');
+      if (emptyMsg) emptyMsg.remove();
+      const el = buildMessageEl(msg, msg.agent);
+      messages.appendChild(el);
+      messages.scrollTop = messages.scrollHeight;
+    } else if (state.selected !== msg.agent) {
       // Track unread for non-selected agents
       state.unread[msg.agent] = (state.unread[msg.agent] || 0) + 1;
     }
@@ -2319,55 +2325,88 @@
       return;
     }
 
+    // Render messages in batches to avoid blocking the main thread.
+    // First batch renders immediately (last N visible), rest render async.
+    const INITIAL_BATCH = 50;
     messages.innerHTML = '';
-    for (const msg of thread) {
-      const div = document.createElement('div');
-      const isSystem = msg.message && msg.message.startsWith('[system]');
-      const isUpload = msg.topic === 'file-upload' && msg.direction === 'to_agent';
-      if (isSystem) {
-        div.className = 'msg system-msg';
-      } else if (isUpload) {
-        div.className = 'msg to-agent file-upload';
-      } else {
-        div.className = `msg ${msg.direction === 'to_agent' ? 'to-agent' : 'from-agent'}`;
-      }
-      if (msg.withdrawn) div.classList.add('withdrawn');
-      const fromLabel = isSystem ? 'system' : (msg.sourceAgent || (msg.direction === 'to_agent' ? 'dashboard' : state.selected));
-      const toLabel = msg.targetAgent || (msg.direction === 'to_agent' ? state.selected : 'dashboard');
-      const time = new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      const topicBadge = msg.topic ? `<span class="msg-topic">${esc(msg.topic)}</span>` : '';
-      const routeStr = `${esc(fromLabel)} \u2192 ${esc(toLabel)}`;
-      const displayMsg = isSystem ? msg.message.replace(/^\[system\]\s*/, '') : msg.message;
-      const statusHtml = (msg.direction === 'to_agent' && msg.queueId)
-        ? `<span class="msg-status ${msg.deliveryStatus || 'pending'}" data-queue-id="${msg.queueId}">${
-            msg.deliveryStatus === 'delivered' ? '\u2713 delivered' :
-            msg.deliveryStatus === 'failed' ? '\u2717 failed' :
-            '\u2022\u2022\u2022 sending'
-          }</span>`
-        : '';
-      const canWithdraw = msg.direction === 'to_agent' && !isSystem && !msg.withdrawn && (!msg.sourceAgent || msg.sourceAgent === 'dashboard');
-      const withdrawHtml = canWithdraw ? `<span class="msg-withdraw" data-msg-id="${msg.id}" title="Withdraw message">unsend</span>` : '';
-      const copyBtn = `<button class="msg-copy" title="Copy message">&#128203;</button>`;
-      const headerHtml = `<div class="msg-header"><span class="msg-sender">${routeStr}</span>${topicBadge}<span class="msg-meta">${copyBtn}${withdrawHtml}<span class="msg-time">${time}</span>${statusHtml}</span></div>`;
-      if (isUpload) {
-        div.innerHTML = `${headerHtml}<div class="file-info"><span class="file-icon">&#128206;</span> ${esc(displayMsg)}</div>`;
-      } else {
-        div.innerHTML = `${headerHtml}<div class="msg-body">${renderMarkdown(esc(displayMsg))}</div>`;
-      }
-      div.querySelector('.msg-copy')?.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const btn = e.target;
-        navigator.clipboard.writeText(displayMsg).then(() => {
-          btn.textContent = '\u2713';
-          setTimeout(() => { btn.innerHTML = '&#128203;'; }, 1500);
-        }).catch(() => {
-          btn.textContent = '\u2717';
-          setTimeout(() => { btn.innerHTML = '&#128203;'; }, 1500);
-        });
-      });
-      messages.appendChild(div);
+    state._renderedAgent = state.selected;
+
+    const startIdx = Math.max(0, thread.length - INITIAL_BATCH);
+    for (let i = startIdx; i < thread.length; i++) {
+      messages.appendChild(buildMessageEl(thread[i], state.selected));
     }
     messages.scrollTop = messages.scrollHeight;
+
+    // Prepend older messages in idle callbacks so they're available on scroll-up
+    if (startIdx > 0) {
+      let idx = startIdx - 1;
+      const agent = state.selected;
+      function prependBatch(deadline) {
+        if (state.selected !== agent) return; // agent switched, abort
+        const frag = document.createDocumentFragment();
+        const batchStart = Math.max(0, idx - 30);
+        // Build in forward order so fragment is correct
+        for (let i = batchStart; i <= idx; i++) {
+          frag.appendChild(buildMessageEl(thread[i], agent));
+        }
+        const prevHeight = messages.scrollHeight;
+        messages.prepend(frag);
+        // Maintain scroll position after prepend
+        messages.scrollTop += messages.scrollHeight - prevHeight;
+        idx = batchStart - 1;
+        if (idx >= 0) requestIdleCallback(prependBatch);
+      }
+      requestIdleCallback(prependBatch);
+    }
+  }
+
+  // Build a single message DOM element — used by both renderThread and addMessage
+  function buildMessageEl(msg, agentName) {
+    const div = document.createElement('div');
+    const isSystem = msg.message && msg.message.startsWith('[system]');
+    const isUpload = msg.topic === 'file-upload' && msg.direction === 'to_agent';
+    if (isSystem) {
+      div.className = 'msg system-msg';
+    } else if (isUpload) {
+      div.className = 'msg to-agent file-upload';
+    } else {
+      div.className = `msg ${msg.direction === 'to_agent' ? 'to-agent' : 'from-agent'}`;
+    }
+    if (msg.withdrawn) div.classList.add('withdrawn');
+    const fromLabel = isSystem ? 'system' : (msg.sourceAgent || (msg.direction === 'to_agent' ? 'dashboard' : agentName));
+    const toLabel = msg.targetAgent || (msg.direction === 'to_agent' ? agentName : 'dashboard');
+    const time = new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const topicBadge = msg.topic ? `<span class="msg-topic">${esc(msg.topic)}</span>` : '';
+    const routeStr = `${esc(fromLabel)} \u2192 ${esc(toLabel)}`;
+    const displayMsg = isSystem ? msg.message.replace(/^\[system\]\s*/, '') : msg.message;
+    const statusHtml = (msg.direction === 'to_agent' && msg.queueId)
+      ? `<span class="msg-status ${msg.deliveryStatus || 'pending'}" data-queue-id="${msg.queueId}">${
+          msg.deliveryStatus === 'delivered' ? '\u2713 delivered' :
+          msg.deliveryStatus === 'failed' ? '\u2717 failed' :
+          '\u2022\u2022\u2022 sending'
+        }</span>`
+      : '';
+    const canWithdraw = msg.direction === 'to_agent' && !isSystem && !msg.withdrawn && (!msg.sourceAgent || msg.sourceAgent === 'dashboard');
+    const withdrawHtml = canWithdraw ? `<span class="msg-withdraw" data-msg-id="${msg.id}" title="Withdraw message">unsend</span>` : '';
+    const copyBtn = `<button class="msg-copy" title="Copy message">&#128203;</button>`;
+    const headerHtml = `<div class="msg-header"><span class="msg-sender">${routeStr}</span>${topicBadge}<span class="msg-meta">${copyBtn}${withdrawHtml}<span class="msg-time">${time}</span>${statusHtml}</span></div>`;
+    if (isUpload) {
+      div.innerHTML = `${headerHtml}<div class="file-info"><span class="file-icon">&#128206;</span> ${esc(displayMsg)}</div>`;
+    } else {
+      div.innerHTML = `${headerHtml}<div class="msg-body">${renderMarkdown(esc(displayMsg))}</div>`;
+    }
+    div.querySelector('.msg-copy')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const btn = e.target;
+      navigator.clipboard.writeText(displayMsg).then(() => {
+        btn.textContent = '\u2713';
+        setTimeout(() => { btn.innerHTML = '&#128203;'; }, 1500);
+      }).catch(() => {
+        btn.textContent = '\u2717';
+        setTimeout(() => { btn.innerHTML = '&#128203;'; }, 1500);
+      });
+    });
+    return div;
   }
 
   function getActiveTopic() {
