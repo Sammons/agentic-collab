@@ -1864,7 +1864,16 @@
 
   // ── Render ──
 
+  // Coalesce rapid renderAgents() calls (WebSocket bursts, state updates)
+  // into a single paint frame. Callers still call renderAgents() normally.
+  let _renderQueued = false;
   function renderAgents() {
+    if (!_renderQueued) {
+      _renderQueued = true;
+      requestAnimationFrame(() => { _renderQueued = false; _renderAgentsNow(); });
+    }
+  }
+  function _renderAgentsNow() {
     const list = document.getElementById('agentList');
 
     // Preserve create form input values and focus before clearing
@@ -3623,15 +3632,14 @@
       sendMessage();
     }
   };
-  let resizeRaf = 0;
   msgTextarea.oninput = () => {
-    cancelAnimationFrame(resizeRaf);
-    resizeRaf = requestAnimationFrame(() => {
-      msgTextarea.style.height = 'auto';
-      const sh = msgTextarea.scrollHeight;
-      msgTextarea.style.height = Math.min(sh, 120) + 'px';
-      msgTextarea.style.overflowY = sh > 120 ? 'auto' : 'hidden';
-    });
+    // Reset to 1-row to measure natural content height without forcing
+    // a full layout invalidation cycle. Single reflow per input event.
+    msgTextarea.style.height = '0';
+    const sh = msgTextarea.scrollHeight;
+    const h = Math.min(sh, 120);
+    msgTextarea.style.height = h + 'px';
+    msgTextarea.style.overflowY = sh > 120 ? 'auto' : 'hidden';
   };
 
   // ── File Upload ──
