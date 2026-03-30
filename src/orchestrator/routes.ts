@@ -149,17 +149,23 @@ route('GET', '/dashboard', async (_req, res, _match, ctx) => {
 });
 
 // Serve dashboard ES module assets (*.js files under src/dashboard/)
+const ASSET_TYPES: Record<string, string> = {
+  '.js': 'application/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+};
+
 route('GET', '/dashboard/assets/:path+', async (req, res, match) => {
   const filePath = match.pathname.groups['path'] ?? '';
-  // Restrict to .js files, no path traversal
-  if (filePath.includes('..') || !filePath.endsWith('.js')) {
+  const ext = filePath.slice(filePath.lastIndexOf('.'));
+  const contentType = ASSET_TYPES[ext];
+  if (filePath.includes('..') || !contentType) {
     res.writeHead(400); res.end('Bad request'); return;
   }
   try {
     const fullPath = join(import.meta.dirname!, '..', 'dashboard', filePath);
     const content = readFileSync(fullPath, 'utf-8');
     res.writeHead(200, {
-      'content-type': 'application/javascript; charset=utf-8',
+      'content-type': contentType,
       'cache-control': 'no-cache, no-store, must-revalidate',
     });
     res.end(content);
