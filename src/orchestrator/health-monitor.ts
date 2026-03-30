@@ -527,9 +527,18 @@ export class HealthMonitor {
       return false;
     }
 
-    // Pane must differ from failure snapshot — stale output can't trigger healing
+    // Require a failure snapshot to exist — if we didn't witness the failure
+    // (e.g. after orchestrator restart), we can't distinguish stale from revived.
     const failSnap = this.failureSnapshot.get(agent.name);
-    if (failSnap !== undefined && paneOutput === failSnap) {
+    if (failSnap === undefined) {
+      // First poll of this failed agent since (re)start — capture baseline snapshot
+      // but don't heal. Next poll can compare against this baseline.
+      this.failureSnapshot.set(agent.name, paneOutput);
+      this.consecutiveFailures.delete(key);
+      return false;
+    }
+    // Pane must differ from failure snapshot — stale output can't trigger healing
+    if (paneOutput === failSnap) {
       this.consecutiveFailures.delete(key);
       return false;
     }

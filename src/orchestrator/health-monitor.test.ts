@@ -665,17 +665,20 @@ describe('HealthMonitor', () => {
       failureReason: 'CLI exited to shell prompt',
     });
 
-    // Pane now shows DIFFERENT Claude Code UI — CLI was manually restarted
-    // (different from failure snapshot which defaults to undefined/empty for manually failed agents)
-    captureOutput = 'bypass permissions\n❯ \n';
-
+    // First poll with stale output — captures baseline snapshot
+    captureOutput = 'old stale CLI output\n❯ \n';
     const monitor = makeMonitor();
-
-    // First poll: increments heal counter but doesn't heal yet
     await monitor.pollAll();
     assert.equal(db.getAgent(agentName)!.state, 'failed');
 
-    // Second poll: confirms CLI alive, heals to active
+    // Pane now shows DIFFERENT Claude Code UI — CLI was manually restarted
+    captureOutput = 'bypass permissions\n❯ \n';
+
+    // Second poll: detects change + CLI-alive signal, increments heal counter
+    await monitor.pollAll();
+    assert.equal(db.getAgent(agentName)!.state, 'failed');
+
+    // Third poll: confirms CLI alive (2 consecutive), heals to active
     await monitor.pollAll();
     const healed = db.getAgent(agentName)!;
     assert.equal(healed.state, 'active');
@@ -717,9 +720,13 @@ describe('HealthMonitor', () => {
       failureReason: 'Health check failed',
     });
 
-    captureOutput = 'current: 12.5\ntokens\n';
-
+    // Baseline poll (stale)
+    captureOutput = 'stale shell output\n';
     const monitor = makeMonitor();
+    await monitor.pollAll();
+
+    // CLI revived with different output
+    captureOutput = 'current: 12.5\ntokens\n';
     await monitor.pollAll();
     await monitor.pollAll();
     assert.equal(db.getAgent(agentName)!.state, 'active');
@@ -771,9 +778,13 @@ describe('HealthMonitor', () => {
       failureReason: 'CLI exited',
     });
 
-    captureOutput = 'context 45%\n❯ \n';
-
+    // Baseline poll
+    captureOutput = 'stale output\n';
     const monitor = makeMonitor();
+    await monitor.pollAll();
+
+    // CLI revived
+    captureOutput = 'context 45%\n❯ \n';
     await monitor.pollAll();
     await monitor.pollAll();
 
