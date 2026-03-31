@@ -8,8 +8,8 @@
  *   enterPersonaEdit()         — switch to edit mode for selected agent
  */
 
-import { state, authHeaders, getToken } from '/dashboard/assets/state.js';
-import { esc, renderMarkdown, showToast } from '/dashboard/assets/utils.js';
+import { state, authHeaders, getToken } from '/dashboard/assets/state.ts';
+import { esc, renderMarkdown, showToast } from '/dashboard/assets/utils.ts';
 
 // ── Dependencies injected via setup() ──
 let _handleAuthError = () => {};

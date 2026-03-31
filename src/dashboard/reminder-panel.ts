@@ -7,8 +7,8 @@
  *   panel.load(agentName);  // fetch and render reminders
  */
 
-import { state, authHeaders } from '/dashboard/assets/state.js';
-import { esc } from '/dashboard/assets/utils.js';
+import { state, authHeaders } from '/dashboard/assets/state.ts';
+import { esc } from '/dashboard/assets/utils.ts';
 
 function renderReminderCard(r, opts = {}) {
   const { isActive = false, prevPending = null, nextPending = null } = opts;

@@ -67,20 +67,20 @@
 </div>
 
 <script type="module">
-import { state, on, emit, getToken, setToken, authHeaders } from '/dashboard/assets/state.js';
-import { esc, renderMarkdown, timeAgo, formatFileSize, showToast, promptInput, confirmAction } from '/dashboard/assets/utils.js';
-import '/dashboard/assets/agent-card.js';
-import '/dashboard/assets/message-list.js';
-import '/dashboard/assets/message-input.js';
-import '/dashboard/assets/watch-panel.js';
-import '/dashboard/assets/reminder-panel.js';
-import '/dashboard/assets/archive-panel.js';
-import { agentAction, openCreateAgentModal, setup as setupLifecycle } from '/dashboard/assets/agent-lifecycle.js';
-import { sendMessage, uploadFile, handleFileUpload, updateSendability, handleQueueUpdate, archiveChat, unarchiveChat, setup as setupMessageIO } from '/dashboard/assets/message-io.js';
-import { voiceState, initVoice, initCommandPalette, setup as setupVoicePalette } from '/dashboard/assets/voice-palette.js';
-import { handleAuthError, connect, fetchEngineUsage, setup as setupConnection } from '/dashboard/assets/connection.js';
-import { renderThread, getActiveTopic, updatePageTitle, setup as setupThread } from '/dashboard/assets/thread.js';
-import { renderAgents, selectAgent, patchAgentCard, updateAgent, addMessage, handleMessageWithdrawn, applySearchFilter, initAgentListEvents, setup as setupAgentList } from '/dashboard/assets/agent-list.js';
+import { state, on, emit, getToken, setToken, authHeaders } from '/dashboard/assets/state.ts';
+import { esc, renderMarkdown, timeAgo, formatFileSize, showToast, promptInput, confirmAction } from '/dashboard/assets/utils.ts';
+import '/dashboard/assets/agent-card.ts';
+import '/dashboard/assets/message-list.ts';
+import '/dashboard/assets/message-input.ts';
+import '/dashboard/assets/watch-panel.ts';
+import '/dashboard/assets/reminder-panel.ts';
+import '/dashboard/assets/archive-panel.ts';
+import { agentAction, openCreateAgentModal, setup as setupLifecycle } from '/dashboard/assets/agent-lifecycle.ts';
+import { sendMessage, uploadFile, handleFileUpload, updateSendability, handleQueueUpdate, archiveChat, unarchiveChat, setup as setupMessageIO } from '/dashboard/assets/message-io.ts';
+import { voiceState, initVoice, initCommandPalette, setup as setupVoicePalette } from '/dashboard/assets/voice-palette.ts';
+import { handleAuthError, connect, fetchEngineUsage, setup as setupConnection } from '/dashboard/assets/connection.ts';
+import { renderThread, getActiveTopic, updatePageTitle, setup as setupThread } from '/dashboard/assets/thread.ts';
+import { renderAgents, selectAgent, patchAgentCard, updateAgent, addMessage, handleMessageWithdrawn, applySearchFilter, initAgentListEvents, setup as setupAgentList } from '/dashboard/assets/agent-list.ts';
 {
 
   // handleAuthError, promptForToken — imported from connection.js

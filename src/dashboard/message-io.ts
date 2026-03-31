@@ -14,8 +14,8 @@
  *   renderArchive()                — render archived messages view
  */
 
-import { state, authHeaders, getToken } from '/dashboard/assets/state.js';
-import { esc, renderMarkdown, formatFileSize, showToast, confirmAction } from '/dashboard/assets/utils.js';
+import { state, authHeaders, getToken } from '/dashboard/assets/state.ts';
+import { esc, renderMarkdown, formatFileSize, showToast, confirmAction } from '/dashboard/assets/utils.ts';
 
 // ── Dependencies injected via setup() ──
 let _handleAuthError = () => {};

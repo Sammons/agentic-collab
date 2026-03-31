@@ -16,5 +16,6 @@
     "lib": ["esnext"],
     "types": ["node"]
   },
-  "include": ["src/**/*.ts"]
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/dashboard/**/*.ts"]
 }

@@ -151,6 +151,7 @@ route('GET', '/dashboard', async (_req, res, _match, ctx) => {
 // Serve dashboard ES module assets (*.js files under src/dashboard/)
 const ASSET_TYPES: Record<string, string> = {
   '.js': 'application/javascript; charset=utf-8',
+  '.ts': 'application/javascript; charset=utf-8', // browser-native type stripping
   '.css': 'text/css; charset=utf-8',
 };
 

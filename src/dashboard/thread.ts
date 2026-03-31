@@ -11,10 +11,10 @@
  *   mobileBack()            -- hide thread panel on mobile
  */
 
-import { state } from '/dashboard/assets/state.js';
-import { esc, renderMarkdown } from '/dashboard/assets/utils.js';
-import { renderArchive } from '/dashboard/assets/message-io.js';
-import { renderPersona, setup as setupPersonaEditor } from '/dashboard/assets/persona-editor.js';
+import { state } from '/dashboard/assets/state.ts';
+import { esc, renderMarkdown } from '/dashboard/assets/utils.ts';
+import { renderArchive } from '/dashboard/assets/message-io.ts';
+import { renderPersona, setup as setupPersonaEditor } from '/dashboard/assets/persona-editor.ts';
 
 // ── Dependencies injected via setup() ──
 let _handleAuthError = () => {};

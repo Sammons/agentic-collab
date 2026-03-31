@@ -11,8 +11,8 @@
  *   'archive-restored' — detail: { agent } — after successful restore
  */
 
-import { state, authHeaders } from '/dashboard/assets/state.js';
-import { esc } from '/dashboard/assets/utils.js';
+import { state, authHeaders } from '/dashboard/assets/state.ts';
+import { esc } from '/dashboard/assets/utils.ts';
 
 export class ArchivePanel extends HTMLElement {
   _renderMarkdown = (s) => s;

@@ -1,7 +1,7 @@
 /**
  * Dashboard shared state and event bus.
  * Single source of truth for all dashboard components.
- * Import via: import { state, on, emit } from '/dashboard/assets/state.js';
+ * Import via: import { state, on, emit } from '/dashboard/assets/state.ts';
  */
 
 // ── State ──

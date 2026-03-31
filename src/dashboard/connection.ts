@@ -11,8 +11,8 @@
  *   fetchEngineUsage()                                  -- poll /api/engines/status
  */
 
-import { state, getToken, setToken } from '/dashboard/assets/state.js';
-import { esc } from '/dashboard/assets/utils.js';
+import { state, getToken, setToken } from '/dashboard/assets/state.ts';
+import { esc } from '/dashboard/assets/utils.ts';
 
 // ── Dependencies injected via setup() ──
 let _renderAgents = () => {};

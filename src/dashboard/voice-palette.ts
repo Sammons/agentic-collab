@@ -9,9 +9,9 @@
  *   initCommandPalette()     — init Cmd+K agent palette with fuzzy search
  */
 
-import { state, getToken } from '/dashboard/assets/state.js';
-import { esc } from '/dashboard/assets/utils.js';
-import { updateSendability } from '/dashboard/assets/message-io.js';
+import { state, getToken } from '/dashboard/assets/state.ts';
+import { esc } from '/dashboard/assets/utils.ts';
+import { updateSendability } from '/dashboard/assets/message-io.ts';
 
 // ── Shared voice state (imported by message-io.js) ──
 

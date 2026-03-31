@@ -16,7 +16,7 @@
  *   focus()             — focus the textarea
  */
 
-import { state } from '/dashboard/assets/state.js';
+import { state } from '/dashboard/assets/state.ts';
 
 const CANT_RECEIVE = new Set(['void', 'failed', 'spawning']);
 

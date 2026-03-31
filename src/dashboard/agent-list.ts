@@ -14,9 +14,9 @@
  *   applySearchFilter()     -- toggle card visibility by text/chip filter
  */
 
-import { state, authHeaders, getToken } from '/dashboard/assets/state.js';
-import { esc, renderMarkdown, timeAgo, showToast, promptInput } from '/dashboard/assets/utils.js';
-import { agentAction, openCreateAgentModal } from '/dashboard/assets/agent-lifecycle.js';
+import { state, authHeaders, getToken } from '/dashboard/assets/state.ts';
+import { esc, renderMarkdown, timeAgo, showToast, promptInput } from '/dashboard/assets/utils.ts';
+import { agentAction, openCreateAgentModal } from '/dashboard/assets/agent-lifecycle.ts';
 
 // ── Dependencies injected via setup() ──
 let _renderThread = () => {};

@@ -8,8 +8,8 @@
  *   openCreateAgentModal()                 — show create agent dialog
  */
 
-import { state, authHeaders } from '/dashboard/assets/state.js';
-import { esc, showToast, confirmAction } from '/dashboard/assets/utils.js';
+import { state, authHeaders } from '/dashboard/assets/state.ts';
+import { esc, showToast, confirmAction } from '/dashboard/assets/utils.ts';
 
 // ── Dependencies injected via setup() ──
 let _handleAuthError = () => {};

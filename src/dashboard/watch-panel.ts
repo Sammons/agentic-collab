@@ -10,8 +10,8 @@
  * Requires: state.js for auth, esc() for display.
  */
 
-import { state, getToken, authHeaders } from '/dashboard/assets/state.js';
-import { esc } from '/dashboard/assets/utils.js';
+import { state, getToken, authHeaders } from '/dashboard/assets/state.ts';
+import { esc } from '/dashboard/assets/utils.ts';
 
 const KEY_BUTTONS = [
   { label: '\u2191', key: 'Up' },
