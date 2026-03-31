@@ -18,21 +18,31 @@
     .thread-input {
       padding: 8px 10px;
       gap: 6px;
+      flex-wrap: wrap;
     }
     .thread-input textarea {
       font-size: 16px; /* prevent iOS zoom */
+      flex: 0 0 100%;
+    }
+    /* Controls row: prevent wrapping, let items shrink to fit */
+    .thread-input .upload-wrap,
+    .thread-input .voice-controls,
+    .thread-input button {
+      flex-shrink: 1;
     }
     .thread-input button {
-      min-width: 68px;
+      min-width: 0;
       padding: 8px 10px;
       font-size: 12px;
+      white-space: nowrap;
     }
     .voice-toggle button {
       font-size: 16px; /* prevent iOS zoom */
+      padding: 6px 8px;
     }
     .voice-controls {
       order: 3;
-      flex: 0 0 auto;
+      flex: 0 1 auto;
     }
     .voice-partial { display: none; }
     header h1 { font-size: 14px; }
@@ -101,11 +111,15 @@
       order: 10;
       width: 100%;
       margin-left: 0;
-      justify-content: stretch;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: none;
     }
+    .thread-tabs::-webkit-scrollbar { display: none; }
     .thread-tabs button {
-      flex: 1;
+      flex: 1 0 auto;
       text-align: center;
+      min-width: 0;
     }
     .clear-chat-btn { margin-left: auto; }
     .thread-messages { padding: 12px 10px; }
