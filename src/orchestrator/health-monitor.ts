@@ -206,6 +206,23 @@ export class HealthMonitor {
     );
     for (const agent of agents) {
       try {
+        // Fast path: check window_activity before expensive capture
+        const activityResult = await this.proxyDispatch(agent.proxyId!, {
+          action: 'pane_activity',
+          sessionName: sessionName(agent),
+        } as ProxyCommand);
+        if (activityResult.ok) {
+          const currentTs = activityResult.data as number;
+          const prevTs = this.lastActivityTs.get(agent.name);
+          this.lastActivityTs.set(agent.name, currentTs);
+          if (prevTs !== undefined && currentTs === prevTs) {
+            // Pane unchanged — definitively idle, skip capture
+            this.handleIdleTransitions(agent, true);
+            continue;
+          }
+        }
+
+        // Window_activity changed — capture to check real content change vs ANSI-only
         const paneOutput = await this.capturePaneOutput(agent);
         if (paneOutput === null) continue;
         this.evaluateIndicators(agent, paneOutput);
@@ -368,6 +385,7 @@ export class HealthMonitor {
     if (agent.state === 'active' && isIdle) {
       const current = this.db.getAgent(agent.name);
       if (current && current.state === 'active') {
+        console.log(`[health] ${agent.name}: active → idle (unchanged=${this.unchangedCount.get(agent.name) ?? 0})`);
         this.db.updateAgentState(agent.name, 'idle', current.version, {
           lastActivity: new Date().toISOString(),
         });
@@ -377,6 +395,7 @@ export class HealthMonitor {
     } else if (agent.state === 'idle' && !isIdle) {
       const current = this.db.getAgent(agent.name);
       if (current && current.state === 'idle') {
+        console.log(`[health] ${agent.name}: idle → active (screen changed)`);
         this.db.updateAgentState(agent.name, 'active', current.version, {
           lastActivity: new Date().toISOString(),
         });
