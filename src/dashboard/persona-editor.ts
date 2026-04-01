@@ -10,6 +10,7 @@
 
 import { state, authHeaders, getToken } from '/dashboard/assets/state.ts';
 import { esc, renderMarkdown, showToast } from '/dashboard/assets/utils.ts';
+import { icon } from '/dashboard/assets/icons.ts';
 
 // ── Dependencies injected via setup() ──
 let _handleAuthError = () => {};
@@ -273,16 +274,16 @@ export function enterPersonaEdit(agentName, rawContent) {
       if (res.status === 401) { _handleAuthError(); return; }
       if (res.ok) {
         statusEl.style.color = 'var(--green)';
-        statusEl.textContent = '\u2713 Saved \u2014 changes take effect when the agent restarts';
+        statusEl.innerHTML = icon.check(14) + ' Saved \u2014 changes take effect when the agent restarts';
         delete state.personaCache[agentName];
       } else {
         const err = await res.json().catch(() => ({}));
         statusEl.style.color = 'var(--red)';
-        statusEl.textContent = '\u2717 ' + (err.error || 'Save failed');
+        statusEl.innerHTML = icon.x(14) + ' ' + (err.error || 'Save failed');
       }
     } catch (err) {
       statusEl.style.color = 'var(--red)';
-      statusEl.textContent = '\u2717 Save failed';
+      statusEl.innerHTML = icon.x(14) + ' Save failed';
     }
   };
 }

@@ -9,6 +9,7 @@
 
 import { state, authHeaders } from '/dashboard/assets/state.ts';
 import { esc } from '/dashboard/assets/utils.ts';
+import { icon } from '/dashboard/assets/icons.ts';
 
 function renderReminderCard(r, opts = {}) {
   const { isActive = false, prevPending = null, nextPending = null } = opts;
@@ -28,20 +29,20 @@ function renderReminderCard(r, opts = {}) {
 
   let actionBtns = '';
   if (r.status === 'pending') {
-    actionBtns += `<button class="complete" data-action="complete" data-id="${r.id}" title="Complete">\u2713</button>`;
-    actionBtns += `<button data-action="edit" data-id="${r.id}" data-prompt="${esc(r.prompt)}" data-cadence="${r.cadenceMinutes}" data-skip-if-active="${r.skipIfActive ? '1' : '0'}" title="Edit">\u270E</button>`;
+    actionBtns += `<button class="complete" data-action="complete" data-id="${r.id}" title="Complete">${icon.check(14)}</button>`;
+    actionBtns += `<button data-action="edit" data-id="${r.id}" data-prompt="${esc(r.prompt)}" data-cadence="${r.cadenceMinutes}" data-skip-if-active="${r.skipIfActive ? '1' : '0'}" title="Edit">${icon.edit(14)}</button>`;
   }
   if (prevPending && r.status === 'pending') {
-    actionBtns += `<button data-action="move-up" data-id="${r.id}" data-swap="${prevPending.id}" title="Move up">\u2191</button>`;
+    actionBtns += `<button data-action="move-up" data-id="${r.id}" data-swap="${prevPending.id}" title="Move up">${icon.arrowUp(12)}</button>`;
   }
   if (nextPending && r.status === 'pending') {
-    actionBtns += `<button data-action="move-down" data-id="${r.id}" data-swap="${nextPending.id}" title="Move down">\u2193</button>`;
+    actionBtns += `<button data-action="move-down" data-id="${r.id}" data-swap="${nextPending.id}" title="Move down">${icon.arrowDown(12)}</button>`;
   }
-  actionBtns += `<button class="danger" data-action="delete" data-id="${r.id}" title="Delete">\u00d7</button>`;
+  actionBtns += `<button class="danger" data-action="delete" data-id="${r.id}" title="Delete">${icon.x(14)}</button>`;
 
   return `<div class="${classes.join(' ')}">
     <div class="reminder-content">
-      <div class="reminder-prompt">${isActive ? '\u25b6 ' : ''}${esc(r.prompt)}</div>
+      <div class="reminder-prompt">${isActive ? icon.play(12) + ' ' : ''}${esc(r.prompt)}</div>
       <div class="reminder-meta">
         <span>${cadenceLabel}</span>
         ${r.skipIfActive ? '<span style="font-size:11px;color:var(--yellow,#d29922);font-weight:600">skip if active</span>' : ''}

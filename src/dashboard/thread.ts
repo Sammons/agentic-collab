@@ -13,6 +13,7 @@
 
 import { state } from '/dashboard/assets/state.ts';
 import { esc, renderMarkdown } from '/dashboard/assets/utils.ts';
+import { icon } from '/dashboard/assets/icons.ts';
 import { renderArchive } from '/dashboard/assets/message-io.ts';
 import { renderPersona, setup as setupPersonaEditor } from '/dashboard/assets/persona-editor.ts';
 
@@ -125,8 +126,8 @@ export function renderThread() {
     <button class="${state.threadView === 'watch' ? 'active' : ''}" data-tab="watch">Watch</button>
     <button class="${state.threadView === 'archive' ? 'active' : ''}" data-tab="archive">Archive</button>
   </div>`;
-  const clearBtn = `<button class="clear-chat-btn" id="clearChatBtn" title="Archive chat">\u2715</button>`;
-  header.innerHTML = `<button class="mobile-back" id="mobileBackBtn">\u2190</button><span>${esc(state.selected)}</span>${headerBadge}${tabs}${clearBtn}`;
+  const clearBtn = `<button class="clear-chat-btn" id="clearChatBtn" title="Archive chat">${icon.x(14)}</button>`;
+  header.innerHTML = `<button class="mobile-back" id="mobileBackBtn">${icon.arrowLeft(16)}</button><span>${esc(state.selected)}</span>${headerBadge}${tabs}${clearBtn}`;
   document.getElementById('mobileBackBtn').onclick = mobileBack;
   document.getElementById('clearChatBtn').onclick = () => _archiveChat(state.selected);
   header.querySelectorAll('.thread-tabs button').forEach(btn => {

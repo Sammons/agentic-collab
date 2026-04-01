@@ -12,13 +12,14 @@
 
 import { state, getToken, authHeaders } from '/dashboard/assets/state.ts';
 import { esc } from '/dashboard/assets/utils.ts';
+import { icon } from '/dashboard/assets/icons.ts';
 
 const KEY_BUTTONS = [
-  { label: '\u2191', key: 'Up' },
-  { label: '\u2193', key: 'Down' },
-  { label: '\u2190', key: 'Left' },
-  { label: '\u2192', key: 'Right' },
-  { label: '\u232b', key: 'BSpace' },
+  { label: icon.arrowUp(12), key: 'Up' },
+  { label: icon.arrowDown(12), key: 'Down' },
+  { label: icon.arrowLeft(12), key: 'Left' },
+  { label: icon.arrowRight(12), key: 'Right' },
+  { label: icon.backspace(12), key: 'BSpace' },
   { label: 'Enter', key: 'Enter' },
   { label: 'Esc', key: 'Escape' },
   { label: 'Tab', key: 'Tab' },
@@ -59,11 +60,11 @@ export class WatchPanel extends HTMLElement {
 
     this.innerHTML = `
       <div class="watch-output"><div class="watch-status">Connecting...</div></div>
-      <div class="watch-keys">${keysHtml}<button class="watch-resize-btn" title="Resize tmux pane to match viewport">\u2922 Resize</button></div>
+      <div class="watch-keys">${keysHtml}<button class="watch-resize-btn" title="Resize tmux pane to match viewport">${icon.maximize(12)} Resize</button></div>
       <div class="watch-type">
         <input type="text" class="watch-type-input" placeholder="Type literal text..." />
         <button class="watch-type-send" title="Send text (no Enter)">Send</button>
-        <button class="watch-type-enter" title="Send text + Enter">Send+\u21b5</button>
+        <button class="watch-type-enter" title="Send text + Enter">Send+${icon.cornerDownLeft(12)}</button>
       </div>
     `;
 

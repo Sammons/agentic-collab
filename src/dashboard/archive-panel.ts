@@ -13,6 +13,7 @@
 
 import { state, authHeaders } from '/dashboard/assets/state.ts';
 import { esc } from '/dashboard/assets/utils.ts';
+import { icon } from '/dashboard/assets/icons.ts';
 
 export class ArchivePanel extends HTMLElement {
   _renderMarkdown = (s) => s;
@@ -106,14 +107,14 @@ export class ArchivePanel extends HTMLElement {
     const displayMsg = isSystem ? msg.message.replace(/^\[system\]\s*/, '') : msg.message;
     const statusHtml = (msg.direction === 'to_agent' && msg.queueId)
       ? `<span class="msg-status ${msg.deliveryStatus || 'pending'}" data-queue-id="${msg.queueId}">${
-          msg.deliveryStatus === 'delivered' ? '\u2713 delivered' :
-          msg.deliveryStatus === 'failed' ? '\u2717 failed' :
-          '\u2022\u2022\u2022 sending'
+          msg.deliveryStatus === 'delivered' ? icon.check(12) + ' delivered' :
+          msg.deliveryStatus === 'failed' ? icon.x(12) + ' failed' :
+          icon.dots(12) + ' sending'
         }</span>`
       : '';
     const headerHtml = `<div class="msg-header"><span class="msg-sender">${routeStr}</span>${topicBadge}<span class="msg-meta"><span class="msg-time">${time}</span>${statusHtml}</span></div>`;
     if (isUpload) {
-      div.innerHTML = `${headerHtml}<div class="file-info"><span class="file-icon">&#128206;</span> ${esc(displayMsg)}</div>`;
+      div.innerHTML = `${headerHtml}<div class="file-info"><span class="file-icon">${icon.paperclip(14)}</span> ${esc(displayMsg)}</div>`;
     } else {
       div.innerHTML = `${headerHtml}<div class="msg-body">${this._renderMarkdown(esc(displayMsg))}</div>`;
     }

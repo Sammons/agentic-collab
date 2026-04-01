@@ -11,6 +11,8 @@
  *   card.update(agent, { unread, indicators, selected, proxies });
  */
 
+import { icon } from '/dashboard/assets/icons.ts';
+
 // ── Utilities ──
 
 function esc(s) {
@@ -24,7 +26,7 @@ function proxyWarning(proxyId, proxies) {
   const proxy = (proxies || []).find(p => p.proxyId === proxyId);
   if (!proxy || proxy.versionMatch !== false) return '';
   const ver = proxy.version ? ` (${esc(proxy.version)})` : '';
-  return ` <span class="version-mismatch" title="Proxy version${ver} does not match orchestrator. Restart the proxy.">\u26a0 stale proxy</span>`;
+  return ` <span class="version-mismatch" title="Proxy version${ver} does not match orchestrator. Restart the proxy.">${icon.alertTriangle(12)} stale proxy</span>`;
 }
 
 function buildActionsHtml(agent) {
@@ -97,7 +99,7 @@ export class AgentCard extends HTMLElement {
       <div class="agent-meta">${buildMetaHtml(agent, ctx.proxies)}</div>
       ${failureInfo}
       ${buildIndicatorsHtml(ctx.indicators)}
-      <div class="drag-handle" title="Drag to reorder or move to group">\u2261</div>
+      <div class="drag-handle" title="Drag to reorder or move to group">${icon.gripVertical(14)}</div>
       <div class="agent-actions">${buildActionsHtml(agent)}</div>
     `;
   }

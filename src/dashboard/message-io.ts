@@ -16,6 +16,7 @@
 
 import { state, authHeaders, getToken } from '/dashboard/assets/state.ts';
 import { esc, renderMarkdown, formatFileSize, showToast, confirmAction } from '/dashboard/assets/utils.ts';
+import { icon } from '/dashboard/assets/icons.ts';
 
 // ── Dependencies injected via setup() ──
 let _handleAuthError = () => {};
@@ -57,9 +58,9 @@ export function handleQueueUpdate(message) {
   const badge = document.querySelector(`[data-queue-id="${message.id}"]`);
   if (badge) {
     badge.className = `msg-status ${message.status}`;
-    badge.textContent = message.status === 'delivered' ? '\u2713 delivered' :
-                        message.status === 'failed' ? '\u2717 failed' :
-                        '\u2022\u2022\u2022 sending';
+    badge.innerHTML = message.status === 'delivered' ? icon.check(12) + ' delivered' :
+                      message.status === 'failed' ? icon.x(12) + ' failed' :
+                      icon.dots(12) + ' sending';
   }
 }
 
@@ -142,18 +143,18 @@ export async function renderArchive() {
       const toLabel = msg.targetAgent || (msg.direction === 'to_agent' ? state.selected : 'dashboard');
       const time = new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       const topicBadge = msg.topic ? `<span class="msg-topic">${esc(msg.topic)}</span>` : '';
-      const routeStr = `${esc(fromLabel)} \u2192 ${esc(toLabel)}`;
+      const routeStr = `${esc(fromLabel)} ${icon.arrowRightSmall(12)} ${esc(toLabel)}`;
       const displayMsg = isSystem ? msg.message.replace(/^\[system\]\s*/, '') : msg.message;
       const statusHtml = (msg.direction === 'to_agent' && msg.queueId)
         ? `<span class="msg-status ${msg.deliveryStatus || 'pending'}" data-queue-id="${msg.queueId}">${
-            msg.deliveryStatus === 'delivered' ? '\u2713 delivered' :
-            msg.deliveryStatus === 'failed' ? '\u2717 failed' :
-            '\u2022\u2022\u2022 sending'
+            msg.deliveryStatus === 'delivered' ? icon.check(12) + ' delivered' :
+            msg.deliveryStatus === 'failed' ? icon.x(12) + ' failed' :
+            icon.dots(12) + ' sending'
           }</span>`
         : '';
       const headerHtml = `<div class="msg-header"><span class="msg-sender">${routeStr}</span>${topicBadge}<span class="msg-meta"><span class="msg-time">${time}</span>${statusHtml}</span></div>`;
       if (isUpload) {
-        div.innerHTML = `${headerHtml}<div class="file-info"><span class="file-icon">&#128206;</span> ${esc(displayMsg)}</div>`;
+        div.innerHTML = `${headerHtml}<div class="file-info"><span class="file-icon">${icon.paperclip(14)}</span> ${esc(displayMsg)}</div>`;
       } else {
         div.innerHTML = `${headerHtml}<div class="msg-body">${renderMarkdown(esc(displayMsg))}</div>`;
       }
@@ -253,7 +254,7 @@ export async function handleFileUpload(files, attachedMessage) {
   uploadIndicator.className = 'msg to-agent file-upload';
   const fileNames = files.map(f => `${f.name} (${formatFileSize(f.size)})`).join(', ');
   const indicatorMsg = attachedMessage ? esc(attachedMessage) + '<br>' : '';
-  uploadIndicator.innerHTML = `<div class="msg-header"><span class="msg-sender">you</span><span class="msg-meta"><span class="msg-status pending">\u2022\u2022\u2022 uploading</span></span></div>${indicatorMsg}<div class="file-info"><span class="file-icon">&#128206;</span> ${esc(fileNames)}</div>`;
+  uploadIndicator.innerHTML = `<div class="msg-header"><span class="msg-sender">you</span><span class="msg-meta"><span class="msg-status pending">${icon.dots(12)} uploading</span></span></div>${indicatorMsg}<div class="file-info"><span class="file-icon">${icon.paperclip(14)}</span> ${esc(fileNames)}</div>`;
   messagesEl.appendChild(uploadIndicator);
   messagesEl.scrollTop = messagesEl.scrollHeight;
 

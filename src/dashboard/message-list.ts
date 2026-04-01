@@ -10,6 +10,8 @@
  *   list.clear();
  */
 
+import { icon } from '/dashboard/assets/icons.ts';
+
 const PAGE_SIZE = 30;
 
 function esc(s) {
@@ -35,21 +37,21 @@ function buildMessageEl(msg, agentName, renderMarkdown) {
   const toLabel = msg.targetAgent || (msg.direction === 'to_agent' ? agentName : 'dashboard');
   const time = new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   const topicBadge = msg.topic ? `<span class="msg-topic">${esc(msg.topic)}</span>` : '';
-  const routeStr = `${esc(fromLabel)} \u2192 ${esc(toLabel)}`;
+  const routeStr = `${esc(fromLabel)} ${icon.arrowRightSmall(12)} ${esc(toLabel)}`;
   const displayMsg = isSystem ? msg.message.replace(/^\[system\]\s*/, '') : msg.message;
   const statusHtml = (msg.direction === 'to_agent' && msg.queueId)
     ? `<span class="msg-status ${msg.deliveryStatus || 'pending'}" data-queue-id="${msg.queueId}">${
-        msg.deliveryStatus === 'delivered' ? '\u2713 delivered' :
-        msg.deliveryStatus === 'failed' ? '\u2717 failed' :
-        '\u2022\u2022\u2022 sending'
+        msg.deliveryStatus === 'delivered' ? icon.check(12) + ' delivered' :
+        msg.deliveryStatus === 'failed' ? icon.x(12) + ' failed' :
+        icon.dots(12) + ' sending'
       }</span>`
     : '';
   const canWithdraw = msg.direction === 'to_agent' && !isSystem && !msg.withdrawn && (!msg.sourceAgent || msg.sourceAgent === 'dashboard');
   const withdrawHtml = canWithdraw ? `<span class="msg-withdraw" data-msg-id="${msg.id}" title="Withdraw message">unsend</span>` : '';
-  const copyBtn = `<button class="msg-copy" title="Copy message">&#128203;</button>`;
+  const copyBtn = `<button class="msg-copy" title="Copy message">${icon.clipboard(14)}</button>`;
   const headerHtml = `<div class="msg-header"><span class="msg-sender">${routeStr}</span>${topicBadge}<span class="msg-meta">${copyBtn}${withdrawHtml}<span class="msg-time">${time}</span>${statusHtml}</span></div>`;
   if (isUpload) {
-    div.innerHTML = `${headerHtml}<div class="file-info"><span class="file-icon">&#128206;</span> ${esc(displayMsg)}</div>`;
+    div.innerHTML = `${headerHtml}<div class="file-info"><span class="file-icon">${icon.paperclip(14)}</span> ${esc(displayMsg)}</div>`;
   } else {
     div.innerHTML = `${headerHtml}<div class="msg-body">${renderMarkdown(esc(displayMsg))}</div>`;
   }
@@ -57,11 +59,11 @@ function buildMessageEl(msg, agentName, renderMarkdown) {
     e.stopPropagation();
     const btn = e.target;
     navigator.clipboard.writeText(displayMsg).then(() => {
-      btn.textContent = '\u2713';
-      setTimeout(() => { btn.innerHTML = '&#128203;'; }, 1500);
+      btn.innerHTML = icon.check(14);
+      setTimeout(() => { btn.innerHTML = icon.clipboard(14); }, 1500);
     }).catch(() => {
-      btn.textContent = '\u2717';
-      setTimeout(() => { btn.innerHTML = '&#128203;'; }, 1500);
+      btn.innerHTML = icon.x(14);
+      setTimeout(() => { btn.innerHTML = icon.clipboard(14); }, 1500);
     });
   });
   return div;

@@ -17,6 +17,7 @@
 import { state, authHeaders, getToken } from '/dashboard/assets/state.ts';
 import { esc, renderMarkdown, timeAgo, showToast, promptInput } from '/dashboard/assets/utils.ts';
 import { agentAction, openCreateAgentModal } from '/dashboard/assets/agent-lifecycle.ts';
+import { icon } from '/dashboard/assets/icons.ts';
 
 // ── Dependencies injected via setup() ──
 let _renderThread = () => {};
@@ -168,7 +169,7 @@ export function renderAgents() {
   if (formContainer && !formContainer.hasChildNodes()) {
     const btn = document.createElement('button');
     btn.className = 'create-agent-btn';
-    btn.textContent = '+ New Agent';
+    btn.innerHTML = icon.plus(14) + ' New Agent';
     btn.onclick = () => openCreateAgentModal();
     formContainer.appendChild(btn);
   }
@@ -183,7 +184,7 @@ export function renderAgents() {
       groupHeader.setAttribute('draggable', 'true');
       groupHeader.dataset.group = groupName;
       const label = document.createElement('span');
-      label.innerHTML = `<span class="group-chevron">\u25BC</span>${esc(groupName)}`;
+      label.innerHTML = `<span class="group-chevron">${icon.chevronDown(12)}</span>${esc(groupName)}`;
       label.style.cursor = 'pointer';
       label.onclick = (e) => {
         e.stopPropagation();
@@ -197,7 +198,7 @@ export function renderAgents() {
       if (groupName !== 'General') {
         const actions = document.createElement('span');
         actions.className = 'group-actions';
-        actions.innerHTML = '<button class="group-rename" title="Rename group">&#9998;</button><button class="group-delete" title="Delete group">&#10005;</button>';
+        actions.innerHTML = '<button class="group-rename" title="Rename group">' + icon.edit(12) + '</button><button class="group-delete" title="Delete group">' + icon.x(12) + '</button>';
         actions.querySelector('.group-rename').onclick = async (e) => {
           e.stopPropagation();
           const newName = await promptInput('Rename group:', groupName);
@@ -230,7 +231,7 @@ export function renderAgents() {
   const newGroupBtn = document.createElement('button');
   newGroupBtn.className = 'secondary';
   newGroupBtn.style.cssText = 'margin-top:6px;padding:6px 12px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--text-dim);font-size:11px;cursor:pointer;width:100%;text-align:left';
-  newGroupBtn.textContent = '+ New Group';
+  newGroupBtn.innerHTML = icon.plus(12) + ' New Group';
   newGroupBtn.onmouseenter = () => { newGroupBtn.style.borderColor = 'var(--accent)'; newGroupBtn.style.color = 'var(--accent)'; };
   newGroupBtn.onmouseleave = () => { newGroupBtn.style.borderColor = 'var(--border)'; newGroupBtn.style.color = 'var(--text-dim)'; };
   newGroupBtn.onclick = async () => {
@@ -506,7 +507,7 @@ function proxyVersionWarning(proxyId) {
   const proxy = (state.proxies || []).find(p => p.proxyId === proxyId);
   if (!proxy || proxy.versionMatch !== false) return '';
   const ver = proxy.version ? ` (${esc(proxy.version)})` : '';
-  return ` <span class="version-mismatch" title="Proxy version${ver} does not match orchestrator. Restart the proxy.">\u26a0 stale proxy</span>`;
+  return ` <span class="version-mismatch" title="Proxy version${ver} does not match orchestrator. Restart the proxy.">${icon.alertTriangle(12)} stale proxy</span>`;
 }
 
 // ── Search Filter ──
