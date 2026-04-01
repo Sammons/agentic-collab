@@ -32,7 +32,14 @@ export class MessageInput extends HTMLElement {
       <textarea id="msgInput" placeholder="Type a message..." rows="1" autocomplete="off" autocorrect="on" autocapitalize="sentences" spellcheck="false" name="msg-no-autofill"></textarea>
       <div class="upload-wrap" id="uploadWrap">
         <input type="file" id="fileInput" multiple disabled />
-        <span class="upload-btn" id="uploadBtn">+</span>
+        <span class="upload-btn" id="uploadBtn"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></span>
+      </div>
+      <div class="voice-controls" id="voiceControls" style="display:none">
+        <div class="voice-toggle" id="voiceToggle">
+          <button data-mode="off" class="active">Off</button>
+          <button data-mode="ptt">PTT</button>
+        </div>
+        <button class="voice-btn inactive" id="voiceBtn" title="Hold to talk (or hold Spacebar)"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z"/><path d="M19 10v2a7 7 0 01-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg></button>
       </div>
       <button id="interruptBtn" style="display:none">Interrupt</button>
       <button id="sendBtn" disabled>Send</button>
