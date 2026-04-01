@@ -137,6 +137,8 @@ export function renderMarkdown(escaped) {
   text = text.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
   // Italic
   text = text.replace(/(?<!\w)\*(.+?)\*(?!\w)/g, '<em>$1</em>');
+  // Images ![alt](src) — must come before links
+  text = text.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" style="max-width:100%;border-radius:8px;margin:4px 0">');
   // Links
   text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" style="color:var(--accent)">$1</a>');
   // Lists, tables, paragraphs
