@@ -597,7 +597,7 @@ export async function resumeAgent(
     //    Use hook resolver: hookResume for existing session, hookStart for fresh spawn.
     const personaFile = resolvePersonaFilePath(name, persona);
 
-    // SESSION_ID resolution: DB currentSessionId → capturedVars.SESSION_ID → null (triggers --continue)
+    // SESSION_ID resolution: DB currentSessionId → capturedVars.SESSION_ID → null (fresh spawn)
     const resolvedSessionId = currentSessionId
       ?? phase1.current.capturedVars?.['SESSION_ID']
       ?? null;
@@ -611,7 +611,7 @@ export async function resumeAgent(
     };
 
     if (!currentSessionId) {
-      console.log(`[lifecycle] ${name}: no stored session ID, will use --continue fallback`);
+      console.log(`[lifecycle] ${name}: no stored session ID, will spawn fresh via hookStart`);
     }
 
     const { result: resumeResult, sessionId: resumeSessionId } = resolveResumeOrStartHook({

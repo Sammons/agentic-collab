@@ -48,9 +48,6 @@ export class ClaudeAdapter implements EngineAdapter {
 
     if (opts.sessionId) {
       parts.push('--resume', opts.sessionId);
-    } else {
-      // Fallback: --continue resumes the most recent session in the cwd
-      parts.push('--continue');
     }
 
     if (opts.appendSystemPrompt) {
