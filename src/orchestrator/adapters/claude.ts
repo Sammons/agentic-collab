@@ -44,7 +44,14 @@ export class ClaudeAdapter implements EngineAdapter {
   }
 
   buildResumeCommand(opts: ResumeOptions): string {
-    const parts = ['claude', '--resume', opts.sessionId];
+    const parts = ['claude'];
+
+    if (opts.sessionId) {
+      parts.push('--resume', opts.sessionId);
+    } else {
+      // Fallback: --continue resumes the most recent session in the cwd
+      parts.push('--continue');
+    }
 
     if (opts.appendSystemPrompt) {
       parts.push('--append-system-prompt', shellQuote(opts.appendSystemPrompt));
