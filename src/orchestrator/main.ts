@@ -362,6 +362,10 @@ async function shutdown(): Promise<void> {
   await usagePoller.cleanup().catch(err =>
     console.error('[orchestrator] Usage session cleanup error:', err));
 
+  // Close WebSocket BEFORE suspending agents — prevents the dashboard
+  // from seeing the transient 'suspended' state that gets restored on startup.
+  wss.close();
+
   // Save agent states for network restore
   try {
     const count = shutdownAgents(lifecycleCtx);
@@ -369,8 +373,6 @@ async function shutdown(): Promise<void> {
   } catch (err) {
     console.error('[orchestrator] Error during agent shutdown:', err);
   }
-
-  wss.close();
   server.close();
   db.close();
   process.exit(0);
@@ -406,6 +408,12 @@ server.listen(PORT, '0.0.0.0', async () => {
     const restored = await restoreAllAgents(lifecycleCtx);
     if (restored > 0) {
       console.log(`[orchestrator] Network restore: resumed ${restored} agents`);
+      // Broadcast corrected agent states to any dashboard clients that connected
+      // before restore completed (they would have seen transient 'suspended' states)
+      const freshAgents = db.listAgents();
+      for (const agent of freshAgents) {
+        wss.broadcast(JSON.stringify({ type: 'agent_update', agent }));
+      }
     }
   } catch (err) {
     console.error('[orchestrator] Network restore failed:', err);
