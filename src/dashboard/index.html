@@ -147,18 +147,21 @@ import { renderAgents, selectAgent, patchAgentCard, updateAgent, addMessage, han
     handleFileUpload(files, message);
   });
 
-  // Drag-and-drop on thread messages
-  const threadMsgs = document.getElementById('threadMessages');
-  threadMsgs.addEventListener('dragover', (e) => {
+  // Drag-and-drop on entire thread panel (messages + input area)
+  const threadPanel = document.getElementById('threadPanel');
+  threadPanel.addEventListener('dragover', (e) => {
     e.preventDefault();
-    threadMsgs.classList.add('drag-over');
+    threadPanel.classList.add('drag-over');
   });
-  threadMsgs.addEventListener('dragleave', () => {
-    threadMsgs.classList.remove('drag-over');
+  threadPanel.addEventListener('dragleave', (e) => {
+    // Only remove highlight when leaving the panel entirely, not child elements
+    if (!threadPanel.contains(e.relatedTarget)) {
+      threadPanel.classList.remove('drag-over');
+    }
   });
-  threadMsgs.addEventListener('drop', (e) => {
+  threadPanel.addEventListener('drop', (e) => {
     e.preventDefault();
-    threadMsgs.classList.remove('drag-over');
+    threadPanel.classList.remove('drag-over');
     const droppedFiles = e.dataTransfer?.files;
     if (droppedFiles && droppedFiles.length > 0 && state.selected) {
       const inputEl = document.getElementById('threadInput');

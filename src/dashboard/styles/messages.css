@@ -333,7 +333,7 @@
     white-space: nowrap;
   }
 
-  .thread-messages.drag-over {
+  .thread-panel.drag-over {
     outline: 2px dashed var(--accent);
     outline-offset: -4px;
     background: rgba(88,166,255,0.05);
