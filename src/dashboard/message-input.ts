@@ -50,10 +50,9 @@ export class MessageInput extends HTMLElement {
     const interruptBtn = this.querySelector('#interruptBtn');
     const fileInput = this.querySelector('#fileInput');
 
-    // Enter to send (Shift+Enter for newline)
-    const isMobile = window.matchMedia('(max-width: 768px)').matches;
+    // Cmd+Enter (Mac) / Ctrl+Enter (Win) to send. Plain Enter inserts newline.
     textarea.onkeydown = (e) => {
-      if (e.key === 'Enter' && !e.shiftKey && !isMobile) {
+      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
         this._emitSend();
       }
