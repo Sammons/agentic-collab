@@ -231,6 +231,21 @@ export function renderMarkdown(escaped) {
         continue;
       }
 
+      // Blank line inside a list: peek ahead — if the next non-empty line is
+      // a list item, keep the list open (loose list). Otherwise close it.
+      if (line.trim() === '' && listStack.length > 0) {
+        let peek = i + 1;
+        while (peek < lines.length && lines[peek].trim() === '') peek++;
+        if (peek < lines.length) {
+          const nextLine = lines[peek];
+          const nextIsUl = /^(\s*)([-*])\s+/.test(nextLine);
+          const nextIsOl = /^(\s*)\d+\.\s+/.test(nextLine);
+          if (nextIsUl || nextIsOl) {
+            continue; // skip blank line, keep list open (for-loop advances i)
+          }
+        }
+      }
+
       closeAllLists();
 
       if (line.trim() === '') {
