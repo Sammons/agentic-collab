@@ -29,14 +29,16 @@ function inlineFormat(line: string): string {
 }
 
 function formatNonCode(s: string): string {
+  // Escape HTML first, then apply formatting
+  s = esc(s);
   // Bold
   s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
   // Italic
   s = s.replace(/\*(.+?)\*/g, '<em>$1</em>');
+  // Images ![alt](src) — must come before links
+  s = s.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" style="max-width:100%">');
   // Links [text](url)
   s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
-  // Auto-escape remaining HTML
-  // (already escaped in the esc() calls for code blocks)
   return s;
 }
 
@@ -81,7 +83,7 @@ export function renderMarkdown(md: string): string {
       const level = headingMatch[1]!.length;
       const text = headingMatch[2]!;
       const id = text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
-      out.push(`<h${level} id="${id}">${inlineFormat(esc(text))}</h${level}>`);
+      out.push(`<h${level} id="${id}">${inlineFormat(text)}</h${level}>`);
       i++;
       continue;
     }
@@ -114,7 +116,7 @@ export function renderMarkdown(md: string): string {
         inList = true;
         listType = 'ul';
       }
-      out.push(`<li>${inlineFormat(esc(line.trim().slice(2)))}</li>`);
+      out.push(`<li>${inlineFormat(line.trim().slice(2))}</li>`);
       i++;
       continue;
     }
@@ -128,7 +130,7 @@ export function renderMarkdown(md: string): string {
         inList = true;
         listType = 'ol';
       }
-      out.push(`<li>${inlineFormat(esc(olMatch[2]!))}</li>`);
+      out.push(`<li>${inlineFormat(olMatch[2]!)}</li>`);
       i++;
       continue;
     }
@@ -148,7 +150,7 @@ export function renderMarkdown(md: string): string {
       i++;
     }
     if (paraLines.length > 0) {
-      out.push(`<p>${inlineFormat(esc(paraLines.join(' ')))}</p>`);
+      out.push(`<p>${inlineFormat(paraLines.join(' '))}</p>`);
     }
   }
 
@@ -168,13 +170,13 @@ function renderTable(lines: string[]): string {
 
   let html = '<table><thead><tr>';
   for (const h of headers) {
-    html += `<th>${inlineFormat(esc(h))}</th>`;
+    html += `<th>${inlineFormat(h)}</th>`;
   }
   html += '</tr></thead><tbody>';
   for (const row of rows) {
     html += '<tr>';
     for (const cell of row) {
-      html += `<td>${inlineFormat(esc(cell))}</td>`;
+      html += `<td>${inlineFormat(cell)}</td>`;
     }
     html += '</tr>';
   }
