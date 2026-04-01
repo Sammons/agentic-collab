@@ -76,6 +76,7 @@ export class ReminderDispatcher {
         this.onQueueUpdate(msg);
       }
       // Trigger delivery — without this, messages sit in the queue forever
+      console.log(`[reminders] Dispatching reminder #${reminder.id} to ${reminder.agentName}`);
       this.messageDispatcher.tryDeliver(reminder.agentName).catch((err) => {
         console.error(`[reminders] Delivery trigger failed for ${reminder.agentName}:`, (err as Error).message);
       });

@@ -28,12 +28,14 @@ import { getAdapter } from './adapters/index.ts';
 import { resolvePersonaPath, loadPersona, composeSystemPrompt, getPersonasDir, toHostPath } from './persona.ts';
 import { resolveHook } from './hook-resolver.ts';
 import type { HookResult, TemplateVars } from './hook-resolver.ts';
+import type { AccountStore } from './accounts.ts';
 
 export type LifecycleContext = {
   db: Database;
   locks: LockManager;
   proxyDispatch: (proxyId: string, command: ProxyCommand) => Promise<ProxyResponse>;
   orchestratorHost: string;
+  accountStore?: AccountStore;
 };
 
 // Timeouts and delays — configurable via env vars for tuning in different environments
@@ -53,11 +55,15 @@ function prependExports(cmd: string, entries: Array<[string, string]>): string {
 }
 
 /** Wrap a launch command with base exports plus persona-defined launch env. */
-function withLaunchEnv(agent: AgentRecord, cmd: string, personaFile: string): string {
+function withLaunchEnv(agent: AgentRecord, cmd: string, personaFile: string, accountHome?: string): string {
   const baseEntries: Array<[string, string]> = [
     ['COLLAB_AGENT', agent.name],
     ['COLLAB_PERSONA_FILE', personaFile],
   ];
+  // Inject HOME override for account-based credential isolation
+  if (accountHome) {
+    baseEntries.push(['HOME', accountHome]);
+  }
   const reservedKeys = new Set(baseEntries.map(([key]) => key));
   const launchEntries = Object.entries(agent.launchEnv ?? {})
     .filter(([key]) => !reservedKeys.has(key));
@@ -65,22 +71,22 @@ function withLaunchEnv(agent: AgentRecord, cmd: string, personaFile: string): st
 }
 
 /** Wrap the first shell step in a pipeline with agent env vars (same as withLaunchEnv for paste mode). */
-function wrapFirstShellStep(steps: PipelineStep[], agent: AgentRecord, personaFile: string): PipelineStep[] {
+function wrapFirstShellStep(steps: PipelineStep[], agent: AgentRecord, personaFile: string, accountHome?: string): PipelineStep[] {
   const idx = steps.findIndex(s => s.type === 'shell');
   if (idx === -1) return steps;
   const step = steps[idx] as { type: 'shell'; command: string };
   const wrapped = [...steps];
-  wrapped[idx] = { type: 'shell', command: withLaunchEnv(agent, step.command, personaFile) };
+  wrapped[idx] = { type: 'shell', command: withLaunchEnv(agent, step.command, personaFile, accountHome) };
   return wrapped;
 }
 
 /** Wrap a resolved hook result with agent env vars for launch operations (spawn/resume/reload). */
-function wrapLaunchResult(result: HookResult, agent: AgentRecord, personaFile: string): HookResult {
+function wrapLaunchResult(result: HookResult, agent: AgentRecord, personaFile: string, accountHome?: string): HookResult {
   if (result.mode === 'paste') {
-    return { mode: 'paste', text: withLaunchEnv(agent, result.text, personaFile) };
+    return { mode: 'paste', text: withLaunchEnv(agent, result.text, personaFile, accountHome) };
   }
   if (result.mode === 'pipeline') {
-    return { ...result, steps: wrapFirstShellStep(result.steps, agent, personaFile) };
+    return { ...result, steps: wrapFirstShellStep(result.steps, agent, personaFile, accountHome) };
   }
   return result;
 }
@@ -480,8 +486,20 @@ export async function spawnAgent(
       templateVars,
     });
 
+    // Scaffold isolated HOME if agent has an account configured
+    let accountHome: string | undefined;
+    if (phase1.current.account && ctx.accountStore) {
+      const home = ctx.accountStore.scaffoldAgentHome(opts.name, phase1.current.account);
+      if (home) {
+        accountHome = home;
+        console.log(`[lifecycle] ${opts.name}: using account "${phase1.current.account}" (HOME=${home})`);
+      } else {
+        console.warn(`[lifecycle] ${opts.name}: account "${phase1.current.account}" not found or missing credentials`);
+      }
+    }
+
     // Wrap launch command with agent env vars
-    const wrappedStart = wrapLaunchResult(startResult, phase1.current, personaFile);
+    const wrappedStart = wrapLaunchResult(startResult, phase1.current, personaFile, accountHome);
 
     await dispatchHookResult(ctx, opts.proxyId, tmuxSession, wrappedStart, { agentName: opts.name });
 
@@ -607,8 +625,15 @@ export async function resumeAgent(
       templateVars: resumeTemplateVars,
     });
 
+    // Scaffold isolated HOME if agent has an account configured
+    let accountHome: string | undefined;
+    if (phase1.current.account && ctx.accountStore) {
+      const home = ctx.accountStore.scaffoldAgentHome(name, phase1.current.account);
+      if (home) accountHome = home;
+    }
+
     // Wrap launch command with agent env vars
-    const wrappedResume = wrapLaunchResult(resumeResult, phase1.current, personaFile);
+    const wrappedResume = wrapLaunchResult(resumeResult, phase1.current, personaFile, accountHome);
 
     await dispatchHookResult(ctx, proxyId, tmuxSession, wrappedResume, { agentName: name });
 
@@ -897,8 +922,15 @@ export async function reloadAgent(
       templateVars: reloadTemplateVars,
     });
 
+    // Scaffold isolated HOME if agent has an account configured
+    let accountHome: string | undefined;
+    if (phase1.current.account && ctx.accountStore) {
+      const home = ctx.accountStore.scaffoldAgentHome(name, phase1.current.account);
+      if (home) accountHome = home;
+    }
+
     // Wrap launch command with agent env vars
-    const wrappedReload = wrapLaunchResult(reloadResult, phase1.current, personaFile);
+    const wrappedReload = wrapLaunchResult(reloadResult, phase1.current, personaFile, accountHome);
 
     await dispatchHookResult(ctx, proxyId, tmuxSession, wrappedReload, { agentName: name });
 

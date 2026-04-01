@@ -9,6 +9,7 @@ import { createRouter, type RouteContext } from './routes.ts';
 import { WebSocketServer } from '../shared/websocket-server.ts';
 import { LockManager } from '../shared/lock.ts';
 import { MessageDispatcher } from './message-dispatcher.ts';
+import { AccountStore } from './accounts.ts';
 import type { ProxyCommand, ProxyResponse } from '../shared/types.ts';
 
 /** Helper to build a MessageDispatcher for tests */
@@ -56,6 +57,7 @@ describe('API Routes', () => {
       messageDispatcher: makeTestDispatcher(db, locks, mockProxyDispatch),
       usagePoller: { getUsageData: () => ({}), pollNow: async () => {} } as any,
       voiceEnabled: false,
+      accountStore: new AccountStore({ accountsDir: join(tmpDir, 'accounts'), agentHomesDir: join(tmpDir, 'agent-homes'), skipAutoRegister: true }),
     };
 
     const router = createRouter(ctx);
@@ -520,6 +522,7 @@ describe('API Routes — Auth', () => {
       messageDispatcher: makeTestDispatcher(db, authLocks, authDispatch),
       usagePoller: { getUsageData: () => ({}), pollNow: async () => {} } as any,
       voiceEnabled: false,
+      accountStore: new AccountStore({ accountsDir: join(tmpDir, 'accounts'), agentHomesDir: join(tmpDir, 'agent-homes'), skipAutoRegister: true }),
     };
 
     const router = createRouter(ctx);
@@ -625,6 +628,7 @@ describe('API Routes — Rate Limiting', () => {
       messageDispatcher: makeTestDispatcher(db, rateLocks, rateDispatch),
       usagePoller: { getUsageData: () => ({}), pollNow: async () => {} } as any,
       voiceEnabled: false,
+      accountStore: new AccountStore({ accountsDir: join(tmpDir, 'accounts'), agentHomesDir: join(tmpDir, 'agent-homes'), skipAutoRegister: true }),
     };
 
     const router = createRouter(ctx);
@@ -705,6 +709,7 @@ describe('API Routes — Personas', () => {
       messageDispatcher: makeTestDispatcher(db, personaLocks, personaDispatch),
       usagePoller: { getUsageData: () => ({}), pollNow: async () => {} } as any,
       voiceEnabled: false,
+      accountStore: new AccountStore({ accountsDir: join(tmpDir, 'accounts'), agentHomesDir: join(tmpDir, 'agent-homes'), skipAutoRegister: true }),
     };
 
     const router = createRouter(ctx);

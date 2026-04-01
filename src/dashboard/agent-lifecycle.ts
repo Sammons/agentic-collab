@@ -73,6 +73,14 @@ indicators:
     regex: 'Context left until'
     badge: Low Context
     style: danger
+  logged-out:
+    regex: 'Not logged in'
+    badge: Logged Out
+    style: danger
+  context-limit:
+    regex: 'Context limit reached'
+    badge: Context Limit
+    style: danger
 ---
 # Agent Name
 
@@ -167,6 +175,10 @@ export function openCreateAgentModal() {
   const proxyOptions = (state.proxies || []).map(p =>
     `<option value="${esc(p.proxyId)}">${esc(p.proxyId)}</option>`
   ).join('');
+  const hasAccounts = state.accounts && state.accounts.length > 0;
+  const accountOptions = (state.accounts || []).map(a =>
+    `<option value="${esc(a.name)}">${esc(a.name)}${a.email ? ` (${esc(a.email)})` : ''}</option>`
+  ).join('');
   overlay.innerHTML = `
     <div class="create-modal">
       <div class="create-modal-header">
@@ -177,6 +189,10 @@ export function openCreateAgentModal() {
         </select>
         <select id="createProxySelect" style="padding:8px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:14px;outline:none" ${hasProxies ? '' : 'disabled'}>
           ${hasProxies ? proxyOptions : '<option>No proxies</option>'}
+        </select>
+        <select id="createAccountSelect" style="padding:8px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:14px;outline:none" ${hasAccounts ? '' : 'disabled'}>
+          <option value="">Default account</option>
+          ${hasAccounts ? accountOptions : ''}
         </select>
         <input type="text" id="createAgentName" placeholder="agent-name (kebab-case)" autocomplete="off" />
       </div>
@@ -218,11 +234,21 @@ export function openCreateAgentModal() {
 
   async function createAgent(spawn) {
     const name = nameInput.value.trim();
-    const content = overlay.querySelector('#createAgentContent').value;
+    let content = overlay.querySelector('#createAgentContent').value;
     if (!name) { showToast('Agent name is required', 'error'); return; }
     if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$/.test(name)) {
       showToast('Name: 1-63 chars, start alphanumeric, [a-zA-Z0-9_-]', 'error');
       return;
+    }
+
+    // Inject account field into frontmatter if selected
+    const selectedAccount = overlay.querySelector('#createAccountSelect')?.value || '';
+    if (selectedAccount) {
+      // Insert account: line after the first --- line in frontmatter
+      const fmEnd = content.indexOf('\n---', 1);
+      if (fmEnd !== -1) {
+        content = content.slice(0, fmEnd) + `\naccount: ${selectedAccount}` + content.slice(fmEnd);
+      }
     }
 
     try {

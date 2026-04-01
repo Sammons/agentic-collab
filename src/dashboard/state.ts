@@ -19,6 +19,7 @@ export const state = {
   quickFilter: null,
   engineUsage: {},
   proxies: [],
+  accounts: [],
   emptyGroups: [],
   drafts: {},
   topicPerAgent: {},

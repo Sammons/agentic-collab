@@ -23,7 +23,7 @@ export function setup({ handleAuthError }) {
 const FM_CONFIG_LABELS = {
   engine: 'Engine', model: 'Model', thinking: 'Thinking',
   cwd: 'Working Dir', permissions: 'Permissions',
-  group: 'Group',
+  group: 'Group', account: 'Account',
 };
 const FM_HOOK_FIELDS = ['start', 'resume', 'exit', 'compact', 'interrupt', 'submit'];
 const FM_ALL_KNOWN = new Set([...Object.keys(FM_CONFIG_LABELS), ...FM_HOOK_FIELDS]);

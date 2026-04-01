@@ -104,6 +104,7 @@ export const CONFIG_FIELDS: readonly FieldDef[] = [
   { name: 'proxyHost',          column: 'proxy_host',            personaKey: 'proxy_host',            kind: 'scalar', nested: false, upsertable: true,  createOnly: false },
   { name: 'proxyId',            column: 'proxy_id',              personaKey: null,                    kind: 'scalar', nested: false, upsertable: false, createOnly: true },
   { name: 'agentGroup',         column: 'agent_group',           personaKey: 'group',                 kind: 'scalar', nested: false, upsertable: true,  createOnly: false },
+  { name: 'account',            column: 'account',               personaKey: 'account',               kind: 'scalar', nested: false, upsertable: true,  createOnly: false },
   { name: 'launchEnv',          column: 'launch_env',            personaKey: 'env',                   kind: 'json',   nested: false, upsertable: true,  createOnly: false, serialize: serializeLaunchEnv, deserialize: deserializeLaunchEnv, equals: launchEnvEquals },
   { name: 'hookStart',          column: 'hook_start',            personaKey: 'start',                 kind: 'hook',   nested: true,  upsertable: true,  createOnly: false },
   { name: 'hookResume',         column: 'hook_resume',           personaKey: 'resume',                kind: 'hook',   nested: true,  upsertable: true,  createOnly: false },

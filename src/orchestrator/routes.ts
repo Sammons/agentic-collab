@@ -7,8 +7,9 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { request as httpRequest } from 'node:http';
 import { pipeline } from 'node:stream/promises';
 import { timingSafeEqual } from 'node:crypto';
-import { readdirSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from 'node:fs';
+import { readdirSync, readFileSync, writeFileSync, mkdirSync, unlinkSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { renderMarkdown, wrapInHtml, DOC_PAGES } from '../docs/render.ts';
 import { hostname } from 'node:os';
 import type { Database } from './database.ts';
 import type { WebSocketServer } from '../shared/websocket-server.ts';
@@ -56,6 +57,7 @@ export type RouteContext = {
   messageDispatcher: MessageDispatcher;
   usagePoller: UsagePoller;
   voiceEnabled: boolean;
+  accountStore: import('./accounts.ts').AccountStore;
 };
 
 /**
@@ -175,6 +177,37 @@ route('GET', '/dashboard/assets/:path+', async (req, res, match) => {
   }
 });
 
+// ── Docs ──
+
+const DOCS_DIR = join(import.meta.dirname!, '..', 'docs');
+
+route('GET', '/docs', async (_req, res) => {
+  // Index page — redirect to quickstart
+  res.writeHead(302, { location: '/docs/quickstart' });
+  res.end();
+});
+
+route('GET', '/docs/:page', async (_req, res, match) => {
+  const page = match.pathname.groups['page'] ?? '';
+  if (page.includes('..') || !/^[a-z0-9-]+$/.test(page)) {
+    res.writeHead(400); res.end('Bad request'); return;
+  }
+  const mdPath = join(DOCS_DIR, `${page}.md`);
+  if (!existsSync(mdPath)) {
+    res.writeHead(404); res.end('Page not found'); return;
+  }
+  const md = readFileSync(mdPath, 'utf-8');
+  const bodyHtml = renderMarkdown(md);
+  const docPage = DOC_PAGES.find(p => p.slug === page);
+  const title = docPage?.title ?? page;
+  const html = wrapInHtml(title, bodyHtml, page);
+  res.writeHead(200, {
+    'content-type': 'text/html; charset=utf-8',
+    'cache-control': 'no-cache, no-store, must-revalidate',
+  });
+  res.end(html);
+});
+
 // ── Agent CRUD ──
 
 route('GET', '/api/agents', async (_req, res, _match, ctx) => {
@@ -280,6 +313,9 @@ route('POST', '/api/agents/send', async (req, res, _match, ctx) => {
 
   const target = ctx.db.getAgent(body.to);
   if (!target) return json(res, 404, { error: `Target agent "${body.to}" not found` });
+  if (target.state === 'void') {
+    return json(res, 400, { error: `Target agent "${body.to}" is in void state (not spawned). Spawn it first with: collab spawn ${body.to}` });
+  }
 
   const messageId = generateMessageId();
   const sanitized = sanitizeMessage(body.message);
@@ -1199,18 +1235,23 @@ route('POST', '/api/reminders/:id/complete', async (_req, res, match, ctx) => {
   // Promote the next pending reminder (now that the completed one is gone)
   const next = ctx.db.getTopReminder(reminder.agentName);
   if (next) {
-    const creator = next.createdBy || 'system';
-    const envelope = `[reminder #${next.id} from ${creator}]: ${next.prompt}\nMark done when complete: collab reminder done ${next.id}`;
-    const msg = ctx.db.enqueueMessage({
-      sourceAgent: null,
-      targetAgent: next.agentName,
-      envelope,
-    });
-    ctx.db.updateReminderDelivery(next.id);
-    ctx.wss.broadcast(JSON.stringify({ type: 'queue_update', message: msg }));
-    ctx.messageDispatcher.tryDeliver(next.agentName).catch((err) => {
-      console.error(`[routes] Reminder promotion delivery failed for ${next.agentName}:`, (err as Error).message);
-    });
+    // Respect skipIfActive on promoted reminders (same check as ReminderDispatcher.tick)
+    const agent = ctx.db.getAgent(next.agentName);
+    const skipBecauseActive = next.skipIfActive && agent && agent.state === 'active';
+    if (!skipBecauseActive) {
+      const creator = next.createdBy || 'system';
+      const envelope = `[reminder #${next.id} from ${creator}]: ${next.prompt}\nMark done when complete: collab reminder done ${next.id}`;
+      const msg = ctx.db.enqueueMessage({
+        sourceAgent: null,
+        targetAgent: next.agentName,
+        envelope,
+      });
+      ctx.db.updateReminderDelivery(next.id);
+      ctx.wss.broadcast(JSON.stringify({ type: 'queue_update', message: msg }));
+      ctx.messageDispatcher.tryDeliver(next.agentName).catch((err) => {
+        console.error(`[routes] Reminder promotion delivery failed for ${next.agentName}:`, (err as Error).message);
+      });
+    }
   }
 
   broadcastReminderUpdate(ctx);
@@ -1260,6 +1301,37 @@ route('POST', '/api/reminders/swap', async (req, res, _match, ctx) => {
 
   broadcastReminderUpdate(ctx);
   json(res, 200, { ok: true });
+});
+
+// ── Accounts ──
+
+route('GET', '/api/accounts', async (_req, res, _match, ctx) => {
+  const accounts = ctx.accountStore.list();
+  json(res, 200, accounts);
+});
+
+route('POST', '/api/accounts', async (req, res, _match, ctx) => {
+  const body = await readBody(req);
+  const name = body?.name;
+  if (typeof name !== 'string' || name.length === 0) {
+    return json(res, 400, { error: 'name is required' });
+  }
+  if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
+    return json(res, 400, { error: 'name must be alphanumeric with dashes/underscores' });
+  }
+  try {
+    const account = ctx.accountStore.registerFromCurrent(name);
+    json(res, 201, account);
+  } catch (err) {
+    json(res, 500, { error: (err as Error).message });
+  }
+});
+
+route('DELETE', '/api/accounts/:name', async (_req, res, match, ctx) => {
+  const name = match.pathname.groups['name']!;
+  const removed = ctx.accountStore.remove(name);
+  if (!removed) return json(res, 404, { error: 'Account not found' });
+  json(res, 200, { ok: true, deleted: name });
 });
 
   return routes;
@@ -1530,5 +1602,6 @@ function makeLifecycleCtx(ctx: RouteContext): LifecycleContext {
     locks: ctx.locks,
     proxyDispatch: ctx.proxyDispatch,
     orchestratorHost: ctx.orchestratorHost,
+    accountStore: ctx.accountStore,
   };
 }

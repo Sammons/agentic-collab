@@ -141,6 +141,7 @@ export function connect() {
         state.agents = data.agents;
         state.threads = data.threads;
         state.proxies = data.proxies || [];
+        state.accounts = data.accounts || [];
         state.indicators = data.indicators || {};
         // Restore unread counts from server, preserving any live increments
         if (data.unreadCounts) {

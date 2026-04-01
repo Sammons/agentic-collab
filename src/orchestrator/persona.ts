@@ -40,6 +40,8 @@ export type PersonaFrontmatter = {
   proxy_host?: string;
   permissions?: string;
   group?: string;
+  /** Named credential account for per-agent HOME isolation. */
+  account?: string;
   /** Launch-time environment variables injected on spawn/resume/reload. */
   env?: LaunchEnv;
   /** Hook value for starting the agent. String (legacy) or structured object. */

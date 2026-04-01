@@ -18,6 +18,7 @@ import { ReminderDispatcher } from './reminder-dispatcher.ts';
 import { shutdownAgents, restoreAllAgents } from './network.ts';
 import type { LifecycleContext } from './lifecycle.ts';
 import { syncPersonasToDb } from './persona.ts';
+import { AccountStore } from './accounts.ts';
 import { isRunning } from '../shared/agent-entity.ts';
 import { resolveSecret, getSecretPath } from '../shared/config.ts';
 import type { ProxyCommand, ProxyResponse, ProxyRegistration } from '../shared/types.ts';
@@ -183,11 +184,14 @@ const reminderDispatcher = new ReminderDispatcher({
   },
 });
 
+const accountStore = new AccountStore();
+
 const lifecycleCtx: LifecycleContext = {
   db,
   locks,
   proxyDispatch,
   orchestratorHost: ORCHESTRATOR_HOST,
+  accountStore,
 };
 
 // Voice proxy config
@@ -215,6 +219,7 @@ const routeCtx: RouteContext = {
   messageDispatcher,
   usagePoller,
   voiceEnabled: !!voiceOpts,
+  accountStore,
 };
 
 const router = createRouter(routeCtx);
@@ -288,6 +293,7 @@ wss.onConnect((client) => {
     const active = healthMonitor.getActiveIndicators(agent.name);
     if (active.length > 0) indicators[agent.name] = active;
   }
+  const accounts = accountStore.list();
   wss.send(client, JSON.stringify({
     type: 'init',
     agents,
@@ -295,6 +301,7 @@ wss.onConnect((client) => {
     proxies,
     unreadCounts,
     indicators,
+    accounts,
   }));
 });
 

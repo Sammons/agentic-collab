@@ -67,7 +67,10 @@ export class MessageDispatcher {
     this.db.resetStaleAttempts(MessageDispatcher.STALE_ATTEMPT_TIMEOUT_S);
 
     const agent = this.db.getAgent(agentName);
-    if (!agent || !agent.proxyId || !canSuspend(agent)) return false;
+    if (!agent || !agent.proxyId || !canSuspend(agent)) {
+      console.log(`[dispatcher] Cannot deliver to ${agentName}: ${!agent ? 'not found' : !agent.proxyId ? 'no proxy' : `state=${agent.state}`}`);
+      return false;
+    }
 
     const delivered = await this.deliverNextMessage(agentName);
     if (delivered) {

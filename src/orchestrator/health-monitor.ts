@@ -66,6 +66,14 @@ export class HealthMonitor {
    * With 2s fast-poll, 2 consecutive (after baseline) = 6s to detect idle.
    */
   static readonly IDLE_THRESHOLD = 2;
+  /**
+   * Grace period (ms) after last detected activity before allowing idle transition.
+   * Resets every time new output is detected, preventing active/idle blinking
+   * when agents produce intermittent output.
+   */
+  static readonly ACTIVE_GRACE_MS = parseInt(process.env['ACTIVE_GRACE_MS'] ?? '10000', 10);
+  /** Timestamp of last detected screen change per agent. */
+  private readonly lastActivityDetected = new Map<string, number>();
   /** Number of trailing pane lines to capture for screen-diff. */
   static readonly SNAPSHOT_LINES = 30;
   private readonly db: Database;
@@ -141,6 +149,8 @@ export class HealthMonitor {
       return count >= HealthMonitor.IDLE_THRESHOLD;
     } else {
       this.unchangedCount.set(agentName, 0);
+      // Reset grace period — activity detected
+      this.lastActivityDetected.set(agentName, Date.now());
       return false;
     }
   }
@@ -383,9 +393,15 @@ export class HealthMonitor {
    */
   private handleIdleTransitions(agent: AgentRecord, isIdle: boolean): void {
     if (agent.state === 'active' && isIdle) {
+      // Enforce grace period — don't transition to idle if recent activity was detected
+      const lastActivity = this.lastActivityDetected.get(agent.name) ?? 0;
+      const elapsed = Date.now() - lastActivity;
+      if (elapsed < HealthMonitor.ACTIVE_GRACE_MS) {
+        return; // Still within grace period, stay active
+      }
       const current = this.db.getAgent(agent.name);
       if (current && current.state === 'active') {
-        console.log(`[health] ${agent.name}: active → idle (unchanged=${this.unchangedCount.get(agent.name) ?? 0})`);
+        console.log(`[health] ${agent.name}: active → idle (unchanged=${this.unchangedCount.get(agent.name) ?? 0}, grace elapsed=${elapsed}ms)`);
         this.db.updateAgentState(agent.name, 'idle', current.version, {
           lastActivity: new Date().toISOString(),
         });

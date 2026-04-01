@@ -70,7 +70,8 @@ function buildIndicatorsHtml(indicators) {
 function buildMetaHtml(agent, proxies) {
   const modelStr = [agent.engine, agent.model, agent.thinking].filter(Boolean).join(' ');
   const ctxStr = agent.lastContextPct != null ? `${agent.lastContextPct}%` : '--';
-  return `<span>${esc(modelStr)}</span><span>ctx: ${ctxStr}</span>${agent.proxyId ? `<span title="proxy: ${esc(agent.proxyId)}">${esc(agent.proxyId)}${proxyWarning(agent.proxyId, proxies)}</span>` : ''}`;
+  const accountSpan = agent.account ? `<span title="account: ${esc(agent.account)}">acct: ${esc(agent.account)}</span>` : '';
+  return `<span>${esc(modelStr)}</span><span>ctx: ${ctxStr}</span>${accountSpan}${agent.proxyId ? `<span title="proxy: ${esc(agent.proxyId)}">${esc(agent.proxyId)}${proxyWarning(agent.proxyId, proxies)}</span>` : ''}`;
 }
 
 // ── Component ──

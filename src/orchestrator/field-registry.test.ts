@@ -18,7 +18,7 @@ import {
 describe('field-registry', () => {
   describe('CONFIG_FIELDS', () => {
     it('has 20 entries covering all config fields', () => {
-      assert.equal(CONFIG_FIELDS.length, 20);
+      assert.equal(CONFIG_FIELDS.length, 21);
     });
 
     it('has unique field names', () => {
@@ -38,6 +38,7 @@ describe('field-registry', () => {
 
       // These are the config fields that appear in the current COLUMN_MAP
       assert.equal(map['agentGroup'], 'agent_group');
+      assert.equal(map['account'], 'account');
       assert.equal(map['launchEnv'], 'launch_env');
       assert.equal(map['hookStart'], 'hook_start');
       assert.equal(map['hookResume'], 'hook_resume');
@@ -175,7 +176,7 @@ describe('field-registry', () => {
       // Registry provides everything except 'name' and 'state' (prepended/appended manually)
       const expected = [
         'engine', 'model', 'thinking', 'cwd', 'persona', 'permissions',
-        'proxy_host', 'proxy_id', 'agent_group', 'launch_env',
+        'proxy_host', 'proxy_id', 'agent_group', 'account', 'launch_env',
         'hook_start', 'hook_resume', 'hook_compact', 'hook_exit',
         'hook_interrupt', 'hook_submit', 'hook_detect_session',
         'detect_session_regex', 'custom_buttons', 'indicators',
@@ -194,7 +195,7 @@ describe('field-registry', () => {
       const cols = configUpsertColumns();
       const expected = [
         'engine', 'model', 'thinking', 'cwd', 'persona', 'permissions',
-        'proxy_host', 'agent_group', 'launch_env',
+        'proxy_host', 'agent_group', 'account', 'launch_env',
         'hook_start', 'hook_resume', 'hook_compact', 'hook_exit',
         'hook_interrupt', 'hook_submit', 'hook_detect_session',
         'detect_session_regex', 'custom_buttons', 'indicators',
@@ -229,7 +230,7 @@ describe('field-registry', () => {
       };
 
       const params = serializeConfigParams(opts);
-      assert.equal(params.length, 20); // 20 config fields
+      assert.equal(params.length, 21); // 21 config fields
       assert.equal(params[0], 'claude'); // engine
       assert.equal(params[1], null);    // model
       assert.equal(params[2], null);    // thinking
@@ -245,7 +246,7 @@ describe('field-registry', () => {
       const opts = {
         engine: 'claude', model: null, thinking: null, cwd: '/tmp',
         persona: null, permissions: null, proxyHost: null, proxyId: null,
-        agentGroup: null, launchEnv: { FOO: 'bar', BAZ: 'qux' },
+        agentGroup: null, account: null, launchEnv: { FOO: 'bar', BAZ: 'qux' },
         hookStart: null, hookResume: null, hookCompact: null,
         hookExit: null, hookInterrupt: null, hookSubmit: null,
         hookDetectSession: null, detectSessionRegex: null,
@@ -253,14 +254,14 @@ describe('field-registry', () => {
       };
 
       const params = serializeConfigParams(opts);
-      assert.equal(params[9], JSON.stringify({ FOO: 'bar', BAZ: 'qux' })); // launch_env index
+      assert.equal(params[10], JSON.stringify({ FOO: 'bar', BAZ: 'qux' })); // launch_env index
     });
 
     it('serializes hook values (string passthrough)', () => {
       const opts = {
         engine: 'claude', model: null, thinking: null, cwd: '/tmp',
         persona: null, permissions: null, proxyHost: null, proxyId: null,
-        agentGroup: null, launchEnv: null,
+        agentGroup: null, account: null, launchEnv: null,
         hookStart: '/start', hookResume: null, hookCompact: '/compact',
         hookExit: null, hookInterrupt: null, hookSubmit: null,
         hookDetectSession: null, detectSessionRegex: null,
@@ -268,8 +269,9 @@ describe('field-registry', () => {
       };
 
       const params = serializeConfigParams(opts);
-      assert.equal(params[10], '/start');   // hook_start
-      assert.equal(params[12], '/compact'); // hook_compact
+      assert.equal(params[11], '/start');   // hook_start
+      assert.equal(params[13], '/compact'); // hook_compact
+      // indices: 0=engine..8=agentGroup, 9=account, 10=launchEnv, 11=hookStart, 13=hookCompact
     });
 
     it('serializes hook values (object to JSON)', () => {
@@ -277,7 +279,7 @@ describe('field-registry', () => {
       const opts = {
         engine: 'claude', model: null, thinking: null, cwd: '/tmp',
         persona: null, permissions: null, proxyHost: null, proxyId: null,
-        agentGroup: null, launchEnv: null,
+        agentGroup: null, account: null, launchEnv: null,
         hookStart: hookObj, hookResume: null, hookCompact: null,
         hookExit: null, hookInterrupt: null, hookSubmit: null,
         hookDetectSession: null, detectSessionRegex: null,
@@ -285,14 +287,14 @@ describe('field-registry', () => {
       };
 
       const params = serializeConfigParams(opts);
-      assert.equal(params[10], JSON.stringify(hookObj));
+      assert.equal(params[11], JSON.stringify(hookObj)); // hook_start at index 11
     });
 
     it('serializes customButtons (empty object to null)', () => {
       const opts = {
         engine: 'claude', model: null, thinking: null, cwd: '/tmp',
         persona: null, permissions: null, proxyHost: null, proxyId: null,
-        agentGroup: null, launchEnv: null,
+        agentGroup: null, account: null, launchEnv: null,
         hookStart: null, hookResume: null, hookCompact: null,
         hookExit: null, hookInterrupt: null, hookSubmit: null,
         hookDetectSession: null, detectSessionRegex: null,
@@ -301,14 +303,14 @@ describe('field-registry', () => {
       };
 
       const params = serializeConfigParams(opts);
-      assert.equal(params[18], null); // custom_buttons
+      assert.equal(params[19], null); // custom_buttons at index 19
     });
 
     it('serializes indicators (empty array to null)', () => {
       const opts = {
         engine: 'claude', model: null, thinking: null, cwd: '/tmp',
         persona: null, permissions: null, proxyHost: null, proxyId: null,
-        agentGroup: null, launchEnv: null,
+        agentGroup: null, account: null, launchEnv: null,
         hookStart: null, hookResume: null, hookCompact: null,
         hookExit: null, hookInterrupt: null, hookSubmit: null,
         hookDetectSession: null, detectSessionRegex: null,
@@ -317,7 +319,7 @@ describe('field-registry', () => {
       };
 
       const params = serializeConfigParams(opts);
-      assert.equal(params[19], null); // indicators
+      assert.equal(params[20], null); // indicators at index 20
     });
   });
 
@@ -326,7 +328,7 @@ describe('field-registry', () => {
       const opts = {
         engine: 'claude', model: null, thinking: null, cwd: '/tmp',
         persona: null, permissions: null, proxyHost: null, proxyId: 'p1',
-        agentGroup: null, launchEnv: null,
+        agentGroup: null, account: null, launchEnv: null,
         hookStart: null, hookResume: null, hookCompact: null,
         hookExit: null, hookInterrupt: null, hookSubmit: null,
         hookDetectSession: null, detectSessionRegex: null,
@@ -334,7 +336,7 @@ describe('field-registry', () => {
       };
 
       const params = serializeUpsertParams(opts);
-      assert.equal(params.length, 19); // 20 - 1 (proxyId)
+      assert.equal(params.length, 20); // 21 - 1 (proxyId)
       // proxyId value 'p1' should NOT appear
       assert.ok(!params.includes('p1'));
     });
@@ -343,7 +345,7 @@ describe('field-registry', () => {
       const opts = {
         engine: 'claude', model: null, thinking: null, cwd: '/tmp',
         persona: null, permissions: null, proxyHost: null,
-        agentGroup: null, launchEnv: null,
+        agentGroup: null, account: null, launchEnv: null,
         hookStart: null, hookResume: null, hookCompact: null,
         hookExit: null, hookInterrupt: null, hookSubmit: null,
         hookDetectSession: null, detectSessionRegex: null,
@@ -387,7 +389,7 @@ describe('field-registry', () => {
 
     it('detects engine change', () => {
       const existing = { engine: 'claude', model: null, thinking: null, cwd: '/tmp',
-        permissions: null, proxyHost: null, agentGroup: null, launchEnv: null,
+        permissions: null, proxyHost: null, agentGroup: null, account: null, launchEnv: null,
         hookStart: null, hookResume: null, hookCompact: null, hookExit: null,
         hookInterrupt: null, hookSubmit: null, hookDetectSession: null,
         detectSessionRegex: null, customButtons: null, indicators: null };
@@ -398,7 +400,7 @@ describe('field-registry', () => {
 
     it('detects model change (null → value)', () => {
       const existing = { engine: 'claude', model: null, thinking: null, cwd: '/tmp',
-        permissions: null, proxyHost: null, agentGroup: null, launchEnv: null,
+        permissions: null, proxyHost: null, agentGroup: null, account: null, launchEnv: null,
         hookStart: null, hookResume: null, hookCompact: null, hookExit: null,
         hookInterrupt: null, hookSubmit: null, hookDetectSession: null,
         detectSessionRegex: null, customButtons: null, indicators: null };
@@ -409,7 +411,7 @@ describe('field-registry', () => {
 
     it('detects launchEnv change (deep equality)', () => {
       const existing = { engine: 'claude', model: null, thinking: null, cwd: '/tmp',
-        permissions: null, proxyHost: null, agentGroup: null,
+        permissions: null, proxyHost: null, agentGroup: null, account: null,
         launchEnv: { FOO: 'bar' },
         hookStart: null, hookResume: null, hookCompact: null, hookExit: null,
         hookInterrupt: null, hookSubmit: null, hookDetectSession: null,
@@ -421,7 +423,7 @@ describe('field-registry', () => {
 
     it('returns false for equivalent launchEnv (same keys/values)', () => {
       const existing = { engine: 'claude', model: null, thinking: null, cwd: '/tmp',
-        permissions: null, proxyHost: null, agentGroup: null,
+        permissions: null, proxyHost: null, agentGroup: null, account: null,
         launchEnv: { FOO: 'bar' },
         hookStart: null, hookResume: null, hookCompact: null, hookExit: null,
         hookInterrupt: null, hookSubmit: null, hookDetectSession: null,
@@ -433,7 +435,7 @@ describe('field-registry', () => {
 
     it('treats null and undefined as equivalent', () => {
       const existing = { engine: 'claude', model: null, thinking: null, cwd: '/tmp',
-        permissions: null, proxyHost: null, agentGroup: null, launchEnv: null,
+        permissions: null, proxyHost: null, agentGroup: null, account: null, launchEnv: null,
         hookStart: null, hookResume: null, hookCompact: null, hookExit: null,
         hookInterrupt: null, hookSubmit: null, hookDetectSession: null,
         detectSessionRegex: null, customButtons: null, indicators: null };
@@ -444,7 +446,7 @@ describe('field-registry', () => {
 
     it('detects hook value change', () => {
       const existing = { engine: 'claude', model: null, thinking: null, cwd: '/tmp',
-        permissions: null, proxyHost: null, agentGroup: null, launchEnv: null,
+        permissions: null, proxyHost: null, agentGroup: null, account: null, launchEnv: null,
         hookStart: '/start', hookResume: null, hookCompact: null, hookExit: null,
         hookInterrupt: null, hookSubmit: null, hookDetectSession: null,
         detectSessionRegex: null, customButtons: null, indicators: null };
@@ -455,7 +457,7 @@ describe('field-registry', () => {
 
     it('detects customButtons change', () => {
       const existing = { engine: 'claude', model: null, thinking: null, cwd: '/tmp',
-        permissions: null, proxyHost: null, agentGroup: null, launchEnv: null,
+        permissions: null, proxyHost: null, agentGroup: null, account: null, launchEnv: null,
         hookStart: null, hookResume: null, hookCompact: null, hookExit: null,
         hookInterrupt: null, hookSubmit: null, hookDetectSession: null,
         detectSessionRegex: null, customButtons: null, indicators: null };
@@ -466,7 +468,7 @@ describe('field-registry', () => {
 
     it('skips persona field in comparison', () => {
       const existing = { engine: 'claude', model: null, thinking: null, cwd: '/tmp',
-        persona: 'old-name', permissions: null, proxyHost: null, agentGroup: null,
+        persona: 'old-name', permissions: null, proxyHost: null, agentGroup: null, account: null,
         launchEnv: null, hookStart: null, hookResume: null, hookCompact: null,
         hookExit: null, hookInterrupt: null, hookSubmit: null, hookDetectSession: null,
         detectSessionRegex: null, customButtons: null, indicators: null };
