@@ -9,6 +9,7 @@
 
 import type { Database } from './database.ts';
 import type { ProxyCommand, ProxyResponse } from '../shared/types.ts';
+import type { AccountStore } from './accounts.ts';
 import { getAdapter } from './adapters/index.ts';
 import { sleep } from '../shared/utils.ts';
 
@@ -20,6 +21,7 @@ export type UsageBucket = {
 
 export type EngineUsage = {
   engine: string;
+  account?: string;    // account name (undefined = default/host credentials)
   buckets: UsageBucket[];
   queriedAt: string;   // ISO timestamp
   queriedFrom: string; // session name used for the query
@@ -28,6 +30,7 @@ export type EngineUsage = {
 export type UsagePollerOptions = {
   db: Database;
   proxyDispatch: (proxyId: string, command: ProxyCommand) => Promise<ProxyResponse>;
+  accountStore?: AccountStore;
   pollIntervalMs?: number;
   cwd?: string;
 };
@@ -41,6 +44,8 @@ const RECYCLE_MS = 8 * 60 * 60 * 1000; // 8 hours — kill and recreate stale se
 
 type EngineConfig = {
   engine: 'claude' | 'codex';
+  account?: string;        // account name if per-account usage
+  accountHome?: string;    // scaffolded HOME path for account isolation
   sessionName: string;
   spawnCommand: string;
   usageCommand: string;
@@ -51,6 +56,7 @@ export class UsagePoller {
   private timer: ReturnType<typeof setInterval> | null = null;
   private readonly db: Database;
   private readonly proxyDispatch: (proxyId: string, command: ProxyCommand) => Promise<ProxyResponse>;
+  private readonly accountStore: AccountStore | undefined;
   private readonly pollIntervalMs: number;
   private readonly cwd: string;
   private readonly usageData = new Map<string, EngineUsage>();
@@ -62,6 +68,7 @@ export class UsagePoller {
   constructor(opts: UsagePollerOptions) {
     this.db = opts.db;
     this.proxyDispatch = opts.proxyDispatch;
+    this.accountStore = opts.accountStore;
     this.pollIntervalMs = opts.pollIntervalMs ?? DEFAULT_POLL_MS;
     this.cwd = opts.cwd ?? '/tmp';
   }
@@ -116,15 +123,30 @@ export class UsagePoller {
   private getEngineConfigs(): EngineConfig[] {
     const agents = this.db.listAgents();
     const configs: EngineConfig[] = [];
+    const claudeAdapter = getAdapter('claude');
 
-    const hasClaude = agents.some(a => a.engine === 'claude');
-    if (hasClaude) {
-      const adapter = getAdapter('claude');
+    // Collect unique accounts used by Claude agents
+    const claudeAccounts = new Set<string>();
+    for (const a of agents) {
+      if (a.engine === 'claude') {
+        claudeAccounts.add(a.account ?? 'default');
+      }
+    }
+
+    // Create one usage session per Claude account
+    for (const accountName of claudeAccounts) {
+      const suffix = accountName === 'default' ? 'claude' : `claude-${accountName}`;
+      let accountHome: string | undefined;
+      if (accountName !== 'default' && this.accountStore) {
+        accountHome = this.accountStore.scaffoldAgentHome(`usage-${suffix}`, accountName) ?? undefined;
+      }
       configs.push({
         engine: 'claude',
-        sessionName: `${SESSION_PREFIX}claude`,
-        spawnCommand: adapter.buildSpawnCommand({
-          name: 'usage-claude',
+        account: accountName,
+        accountHome,
+        sessionName: `${SESSION_PREFIX}${suffix}`,
+        spawnCommand: claudeAdapter.buildSpawnCommand({
+          name: `usage-${suffix}`,
           cwd: this.cwd,
           dangerouslySkipPermissions: true,
         }),
@@ -225,15 +247,21 @@ export class UsagePoller {
     });
 
     if (buckets.length > 0) {
-      this.usageData.set(config.engine, {
+      // Key by engine:account for per-account usage, or just engine for non-account
+      const key = config.account && config.account !== 'default'
+        ? `${config.engine}:${config.account}` : config.engine;
+      const label = config.account ? `${config.engine}:${config.account}` : config.engine;
+      this.usageData.set(key, {
         engine: config.engine,
+        account: config.account,
         buckets,
         queriedAt: new Date().toISOString(),
         queriedFrom: config.sessionName,
       });
-      console.log(`[usage] ${config.engine}: ${buckets.map(b => `${b.label}: ${b.pctUsed}%`).join(', ')}`);
+      console.log(`[usage] ${label}: ${buckets.map(b => `${b.label}: ${b.pctUsed}%`).join(', ')}`);
     } else {
-      console.warn(`[usage] ${config.engine}: no usage data found within ${CAPTURE_TIMEOUT_MS / 1000}s`);
+      const label = config.account ? `${config.engine}:${config.account}` : config.engine;
+      console.warn(`[usage] ${label}: no usage data found within ${CAPTURE_TIMEOUT_MS / 1000}s`);
     }
   }
 
@@ -253,17 +281,23 @@ export class UsagePoller {
     }
 
     // Create session and spawn CLI
-    console.log(`[usage] Spawning dedicated ${config.engine} session: ${config.sessionName}`);
+    const label = config.account ? `${config.engine}:${config.account}` : config.engine;
+    console.log(`[usage] Spawning dedicated ${label} session: ${config.sessionName}`);
     await this.proxyDispatch(proxyId, {
       action: 'create_session',
       sessionName: config.sessionName,
       cwd: this.cwd,
     });
 
+    // Inject HOME override for account-isolated credential usage
+    const cmd = config.accountHome
+      ? `export HOME=${config.accountHome} && ${config.spawnCommand}`
+      : config.spawnCommand;
+
     await this.proxyDispatch(proxyId, {
       action: 'paste',
       sessionName: config.sessionName,
-      text: config.spawnCommand,
+      text: cmd,
       pressEnter: true,
     });
 

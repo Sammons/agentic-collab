@@ -275,14 +275,17 @@ export function renderAgents() {
       if (rest > 0) parts.push(`${rest} other`);
       engineHtml += `<div style="margin:2px 0">${engine}: ${parts.join(', ')}</div>`;
 
-      // Usage buckets
-      const usage = state.engineUsage[engine];
-      if (usage && usage.buckets && usage.buckets.length > 0) {
+      // Usage buckets — find all usage entries for this engine (including per-account)
+      const usageEntries = Object.entries(state.engineUsage)
+        .filter(([key, u]) => u && u.engine === engine && u.buckets && u.buckets.length > 0);
+      for (const [key, usage] of usageEntries) {
+        const accountLabel = usage.account && usage.account !== 'default'
+          ? `<span style="color:var(--accent)">${esc(usage.account)}</span> ` : '';
         for (const b of usage.buckets) {
           const barPct = Math.min(100, Math.max(0, b.pctUsed));
           const color = barPct >= 80 ? 'var(--red)' : barPct >= 50 ? 'var(--yellow)' : 'var(--green)';
           engineHtml += `<div style="margin:2px 0 2px 12px;font-size:11px;color:var(--text-dim)">`;
-          engineHtml += `${b.label}: `;
+          engineHtml += `${accountLabel}${b.label}: `;
           engineHtml += `<span style="display:inline-block;width:60px;height:8px;background:var(--border);border-radius:4px;vertical-align:middle;overflow:hidden">`;
           engineHtml += `<span style="display:block;width:${barPct}%;height:100%;background:${color};border-radius:4px"></span></span>`;
           engineHtml += ` <span style="color:${color}">${b.pctUsed}%</span>`;

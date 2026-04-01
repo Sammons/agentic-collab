@@ -163,11 +163,16 @@ const healthMonitor = new HealthMonitor({
 });
 healthMonitorRef = healthMonitor;
 
+// ── Account Store ──
+
+const accountStore = new AccountStore();
+
 // ── Usage Poller ──
 
 const usagePoller = new UsagePoller({
   db,
   proxyDispatch,
+  accountStore,
   cwd: '/tmp',
 });
 
@@ -183,8 +188,6 @@ const reminderDispatcher = new ReminderDispatcher({
     wss.broadcast(JSON.stringify({ type: 'message', msg }));
   },
 });
-
-const accountStore = new AccountStore();
 
 const lifecycleCtx: LifecycleContext = {
   db,
