@@ -130,11 +130,13 @@
     display: flex;
     gap: 6px;
     padding: 4px 12px;
-    overflow-x: hidden;
+    overflow-x: auto;
     flex-wrap: nowrap;
     border-top: 1px solid var(--border);
     background: var(--surface);
+    scrollbar-width: none;
   }
+  .topic-breadcrumbs::-webkit-scrollbar { display: none; }
   .topic-breadcrumbs:empty { display: none; }
   .topic-chip {
     font-size: 11px;
