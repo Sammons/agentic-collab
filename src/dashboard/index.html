@@ -171,7 +171,7 @@ import { renderAgents, selectAgent, patchAgentCard, updateAgent, addMessage, han
   });
 
   // Withdraw/unsend message handler
-  threadMsgs.addEventListener('click', async (e) => {
+  document.getElementById('threadMessages').addEventListener('click', async (e) => {
     const btn = e.target.closest('.msg-withdraw');
     if (!btn) return;
     const msgId = btn.dataset.msgId;
