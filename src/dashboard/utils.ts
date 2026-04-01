@@ -219,6 +219,18 @@ export function renderMarkdown(escaped) {
         continue;
       }
 
+      // Continuation lines inside a list (indented or non-empty while list is open)
+      if (listStack.length > 0 && line.trim() !== '' && !line.startsWith('#') && !line.startsWith('```') && !line.startsWith('<h') && !line.startsWith('<hr')) {
+        // Append to last list item as continuation text
+        const lastIdx = out.length - 1;
+        if (lastIdx >= 0 && out[lastIdx].startsWith('<li>')) {
+          out[lastIdx] = out[lastIdx].replace('</li>', ' ' + line.trim() + '</li>');
+        } else {
+          out.push(line);
+        }
+        continue;
+      }
+
       closeAllLists();
 
       if (line.trim() === '') {

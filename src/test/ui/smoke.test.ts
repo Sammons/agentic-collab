@@ -188,4 +188,82 @@ describe('UI Test Framework - Smoke', () => {
     assert.equal(agents.length, 3);
     assert.equal(agents[0]!.name, 'test-claude');
   });
+
+  // ── Dashboard script validation ──
+
+  it('dashboard inline script references only declared variables', async () => {
+    const res = await fetch(ctx.url);
+    const html = await res.text();
+
+    // Extract inline <script type="module"> content
+    const scriptMatch = html.match(/<script type="module">([\s\S]*?)<\/script>/);
+    assert.ok(scriptMatch, 'should have inline module script');
+    const script = scriptMatch![1]!;
+
+    // Find all getElementById calls and track the variable names they assign to
+    const idRefs = new Map<string, string>(); // varName -> elementId
+    for (const match of script.matchAll(/(?:const|let|var)\s+(\w+)\s*=\s*document\.getElementById\(['"](\w+)['"]\)/g)) {
+      idRefs.set(match[1]!, match[2]!);
+    }
+
+    // Find all .addEventListener, .querySelector, .classList, .value, .style references
+    // and check that the variable was declared (getElementById or import)
+    const memberRefs = [...script.matchAll(/\b(\w+)\.(addEventListener|querySelector|classList|value|style|onclick|innerHTML|textContent|getDraft|clear)\b/g)];
+    const importedNames = new Set<string>();
+    for (const match of script.matchAll(/import\s*\{([^}]+)\}/g)) {
+      for (const name of match[1]!.split(',')) {
+        importedNames.add(name.trim().split(/\s+as\s+/).pop()!.trim());
+      }
+    }
+    // Also count const/let declarations
+    for (const match of script.matchAll(/(?:const|let|var)\s+(\w+)\s*=/g)) {
+      importedNames.add(match[1]!);
+    }
+    // Function declarations
+    for (const match of script.matchAll(/function\s+(\w+)\s*\(/g)) {
+      importedNames.add(match[1]!);
+    }
+
+    const undeclared: string[] = [];
+    for (const ref of memberRefs) {
+      const varName = ref[1]!;
+      // Skip well-known globals and properties
+      if (['document', 'window', 'location', 'console', 'state', 'e', 'evt', 'err', 'res', 'body', 'btn', 'file', 'item', 'files', 'items', 'i', 'droppedFiles', 'threadPanel'].includes(varName)) continue;
+      if (importedNames.has(varName)) continue;
+      if (idRefs.has(varName)) continue;
+      undeclared.push(`${varName}.${ref[2]}`);
+    }
+
+    assert.deepEqual(undeclared, [], `Found references to undeclared variables: ${undeclared.join(', ')}`);
+  });
+
+  it('all dashboard asset imports reference existing files', async () => {
+    const { existsSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const res = await fetch(ctx.url);
+    const html = await res.text();
+
+    // Extract all import paths from the module script
+    const importPaths: string[] = [];
+    for (const match of html.matchAll(/from\s+['"]([^'"]+)['"]/g)) {
+      importPaths.push(match[1]!);
+    }
+    for (const match of html.matchAll(/import\s+['"]([^'"]+)['"]/g)) {
+      importPaths.push(match[1]!);
+    }
+
+    assert.ok(importPaths.length > 0, 'should have module imports');
+
+    // Verify each import path maps to a real file on disk
+    // /dashboard/assets/foo.ts → src/dashboard/foo.ts
+    const srcDir = join(import.meta.dirname!, '..', '..', 'dashboard');
+    const missing: string[] = [];
+    for (const path of importPaths) {
+      const rel = path.replace('/dashboard/assets/', '');
+      if (!existsSync(join(srcDir, rel))) {
+        missing.push(path);
+      }
+    }
+    assert.deepEqual(missing, [], `Imports reference missing files: ${missing.join(', ')}`);
+  });
 });
