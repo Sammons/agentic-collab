@@ -22,8 +22,8 @@ export function setup({ handleAuthError, selectAgent }) {
 
 // ── Constants ──
 
-const DESTRUCTIVE_ACTIONS = new Set(['kill', 'destroy']);
-const ACTION_LABELS = { kill: 'Kill', destroy: 'Destroy', exit: 'Exit', resume: 'Resume', interrupt: 'Interrupt', compact: 'Compact', spawn: 'Spawn' };
+const DESTRUCTIVE_ACTIONS = new Set(['kill', 'destroy', 'reload']);
+const ACTION_LABELS = { kill: 'Kill', destroy: 'Destroy', exit: 'Exit', resume: 'Resume', interrupt: 'Interrupt', compact: 'Compact', spawn: 'Spawn', reload: 'Reload' };
 
 const ENGINE_TEMPLATES = {
   claude: `---

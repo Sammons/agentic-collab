@@ -36,7 +36,7 @@ function buildActionsHtml(agent) {
   const isVoid = agent.state === 'void';
   let html = '';
   if (activeIdle) {
-    html = `${agent.engine !== 'codex' ? '<button data-action="compact">Compact</button>' : ''}<button data-action="exit">Exit</button><button class="danger" data-action="kill">Kill</button>${agent.tmuxSession ? `<button class="secondary" data-copy-tmux="tmux attach -t ${esc(agent.tmuxSession)}">Copy tmux</button>` : ''}`;
+    html = `${agent.engine !== 'codex' ? '<button data-action="compact">Compact</button>' : ''}<button data-action="reload">Reload</button><button data-action="exit">Exit</button><button class="danger" data-action="kill">Kill</button>${agent.tmuxSession ? `<button class="secondary" data-copy-tmux="tmux attach -t ${esc(agent.tmuxSession)}">Copy tmux</button>` : ''}`;
   } else if (suspendedFailed) {
     html = '<button data-action="resume">Resume</button><button class="danger" data-action="destroy">Destroy</button>';
   } else if (transitioning) {
