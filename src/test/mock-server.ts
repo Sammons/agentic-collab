@@ -169,6 +169,7 @@ type FixtureState = {
   threads: Record<string, DashboardMessage[]>;
   proxies: ProxyRegistration[];
   indicators: Record<string, ActiveIndicator[]>;
+  personas: Record<string, unknown>;
   messageIdCounter: number;
   requestLog: RequestLogEntry[];
   wsLog: WsLogEntry[];
@@ -180,6 +181,7 @@ function createFixtureState(): FixtureState {
     threads: {},
     proxies: [...DEFAULT_PROXIES],
     indicators: {},
+    personas: {},
     messageIdCounter: 1,
     requestLog: [],
     wsLog: [],
@@ -353,7 +355,13 @@ export async function startMockServer(port: number): Promise<MockServer> {
 
     // ── API: personas ──
     if (method === 'GET' && path.startsWith('/api/personas/')) {
-      logJson(res, { error: 'not found' }, 404);
+      const name = path.replace('/api/personas/', '');
+      const persona = fixtures.personas[name];
+      if (persona) {
+        logJson(res, persona);
+      } else {
+        logJson(res, { error: 'not found' }, 404);
+      }
       return;
     }
 
@@ -388,6 +396,16 @@ export async function startMockServer(port: number): Promise<MockServer> {
           wss.broadcast(JSON.stringify(event));
         }
       }
+      logJson(res, { ok: true });
+      return;
+    }
+
+    // ── Test Control: set-personas ──
+    if (method === 'POST' && path === '/test/set-personas') {
+      const rawBody = await readBody(req);
+      const body = JSON.parse(rawBody) as Record<string, unknown>;
+      parsedRequestBody = body;
+      Object.assign(fixtures.personas, body);
       logJson(res, { ok: true });
       return;
     }

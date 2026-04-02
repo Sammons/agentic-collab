@@ -226,6 +226,15 @@ export class TestContext {
     if (!res.ok) throw new Error(`setAgents failed: ${res.status}`);
   }
 
+  async setPersonas(personas: Record<string, unknown>): Promise<void> {
+    const res = await fetch(`${this.mock.url}/test/set-personas`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(personas),
+    });
+    if (!res.ok) throw new Error(`setPersonas failed: ${res.status}`);
+  }
+
   async sendMessage(agent: string, message: string, opts?: { direction?: string; topic?: string }): Promise<void> {
     const res = await fetch(`${this.mock.url}/test/send-message`, {
       method: 'POST',
