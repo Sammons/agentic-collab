@@ -272,11 +272,9 @@ The recommended way to use agentic-collab is to start with a **team lead agent**
 
 1. `docker compose up -d` — starts orchestrator, creates shared secret
 2. `node src/proxy/main.ts` — auto-discovers orchestrator, no config needed
-3. Copy `persistent-agents/team-lead.example.md` → `persistent-agents/team-lead.md`, edit for your project
+3. Create a persona file in `persistent-agents/` with engine, cwd, and start hook (see `src/docs/persona-reference.md` for all frontmatter fields)
 4. Spawn the team lead with a high-level objective
 5. The team lead creates specialist agents, assigns tasks, coordinates
-
-See `persistent-agents/team-lead.example.md` for the full template.
 
 ## What Could Be Built Next
 

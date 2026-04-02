@@ -103,11 +103,18 @@ mise run doctor      # check prerequisites
 
 ### 3. Create your team lead
 
-The recommended pattern is to start with a **team lead agent** that coordinates other agents. Copy the example:
+The recommended pattern is to start with a **team lead agent** that coordinates other agents. Create a persona file:
 
 ```bash
-cp persistent-agents/team-lead.example.md persistent-agents/my-team-lead.md
-# Edit cwd, proxy_host, and instructions for your project
+cat > persistent-agents/my-team-lead.md << 'EOF'
+---
+engine: claude
+cwd: /path/to/your/project
+start:
+  - shell: claude --dangerously-skip-permissions --model sonnet --append-system-prompt $PERSONA_PROMPT
+---
+You are a team lead. Coordinate with other agents via `collab send`.
+EOF
 ```
 
 Then spawn it from the dashboard, or via API:
@@ -550,7 +557,7 @@ Supported engines: `claude`, `codex`, `opencode`.
 node --test 'src/**/*.test.ts'
 ```
 
-631 tests across 101 suites covering lifecycle operations, database persistence, networking, locking, health monitoring, adapters, message delivery, crash recovery, file upload, streaming upload, rate limiting, path traversal, persona frontmatter, pipeline hooks, variable capture, custom buttons, markdown rendering, session detection, version handshake, unread cursors, integration tests, and input validation.
+773 tests across 140+ suites covering lifecycle operations, database persistence, networking, locking, health monitoring, adapters, message delivery, crash recovery, file upload, streaming upload, rate limiting, path traversal, persona frontmatter, pipeline hooks, variable capture, custom buttons, markdown rendering, session detection, version handshake, unread cursors, integration tests, input validation, and UI regression tests.
 
 ## Project structure
 
@@ -609,7 +616,7 @@ src/
 └── test/
     ├── mock-server.ts      # Dashboard mock server for UI tests
     ├── runner.ts           # Test probe + browser automation
-    └── ui/                 # 7 UI test suites (105 tests)
+    └── ui/                 # 8 UI test suites (105 tests)
 ```
 
 ## Design decisions
