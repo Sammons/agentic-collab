@@ -289,6 +289,8 @@ export async function startMockServer(port: number): Promise<MockServer> {
 
     // ── Dashboard ──
     if (method === 'GET' && path === '/dashboard') {
+      // Always inject the in-page probe (handles DOM interaction).
+      // The chrome extension handles screenshots separately via its own WS channel.
       const html = getDashboardHtml(port + 1);
       res.writeHead(200, {
         'content-type': 'text/html',

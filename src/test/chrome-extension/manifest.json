@@ -1,10 +1,11 @@
 {
   "manifest_version": 3,
   "name": "Agentic Collab Test Probe",
-  "version": "1.0.0",
-  "description": "Screenshot and interaction probe for UI testing",
-  "permissions": ["activeTab", "scripting", "tabs"],
-  "host_permissions": ["*://localhost/*"],
+  "version": "2.1.0",
+  "description": "Screenshot and resize probe for UI testing — connects directly to test runner",
+  "permissions": ["debugger", "tabs"],
+  "host_permissions": ["<all_urls>"],
+  "action": {},
   "background": {
     "service_worker": "background.js"
   }

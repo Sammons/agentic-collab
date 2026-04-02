@@ -1,25 +1,30 @@
 /**
- * Capture dashboard screenshots using mock server + chrome extension probe.
- * Fully automated — launches Chrome with the extension auto-loaded via --load-extension.
+ * Capture dashboard screenshots using:
+ *   - Mock server (seeded data)
+ *   - In-page probe (DOM interaction: click, type, read)
+ *   - Chrome extension (browser-level: screenshot via captureVisibleTab, resize)
+ *
+ * One-time setup:
+ *   chrome://extensions -> Developer mode -> Load unpacked -> src/test/chrome-extension/
  *
  * Usage: node scripts/capture-screenshots.ts
+ *   or:  pnpm screenshot
  */
 import { createTestContext } from '../src/test/runner.ts';
-import { spawn } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync } from 'node:fs';
+import { execSync } from 'node:child_process';
+import { copyFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
 
 const OUT = join(import.meta.dirname!, '..', 'docs', 'screenshots');
 const SNAP = join(import.meta.dirname!, '..', 'src', 'test', 'ui', 'snapshots');
-const EXT = join(import.meta.dirname!, '..', 'src', 'test', 'chrome-extension');
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
 if (!existsSync(OUT)) mkdirSync(OUT, { recursive: true });
 
 const ctx = await createTestContext();
+await ctx.startExtensionServer();
 
-// Seed realistic data
+// Seed data
 await ctx.setAgents([
   { name: 'team-lead', engine: 'claude', state: 'active', lastActivity: new Date().toISOString() },
   { name: 'frontend-dev', engine: 'claude', state: 'idle', lastActivity: new Date(Date.now() - 300000).toISOString() },
@@ -39,82 +44,71 @@ for (const msg of [
   await ctx.sendMessage('team-lead', msg.m, { direction: msg.d });
 }
 
-// Launch Chrome with extension auto-loaded via --load-extension + --disable-extensions-except
+// Open dashboard — probe.ts connects for DOM, extension connects for screenshots
 const url = ctx.extensionUrl;
-const tmpProfile = mkdtempSync(join(tmpdir(), 'chrome-ss-'));
-console.log(`Launching Chrome with extension from ${EXT}`);
-console.log(`Dashboard: ${url}\n`);
-const chrome = spawn('google-chrome', [
-  `--user-data-dir=${tmpProfile}`,
-  `--load-extension=${EXT}`,
-  `--disable-extensions-except=${EXT}`,
-  '--no-first-run',
-  '--no-default-browser-check',
-  '--remote-debugging-port=9223',
-  `--window-size=1280,800`,
-  url,
-], { stdio: 'ignore' });
+console.log(`Opening: ${url}\n`);
+execSync(`xdg-open "${url}"`, { stdio: 'ignore' });
 
-console.log('Waiting for probe to connect...');
+console.log('Waiting for in-page probe...');
 await ctx.waitForProbe(30_000);
-console.log('Probe connected!\n');
+console.log('Probe connected!');
+
+console.log('Waiting for extension...');
+await ctx.waitForExtension(30_000);
+console.log('Extension connected!\n');
 await sleep(2000);
 
-function copySnap(name: string) {
+function save(name: string) {
   const src = join(SNAP, `${name}.png`);
   if (existsSync(src)) {
     copyFileSync(src, join(OUT, `${name}.png`));
-    console.log(`  → docs/screenshots/${name}.png`);
+    console.log(`  -> docs/screenshots/${name}.png`);
   }
 }
 
 try {
-  // ── Desktop ──
-  console.log('Desktop screenshots (1280x800)...');
+  console.log('Desktop screenshots...');
 
-  await ctx.screenshot('desktop-agents');
-  copySnap('desktop-agents');
+  await ctx.extScreenshot('desktop-agents');
+  save('desktop-agents');
 
   await ctx.click('agent-card');
   await sleep(2000);
-  await ctx.screenshot('desktop-messages');
-  copySnap('desktop-messages');
+  await ctx.extScreenshot('desktop-messages');
+  save('desktop-messages');
 
   await ctx.click('.thread-tabs button:nth-child(2)');
   await sleep(1000);
-  await ctx.screenshot('desktop-persona');
-  copySnap('desktop-persona');
+  await ctx.extScreenshot('desktop-persona');
+  save('desktop-persona');
 
   await ctx.click('.filter-chip[data-filter="active"]');
   await sleep(500);
-  await ctx.screenshot('desktop-filter');
-  copySnap('desktop-filter');
+  await ctx.extScreenshot('desktop-filter');
+  save('desktop-filter');
 
-  // ── Mobile ──
-  // Resize window to mobile dimensions via extension
-  console.log('\nMobile screenshots (375x812)...');
-  console.log('  Resizing window...');
-  await ctx.resize(375, 812);
+  console.log('\nMobile screenshots...');
+  await ctx.extResize(375, 812);
   await sleep(2000);
 
-  // Clear filter
-  await ctx.click('.filter-chip.active');
+  try { await ctx.click('.filter-chip.active'); } catch {}
   await sleep(500);
-  await ctx.screenshot('mobile-agents');
-  copySnap('mobile-agents');
+  try { await ctx.click('.mobile-back'); } catch {}
+  await sleep(500);
+  await ctx.extScreenshot('mobile-agents');
+  save('mobile-agents');
 
   await ctx.click('agent-card');
   await sleep(2000);
-  await ctx.screenshot('mobile-messages');
-  copySnap('mobile-messages');
+  await ctx.extScreenshot('mobile-messages');
+  save('mobile-messages');
 
   await ctx.click('.thread-tabs button:nth-child(2)');
   await sleep(1000);
-  await ctx.screenshot('mobile-persona');
-  copySnap('mobile-persona');
+  await ctx.extScreenshot('mobile-persona');
+  save('mobile-persona');
 
   console.log('\nDone! 7 screenshots in docs/screenshots/');
 } finally {
-  chrome.kill();
   await ctx.close();
 }

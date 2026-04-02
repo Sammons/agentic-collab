@@ -12,6 +12,7 @@
     "proxy": "node src/proxy/main.ts",
     "test": "node --test 'src/**/*.test.ts'",
     "test:watch": "node --test --watch 'src/**/*.test.ts'",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "screenshot": "node scripts/capture-screenshots.ts"
   }
 }

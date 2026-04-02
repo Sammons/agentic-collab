@@ -20,6 +20,14 @@ export class TestContext {
   private pendingCommands = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
   private mockPort: number;
 
+  // Extension channel (screenshot/resize via chrome extension polling HTTP)
+  private extServer: Server | null = null;
+  private extReady: Promise<void> | null = null;
+  private resolveExtReady: (() => void) | null = null;
+  private extCommandQueue: { id: string; cmd: string; [k: string]: unknown }[] = [];
+  private extPollWaiters: ((cmd: unknown) => void)[] = [];
+  private pendingExtCommands = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
+
   constructor(mock: MockServer, probeServer: Server, probeWss: WebSocketServer, mockPort: number) {
     this.mock = mock;
     this.probeServer = probeServer;
@@ -70,15 +78,133 @@ export class TestContext {
     });
   }
 
+  /** Start the extension HTTP server on mockPort + 2. Call before opening the extensionUrl. */
+  async startExtensionServer(): Promise<void> {
+    const extPort = this.mockPort + 2;
+    this.extReady = new Promise<void>((resolve) => { this.resolveExtReady = resolve; });
+
+    this.extServer = createServer((req, res) => {
+      const url = new URL(req.url ?? '/', `http://localhost:${extPort}`);
+      res.setHeader('access-control-allow-origin', '*');
+      res.setHeader('access-control-allow-headers', 'content-type');
+
+      if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
+
+      // Extension signals ready
+      if (url.pathname === '/ext/ready') {
+        this.resolveExtReady?.();
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end('{"ok":true}');
+        return;
+      }
+
+      // Extension polls for next command (long-poll: wait up to 10s)
+      if (url.pathname === '/ext/poll') {
+        if (this.extCommandQueue.length > 0) {
+          const cmd = this.extCommandQueue.shift()!;
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify(cmd));
+        } else {
+          // Long-poll: wait for a command or timeout
+          const timer = setTimeout(() => {
+            const idx = this.extPollWaiters.indexOf(resolve);
+            if (idx >= 0) this.extPollWaiters.splice(idx, 1);
+            res.writeHead(200, { 'content-type': 'application/json' });
+            res.end('{}');
+          }, 10000);
+          const resolve = (cmd: unknown) => {
+            clearTimeout(timer);
+            res.writeHead(200, { 'content-type': 'application/json' });
+            res.end(JSON.stringify(cmd));
+          };
+          this.extPollWaiters.push(resolve);
+        }
+        return;
+      }
+
+      // Extension posts result
+      if (url.pathname === '/ext/result') {
+        let body = '';
+        req.on('data', (c) => { body += c; });
+        req.on('end', () => {
+          try {
+            const msg = JSON.parse(body) as Record<string, unknown>;
+            const id = msg['id'] as string;
+            if (id && this.pendingExtCommands.has(id)) {
+              const pending = this.pendingExtCommands.get(id)!;
+              this.pendingExtCommands.delete(id);
+              if (msg['ok']) pending.resolve(msg['data'] ?? null);
+              else pending.reject(new Error(String(msg['error'] ?? 'ext command failed')));
+            }
+          } catch { /* ignore */ }
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end('{"ok":true}');
+        });
+        return;
+      }
+
+      res.writeHead(404); res.end();
+    });
+
+    await new Promise<void>((resolve) => { this.extServer!.listen(extPort, () => resolve()); });
+  }
+
+  async waitForExtension(timeout = 30_000): Promise<void> {
+    if (!this.extReady) throw new Error('Extension server not started — call startExtensionServer() first');
+    const timer = new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error('Extension did not connect within timeout')), timeout);
+    });
+    await Promise.race([this.extReady, timer]);
+  }
+
+  private sendExtCommand(cmd: string, params: Record<string, unknown> = {}): Promise<unknown> {
+    const id = randomUUID();
+    const command = { id, cmd, ...params };
+
+    // Push to queue — if a poller is waiting, deliver immediately
+    if (this.extPollWaiters.length > 0) {
+      this.extPollWaiters.shift()!(command);
+    } else {
+      this.extCommandQueue.push(command);
+    }
+
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingExtCommands.delete(id);
+        reject(new Error(`Extension command "${cmd}" timed out`));
+      }, 15_000);
+      this.pendingExtCommands.set(id, {
+        resolve: (v) => { clearTimeout(timer); resolve(v); },
+        reject: (e) => { clearTimeout(timer); reject(e); },
+      });
+    });
+  }
+
+  /** Take screenshot via chrome extension (captureVisibleTab). */
+  async extScreenshot(name: string): Promise<string> {
+    const result = await this.sendExtCommand('screenshot') as { base64: string };
+    const snapshotDir = join(import.meta.dirname, 'ui', 'snapshots');
+    mkdirSync(snapshotDir, { recursive: true });
+    const pngPath = join(snapshotDir, `${name}.png`);
+    writeFileSync(pngPath, Buffer.from(result.base64, 'base64'));
+    console.log(`[ext-screenshot] ${name}.png saved`);
+    return pngPath;
+  }
+
+  /** Resize window via chrome extension. */
+  async extResize(width: number, height: number): Promise<void> {
+    await this.sendExtCommand('resize', { width, height });
+  }
+
   // ── Dashboard URL ──
 
   get url(): string {
     return `${this.mock.url}/dashboard?test=true`;
   }
 
-  /** URL with probePort param for chrome extension content script. */
+  /** URL with extPort param for chrome extension service worker. */
   get extensionUrl(): string {
-    return `${this.mock.url}/dashboard?test=true&probePort=${this.mockPort + 1}`;
+    return `${this.mock.url}/dashboard?test=true&extPort=${this.mockPort + 2}`;
   }
 
   get probePort(): number {
@@ -236,6 +362,7 @@ export class TestContext {
     this.probeWss.close();
     this.mock.close();
     await new Promise<void>((resolve) => this.probeServer.close(() => resolve()));
+    if (this.extServer) await new Promise<void>((resolve) => this.extServer!.close(() => resolve()));
   }
 }
 
