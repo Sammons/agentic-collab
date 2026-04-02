@@ -130,7 +130,7 @@ export function renderAgents() {
   } else if (state.quickFilter === 'recent') {
     filtered = filtered.filter(a => a.lastActivity).sort((a, b) =>
       new Date(b.lastActivity).getTime() - new Date(a.lastActivity).getTime()
-    ).slice(0, 10);
+    ).slice(0, 7);
   }
 
   // Update chip active states

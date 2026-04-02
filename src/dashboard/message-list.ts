@@ -33,31 +33,34 @@ function buildMessageEl(msg, agentName, renderMarkdown) {
     div.className = `msg ${msg.direction === 'to_agent' ? 'to-agent' : 'from-agent'}`;
   }
   if (msg.withdrawn) div.classList.add('withdrawn');
-  const fromLabel = isSystem ? 'system' : (msg.sourceAgent || (msg.direction === 'to_agent' ? 'dashboard' : agentName));
-  const toLabel = msg.targetAgent || (msg.direction === 'to_agent' ? agentName : 'dashboard');
   const time = new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  const topicBadge = msg.topic ? `<span class="msg-topic">${esc(msg.topic)}</span>` : '';
-  const routeStr = `${esc(fromLabel)} ${icon.arrowRightSmall(12)} ${esc(toLabel)}`;
   const displayMsg = isSystem ? msg.message.replace(/^\[system\]\s*/, '') : msg.message;
+  // Cross-agent routing label only when message comes from/goes to a different agent (not dashboard)
+  const crossAgent = msg.sourceAgent && msg.sourceAgent !== 'dashboard' && msg.direction === 'to_agent'
+    ? `<span class="msg-route">${icon.arrowRightSmall(10)} from ${esc(msg.sourceAgent)}</span>`
+    : msg.targetAgent && msg.targetAgent !== 'dashboard' && msg.direction === 'from_agent'
+    ? `<span class="msg-route">${icon.arrowRightSmall(10)} to ${esc(msg.targetAgent)}</span>`
+    : '';
   const statusHtml = (msg.direction === 'to_agent' && msg.queueId)
     ? `<span class="msg-status ${msg.deliveryStatus || 'pending'}" data-queue-id="${msg.queueId}">${
-        msg.deliveryStatus === 'delivered' ? icon.check(12) + ' delivered' :
+        msg.deliveryStatus === 'delivered' ? icon.check(12) :
         msg.deliveryStatus === 'failed' ? icon.x(12) + ' failed' :
-        icon.dots(12) + ' sending'
+        icon.dots(12)
       }</span>`
     : '';
   const canWithdraw = msg.direction === 'to_agent' && !isSystem && !msg.withdrawn && (!msg.sourceAgent || msg.sourceAgent === 'dashboard');
   const withdrawHtml = canWithdraw ? `<span class="msg-withdraw" data-msg-id="${msg.id}" title="Withdraw message">unsend</span>` : '';
-  const copyBtn = `<button class="msg-copy" title="Copy message">${icon.clipboard(14)}</button>`;
-  const headerHtml = `<div class="msg-header"><span class="msg-sender">${routeStr}</span>${topicBadge}<span class="msg-meta">${copyBtn}${withdrawHtml}<span class="msg-time">${time}</span>${statusHtml}</span></div>`;
+  const copyBtnHtml = `<button class="msg-copy" title="Copy message">${icon.clipboard(14)}</button>`;
+  const headerHtml = `<div class="msg-header">${crossAgent}<span class="msg-meta"><span class="msg-time">${time}</span>${statusHtml}${copyBtnHtml}${withdrawHtml}</span></div>`;
   if (isUpload) {
     div.innerHTML = `${headerHtml}<div class="file-info"><span class="file-icon">${icon.paperclip(14)}</span> ${esc(displayMsg)}</div>`;
   } else {
     div.innerHTML = `${headerHtml}<div class="msg-body">${renderMarkdown(esc(displayMsg))}</div>`;
   }
-  div.querySelector('.msg-copy')?.addEventListener('click', (e) => {
-    e.stopPropagation();
-    const btn = e.target;
+  const copyEl = div.querySelector('.msg-copy');
+  // Prevent focus steal on desktop (keeps textarea focused)
+  copyEl?.addEventListener('mousedown', (e) => e.preventDefault());
+  function doCopy(btn) {
     navigator.clipboard.writeText(displayMsg).then(() => {
       btn.innerHTML = icon.check(14);
       setTimeout(() => { btn.innerHTML = icon.clipboard(14); }, 1500);
@@ -65,6 +68,15 @@ function buildMessageEl(msg, agentName, renderMarkdown) {
       btn.innerHTML = icon.x(14);
       setTimeout(() => { btn.innerHTML = icon.clipboard(14); }, 1500);
     });
+  }
+  // Touch: handle in touchend to avoid preventDefault on touchstart killing click
+  copyEl?.addEventListener('touchend', (e) => {
+    e.preventDefault();
+    doCopy(e.currentTarget);
+  });
+  copyEl?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    doCopy(e.currentTarget);
   });
   return div;
 }

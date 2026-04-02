@@ -266,4 +266,38 @@ describe('UI Test Framework - Smoke', () => {
     }
     assert.deepEqual(missing, [], `Imports reference missing files: ${missing.join(', ')}`);
   });
+
+  // ── Dashboard .ts syntax validation ──
+  // Dashboard files are excluded from tsconfig (browser-native type stripping with
+  // bare path imports). This test catches syntax errors like duplicate const
+  // declarations that tsc would normally find.
+
+  it('dashboard .ts files have no syntax errors', async () => {
+    const { readdirSync, readFileSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const vm = await import('node:vm');
+
+    const dashDir = join(import.meta.dirname!, '..', '..', 'dashboard');
+    const tsFiles = readdirSync(dashDir).filter((f: string) => f.endsWith('.ts'));
+    assert.ok(tsFiles.length > 0, 'should find dashboard .ts files');
+
+    const errors: string[] = [];
+    for (const file of tsFiles) {
+      let source = readFileSync(join(dashDir, file), 'utf-8');
+      // Strip import/export statements (vm.compileFunction doesn't support ESM)
+      source = source.replace(/^\s*import\s+.*$/gm, '/* import stripped */');
+      source = source.replace(/^\s*export\s+(default\s+)?/gm, '');
+      // Strip type annotations: `: Type`, `as Type`, `<Type>` generics, type/interface blocks
+      source = source.replace(/:\s*[A-Z]\w*(\[\])?\s*(?=[,)=;\n{])/g, ' ');
+      source = source.replace(/\bas\s+\w+/g, '');
+      source = source.replace(/^(type|interface)\s+\w+[\s\S]*?(?=\n(?:const|let|var|function|class|export|\/))/gm, '');
+      try {
+        vm.compileFunction(source, [], { filename: file });
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        errors.push(`${file}: ${msg}`);
+      }
+    }
+    assert.deepEqual(errors, [], `Dashboard syntax errors:\n${errors.join('\n')}`);
+  });
 });

@@ -254,7 +254,7 @@ export async function handleFileUpload(files, attachedMessage) {
   uploadIndicator.className = 'msg to-agent file-upload';
   const fileNames = files.map(f => `${f.name} (${formatFileSize(f.size)})`).join(', ');
   const indicatorMsg = attachedMessage ? esc(attachedMessage) + '<br>' : '';
-  uploadIndicator.innerHTML = `<div class="msg-header"><span class="msg-sender">you</span><span class="msg-meta"><span class="msg-status pending">${icon.dots(12)} uploading</span></span></div>${indicatorMsg}<div class="file-info"><span class="file-icon">${icon.paperclip(14)}</span> ${esc(fileNames)}</div>`;
+  uploadIndicator.innerHTML = `<div class="msg-header"><span class="msg-meta"><span class="msg-status pending">${icon.dots(12)} uploading</span></span></div>${indicatorMsg}<div class="file-info"><span class="file-icon">${icon.paperclip(14)}</span> ${esc(fileNames)}</div>`;
   messagesEl.appendChild(uploadIndicator);
   messagesEl.scrollTop = messagesEl.scrollHeight;
 

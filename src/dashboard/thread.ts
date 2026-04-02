@@ -74,8 +74,9 @@ document.getElementById('topicBreadcrumbs').addEventListener('click', (e) => {
 // ── Page Title ──
 
 export function updatePageTitle() {
-  const totalUnread = Object.values(state.unread).reduce((sum, n) => sum + (n || 0), 0);
-  const prefix = totalUnread > 0 ? `(${totalUnread}) ` : '';
+  // Show unread count for the selected agent only (not global total across all agents)
+  const unread = state.selected ? (state.unread[state.selected] || 0) : 0;
+  const prefix = unread > 0 ? `(${unread}) ` : '';
   if (state.selected) {
     document.title = `${prefix}${state.selected} — Agentic Collab`;
   } else {

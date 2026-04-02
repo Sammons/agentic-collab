@@ -124,24 +124,7 @@
     .clear-chat-btn { margin-left: auto; }
     .thread-messages { padding: 12px 10px; }
     .msg-header {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
-      align-items: start;
-      column-gap: 8px;
-      row-gap: 4px;
-    }
-    .msg-sender {
-      grid-column: 1;
-    }
-    .msg-topic {
-      grid-column: 2;
-      max-width: 40vw;
-    }
-    .msg-meta {
-      grid-column: 1 / -1;
-      width: 100%;
-      margin-left: 0;
-      justify-content: flex-end;
+      gap: 4px;
     }
     .persona-panel { padding: 14px 10px; }
     .reminder-panel { padding: 14px 10px; }

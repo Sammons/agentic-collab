@@ -14,6 +14,15 @@
     --shadow: 0 2px 8px rgba(0,0,0,0.3);
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
+  /* Thin dark scrollbars that blend with the theme */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+  *::-webkit-scrollbar { width: 6px; height: 6px; }
+  *::-webkit-scrollbar-track { background: transparent; }
+  *::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  *::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
   body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
     background: var(--bg);
@@ -67,6 +76,10 @@
     grid-template-columns: 340px 1fr;
     height: calc(100vh - 49px);
     height: calc(100dvh - 49px);
+    transition: grid-template-columns 0.2s;
+  }
+  .layout:has(.agent-sidebar.collapsed) {
+    grid-template-columns: 0px 1fr;
   }
   /* ── Confirm Dialog ── */
   .confirm-overlay {
