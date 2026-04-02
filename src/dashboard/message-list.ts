@@ -60,8 +60,26 @@ function buildMessageEl(msg, agentName, renderMarkdown) {
   const copyEl = div.querySelector('.msg-copy');
   // Prevent focus steal on desktop (keeps textarea focused)
   copyEl?.addEventListener('mousedown', (e) => e.preventDefault());
+  function copyToClipboard(text) {
+    // navigator.clipboard requires secure context + user activation.
+    // iOS Safari sometimes rejects it in touchend — fall back to execCommand.
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(text).catch(() => execCommandCopy(text));
+    }
+    return execCommandCopy(text);
+  }
+  function execCommandCopy(text) {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.cssText = 'position:fixed;left:-9999px;top:-9999px';
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    ta.remove();
+    return Promise.resolve();
+  }
   function doCopy(btn) {
-    navigator.clipboard.writeText(displayMsg).then(() => {
+    copyToClipboard(displayMsg).then(() => {
       btn.innerHTML = icon.check(14);
       setTimeout(() => { btn.innerHTML = icon.clipboard(14); }, 1500);
     }).catch(() => {
