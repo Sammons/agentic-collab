@@ -37,7 +37,7 @@ All notable changes to agentic-collab are documented here. Format follows [Keep 
 - **Progressive message loading** — render last 30 messages on load, prepend older on scroll-up; eliminates full-thread DOM rebuild (#206, #207, #208)
 - **Layout thrashing** — agent cards patched in-place, search filtering without DOM rebuild (#196–#200)
 - **Textarea auto-resize** removed — was causing 48ms reflow per keystroke (#199)
-- **Markdown images** now render in messages; double-escaping fixed (#213, #214)
+- **Markdown images** now render in dashboard messages (`dashboard/utils.ts`); double-escaping fixed in docs renderer (`docs/render.ts`) (#213, #214)
 - **Ordered list numbering** preserved across blank lines (#216)
 - **Topic breadcrumb scroll** — `overflow-x` was `hidden` instead of `auto` (#215)
 - **Drag-drop zone** expanded to entire thread panel (#215)
