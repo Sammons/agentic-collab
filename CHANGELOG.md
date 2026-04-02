@@ -5,7 +5,7 @@ All notable changes to agentic-collab are documented here. Format follows [Keep 
 ## 0.1.1 — 2026-04-01
 
 ### Added
-- **Dashboard modularization** — monolithic `index.html` script extracted into 12 TypeScript modules and 5 Web Components (`<agent-card>`, `<message-list>`, `<message-input>`, watch/reminder/archive panels) across a 5-story epic (#195–#210)
+- **Dashboard modularization** — monolithic `index.html` script extracted into 16 TypeScript modules and 6 Web Components (`<agent-card>`, `<message-list>`, `<message-input>`, `<watch-panel>`, `<reminder-panel>`, `<archive-panel>`) across a 5-story epic (#195–#210)
 - **SVG icon system** — all emoji icons replaced with inline SVG for consistent rendering across platforms (#211)
 - **Collapsible sidebar** — toggle sidebar with Cmd/Ctrl+B, thread panel fills space via CSS `:has()` (#230)
 - **Reload button** on agent cards — one-click agent reload without destroy/recreate (#233)
@@ -19,7 +19,7 @@ All notable changes to agentic-collab are documented here. Format follows [Keep 
 - **Dashboard TypeScript conversion** — all dashboard modules converted to `.ts` with browser-native type stripping (#212)
 - **CSS split** — single `dashboard.css` split into 8 component-scoped stylesheets (#210)
 - **UI test framework** — mock server, test probe, browser automation runner (#228, #229)
-- **105 UI regression tests** across 7 test suites, 17 browser-dependent (graceful skip in CI) (#229, #231)
+- **105 UI regression tests** across 8 test suites, 17 browser-dependent (graceful skip in CI) (#229, #231)
 - **Dashboard syntax validation** test via `vm.compileFunction` — catches errors in browser-only `.ts` files excluded from tsconfig
 
 ### Changed
