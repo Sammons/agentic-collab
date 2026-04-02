@@ -1,21 +1,18 @@
 /**
  * Capture dashboard screenshots using mock server + chrome extension probe.
- *
- * Prerequisites:
- *   1. Load the extension: chrome://extensions → Developer mode → Load unpacked
- *      → select src/test/chrome-extension/
- *   2. Run this script: node scripts/capture-screenshots.ts
- *   3. Script opens Chrome tab, extension connects probe, screenshots via captureVisibleTab
+ * Fully automated — launches Chrome with the extension auto-loaded via --load-extension.
  *
  * Usage: node scripts/capture-screenshots.ts
  */
 import { createTestContext } from '../src/test/runner.ts';
-import { execSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 const OUT = join(import.meta.dirname!, '..', 'docs', 'screenshots');
 const SNAP = join(import.meta.dirname!, '..', 'src', 'test', 'ui', 'snapshots');
+const EXT = join(import.meta.dirname!, '..', 'src', 'test', 'chrome-extension');
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
 if (!existsSync(OUT)) mkdirSync(OUT, { recursive: true });
@@ -42,11 +39,21 @@ for (const msg of [
   await ctx.sendMessage('team-lead', msg.m, { direction: msg.d });
 }
 
-// Open dashboard in Chrome (extension must be pre-loaded)
+// Launch Chrome with extension auto-loaded via --load-extension + --disable-extensions-except
 const url = ctx.extensionUrl;
-console.log(`Opening: ${url}`);
-console.log('(Extension must be loaded at chrome://extensions)\n');
-execSync(`xdg-open "${url}"`, { stdio: 'ignore' });
+const tmpProfile = mkdtempSync(join(tmpdir(), 'chrome-ss-'));
+console.log(`Launching Chrome with extension from ${EXT}`);
+console.log(`Dashboard: ${url}\n`);
+const chrome = spawn('google-chrome', [
+  `--user-data-dir=${tmpProfile}`,
+  `--load-extension=${EXT}`,
+  `--disable-extensions-except=${EXT}`,
+  '--no-first-run',
+  '--no-default-browser-check',
+  '--remote-debugging-port=9223',
+  `--window-size=1280,800`,
+  url,
+], { stdio: 'ignore' });
 
 console.log('Waiting for probe to connect...');
 await ctx.waitForProbe(30_000);
@@ -108,5 +115,6 @@ try {
 
   console.log('\nDone! 7 screenshots in docs/screenshots/');
 } finally {
+  chrome.kill();
   await ctx.close();
 }
