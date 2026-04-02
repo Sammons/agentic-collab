@@ -2,6 +2,55 @@
 
 All notable changes to agentic-collab are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## 0.1.1 — 2026-04-01
+
+### Added
+- **Dashboard modularization** — monolithic `index.html` script extracted into 12 TypeScript modules and 5 Web Components (`<agent-card>`, `<message-list>`, `<message-input>`, watch/reminder/archive panels) across a 5-story epic (#195–#210)
+- **SVG icon system** — all emoji icons replaced with inline SVG for consistent rendering across platforms (#211)
+- **Collapsible sidebar** — toggle sidebar with Cmd/Ctrl+B, thread panel fills space via CSS `:has()` (#230)
+- **Reload button** on agent cards — one-click agent reload without destroy/recreate (#233)
+- **Permission badge** on agent cards — shows current permission level at a glance (#230)
+- **Interrupt button** — stop active agents directly from the message input area (#225, #226, #227)
+- **Auto-heal failed agents** — health monitor detects CLI alive in tmux and recovers failed state (#224)
+- **Per-account usage polling** — context percentage tracked per credential account (#222)
+- **Per-agent credential accounts** — agents can use different API credentials (#221)
+- **Proxy dropdown in Create Agent** — replaced `proxy_host` text field with proxy picker (#220)
+- **Frontmatter validation** for `cwd` and `proxy_host` fields (#220)
+- **Dashboard TypeScript conversion** — all dashboard modules converted to `.ts` with browser-native type stripping (#212)
+- **CSS split** — single `dashboard.css` split into 8 component-scoped stylesheets (#210)
+- **UI test framework** — mock server, test probe, browser automation runner (#228, #229)
+- **105 UI regression tests** across 7 test suites, 17 browser-dependent (graceful skip in CI) (#229, #231)
+- **Dashboard syntax validation** test via `vm.compileFunction` — catches errors in browser-only `.ts` files excluded from tsconfig
+
+### Changed
+- **Message layout simplified** — removed per-message routing header and topic badge; cross-agent labels shown only for inter-agent messages
+- **Tab title** shows unread count for selected agent only (was global total across all agents)
+- **Recent filter** capped at 7 agents (was 10)
+- **Copy/unsend buttons** always visible at 40% opacity (was hover-only, invisible on mobile)
+- **Idle detection** unified across fast and main poll loops with tmux activity timestamps (#223)
+
+### Fixed
+- **iOS copy button** — works without dismissing keyboard; uses `touchend` handler instead of suppressing `click` via `touchstart`
+- **Copy icon shrinking** after click — `e.target` (SVG child) replaced with `e.currentTarget` (button element)
+- **Scrollbars** themed thin and dark, no longer visually jarring on agent list and messages
+- **Sidebar collapse dead space** — CSS grid column now collapses to 0px when sidebar hidden
+- **Progressive message loading** — render last 30 messages on load, prepend older on scroll-up; eliminates full-thread DOM rebuild (#206, #207, #208)
+- **Layout thrashing** — `renderAgents` throttled via rAF, search debounced, agent cards patched in-place (#196–#200)
+- **Textarea auto-resize** removed — was causing 48ms reflow per keystroke (#199)
+- **Markdown images** now render in messages; double-escaping fixed (#213, #214)
+- **Ordered list numbering** preserved across blank lines (#216)
+- **Topic breadcrumb scroll** — `overflow-x` was `hidden` instead of `auto` (#215)
+- **Drag-drop zone** expanded to entire thread panel (#215)
+- **Interrupt button** CSS specificity issue causing hidden state (#226, #227)
+- **Heal sweep after restart** prevented — stale pane output no longer triggers false recovery (#224)
+- **Session ID resume** fallback when no session captured yet (#232, #233)
+- **Agents showing suspended** during redeploy — state transition guard added (#232)
+- **PTT toggle wrapping** on iPhone (#220)
+- **Exit hook timing** — tmux session preserved on exit (#220)
+
+### Deprecated
+- `proxy_host` frontmatter field — use proxy dropdown in Create Agent modal instead (#220)
+
 ## 2026-03-24
 
 ### Added

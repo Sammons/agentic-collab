@@ -4,5 +4,8 @@ node_modules/
 *.db-shm
 dist/
 .env
+.env.*
 persistent-agents
 src/test/ui/snapshots/
+.DS_Store
+*.log
