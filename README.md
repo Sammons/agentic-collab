@@ -571,6 +571,9 @@ src/
 │   ├── voice-proxy.ts      # WebSocket voice dictation proxy
 │   ├── persona.ts          # Persona loading, frontmatter, startup sync
 │   ├── hook-resolver.ts    # Hook resolution: preset/shell/send modes
+│   ├── accounts.ts         # Per-agent credential account management
+│   ├── field-registry.ts   # Schema-driven config field registry
+│   ├── reminder-dispatcher.ts # Reminder scheduling + delivery
 │   └── adapters/           # Engine-specific behavior
 │       ├── claude.ts
 │       ├── codex.ts
@@ -583,12 +586,30 @@ src/
 │   ├── lock.ts             # SQLite-based lock manager
 │   ├── agent-entity.ts     # Agent state helpers
 │   ├── sanitize.ts         # Message sanitization
+│   ├── markdown.ts         # Markdown rendering (shared)
 │   ├── version.ts          # Git SHA version utility (shared)
 │   ├── config.ts           # Secret resolution + orchestrator discovery
 │   ├── websocket-server.ts # RFC 6455 implementation
 │   └── utils.ts            # Shell quoting, sleep
-└── dashboard/
-    └── index.html          # Single-file SPA
+├── dashboard/              # Browser-native TypeScript modules
+│   ├── index.html          # Entry point + template orchestration
+│   ├── agent-card.ts       # <agent-card> Web Component
+│   ├── message-list.ts     # <message-list> Web Component (progressive loading)
+│   ├── message-input.ts    # <message-input> Web Component
+│   ├── state.ts            # Centralized state + event bus
+│   ├── connection.ts       # WebSocket, auth, engine polling
+│   ├── agent-list.ts       # Agent list rendering + search + filters
+│   ├── agent-lifecycle.ts  # Agent actions (create, destroy, reload)
+│   ├── message-io.ts       # Send, upload, archive, queue status
+│   ├── thread.ts           # Thread rendering + tab title
+│   ├── voice-palette.ts    # Voice dictation + command palette
+│   ├── persona-editor.ts   # Persona editor modal
+│   ├── utils.ts            # Markdown, escaping, toast, confirm
+│   └── styles/             # 8 component-scoped CSS files
+└── test/
+    ├── mock-server.ts      # Dashboard mock server for UI tests
+    ├── runner.ts           # Test probe + browser automation
+    └── ui/                 # 7 UI test suites (105 tests)
 ```
 
 ## Design decisions

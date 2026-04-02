@@ -1,12 +1,12 @@
 # Agentic-Collab Handoff Brief
 
-> Last updated: 2026-03-08 — 410+ tests, all passing
+> Last updated: 2026-04-01 — 773 tests, all passing
 
 ---
 
 ## What Is This?
 
-A zero-dependency orchestrator for managing AI coding agents (Claude, Codex, OpenCode) via tmux sessions. Node 24, no build step, no `npm install`. SQLite persistence via `node:sqlite`. Single-file SPA dashboard.
+A zero-dependency orchestrator for managing AI coding agents (Claude, Codex, OpenCode) via tmux sessions. Node 24, no build step, no `npm install`. SQLite persistence via `node:sqlite`. Modular TypeScript dashboard with Web Components.
 
 **Repo**: GitHub — `Sammons/agentic-collab`
 
@@ -43,9 +43,16 @@ src/
 │   ├── database.ts          # SQLite: agents, events, messages, proxies
 │   ├── routes.ts            # 25+ HTTP endpoints + rate limiter (sliding window per-IP)
 │   ├── lifecycle.ts         # State machine: spawn/resume/suspend/destroy/reload/compact
-│   ├── health-monitor.ts    # 30s poll: idle detection, context thresholds, message delivery
+│   ├── health-monitor.ts    # Polling, idle detection, context thresholds, auto-heal
 │   ├── network.ts           # Graceful shutdown + crash recovery (stuck suspending/resuming)
 │   ├── persona.ts           # Persona loading, frontmatter parsing, startup sync to SQLite
+│   ├── hook-resolver.ts     # Hook resolution: preset/shell/keystrokes modes
+│   ├── message-dispatcher.ts # Event-driven message delivery with retry + backoff
+│   ├── reminder-dispatcher.ts # Reminder scheduling + cadence-based delivery
+│   ├── usage-poller.ts      # Token usage tracking via CLI sessions (per-account)
+│   ├── voice-proxy.ts       # WebSocket voice dictation proxy (ElevenLabs)
+│   ├── accounts.ts          # Per-agent credential account management
+│   ├── field-registry.ts    # Schema-driven config field registry
 │   ├── adapters/
 │   │   ├── index.ts         # Adapter registry
 │   │   ├── claude.ts        # Claude CLI adapter
@@ -64,14 +71,35 @@ src/
 │   ├── lock.ts              # SQLite-based lock manager (poll-wait, not try-lock)
 │   ├── agent-entity.ts      # State helpers (isRunning, canSuspend, canResume, sessionName)
 │   ├── sanitize.ts          # Message sanitization + token generation
+│   ├── markdown.ts          # Markdown rendering (shared between dashboard + docs)
 │   ├── websocket-server.ts  # RFC 6455 WebSocket (zero deps)
+│   ├── config.ts            # Secret resolution + orchestrator discovery
+│   ├── version.ts           # Git SHA version utility
 │   ├── utils.ts             # Shell quoting, sleep
 │   └── *.test.ts
-└── dashboard/
-    └── index.html           # Single-file SPA (vanilla JS, no framework)
+├── dashboard/               # Browser-native TypeScript (type stripping, bare imports)
+│   ├── index.html           # Entry point + template orchestration
+│   ├── state.ts             # Centralized state + event bus
+│   ├── connection.ts        # WebSocket, auth, engine polling
+│   ├── agent-card.ts        # <agent-card> Web Component
+│   ├── agent-list.ts        # Agent list rendering + search + filters
+│   ├── agent-lifecycle.ts   # Agent actions (create, destroy, reload)
+│   ├── message-list.ts      # <message-list> Web Component (progressive loading)
+│   ├── message-input.ts     # <message-input> Web Component
+│   ├── message-io.ts        # Send, upload, archive, queue status
+│   ├── thread.ts            # Thread rendering + tab title
+│   ├── voice-palette.ts     # Voice dictation + command palette
+│   ├── persona-editor.ts    # Persona editor modal
+│   ├── utils.ts             # Markdown, escaping, toast, confirm
+│   ├── icons.ts             # Inline SVG icon system
+│   └── styles/              # 8 component-scoped CSS files
+└── test/
+    ├── mock-server.ts       # Dashboard mock server for UI tests
+    ├── runner.ts            # Test probe + browser automation
+    └── ui/                  # 7 UI test suites (105 tests)
 ```
 
-**Other root files**: `Dockerfile`, `docker-compose.yml`, `package.json`, `tsconfig.json`, `LICENSE`
+**Other root files**: `Dockerfile`, `docker-compose.yml`, `package.json`, `tsconfig.json`, `CHANGELOG.md`, `LICENSE`
 
 ---
 
