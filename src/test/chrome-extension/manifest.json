@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "Agentic Collab Test Probe",
+  "version": "1.0.0",
+  "description": "Screenshot and interaction probe for UI testing",
+  "permissions": ["activeTab"],
+  "host_permissions": ["http://localhost:*/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://localhost:*/dashboard*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

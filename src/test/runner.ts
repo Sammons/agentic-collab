@@ -76,6 +76,15 @@ export class TestContext {
     return `${this.mock.url}/dashboard?test=true`;
   }
 
+  /** URL with probePort param for chrome extension content script. */
+  get extensionUrl(): string {
+    return `${this.mock.url}/dashboard?test=true&probePort=${this.mockPort + 1}`;
+  }
+
+  get probePort(): number {
+    return this.mockPort + 1;
+  }
+
   get baseUrl(): string {
     return this.mock.url;
   }
@@ -165,6 +174,11 @@ export class TestContext {
 
   async count(selector: string): Promise<number> {
     return (await this.sendProbeCommand('count', { selector })) as number;
+  }
+
+  /** Resize window (requires chrome extension probe). */
+  async resize(width: number, height: number): Promise<void> {
+    await this.sendProbeCommand('resize', { width, height });
   }
 
   // ── Snapshots ──
