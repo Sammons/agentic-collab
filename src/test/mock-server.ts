@@ -309,6 +309,22 @@ export async function startMockServer(port: number): Promise<MockServer> {
       return;
     }
 
+    // ── Dashboard assets (JS/TS/CSS) ──
+    if (method === 'GET' && path.startsWith('/dashboard/assets/')) {
+      const filePath = path.replace('/dashboard/assets/', '');
+      const ext = filePath.slice(filePath.lastIndexOf('.'));
+      const types: Record<string, string> = { '.js': 'application/javascript; charset=utf-8', '.ts': 'application/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8' };
+      const contentType = types[ext];
+      if (filePath.includes('..') || !contentType) { res.writeHead(400); res.end('Bad request'); return; }
+      try {
+        const fullPath = join(import.meta.dirname!, '..', 'dashboard', filePath);
+        const content = readFileSync(fullPath, 'utf-8');
+        res.writeHead(200, { 'content-type': contentType });
+        res.end(content);
+      } catch { res.writeHead(404); res.end('Not found'); }
+      return;
+    }
+
     // ── API: agents ──
     if (method === 'GET' && path === '/api/agents') {
       logJson(res, fixtures.agents);
