@@ -15,6 +15,8 @@ import { state } from '/dashboard/assets/state.ts';
 import { esc, renderMarkdown } from '/dashboard/assets/utils.ts';
 import { icon } from '/dashboard/assets/icons.ts';
 import { renderPersona, setup as setupPersonaEditor } from '/dashboard/assets/persona-editor.ts';
+import { buildActionsHtml } from '/dashboard/assets/agent-card.ts';
+import { agentAction } from '/dashboard/assets/agent-lifecycle.ts';
 
 // ── Dependencies injected via setup() ──
 let _handleAuthError = () => {};
@@ -125,10 +127,31 @@ export function renderThread() {
     <button class="${state.threadView === 'reminders' ? 'active' : ''}" data-tab="reminders">Reminders</button>
     <button class="${state.threadView === 'persona' ? 'active' : ''}" data-tab="persona">Persona</button>
   </div>`;
-  header.innerHTML = `<button class="mobile-back" id="mobileBackBtn">${icon.arrowLeft(16)}</button><span>${esc(state.selected)}</span>${headerBadge}${tabs}`;
+  const actionsHtml = selectedAgent ? `<div class="thread-actions">${buildActionsHtml(selectedAgent)}</div>` : '';
+  header.innerHTML = `<div class="thread-header-top"><button class="mobile-back" id="mobileBackBtn">${icon.arrowLeft(16)}</button><span>${esc(state.selected)}</span>${headerBadge}${tabs}</div>${actionsHtml}`;
   document.getElementById('mobileBackBtn').onclick = mobileBack;
   header.querySelectorAll('.thread-tabs button').forEach(btn => {
     btn.onclick = () => { state.editingPersona = false; state.threadView = btn.dataset.tab; renderThread(); };
+  });
+  // Action button delegation
+  header.querySelectorAll('.thread-actions button[data-action]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      if (btn.classList.contains('loading') || !state.selected) return;
+      btn.classList.add('loading');
+      agentAction(state.selected, btn.dataset.action).finally(() => btn.classList.remove('loading'));
+    });
+  });
+  header.querySelectorAll('.thread-actions button[data-copy-tmux]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const orig = btn.textContent;
+      navigator.clipboard.writeText(btn.dataset.copyTmux).then(() => {
+        btn.textContent = 'Copied!';
+        setTimeout(() => { btn.textContent = orig; }, 1500);
+      }).catch(() => {
+        btn.textContent = 'Failed';
+        setTimeout(() => { btn.textContent = orig; }, 1500);
+      });
+    });
   });
 
   const view = state.threadView;

@@ -29,7 +29,7 @@ function proxyWarning(proxyId, proxies) {
   return ` <span class="version-mismatch" title="Proxy version${ver} does not match orchestrator. Restart the proxy.">${icon.alertTriangle(12)} stale proxy</span>`;
 }
 
-function buildActionsHtml(agent) {
+export function buildActionsHtml(agent) {
   const activeIdle = agent.state === 'active' || agent.state === 'idle';
   const suspendedFailed = agent.state === 'suspended' || agent.state === 'failed';
   const transitioning = agent.state === 'spawning' || agent.state === 'suspending' || agent.state === 'resuming';
@@ -108,7 +108,6 @@ export class AgentCard extends HTMLElement {
       ${failureInfo}
       ${buildIndicatorsHtml(ctx.indicators)}
       <div class="drag-handle" title="Drag to reorder or move to group">${icon.gripVertical(14)}</div>
-      <div class="agent-actions">${buildActionsHtml(agent)}</div>
     `;
   }
 
@@ -180,9 +179,6 @@ export class AgentCard extends HTMLElement {
     } else if (indEl) {
       indEl.remove();
     }
-    // Actions
-    const actions = this.querySelector('.agent-actions');
-    if (actions) actions.innerHTML = buildActionsHtml(agent);
     // Selected
     this.classList.toggle('selected', !!ctx.selected);
   }

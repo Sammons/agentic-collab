@@ -7,9 +7,32 @@
     font-size: 14px;
     background: var(--surface);
     display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .thread-header-top {
+    display: flex;
     align-items: center;
     gap: 10px;
   }
+  .thread-actions {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .thread-actions button {
+    font-size: 11px;
+    padding: 3px 10px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .thread-actions button:hover { border-color: var(--accent); color: var(--accent); }
+  .thread-actions button.danger:hover { border-color: var(--red); color: var(--red); }
+  .thread-actions button.loading { opacity: 0.5; pointer-events: none; }
 
   /* ── Thread tabs ── */
   .thread-tabs {
