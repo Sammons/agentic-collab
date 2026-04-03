@@ -341,7 +341,7 @@ export class SettingsPanel extends HTMLElement {
         html += `<textarea class="config-yaml-editor" data-config-name="${esc(cfg.name)}">${esc(configToYaml(cfg))}</textarea>`;
         html += '<div class="config-edit-actions"><button class="settings-btn settings-btn-save" data-action="save">Save</button><button class="settings-btn settings-btn-cancel" data-action="cancel">Cancel</button></div>';
       } else {
-        html += `<pre class="config-yaml-display">${esc(configToYaml(cfg))}</pre>`;
+        html += `<details class="config-details"><summary>Show YAML</summary><pre class="config-yaml-display">${esc(configToYaml(cfg))}</pre></details>`;
       }
       html += '</div>';
     }

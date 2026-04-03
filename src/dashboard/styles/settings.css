@@ -102,6 +102,13 @@
     outline: none;
   }
   .config-yaml-editor:focus { border-color: var(--accent); }
+  .config-details summary {
+    font-size: 11px;
+    color: var(--text-dim);
+    cursor: pointer;
+    padding: 4px 0;
+  }
+  .config-details summary:hover { color: var(--accent); }
   .config-name-input {
     padding: 4px 8px;
     border: 1px solid var(--border);
