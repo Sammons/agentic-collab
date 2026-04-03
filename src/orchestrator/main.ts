@@ -4,7 +4,7 @@
  */
 
 import { createServer } from 'node:http';
-import { readFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, mkdirSync, watch, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { timingSafeEqual } from 'node:crypto';
 import { Database } from './database.ts';
@@ -17,7 +17,7 @@ import { UsagePoller } from './usage-poller.ts';
 import { ReminderDispatcher } from './reminder-dispatcher.ts';
 import { shutdownAgents, restoreAllAgents } from './network.ts';
 import type { LifecycleContext } from './lifecycle.ts';
-import { syncPersonasToDb } from './persona.ts';
+import { syncPersonasToDb, syncPersonasWithDiff, getPersonasDir } from './persona.ts';
 import { AccountStore } from './accounts.ts';
 import { isRunning } from '../shared/agent-entity.ts';
 import { resolveSecret, getSecretPath } from '../shared/config.ts';
@@ -408,6 +408,37 @@ server.listen(PORT, '0.0.0.0', async () => {
     }
   } catch (err) {
     console.error('[orchestrator] Persona sync failed:', err);
+  }
+
+  // Watch persona directory for changes — re-sync and broadcast updates
+  const personasDir = getPersonasDir();
+  if (existsSync(personasDir)) {
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+    watch(personasDir, { persistent: false }, () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        try {
+          const diff = syncPersonasWithDiff(db);
+          const changed = [...diff.created, ...diff.updated];
+          if (changed.length > 0) {
+            console.log(`[persona-watch] Hot-reloaded: ${changed.join(', ')}`);
+            // Broadcast updated agents to dashboard
+            const agents = db.listAgents();
+            const initPayload = JSON.stringify({
+              type: 'init',
+              agents,
+              threads: {},
+              engineConfigs: db.listEngineConfigs(),
+              indicators: {},
+            });
+            wss.broadcast(initPayload);
+          }
+        } catch (err) {
+          console.error('[persona-watch] Re-sync failed:', err);
+        }
+      }, 500);
+    });
+    console.log(`[persona-watch] Watching ${personasDir} for changes`);
   }
 
   // Start health monitor + usage poller + reminder dispatcher
