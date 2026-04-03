@@ -29,6 +29,7 @@ import { resolvePersonaPath, loadPersona, composeSystemPrompt, getPersonasDir, t
 import { resolveHook } from './hook-resolver.ts';
 import type { HookResult, TemplateVars } from './hook-resolver.ts';
 import type { AccountStore } from './accounts.ts';
+import { resolveEffectiveConfig } from './engine-config-resolver.ts';
 
 export type LifecycleContext = {
   db: Database;
@@ -430,7 +431,20 @@ export async function spawnAgent(
     return { current, tmuxSession, engine: agent.engine, spawnCount: agent.spawnCount, permissions: agent.permissions, hookStart: agent.hookStart };
   });
 
-  const { tmuxSession, engine, spawnCount, permissions, hookStart } = phase1;
+  const { tmuxSession, spawnCount } = phase1;
+
+  // Resolve engine config defaults beneath agent-level fields
+  let effectiveCurrent = phase1.current;
+  if (phase1.current.engineConfig) {
+    const engineConfig = ctx.db.getEngineConfig(phase1.current.engineConfig);
+    if (engineConfig) {
+      effectiveCurrent = resolveEffectiveConfig(phase1.current, engineConfig);
+    }
+  }
+  const engine = effectiveCurrent.engine;
+  const permissions = effectiveCurrent.permissions;
+  const hookStart = effectiveCurrent.hookStart;
+
   const watchdog = startWatchdog(ctx, opts.name, 'spawning', SPAWN_TIMEOUT_MS, opts.proxyId, tmuxSession);
 
   try {
@@ -472,7 +486,7 @@ export async function spawnAgent(
       PERSONA_PROMPT_FILEPATH: personaFile ?? undefined,
       capturedVars: phase1.current.capturedVars ?? undefined,
     };
-    const startResult = resolveHook('start', hookStart, phase1.current, {
+    const startResult = resolveHook('start', hookStart, effectiveCurrent, {
       spawnOpts: {
         name: opts.name,
         cwd: opts.cwd,
@@ -499,7 +513,7 @@ export async function spawnAgent(
     }
 
     // Wrap launch command with agent env vars
-    const wrappedStart = wrapLaunchResult(startResult, phase1.current, personaFile, accountHome);
+    const wrappedStart = wrapLaunchResult(startResult, effectiveCurrent, personaFile, accountHome);
 
     await dispatchHookResult(ctx, opts.proxyId, tmuxSession, wrappedStart, { agentName: opts.name });
 
@@ -567,7 +581,21 @@ export async function resumeAgent(
     };
   });
 
-  const { proxyId, tmuxSession, engine, cwd, persona, permissions, currentSessionId, hookStart, hookResume } = phase1;
+  const { proxyId, tmuxSession, cwd, persona, currentSessionId } = phase1;
+
+  // Resolve engine config defaults beneath agent-level fields
+  let effectiveCurrent = phase1.current;
+  if (phase1.current.engineConfig) {
+    const engineConfig = ctx.db.getEngineConfig(phase1.current.engineConfig);
+    if (engineConfig) {
+      effectiveCurrent = resolveEffectiveConfig(phase1.current, engineConfig);
+    }
+  }
+  const engine = effectiveCurrent.engine;
+  const permissions = effectiveCurrent.permissions;
+  const hookStart = effectiveCurrent.hookStart;
+  const hookResume = effectiveCurrent.hookResume;
+
   const watchdog = startWatchdog(ctx, name, 'resuming', RESUME_TIMEOUT_MS, proxyId, tmuxSession);
 
   try {
@@ -618,7 +646,7 @@ export async function resumeAgent(
       adapter,
       hookResume,
       hookStart,
-      agentRecord: phase1.current,
+      agentRecord: effectiveCurrent,
       sessionId: currentSessionId,
       name,
       cwd,
@@ -637,7 +665,7 @@ export async function resumeAgent(
     }
 
     // Wrap launch command with agent env vars
-    const wrappedResume = wrapLaunchResult(resumeResult, phase1.current, personaFile, accountHome);
+    const wrappedResume = wrapLaunchResult(resumeResult, effectiveCurrent, personaFile, accountHome);
 
     await dispatchHookResult(ctx, proxyId, tmuxSession, wrappedResume, { agentName: name });
 
@@ -696,14 +724,25 @@ export async function suspendAgent(
     return { current, proxyId, engine: agent.engine, hookExit: agent.hookExit, tmuxSession: sessionName(agent) };
   });
 
-  const { proxyId, engine, hookExit, tmuxSession } = phase1;
+  const { proxyId, tmuxSession } = phase1;
+
+  // Resolve engine config defaults beneath agent-level fields
+  let effectiveCurrent = phase1.current;
+  if (phase1.current.engineConfig) {
+    const engineConfig = ctx.db.getEngineConfig(phase1.current.engineConfig);
+    if (engineConfig) {
+      effectiveCurrent = resolveEffectiveConfig(phase1.current, engineConfig);
+    }
+  }
+  const hookExit = effectiveCurrent.hookExit;
+
   const watchdog = startWatchdog(ctx, name, 'suspending', SUSPEND_TIMEOUT_MS, proxyId, tmuxSession);
 
   try {
     // ── Phase 2: slow proxy work (no lock) ──
 
     // Send exit command via hook resolver
-    const exitResult = resolveHook('exit', hookExit, phase1.current);
+    const exitResult = resolveHook('exit', hookExit, effectiveCurrent);
     await dispatchHookResult(ctx, proxyId, tmuxSession, exitResult, { agentName: name });
 
     // Wait for process to exit, then verify
@@ -766,8 +805,16 @@ export async function destroyAgent(
     }
 
     // Clean up config profile for engines that use it (e.g. Codex)
+    // Resolve engine config to get the effective engine for adapter selection
+    let effectiveEngine = agent.engine;
+    if (agent.engineConfig) {
+      const engineConfig = ctx.db.getEngineConfig(agent.engineConfig);
+      if (engineConfig) {
+        effectiveEngine = resolveEffectiveConfig(agent, engineConfig).engine;
+      }
+    }
     if (agent.proxyId) {
-      const adapter = getAdapter(agent.engine);
+      const adapter = getAdapter(effectiveEngine);
       if (adapter.usesConfigProfile) {
         await ctx.proxyDispatch(agent.proxyId, {
           action: 'remove_codex_profile',
@@ -854,9 +901,24 @@ export async function reloadAgent(
   });
 
   const {
-    proxyId, engine, cwd, persona, permissions, previousContextPct,
-    currentSessionId, spawnCount, reloadTask, oldTmuxSession, hookStart, hookResume, hookExit,
+    proxyId, cwd, persona, previousContextPct,
+    currentSessionId, spawnCount, reloadTask, oldTmuxSession,
   } = phase1;
+
+  // Resolve engine config defaults beneath agent-level fields
+  let effectiveCurrent = phase1.current;
+  if (phase1.current.engineConfig) {
+    const engineConfig = ctx.db.getEngineConfig(phase1.current.engineConfig);
+    if (engineConfig) {
+      effectiveCurrent = resolveEffectiveConfig(phase1.current, engineConfig);
+    }
+  }
+  const engine = effectiveCurrent.engine;
+  const permissions = effectiveCurrent.permissions;
+  const hookStart = effectiveCurrent.hookStart;
+  const hookResume = effectiveCurrent.hookResume;
+  const hookExit = effectiveCurrent.hookExit;
+
   const watchdog = startWatchdog(ctx, name, 'suspending', RELOAD_TIMEOUT_MS, proxyId, oldTmuxSession);
 
   try {
@@ -864,7 +926,7 @@ export async function reloadAgent(
     const adapter = getAdapter(engine);
 
     // 1. Send exit command via hook resolver
-    const exitResult = resolveHook('exit', hookExit, phase1.current);
+    const exitResult = resolveHook('exit', hookExit, effectiveCurrent);
     await dispatchHookResult(ctx, proxyId, oldTmuxSession, exitResult, { agentName: name });
 
     // 2. Wait for exit
@@ -915,7 +977,7 @@ export async function reloadAgent(
       adapter,
       hookResume,
       hookStart,
-      agentRecord: phase1.current,
+      agentRecord: effectiveCurrent,
       sessionId: existingSessionId,
       name,
       cwd,
@@ -934,7 +996,7 @@ export async function reloadAgent(
     }
 
     // Wrap launch command with agent env vars
-    const wrappedReload = wrapLaunchResult(reloadResult, phase1.current, personaFile, accountHome);
+    const wrappedReload = wrapLaunchResult(reloadResult, effectiveCurrent, personaFile, accountHome);
 
     await dispatchHookResult(ctx, proxyId, tmuxSession, wrappedReload, { agentName: name });
 
@@ -983,8 +1045,17 @@ export async function interruptAgent(
     if (!agent) throw new Error(`Agent "${name}" not found`);
     const proxyId = requireProxy(agent);
 
+    // Resolve engine config defaults for hook fields
+    let effectiveAgent = agent;
+    if (agent.engineConfig) {
+      const engineConfig = ctx.db.getEngineConfig(agent.engineConfig);
+      if (engineConfig) {
+        effectiveAgent = resolveEffectiveConfig(agent, engineConfig);
+      }
+    }
+
     // Send interrupt via hook resolver
-    const interruptResult = resolveHook('interrupt', agent.hookInterrupt, agent);
+    const interruptResult = resolveHook('interrupt', effectiveAgent.hookInterrupt, effectiveAgent);
     await dispatchHookResult(ctx, proxyId, sessionName(agent), interruptResult, { keyDelay: INTERRUPT_KEY_DELAY_MS, agentName: name });
 
     ctx.db.logEvent(name, 'interrupted');
@@ -1004,10 +1075,19 @@ export async function compactAgent(
     if (!agent) throw new Error(`Agent "${name}" not found`);
     const proxyId = requireProxy(agent);
 
+    // Resolve engine config defaults for hook fields
+    let effectiveAgent = agent;
+    if (agent.engineConfig) {
+      const engineConfig = ctx.db.getEngineConfig(agent.engineConfig);
+      if (engineConfig) {
+        effectiveAgent = resolveEffectiveConfig(agent, engineConfig);
+      }
+    }
+
     // Send compact command via hook resolver
-    const compactResult = resolveHook('compact', agent.hookCompact, agent);
+    const compactResult = resolveHook('compact', effectiveAgent.hookCompact, effectiveAgent);
     if (compactResult.mode === 'skip') {
-      console.log(`[lifecycle] ${name}: engine "${agent.engine}" does not support compaction — skipping`);
+      console.log(`[lifecycle] ${name}: engine "${effectiveAgent.engine}" does not support compaction — skipping`);
       ctx.db.logEvent(name, 'compact_skipped', undefined, { reason: 'unsupported_engine' });
       return;
     }
@@ -1186,9 +1266,18 @@ export async function deliverToAgent(
   const proxyId = requireProxy(agent);
   let error: string | null = null;
 
+  // Resolve engine config defaults for hook fields
+  let effectiveAgent = agent;
+  if (agent.engineConfig) {
+    const engineConfig = ctx.db.getEngineConfig(agent.engineConfig);
+    if (engineConfig) {
+      effectiveAgent = resolveEffectiveConfig(agent, engineConfig);
+    }
+  }
+
   await ctx.locks.withLock(agent.name, async () => {
     try {
-      const hookResult = resolveHook('submit', agent.hookSubmit, agent, { task: text });
+      const hookResult = resolveHook('submit', effectiveAgent.hookSubmit, effectiveAgent, { task: text });
       // Wrap proxyDispatch to throw on failure so dispatchHookResult propagates errors
       const throwingCtx: LifecycleContext = {
         ...ctx,
