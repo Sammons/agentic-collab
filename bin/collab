@@ -13,9 +13,9 @@
  *   COLLAB_AGENT            — Default agent name for send/reply (set by orchestrator)
  */
 
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, mkdtempSync, writeFileSync, readdirSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { execSync } from 'node:child_process';
 
 // ── Config Resolution ──
@@ -474,20 +474,13 @@ cmd('reminder', 'reminder <sub> [args...]', 'Manage reminders (add|list|done|can
 
 // ── Pages ──
 
-cmd('publish', 'collab publish <slug> <dir>', 'Publish a directory as a static page', async (args) => {
-  const slug = args[0];
-  const dir = args[1];
-  if (!slug || !dir) {
-    console.error('usage: collab publish <slug> <directory>');
-    process.exit(1);
-  }
-  const resolved = resolve(dir);
-  if (!existsSync(resolved)) {
-    console.error(`directory not found: ${resolved}`);
-    process.exit(1);
-  }
-  // Tar the directory and upload
-  const tarData = execSync(`tar cf - -C ${JSON.stringify(resolved)} .`, { maxBuffer: 50 * 1024 * 1024 });
+const templatesDir = join(new URL('.', import.meta.url).pathname, '..', 'src', 'templates');
+
+function publishTar(dirPath) {
+  return execSync(`tar cf - -C ${JSON.stringify(dirPath)} .`, { maxBuffer: 50 * 1024 * 1024 });
+}
+
+async function uploadTar(slug, tarData) {
   const agent = process.env['COLLAB_AGENT'] ?? null;
   const qs = `slug=${encodeURIComponent(slug)}${agent ? '&agent=' + encodeURIComponent(agent) : ''}`;
   const h = { 'Content-Type': 'application/x-tar' };
@@ -500,6 +493,89 @@ cmd('publish', 'collab publish <slug> <dir>', 'Publish a directory as a static p
   const body = await res.json();
   if (!res.ok) { console.error(body.error ?? 'Publish failed'); process.exit(1); }
   console.log(`published: ${_host}/pages/${slug} (${body.fileCount} files, ${body.totalBytes} bytes)`);
+}
+
+cmd('publish', 'collab publish <slug> <dir> [--template <name> --store <store> --title <title>]', 'Publish a directory or template as a page', async (args) => {
+  let slug = null;
+  let dir = null;
+  let template = null;
+  let store = null;
+  let title = null;
+
+  // Parse flags and positional args
+  const positional = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--template' && args[i + 1]) { template = args[++i]; }
+    else if (args[i] === '--store' && args[i + 1]) { store = args[++i]; }
+    else if (args[i] === '--title' && args[i + 1]) { title = args[++i]; }
+    else { positional.push(args[i]); }
+  }
+
+  slug = positional[0];
+  dir = positional[1];
+
+  if (!slug) {
+    console.error('usage: collab publish <slug> <directory>');
+    console.error('       collab publish <slug> --template <name> --store <store> --title <title>');
+    process.exit(1);
+  }
+
+  if (template) {
+    // Template-based publish
+    if (!store) { console.error('error: --store is required when using --template'); process.exit(1); }
+    if (!title) title = slug;
+
+    const templatePath = join(templatesDir, `${template}.html`);
+    if (!existsSync(templatePath)) {
+      console.error(`error: template not found: ${template}`);
+      console.error(`  looked at: ${templatePath}`);
+      console.error(`  run 'collab templates' to see available templates`);
+      process.exit(1);
+    }
+
+    let html = readFileSync(templatePath, 'utf-8');
+    html = html.replaceAll('{{STORE}}', store);
+    html = html.replaceAll('{{TITLE}}', title);
+    html = html.replaceAll('{{TOKEN}}', _secret ?? '');
+
+    const tmpDir = mkdtempSync(join(tmpdir(), 'collab-template-'));
+    writeFileSync(join(tmpDir, 'index.html'), html);
+
+    const tarData = publishTar(tmpDir);
+    await uploadTar(slug, tarData);
+  } else {
+    // Directory-based publish (original flow)
+    if (!dir) {
+      console.error('usage: collab publish <slug> <directory>');
+      console.error('       collab publish <slug> --template <name> --store <store> --title <title>');
+      process.exit(1);
+    }
+    const resolved = resolve(dir);
+    if (!existsSync(resolved)) {
+      console.error(`directory not found: ${resolved}`);
+      process.exit(1);
+    }
+    const tarData = publishTar(resolved);
+    await uploadTar(slug, tarData);
+  }
+});
+
+cmd('templates', 'collab templates', 'List available page templates', async () => {
+  if (!existsSync(templatesDir)) {
+    console.log('No templates directory found');
+    return;
+  }
+  const files = readdirSync(templatesDir).filter(f => f.endsWith('.html')).sort();
+  if (files.length === 0) {
+    console.log('No templates available');
+    return;
+  }
+  console.log('Available templates:\n');
+  for (const f of files) {
+    const name = f.replace(/\.html$/, '');
+    console.log(`  ${name}`);
+  }
+  console.log(`\nUsage: collab publish <slug> --template <name> --store <store> --title <title>`);
 });
 
 cmd('pages', 'collab pages {list|delete}', 'Manage published pages', async (args) => {
