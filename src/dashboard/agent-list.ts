@@ -71,19 +71,7 @@ export function updateAgent(agent) {
 
 export function addMessage(msg) {
   if (!state.threads[msg.agent]) state.threads[msg.agent] = [];
-  const thread = state.threads[msg.agent];
-
-  // Deduplicate: if an optimistic message matches, replace it in state and skip DOM append
-  const optimisticIdx = thread.findIndex(m =>
-    m._optimistic && m.message === msg.message && m.direction === msg.direction
-  );
-  if (optimisticIdx >= 0) {
-    thread[optimisticIdx] = msg;
-    // The optimistic message is already rendered — no need to append again
-    return;
-  }
-
-  thread.push(msg);
+  state.threads[msg.agent].push(msg);
   if (state.selected === msg.agent && state.threadView === 'messages') {
     // Append single message via component — no full re-render
     const messages = document.getElementById('threadMessages');
