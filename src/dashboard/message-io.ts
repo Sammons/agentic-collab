@@ -188,6 +188,8 @@ export async function sendMessage() {
 
   const message = _voiceState.usedSinceSend ? VOICE_TO_TEXT_PREFIX + text : text;
   _voiceState.usedSinceSend = false;
+  // Optimistic clear — avoids lag where WS broadcast arrives before HTTP response
+  inputEl.clear();
   try {
     const res = await fetch('/api/dashboard/send', {
       method: 'POST',
@@ -198,17 +200,13 @@ export async function sendMessage() {
     if (!res.ok) {
       let body = null;
       try { body = await res.json(); } catch (_) {}
-      if (body && body.msg) {
-        inputEl.clear();
-      } else {
-        console.error('Send failed: HTTP', res.status);
+      if (!(body && body.msg)) {
+        inputEl.setDraft(text);
         showToast('Send failed', 'error');
       }
-    } else {
-      inputEl.clear();
     }
   } catch (err) {
-    console.error('Send failed:', err);
+    inputEl.setDraft(text);
     showToast('Send failed — network error', 'error');
   } finally {
     updateSendability();
