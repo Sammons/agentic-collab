@@ -131,6 +131,9 @@ export function renderAgents() {
     filtered = filtered.filter(a => a.lastActivity).sort((a, b) =>
       new Date(b.lastActivity).getTime() - new Date(a.lastActivity).getTime()
     ).slice(0, 7);
+  } else if (state.quickFilter === 'starred') {
+    const starred = JSON.parse(localStorage.getItem('starredAgents') || '{}');
+    filtered = filtered.filter(a => starred[a.name]);
   }
 
   // Update chip active states
@@ -402,6 +405,22 @@ function handleAgentListEvent(e) {
   // Ignore taps on drag handle (mobile touch-drag)
   if (e.target.closest('.drag-handle')) return;
 
+  // Star toggle
+  const starBtn = e.target.closest('.agent-star');
+  if (starBtn) {
+    e.stopPropagation();
+    const agentName = starBtn.dataset.starAgent;
+    if (!agentName) return;
+    const starred = JSON.parse(localStorage.getItem('starredAgents') || '{}');
+    if (starred[agentName]) delete starred[agentName];
+    else starred[agentName] = true;
+    localStorage.setItem('starredAgents', JSON.stringify(starred));
+    const isStarred = !!starred[agentName];
+    starBtn.className = `agent-star${isStarred ? ' starred' : ''}`;
+    starBtn.innerHTML = isStarred ? icon.starFilled(14) : icon.star(14);
+    return;
+  }
+
   const copyBtn = e.target.closest('button[data-copy-tmux]');
   if (copyBtn) {
     e.stopPropagation();
@@ -519,6 +538,7 @@ export function applySearchFilter() {
   const list = document.getElementById('agentList');
   const cards = list.querySelectorAll('.agent-card[data-agent]');
   const groupCounts = new Map(); // groupHeader element → visible count
+  const starred = JSON.parse(localStorage.getItem('starredAgents') || '{}');
   // First pass: show/hide cards
   for (const card of cards) {
     const name = card.dataset.agent;
@@ -535,6 +555,7 @@ export function applySearchFilter() {
       else if (state.quickFilter === 'idle') visible = agent && agent.state === 'idle';
       else if (state.quickFilter === 'unread') visible = agent && (state.unread[agent.name] || 0) > 0;
       else if (state.quickFilter === 'recent') visible = agent && !!agent.lastActivity;
+      else if (state.quickFilter === 'starred') visible = agent && !!starred[agent.name];
     }
     card.style.display = visible ? '' : 'none';
     // Track per-group visibility

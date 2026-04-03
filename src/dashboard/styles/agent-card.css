@@ -122,6 +122,19 @@
     align-items: center;
     margin-bottom: 6px;
   }
+  .agent-star {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 0;
+    color: var(--text-dim);
+    opacity: 0.4;
+    transition: opacity 0.15s, color 0.15s;
+    display: inline-flex;
+    align-items: center;
+  }
+  .agent-star:hover { opacity: 1; color: #f5c518; }
+  .agent-star.starred { opacity: 0.8; color: #f5c518; }
   .agent-name { font-weight: 600; font-size: 14px; }
   .state-badge {
     margin-left: auto;

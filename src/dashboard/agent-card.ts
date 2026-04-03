@@ -92,8 +92,14 @@ export class AgentCard extends HTMLElement {
     const failureInfo = agent.state === 'failed' && agent.failureReason
       ? `<div class="agent-failure" title="${esc(agent.failureReason)}">${esc(agent.failureReason)}</div>` : '';
 
+    const starred = JSON.parse(localStorage.getItem('starredAgents') || '{}');
+    const isStarred = !!starred[agent.name];
+
     this.innerHTML = `
       <div class="agent-header">
+        <button class="agent-star${isStarred ? ' starred' : ''}" data-star-agent="${esc(agent.name)}" title="Star agent">
+          ${isStarred ? icon.starFilled(14) : icon.star(14)}
+        </button>
         <span class="agent-name">${esc(agent.name)}${unreadBadge}</span>
         <span class="state-badge state-${agent.state}">${agent.state}</span>
       </div>
@@ -107,6 +113,14 @@ export class AgentCard extends HTMLElement {
 
   /** In-place patch — updates sub-elements without DOM teardown. */
   update(agent, ctx) {
+    // Star
+    const starBtn = this.querySelector('.agent-star');
+    if (starBtn) {
+      const starred = JSON.parse(localStorage.getItem('starredAgents') || '{}');
+      const isStarred = !!starred[agent.name];
+      starBtn.className = `agent-star${isStarred ? ' starred' : ''}`;
+      starBtn.innerHTML = isStarred ? icon.starFilled(14) : icon.star(14);
+    }
     // State badge
     const badge = this.querySelector('.state-badge');
     if (badge) {
