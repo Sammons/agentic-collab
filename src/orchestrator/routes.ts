@@ -218,15 +218,29 @@ route('GET', '/api/agents/:name', async (_req, res, match, ctx) => {
 
 route('POST', '/api/agents', async (req, res, _match, ctx) => {
   const body = await readJson(req);
-  if (!body.name || !body.engine || !body.cwd) {
-    return json(res, 400, { error: 'name, engine, cwd required' });
+  if (!body.name || !body.cwd) {
+    return json(res, 400, { error: 'name, cwd required' });
   }
 
   const nameError = validateAgentName(body.name as string);
   if (nameError) return json(res, 400, { error: nameError });
 
+  // Resolve engine: direct value, or look up from engine_config
+  let resolvedEngine = body.engine as string | undefined;
+  if (!resolvedEngine && body.engine_config) {
+    const config = ctx.db.getEngineConfig(body.engine_config as string);
+    if (config) {
+      resolvedEngine = config.engine;
+    } else {
+      return json(res, 400, { error: `engine_config '${body.engine_config}' not found` });
+    }
+  }
+  if (!resolvedEngine) {
+    return json(res, 400, { error: 'engine or engine_config required' });
+  }
+
   const VALID_ENGINES = new Set(['claude', 'codex', 'opencode']);
-  if (!VALID_ENGINES.has(body.engine as string)) {
+  if (!VALID_ENGINES.has(resolvedEngine)) {
     return json(res, 400, { error: 'engine must be claude, codex, or opencode' });
   }
 
@@ -235,7 +249,7 @@ route('POST', '/api/agents', async (req, res, _match, ctx) => {
 
   const agent = ctx.db.createAgent({
     name: body.name,
-    engine: body.engine as EngineType,
+    engine: resolvedEngine as EngineType,
     model: body.model,
     thinking: body.thinking,
     cwd: body.cwd,
@@ -243,12 +257,14 @@ route('POST', '/api/agents', async (req, res, _match, ctx) => {
     permissions: body.permissions,
     proxyId: body.proxyId,
     agentGroup: body.group,
+    engineConfig: body.engine_config,
   });
 
   // Write persona file so agent config persists across restarts
   try {
     const fmLines: string[] = [];
-    fmLines.push(`engine: ${body.engine}`);
+    if (body.engine) fmLines.push(`engine: ${body.engine}`);
+    if (body.engine_config) fmLines.push(`engine_config: ${body.engine_config}`);
     if (body.model) fmLines.push(`model: ${body.model}`);
     if (body.thinking) fmLines.push(`thinking: ${body.thinking}`);
     fmLines.push(`cwd: ${body.cwd}`);

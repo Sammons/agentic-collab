@@ -250,6 +250,7 @@ export class Database {
     hookExit?: string;
     hookInterrupt?: string;
     hookSubmit?: string;
+    engineConfig?: string;
     customButtons?: string;
     indicators?: string;
   }): AgentRecord {
@@ -282,6 +283,7 @@ export class Database {
     hookExit?: string;
     hookInterrupt?: string;
     hookSubmit?: string;
+    engineConfig?: string;
     customButtons?: string;
     indicators?: string;
   }): AgentRecord {
