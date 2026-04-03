@@ -6,7 +6,8 @@
  * is unchanged across consecutive polls, the agent is considered idle.
  * This is engine-agnostic — no regex prompt detection needed.
  *
- * Context % parsing still uses engine adapters (each CLI reports usage differently).
+ * Context % parsing prefers engine config contextPattern (from detection config)
+ * over hardcoded adapter patterns. Falls back to adapters when no pattern is configured.
  * Context percentages are recorded to the DB for dashboard display but do NOT
  * trigger automatic compact or reload actions.
  *
@@ -459,18 +460,48 @@ export class HealthMonitor {
 
   /**
    * Parse context % from pane output and record to DB (read-only — no actions taken).
+   * Prefers engine config's contextPattern over hardcoded adapter patterns.
    */
   private recordContextPercent(agent: AgentRecord, paneOutput: string): void {
-    const adapter = getAdapter(agent.engine);
-    const contextResult = adapter.parseContextPercent(paneOutput);
-    if (contextResult.contextPct === null) return;
+    let contextPct: number | null = null;
+
+    // Try engine config contextPattern first
+    const detection = this.getDetection(agent);
+    if (detection?.contextPattern) {
+      const lines = paneOutput.split('\n');
+      // Search bottom-up through last 20 lines (status bar region)
+      for (let i = lines.length - 1; i >= Math.max(0, lines.length - 20); i--) {
+        const match = lines[i]?.match(detection.contextPattern);
+        if (match?.[1]) {
+          const rawValue = parseInt(match[1].replace(/,/g, ''), 10);
+          // Determine if value is a percentage or token count:
+          // If the matched text contains '%', treat as direct percentage.
+          // Otherwise assume token count and convert (200k context window).
+          if (match[0].includes('%')) {
+            contextPct = Math.min(100, rawValue);
+          } else {
+            contextPct = Math.min(100, Math.round((rawValue / 200_000) * 100));
+          }
+          break;
+        }
+      }
+    }
+
+    // Fall back to adapter if contextPattern didn't match
+    if (contextPct === null) {
+      const adapter = getAdapter(agent.engine);
+      const contextResult = adapter.parseContextPercent(paneOutput);
+      contextPct = contextResult.contextPct;
+    }
+
+    if (contextPct === null) return;
 
     // Re-read the agent to avoid stale version conflicts from the poll snapshot
     const latest = this.db.getAgent(agent.name);
     if (!latest || (latest.state !== 'active' && latest.state !== 'idle')) return;
     try {
       this.db.updateAgentState(agent.name, latest.state, latest.version, {
-        lastContextPct: contextResult.contextPct,
+        lastContextPct: contextPct,
         lastActivity: new Date().toISOString(),
       });
     } catch { /* version conflict — another operation changed the agent, skip this update */ }
