@@ -82,7 +82,7 @@ export async function sendMessage() {
 
   const message = _voiceState.usedSinceSend ? VOICE_TO_TEXT_PREFIX + text : text;
   _voiceState.usedSinceSend = false;
-  // Optimistic clear — the message will appear via WS broadcast with queue status
+  // Optimistic clear — message appears via WS broadcast, with HTTP fallback
   inputEl.clear();
   try {
     const res = await fetch('/api/dashboard/send', {
@@ -97,6 +97,20 @@ export async function sendMessage() {
       if (!(body && body.msg)) {
         inputEl.setDraft(text);
         showToast('Send failed', 'error');
+      }
+    } else {
+      // Ensure message shows even if WS broadcast was missed (e.g. brief disconnect)
+      const body = await res.json().catch(() => null);
+      if (body?.msg) {
+        const thread = state.threads[body.msg.agent];
+        if (thread && !thread.some(m => m.id === body.msg.id)) {
+          const linked = { ...body.msg, queueId: body.queueId ?? null, deliveryStatus: body.status ?? 'pending' };
+          thread.push(linked);
+          if (state.selected === body.msg.agent && state.threadView === 'messages') {
+            const messagesEl = document.getElementById('threadMessages');
+            if (messagesEl?.appendMessage) messagesEl.appendMessage(linked, body.msg.agent);
+          }
+        }
       }
     }
   } catch (err) {

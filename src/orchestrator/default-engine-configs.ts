@@ -95,9 +95,6 @@ export const DEFAULT_ENGINE_CONFIGS: DefaultEngineConfig[] = [
   {
     name: 'claude',
     engine: 'claude',
-    model: 'opus',
-    thinking: 'high',
-    permissions: 'dangerously-skip',
     hookStart: JSON.stringify([
       { type: 'shell', command: 'claude --dangerously-skip-permissions --model opus --effort max --append-system-prompt $PERSONA_PROMPT' },
       { type: 'wait', ms: 5000 },
@@ -125,7 +122,6 @@ export const DEFAULT_ENGINE_CONFIGS: DefaultEngineConfig[] = [
   {
     name: 'codex',
     engine: 'codex',
-    model: 'gpt-4.1',
     hookStart: JSON.stringify([
       { type: 'shell', command: 'codex --dangerously-bypass-approvals-and-sandbox --no-alt-screen -p $AGENT_NAME' },
     ]),
@@ -140,7 +136,6 @@ export const DEFAULT_ENGINE_CONFIGS: DefaultEngineConfig[] = [
   {
     name: 'opencode',
     engine: 'opencode',
-    model: 'sonnet',
     hookStart: JSON.stringify([
       { type: 'shell', command: 'opencode' },
     ]),
