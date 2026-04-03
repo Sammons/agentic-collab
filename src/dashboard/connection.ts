@@ -24,9 +24,11 @@ let _handleMessageWithdrawn = () => {};
 let _handleQueueUpdate = () => {};
 let _patchAgentCard = () => {};
 
+let _onInit = () => {};
+
 export function setup({ renderAgents, renderThread, updatePageTitle, updateAgent,
                          addMessage, handleMessageWithdrawn, handleQueueUpdate,
-                         patchAgentCard }) {
+                         patchAgentCard, onInit }) {
   _renderAgents = renderAgents;
   _renderThread = renderThread;
   _updatePageTitle = updatePageTitle;
@@ -35,6 +37,7 @@ export function setup({ renderAgents, renderThread, updatePageTitle, updateAgent
   _handleMessageWithdrawn = handleMessageWithdrawn;
   _handleQueueUpdate = handleQueueUpdate;
   _patchAgentCard = patchAgentCard;
+  if (onInit) _onInit = onInit;
 }
 
 // ── Module-scoped connection state ──
@@ -157,6 +160,7 @@ export function connect() {
         _renderAgents();
         _renderThread();
         _updatePageTitle();
+        _onInit();
         break;
       case 'agent_update':
         _updateAgent(data.agent);

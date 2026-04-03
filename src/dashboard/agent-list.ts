@@ -18,6 +18,7 @@ import { state, authHeaders, getToken } from '/dashboard/assets/state.ts';
 import { esc, renderMarkdown, timeAgo, showToast, promptInput } from '/dashboard/assets/utils.ts';
 import { agentAction, openCreateAgentModal } from '/dashboard/assets/agent-lifecycle.ts';
 import { icon } from '/dashboard/assets/icons.ts';
+import { pushUrlState } from '/dashboard/assets/url-state.ts';
 
 // ── Dependencies injected via setup() ──
 let _renderThread = () => {};
@@ -349,6 +350,7 @@ export function selectAgent(name) {
   // Preserve current tab (messages/persona/watch) when switching agents
   renderAgents();
   _renderThread();
+  pushUrlState();
   // Restore draft and focus via component
   const freshInput = document.getElementById('threadInput');
   if (freshInput && freshInput.setDraft) {

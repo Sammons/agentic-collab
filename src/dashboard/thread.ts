@@ -17,6 +17,7 @@ import { icon } from '/dashboard/assets/icons.ts';
 import { renderPersona, setup as setupPersonaEditor } from '/dashboard/assets/persona-editor.ts';
 import { buildActionsHtml } from '/dashboard/assets/agent-card.ts';
 import { agentAction } from '/dashboard/assets/agent-lifecycle.ts';
+import { pushUrlState } from '/dashboard/assets/url-state.ts';
 
 // ── Dependencies injected via setup() ──
 let _handleAuthError = () => {};
@@ -135,7 +136,7 @@ export function renderThread() {
   header.innerHTML = `<div class="thread-header-top"><button class="mobile-back" id="mobileBackBtn">${icon.arrowLeft(16)}</button><span>${esc(state.selected)}</span>${headerBadge}${indicators}</div>${tabs}${actionsHtml}`;
   document.getElementById('mobileBackBtn').onclick = mobileBack;
   header.querySelectorAll('.thread-tabs button').forEach(btn => {
-    btn.onclick = () => { state.editingPersona = false; state.threadView = btn.dataset.tab; renderThread(); };
+    btn.onclick = () => { state.editingPersona = false; state.threadView = btn.dataset.tab; renderThread(); pushUrlState(); };
   });
   // Action button delegation
   header.querySelectorAll('.thread-actions button[data-action]').forEach(btn => {

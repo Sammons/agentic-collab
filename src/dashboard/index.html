@@ -80,6 +80,7 @@ import { voiceState, initVoice, initCommandPalette, setup as setupVoicePalette }
 import { handleAuthError, connect, fetchEngineUsage, setup as setupConnection } from '/dashboard/assets/connection.ts';
 import { renderThread, getActiveTopic, updatePageTitle, setup as setupThread } from '/dashboard/assets/thread.ts';
 import { renderAgents, selectAgent, patchAgentCard, updateAgent, addMessage, handleMessageWithdrawn, applySearchFilter, initAgentListEvents, setup as setupAgentList } from '/dashboard/assets/agent-list.ts';
+import { pushUrlState, restorePendingAgent, setup as setupUrlState } from '/dashboard/assets/url-state.ts';
 {
 
   // handleAuthError, promptForToken — imported from connection.js
@@ -103,7 +104,7 @@ import { renderAgents, selectAgent, patchAgentCard, updateAgent, addMessage, han
   // mobileBack — imported from thread.js
 
   // Wire connection module dependencies (must precede lifecycle + message-io which depend on handleAuthError)
-  setupConnection({ renderAgents, renderThread, updatePageTitle, updateAgent, addMessage, handleMessageWithdrawn, handleQueueUpdate, patchAgentCard });
+  setupConnection({ renderAgents, renderThread, updatePageTitle, updateAgent, addMessage, handleMessageWithdrawn, handleQueueUpdate, patchAgentCard, onInit: restorePendingAgent });
 
   // Wire thread/persona module dependencies
   setupThread({ handleAuthError, updateSendability });
@@ -221,22 +222,30 @@ import { renderAgents, selectAgent, patchAgentCard, updateAgent, addMessage, han
     settingsBtn.style.color = 'var(--text-dim)';
     settingsBtn.style.borderColor = 'var(--border)';
   }
+  function openSettings() {
+    settingsPanel.style.display = 'flex';
+    threadPanel.style.display = 'none';
+    settingsBtn.style.color = 'var(--accent)';
+    settingsBtn.style.borderColor = 'var(--accent)';
+    settingsPanel.render();
+  }
   settingsBtn.addEventListener('click', () => {
     const isOpen = settingsPanel.style.display !== 'none';
     if (isOpen) {
       closeSettings();
+      pushUrlState({ settings: false });
     } else {
-      settingsPanel.style.display = 'flex';
-      threadPanel.style.display = 'none';
-      settingsBtn.style.color = 'var(--accent)';
-      settingsBtn.style.borderColor = 'var(--accent)';
-      settingsPanel.render();
+      openSettings();
+      pushUrlState({ settings: true });
     }
   });
   // Close settings when selecting an agent
   document.getElementById('agentList').addEventListener('click', () => {
     if (settingsPanel.style.display !== 'none') closeSettings();
   });
+
+  // ── URL State (History API) ──
+  setupUrlState({ selectAgent, renderThread, renderAgents, openSettings, closeSettings });
 
   // ── Init ──
   // Always try connecting first. If the server requires auth and we don't have
