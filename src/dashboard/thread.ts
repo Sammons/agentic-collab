@@ -96,7 +96,7 @@ export function mobileBack() {
 let _searchOpen = false;
 let _searchQuery = '';
 let _searchResults = [];
-let _searchDebounce: ReturnType<typeof setTimeout> | null = null;
+let _searchDebounce = null;
 
 function highlightMatch(text, query) {
   if (!query) return esc(text);
@@ -106,7 +106,7 @@ function highlightMatch(text, query) {
   return escaped.replace(re, '<mark class="search-highlight">$1</mark>');
 }
 
-function snippetAround(text: string, query: string, radius = 80): string {
+function snippetAround(text, query, radius = 80) {
   const lower = text.toLowerCase();
   const idx = lower.indexOf(query.toLowerCase());
   if (idx === -1) return text.slice(0, radius * 2);
@@ -118,7 +118,7 @@ function snippetAround(text: string, query: string, radius = 80): string {
   return snippet;
 }
 
-function renderSearchResults(container: HTMLElement): void {
+function renderSearchResults(container) {
   if (_searchResults.length === 0 && _searchQuery.length > 0) {
     container.innerHTML = '<div class="search-empty">No messages found</div>';
     return;
@@ -137,8 +137,8 @@ function renderSearchResults(container: HTMLElement): void {
   }).join('');
 }
 
-function doLocalSearch(query: string): void {
-  const thread = state.threads[state.selected!] || [];
+function doLocalSearch(query) {
+  const thread = state.threads[state.selected] || [];
   const lower = query.toLowerCase();
   _searchResults = thread
     .filter(m => m.message.toLowerCase().includes(lower))
@@ -147,14 +147,14 @@ function doLocalSearch(query: string): void {
     .map(m => ({ id: m.id, agent: m.agent, message: m.message, createdAt: m.createdAt }));
 }
 
-async function doGlobalSearch(query: string): Promise<void> {
+async function doGlobalSearch(query) {
   const params = new URLSearchParams({ q: query });
   const res = await fetch(`/api/dashboard/messages/search?${params}`, {
     headers: authHeaders(),
   });
   if (!res.ok) return;
   const data = await res.json();
-  _searchResults = data.map((m: any) => ({ id: m.id, agent: m.agent, message: m.message, createdAt: m.createdAt }));
+  _searchResults = data.map(m => ({ id: m.id, agent: m.agent, message: m.message, createdAt: m.createdAt }));
 }
 
 // ── Thread Renderer ──
@@ -195,6 +195,7 @@ export function renderThread() {
     <button class="${state.threadView === 'messages' ? 'active' : ''}" data-tab="messages">Messages</button>
     <button class="${state.threadView === 'watch' ? 'active' : ''}" data-tab="watch">Watch</button>
     <button class="${state.threadView === 'reminders' ? 'active' : ''}" data-tab="reminders">Reminders</button>
+    <button class="${state.threadView === 'files' ? 'active' : ''}" data-tab="files">Files</button>
     <button class="${state.threadView === 'persona' ? 'active' : ''}" data-tab="persona">Persona</button>
   </div>`;
   const actionsHtml = selectedAgent ? `<div class="thread-actions">${buildActionsHtml(selectedAgent)}</div>` : '';
@@ -210,11 +211,11 @@ export function renderThread() {
   document.getElementById('mobileBackBtn').onclick = mobileBack;
 
   // ── Search wiring ──
-  const searchBtnEl = document.getElementById('threadSearchBtn')!;
-  const searchPanelEl = document.getElementById('threadSearchPanel')!;
-  const searchInputEl = document.getElementById('threadSearchInput') as HTMLInputElement;
-  const searchResultsEl = document.getElementById('threadSearchResults')!;
-  const searchAllBtnEl = document.getElementById('threadSearchAllBtn')!;
+  const searchBtnEl = document.getElementById('threadSearchBtn');
+  const searchPanelEl = document.getElementById('threadSearchPanel');
+  const searchInputEl = document.getElementById('threadSearchInput');
+  const searchResultsEl = document.getElementById('threadSearchResults');
+  const searchAllBtnEl = document.getElementById('threadSearchAllBtn');
 
   searchBtnEl.addEventListener('click', () => {
     _searchOpen = !_searchOpen;
@@ -290,10 +291,12 @@ export function renderThread() {
   });
 
   const view = state.threadView;
+  const filesPanel = document.getElementById('filesPanel');
   messages.style.display = view === 'messages' ? 'flex' : 'none';
   personaPanel.style.display = view === 'persona' ? 'block' : 'none';
   reminderPanel.style.display = view === 'reminders' ? 'flex' : 'none';
   watchPanel.style.display = view === 'watch' ? 'flex' : 'none';
+  filesPanel.style.display = view === 'files' ? 'flex' : 'none';
   input.style.display = view === 'messages' ? 'flex' : 'none';
   const breadcrumbs = document.getElementById('topicBreadcrumbs');
   breadcrumbs.style.display = view === 'messages' ? 'flex' : 'none';
@@ -311,6 +314,11 @@ export function renderThread() {
 
   if (view === 'watch') {
     document.getElementById('watchPanel').start(state.selected);
+    return;
+  }
+
+  if (view === 'files') {
+    document.getElementById('filesPanel').load(state.selected);
     return;
   }
 

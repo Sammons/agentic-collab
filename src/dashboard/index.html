@@ -12,6 +12,7 @@
 <link rel="stylesheet" href="/dashboard/assets/styles/reminder-panel.css">
 <link rel="stylesheet" href="/dashboard/assets/styles/modals.css">
 <link rel="stylesheet" href="/dashboard/assets/styles/settings.css">
+<link rel="stylesheet" href="/dashboard/assets/styles/files-panel.css">
 <link rel="stylesheet" href="/dashboard/assets/styles/responsive.css">
 </head>
 <body>
@@ -57,6 +58,7 @@
     <div class="persona-panel" id="personaPanel" style="display:none"></div>
     <reminder-panel class="reminder-panel" id="reminderPanel" style="display:none"></reminder-panel>
     <watch-panel class="watch-panel" id="watchPanel" style="display:none"></watch-panel>
+    <files-panel class="files-panel" id="filesPanel" style="display:none"></files-panel>
     <div class="topic-breadcrumbs" id="topicBreadcrumbs" style="display:none"></div>
     <message-input class="thread-input" id="threadInput" style="display:none">
     </message-input>
@@ -73,6 +75,7 @@ import '/dashboard/assets/message-list.ts';
 import '/dashboard/assets/message-input.ts';
 import '/dashboard/assets/watch-panel.ts';
 import '/dashboard/assets/reminder-panel.ts';
+import '/dashboard/assets/files-panel.ts';
 import '/dashboard/assets/settings.ts';
 import { agentAction, openCreateAgentModal, setup as setupLifecycle } from '/dashboard/assets/agent-lifecycle.ts';
 import { sendMessage, uploadFile, handleFileUpload, updateSendability, handleQueueUpdate, setup as setupMessageIO } from '/dashboard/assets/message-io.ts';

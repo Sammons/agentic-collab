@@ -1,0 +1,91 @@
+  /* ── Files Panel ── */
+  .files-panel {
+    padding: 12px;
+    overflow-y: auto;
+    font-size: 13px;
+  }
+  .files-empty {
+    color: var(--text-dim);
+    text-align: center;
+    padding: 24px 12px;
+    font-size: 13px;
+  }
+  .files-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--border);
+  }
+  .files-cwd {
+    font-family: 'SFMono-Regular', Consolas, monospace;
+    font-size: 11px;
+    color: var(--text-dim);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 70%;
+  }
+  .files-count {
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+  .files-list {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+  .files-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 8px;
+    border-radius: 4px;
+    transition: background 0.1s;
+  }
+  .files-item:hover { background: var(--surface); }
+  .files-item.is-dir .files-name { font-weight: 600; }
+  .files-icon {
+    color: var(--text-dim);
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+  }
+  .files-item.is-dir .files-icon { color: var(--accent); }
+  .files-item.files-page .files-icon { color: var(--green); }
+  .files-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text);
+  }
+  .files-link {
+    color: var(--accent);
+    text-decoration: none;
+  }
+  .files-link:hover { text-decoration: underline; }
+  .files-meta {
+    font-size: 11px;
+    color: var(--text-dim);
+    white-space: nowrap;
+  }
+  .files-size {
+    font-size: 11px;
+    color: var(--text-dim);
+    min-width: 50px;
+    text-align: right;
+    white-space: nowrap;
+  }
+  .files-section-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    margin-top: 16px;
+    margin-bottom: 6px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--border);
+  }

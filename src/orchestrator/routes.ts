@@ -523,7 +523,6 @@ route('GET', '/api/dashboard/threads', async (req, res, _match, ctx) => {
   json(res, 200, threads);
 });
 
-
 route('GET', '/api/dashboard/messages/search', async (req, res, _match, ctx) => {
   const url = new URL(req.url!, `http://${req.headers.host}`);
   const q = url.searchParams.get('q')?.trim();
@@ -650,6 +649,39 @@ route('GET', '/api/queue', async (req, res, _match, ctx) => {
   const status = url.searchParams.get('status') ?? undefined;
   const messages = ctx.db.listPendingMessages(agent, status);
   json(res, 200, messages);
+});
+
+// ── Agent Files ──
+
+route('GET', '/api/agents/:name/files', async (_req, res, match, ctx) => {
+  const name = match.pathname.groups['name']!;
+  const agent = ctx.db.getAgent(name);
+  if (!agent) return json(res, 404, { error: 'Agent not found' });
+  if (!agent.cwd) return json(res, 400, { error: 'Agent has no working directory' });
+  if (!agent.proxyId) return json(res, 400, { error: 'Agent has no proxy' });
+
+  try {
+    const result = await ctx.proxyDispatch(agent.proxyId, {
+      action: 'exec',
+      command: `find . -maxdepth 1 -not -name '.' -printf '%T@\\t%s\\t%y\\t%f\\n' 2>/dev/null | sort -rn | head -100`,
+      cwd: agent.cwd,
+      timeoutMs: 5000,
+    } as any);
+    if (!result.ok) return json(res, 500, { error: 'Failed to list files' });
+
+    const files = (result.data as string).split('\n').filter(Boolean).map(line => {
+      const [mtime, size, type, ...nameParts] = line.split('\t');
+      return {
+        name: nameParts.join('\t'),
+        size: parseInt(size ?? '0', 10),
+        isDir: type === 'd',
+        modified: new Date(parseFloat(mtime ?? '0') * 1000).toISOString(),
+      };
+    });
+    json(res, 200, { cwd: agent.cwd, files });
+  } catch {
+    json(res, 500, { error: 'Failed to list files' });
+  }
 });
 
 // ── Engine Configs ──
