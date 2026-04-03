@@ -20,6 +20,7 @@ import type { ProxyCommand, ProxyResponse, AgentRecord, PendingMessage, Dashboar
 import { sessionName, canSuspend } from '../shared/agent-entity.ts';
 import { getAdapter } from './adapters/index.ts';
 import { reloadAgent, type LifecycleContext } from './lifecycle.ts';
+import { resolveEffectiveConfig } from './engine-config-resolver.ts';
 
 type CompiledDetection = {
   json: string;
@@ -117,6 +118,12 @@ export class HealthMonitor {
    * Handles CSI sequences (colors, cursor), OSC sequences (hyperlinks, titles),
    * and single-character escapes.
    */
+  /** Merge engine config defaults into agent record for indicator/detection resolution. */
+  private resolveAgent(agent: AgentRecord): AgentRecord {
+    const engineConfig = this.db.getEngineConfig(agent.engine);
+    return resolveEffectiveConfig(agent, engineConfig);
+  }
+
   static stripAnsi(text: string): string {
     // CSI: \x1b[ ... final byte (letter)
     // OSC: \x1b] ... ST (\x1b\\ or \x07)
@@ -308,8 +315,9 @@ export class HealthMonitor {
         // Window_activity changed — capture to check real content change vs ANSI-only
         const paneOutput = await this.capturePaneOutput(agent);
         if (paneOutput === null) continue;
-        this.evaluateIndicators(agent, paneOutput);
-        const isIdle = this.checkScreenDiff(agent, paneOutput);
+        const resolved = this.resolveAgent(agent);
+        this.evaluateIndicators(resolved, paneOutput);
+        const isIdle = this.checkScreenDiff(resolved, paneOutput);
         this.handleIdleTransitions(agent, isIdle);
       } catch (err) {
         console.error(`[health] Fast poll error for ${agent.name}:`, err);
@@ -376,9 +384,10 @@ export class HealthMonitor {
     if (this.detectCliExit(agent, paneOutput)) return;
 
     this.recordContextPercent(agent, paneOutput);
-    this.evaluateIndicators(agent, paneOutput);
+    const resolved = this.resolveAgent(agent);
+    this.evaluateIndicators(resolved, paneOutput);
 
-    const isIdle = this.checkScreenDiff(agent, paneOutput);
+    const isIdle = this.checkScreenDiff(resolved, paneOutput);
     this.handleIdleTransitions(agent, isIdle);
 
     this.checkIdleSuspendTimeout(agent.name);
