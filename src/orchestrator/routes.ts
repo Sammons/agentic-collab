@@ -62,23 +62,17 @@ export type RouteContext = {
 
 /**
  * Resolve the proxy ID for an agent at spawn/resume time.
- * Priority: explicit body value > agent's existing proxyId > proxyHost match > any available proxy.
+ * Priority: explicit body value > agent's existing proxyId > any available proxy.
  */
-function resolveProxyId(ctx: RouteContext, agent: { proxyId: string | null; proxyHost: string | null }, bodyProxyId?: string): string {
+function resolveProxyId(ctx: RouteContext, agent: { proxyId: string | null }, bodyProxyId?: string): string {
   // 1. Explicit override from request body
   if (bodyProxyId) return bodyProxyId;
 
   // 2. Already assigned (e.g. from a previous spawn)
   if (agent.proxyId) return agent.proxyId;
 
-  // 3. Match by proxyHost preference
+  // 3. Fall back to any registered proxy
   const proxies = ctx.db.listProxies();
-  if (agent.proxyHost) {
-    const match = proxies.find(p => p.proxyId === agent.proxyHost);
-    if (match) return match.proxyId;
-  }
-
-  // 4. Fall back to any registered proxy
   if (proxies.length > 0) return proxies[0]!.proxyId;
 
   return '';
@@ -248,7 +242,6 @@ route('POST', '/api/agents', async (req, res, _match, ctx) => {
     persona: body.name,
     permissions: body.permissions,
     proxyId: body.proxyId,
-    proxyHost: body.proxyHost,
     agentGroup: body.group,
   });
 
@@ -259,7 +252,6 @@ route('POST', '/api/agents', async (req, res, _match, ctx) => {
     if (body.model) fmLines.push(`model: ${body.model}`);
     if (body.thinking) fmLines.push(`thinking: ${body.thinking}`);
     fmLines.push(`cwd: ${body.cwd}`);
-    if (body.proxyHost) fmLines.push(`proxy_host: ${body.proxyHost}`);
     if (body.permissions) fmLines.push(`permissions: ${body.permissions}`);
     if (body.group) fmLines.push(`group: ${body.group}`);
     const content = `---\n${fmLines.join('\n')}\n---\n`;

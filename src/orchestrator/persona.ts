@@ -37,7 +37,6 @@ export type PersonaFrontmatter = {
   model?: string;
   thinking?: string;
   cwd?: string;
-  proxy_host?: string;
   permissions?: string;
   group?: string;
   /** Named credential account for per-agent HOME isolation. */
@@ -56,10 +55,6 @@ export type PersonaFrontmatter = {
   interrupt?: HookValue;
   /** Hook value for submitting messages to the agent. */
   submit?: HookValue;
-  /** Hook value for detecting the agent's session ID after spawn/resume. */
-  detect_session?: HookValue;
-  /** Regex to extract session ID from pane output on exit. First capture group = session ID. */
-  detect_session_regex?: string;
   /** Legacy alias for start (backward compat). */
   spawn?: HookValue;
   /** Custom dashboard buttons — named keys mapping to pipeline step arrays. */
@@ -1044,14 +1039,11 @@ export type SyncDiffResult = {
  * - DELETED personas (DB record, no file) are intentionally ignored.
  */
 
-/** Validate cwd and proxy_host, logging warnings for invalid values. */
+/** Validate cwd, logging warnings for invalid values. */
 function validateFrontmatter(name: string, fm: PersonaFrontmatter): string[] {
   const warnings: string[] = [];
   if (fm.cwd && !existsSync(fm.cwd)) {
     warnings.push(`cwd "${fm.cwd}" does not exist`);
-  }
-  if (fm.proxy_host) {
-    warnings.push(`proxy_host is deprecated — use the proxy dropdown in Create Agent instead. Field will be ignored.`);
   }
   for (const w of warnings) {
     console.warn(`[persona] ${name}: ${w}`);

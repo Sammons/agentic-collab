@@ -45,7 +45,6 @@ Each engine wraps a CLI tool: `claude` (Claude Code), `codex` (OpenAI Codex CLI)
 | cwd | `/home/user/project` | Working directory (required) |
 | permissions | `skip` | Omit for normal prompting. Set to `skip` to pass `--dangerously-skip-permissions` (auto-approves all tool use — no confirmation prompts) |
 | group | `backend` | Dashboard sidebar grouping label (visual only, no effect on routing) |
-| proxy_host | `main-proxy` | Pin agent to a specific proxy by its registered ID. If omitted, the orchestrator assigns any available proxy |
 | account | `my-pro-account` | Named credential account — agent runs with that account's Claude Code credentials via HOME isolation |
 
 ### Environment variables
@@ -154,7 +153,6 @@ thinking: medium
 cwd: /home/user/my-project
 group: backend
 permissions: skip
-proxy_host: main-proxy
 env:
   NODE_ENV: development
 start:

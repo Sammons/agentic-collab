@@ -203,13 +203,12 @@ describe('Persona', () => {
     });
 
     it('handles all persona frontmatter fields', () => {
-      const raw = '---\nengine: claude\nmodel: opus\nthinking: high\ncwd: /project\nproxy_host: myhost\npermissions: skip\n---\nBody';
+      const raw = '---\nengine: claude\nmodel: opus\nthinking: high\ncwd: /project\npermissions: skip\n---\nBody';
       const { frontmatter } = parseFrontmatter(raw);
       assert.equal(frontmatter['engine'], 'claude');
       assert.equal(frontmatter['model'], 'opus');
       assert.equal(frontmatter['thinking'], 'high');
       assert.equal(frontmatter['cwd'], '/project');
-      assert.equal(frontmatter['proxy_host'], 'myhost');
       assert.equal(frontmatter['permissions'], 'skip');
     });
 
@@ -290,7 +289,6 @@ describe('Persona', () => {
         'model: opus',
         'thinking: high',
         'cwd: /alpha',
-        'proxy_host: myhost',
         'permissions: skip',
         'env:',
         '  GIT_CONFIG_GLOBAL: $PWD/alpha.gitconfig',
@@ -310,7 +308,6 @@ describe('Persona', () => {
       assert.equal(alpha.thinking, 'high');
       assert.equal(alpha.cwd, '/alpha');
       assert.equal(alpha.permissions, 'skip');
-      assert.equal(alpha.proxyHost, 'myhost');
       assert.equal(alpha.persona, 'alpha');
       assert.deepEqual(alpha.launchEnv, {
         GIT_CONFIG_GLOBAL: '$PWD/alpha.gitconfig',
@@ -782,7 +779,7 @@ describe('Persona', () => {
 
     it('handles flat and nested hooks in same frontmatter', () => {
       const raw = [
-        '---', 'engine: claude', 'model: opus', 'cwd: /tmp', 'proxy_host: crankshaft',
+        '---', 'engine: claude', 'model: opus', 'cwd: /tmp',
         'start:', '  preset: claude', '  options:', '    model: sonnet',
         'resume:', '  preset: claude',
         'exit: /exit',

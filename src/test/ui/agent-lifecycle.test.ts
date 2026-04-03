@@ -150,9 +150,9 @@ describe('Agent Lifecycle', () => {
     const agents = (await res.json()) as Record<string, unknown>[];
     const requiredFields = [
       'name', 'engine', 'model', 'thinking', 'cwd', 'persona', 'permissions',
-      'proxyHost', 'agentGroup', 'launchEnv', 'sortOrder',
+      'agentGroup', 'launchEnv', 'sortOrder',
       'hookStart', 'hookResume', 'hookCompact', 'hookExit',
-      'hookInterrupt', 'hookSubmit', 'hookDetectSession', 'detectSessionRegex',
+      'hookInterrupt', 'hookSubmit',
       'state', 'stateBeforeShutdown', 'currentSessionId', 'tmuxSession',
       'proxyId', 'lastActivity', 'lastContextPct', 'reloadQueued', 'reloadTask',
       'failedAt', 'failureReason', 'capturedVars', 'customButtons', 'indicators',

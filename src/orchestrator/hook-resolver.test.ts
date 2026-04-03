@@ -17,7 +17,6 @@ function makeAgent(overrides: Partial<AgentRecord> = {}): AgentRecord {
     cwd: '/tmp/test',
     persona: null,
     permissions: null,
-    proxyHost: null,
     agentGroup: null,
     sortOrder: 0,
     hookStart: null,

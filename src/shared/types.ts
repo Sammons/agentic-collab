@@ -88,7 +88,6 @@ export type AgentRecord = {
   cwd: string;
   persona: string | null;
   permissions: string | null; // 'skip' | null
-  proxyHost: string | null; // hostname for proxy pinning
   agentGroup: string | null; // grouping label from persona frontmatter
   launchEnv: LaunchEnv | null; // launch-time env injected on spawn/resume/reload
   account: string | null; // named credential account for HOME isolation
@@ -105,10 +104,6 @@ export type AgentRecord = {
   hookInterrupt: string | null;
   /** Hook value for submitting messages to the agent. */
   hookSubmit: string | null;
-  /** @deprecated Use capture pipeline steps instead. Kept for DB backward compat. */
-  hookDetectSession: string | null;
-  /** @deprecated Use capture pipeline steps instead. Kept for DB backward compat. */
-  detectSessionRegex: string | null;
   state: AgentState;
   stateBeforeShutdown: string | null;
   currentSessionId: string | null;

@@ -2,7 +2,7 @@
  * Schema-driven field registry for AgentRecord config fields.
  *
  * Single source of truth for field names, column mappings, serialization,
- * and persona-sync behavior. Covers the 19 persona-managed config fields.
+ * and persona-sync behavior.
  * Runtime fields (state, version, capturedVars, etc.) are NOT in the registry.
  */
 
@@ -101,7 +101,6 @@ export const CONFIG_FIELDS: readonly FieldDef[] = [
   { name: 'cwd',                column: 'cwd',                   personaKey: 'cwd',                   kind: 'scalar', nested: false, upsertable: true,  createOnly: false },
   { name: 'persona',            column: 'persona',               personaKey: null,                    kind: 'scalar', nested: false, upsertable: true,  createOnly: false },
   { name: 'permissions',        column: 'permissions',           personaKey: 'permissions',           kind: 'scalar', nested: false, upsertable: true,  createOnly: false },
-  { name: 'proxyHost',          column: 'proxy_host',            personaKey: 'proxy_host',            kind: 'scalar', nested: false, upsertable: true,  createOnly: false },
   { name: 'proxyId',            column: 'proxy_id',              personaKey: null,                    kind: 'scalar', nested: false, upsertable: false, createOnly: true },
   { name: 'agentGroup',         column: 'agent_group',           personaKey: 'group',                 kind: 'scalar', nested: false, upsertable: true,  createOnly: false },
   { name: 'account',            column: 'account',               personaKey: 'account',               kind: 'scalar', nested: false, upsertable: true,  createOnly: false },
@@ -112,8 +111,6 @@ export const CONFIG_FIELDS: readonly FieldDef[] = [
   { name: 'hookExit',           column: 'hook_exit',             personaKey: 'exit',                  kind: 'hook',   nested: true,  upsertable: true,  createOnly: false },
   { name: 'hookInterrupt',      column: 'hook_interrupt',        personaKey: 'interrupt',             kind: 'hook',   nested: true,  upsertable: true,  createOnly: false },
   { name: 'hookSubmit',         column: 'hook_submit',           personaKey: 'submit',                kind: 'hook',   nested: true,  upsertable: true,  createOnly: false },
-  { name: 'hookDetectSession',  column: 'hook_detect_session',   personaKey: 'detect_session',        kind: 'hook',   nested: true,  upsertable: true,  createOnly: false },
-  { name: 'detectSessionRegex', column: 'detect_session_regex',  personaKey: 'detect_session_regex',  kind: 'scalar', nested: false, upsertable: true,  createOnly: false },
   { name: 'customButtons',      column: 'custom_buttons',        personaKey: 'custom_buttons',        kind: 'json',   nested: false, upsertable: true,  createOnly: false, serialize: serializeCustomButtons },
   { name: 'indicators',         column: 'indicators',            personaKey: 'indicators',            kind: 'json',   nested: false, upsertable: true,  createOnly: false, serialize: serializeIndicators },
 ];

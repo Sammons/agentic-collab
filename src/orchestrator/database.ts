@@ -42,7 +42,7 @@ const SCHEMA = `
     cwd                TEXT NOT NULL,
     persona            TEXT,
     permissions        TEXT,
-    proxy_host         TEXT,
+    proxy_host         TEXT, -- Deprecated: no longer read/written (proxy_host, hook_detect_session, detect_session_regex remain in schema for SQLite compat)
     state              TEXT NOT NULL DEFAULT 'void',
     state_before_shutdown TEXT,
     current_session_id TEXT,
@@ -224,7 +224,6 @@ export class Database {
     cwd: string;
     persona?: string;
     permissions?: string;
-    proxyHost?: string;
     proxyId?: string;
     agentGroup?: string;
     launchEnv?: LaunchEnv | null;
@@ -234,8 +233,6 @@ export class Database {
     hookExit?: string;
     hookInterrupt?: string;
     hookSubmit?: string;
-    hookDetectSession?: string;
-    detectSessionRegex?: string;
     customButtons?: string;
     indicators?: string;
   }): AgentRecord {
@@ -260,7 +257,6 @@ export class Database {
     cwd: string;
     persona?: string;
     permissions?: string;
-    proxyHost?: string;
     agentGroup?: string;
     launchEnv?: LaunchEnv | null;
     hookStart?: string;
@@ -269,8 +265,6 @@ export class Database {
     hookExit?: string;
     hookInterrupt?: string;
     hookSubmit?: string;
-    hookDetectSession?: string;
-    detectSessionRegex?: string;
     customButtons?: string;
     indicators?: string;
   }): AgentRecord {
