@@ -697,12 +697,11 @@ route('POST', '/api/engine-configs/reset-defaults', async (_req, res, _match, ct
   for (const config of DEFAULT_ENGINE_CONFIGS) {
     const existing = ctx.db.getEngineConfig(config.name);
     if (existing) {
-      ctx.db.updateEngineConfig(config.name, config);
-      results.push(`updated: ${config.name}`);
-    } else {
-      ctx.db.createEngineConfig(config);
-      results.push(`created: ${config.name}`);
+      // Delete and recreate to clear stale fields not in the new defaults
+      ctx.db.deleteEngineConfig(config.name);
     }
+    ctx.db.createEngineConfig(config);
+    results.push(existing ? `reset: ${config.name}` : `created: ${config.name}`);
   }
   const configs = ctx.db.listEngineConfigs();
   ctx.wss.broadcast(JSON.stringify({ type: 'init', engineConfigs: configs }));
