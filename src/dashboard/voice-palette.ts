@@ -258,12 +258,20 @@ export async function startVoice() {
   };
 
   ws.onclose = () => {
-    if (voiceState.recording) stopVoiceLocal();
+    if (voiceState.recording) {
+      const partial = document.getElementById('voicePartial');
+      partial.textContent = 'Voice disconnected';
+      partial.style.color = 'var(--red)';
+      setTimeout(() => { partial.textContent = ''; partial.style.color = ''; }, 3000);
+      stopVoiceLocal();
+    }
   };
 
   ws.onerror = () => {
-    document.getElementById('voicePartial').textContent = 'Connection failed';
-    setTimeout(() => { document.getElementById('voicePartial').textContent = ''; }, 3000);
+    const partial = document.getElementById('voicePartial');
+    partial.textContent = 'Voice connection failed';
+    partial.style.color = 'var(--red)';
+    setTimeout(() => { partial.textContent = ''; partial.style.color = ''; }, 3000);
     stopVoiceLocal();
   };
 
