@@ -519,7 +519,7 @@ export class HealthMonitor {
       // Enforce grace period — don't transition to idle if recent activity was detected
       const detection = this.compiledDetection.get(agent.engine);
       const graceMs = detection?.config.activeGraceMs ?? HealthMonitor.ACTIVE_GRACE_MS;
-      const lastActivity = this.lastActivityDetected.get(agent.name) ?? 0;
+      const lastActivity = this.lastActivityDetected.get(agent.name) ?? Date.now();
       const elapsed = Date.now() - lastActivity;
       if (elapsed < graceMs) {
         return; // Still within grace period, stay active
