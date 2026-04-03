@@ -121,6 +121,10 @@ export function renderThread() {
 
   const selectedAgent = state.agents.find(a => a.name === state.selected);
   const headerBadge = selectedAgent ? `<span class="state-badge state-${selectedAgent.state}">${selectedAgent.state}</span>` : '';
+  const indicators = (state.indicators[state.selected] || []).map(ind => {
+    const cls = ind.style || 'info';
+    return `<span class="indicator-badge ${cls}">${esc(ind.badge)}</span>`;
+  }).join('');
   const tabs = `<div class="thread-tabs">
     <button class="${state.threadView === 'messages' ? 'active' : ''}" data-tab="messages">Messages</button>
     <button class="${state.threadView === 'watch' ? 'active' : ''}" data-tab="watch">Watch</button>
@@ -128,7 +132,7 @@ export function renderThread() {
     <button class="${state.threadView === 'persona' ? 'active' : ''}" data-tab="persona">Persona</button>
   </div>`;
   const actionsHtml = selectedAgent ? `<div class="thread-actions">${buildActionsHtml(selectedAgent)}</div>` : '';
-  header.innerHTML = `<div class="thread-header-top"><button class="mobile-back" id="mobileBackBtn">${icon.arrowLeft(16)}</button><span>${esc(state.selected)}</span>${headerBadge}</div>${tabs}${actionsHtml}`;
+  header.innerHTML = `<div class="thread-header-top"><button class="mobile-back" id="mobileBackBtn">${icon.arrowLeft(16)}</button><span>${esc(state.selected)}</span>${headerBadge}${indicators}</div>${tabs}${actionsHtml}`;
   document.getElementById('mobileBackBtn').onclick = mobileBack;
   header.querySelectorAll('.thread-tabs button').forEach(btn => {
     btn.onclick = () => { state.editingPersona = false; state.threadView = btn.dataset.tab; renderThread(); };
