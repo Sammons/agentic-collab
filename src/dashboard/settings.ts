@@ -94,14 +94,20 @@ function configToYaml(cfg) {
     try {
       const det = JSON.parse(cfg.detection);
       lines.push('detection:');
-      if (det.idlePatterns?.length > 0) {
-        lines.push('  idlePatterns:');
-        for (const p of det.idlePatterns) lines.push(`    - '${p}'`);
-      }
-      if (det.activePatterns?.length > 0) {
-        lines.push('  activePatterns:');
-        for (const p of det.activePatterns) lines.push(`    - '${p}'`);
-      }
+      const renderPatternList = (key, patterns) => {
+        if (!patterns?.length) return;
+        lines.push(`  ${key}:`);
+        for (const p of patterns) {
+          if (typeof p === 'string') {
+            lines.push(`    - '${p}'`);
+          } else {
+            lines.push(`    - pattern: '${p.pattern}'`);
+            if (p.lines != null) lines.push(`      lines: ${p.lines}`);
+          }
+        }
+      };
+      renderPatternList('idlePatterns', det.idlePatterns);
+      renderPatternList('activePatterns', det.activePatterns);
       if (det.contextPattern) lines.push(`  contextPattern: '${det.contextPattern}'`);
       if (det.idleThreshold != null) lines.push(`  idleThreshold: ${det.idleThreshold}`);
       if (det.activeGraceMs != null) lines.push(`  activeGraceMs: ${det.activeGraceMs}`);
@@ -216,8 +222,23 @@ function yamlToConfig(yaml, name) {
           }
         }
       } else if (indent === 4 && content.startsWith('- ') && detectionListKey && detectionObj[detectionListKey]) {
-        const pattern = content.replace(/^-\s*/, '').replace(/^'(.*)'$/, '$1');
-        detectionObj[detectionListKey].push(pattern);
+        const itemStr = content.replace(/^-\s*/, '');
+        const patternKv = itemStr.match(/^pattern:\s*(.*)$/);
+        if (patternKv) {
+          // Object format: - pattern: '...'
+          const patternObj = { pattern: patternKv[1].trim().replace(/^'(.*)'$/, '$1') };
+          detectionObj[detectionListKey].push(patternObj);
+        } else {
+          // String format: - '...'
+          detectionObj[detectionListKey].push(itemStr.replace(/^'(.*)'$/, '$1'));
+        }
+      } else if (indent === 6 && detectionListKey && detectionObj[detectionListKey]?.length > 0) {
+        // Sub-field of object pattern (e.g. lines: 3)
+        const last = detectionObj[detectionListKey][detectionObj[detectionListKey].length - 1];
+        if (typeof last === 'object') {
+          const subKv = content.match(/^(\w+):\s*(.*)$/);
+          if (subKv) last[subKv[1]] = parseInt(subKv[2]) || subKv[2].trim();
+        }
       }
     } else if (inIndicators) {
       // Indicator parsing — 4 indent levels:

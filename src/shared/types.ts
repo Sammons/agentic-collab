@@ -82,9 +82,11 @@ export type ActiveIndicator = {
 
 // ── Detection ──
 
+export type DetectionPattern = string | { pattern: string; lines?: number };
+
 export type DetectionConfig = {
-  idlePatterns?: string[];
-  activePatterns?: string[];
+  idlePatterns?: DetectionPattern[];
+  activePatterns?: DetectionPattern[];
   contextPattern?: string;
   idleThreshold?: number;
   activeGraceMs?: number;

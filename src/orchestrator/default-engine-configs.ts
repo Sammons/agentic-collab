@@ -52,12 +52,12 @@ const LOCAL_AGENTS_INDICATOR = { id: 'local-agents', regex: '\\u00b7\\s*(\\d+) l
 // Detection configs per engine — regex patterns for idle/active state detection
 const CLAUDE_DETECTION = {
   idlePatterns: [
-    '^[\\u276f>]\\s*$',            // prompt waiting for input (❯ or >)
+    { pattern: '^[\\u276f>]\\s*$', lines: 5 },            // prompt waiting for input (❯ or >)
   ],
   activePatterns: [
     '^\\s*(Read|Write|Edit|Bash|Glob|Grep|Agent|WebFetch|WebSearch)\\s',  // tool execution
     '^[\\u280b\\u2819\\u2839\\u2838\\u283c\\u2834\\u2826\\u2827\\u2807\\u280f]',  // braille spinner
-    '\\u00b7\\s*\\d+ local agents?',  // sub-agents running (middle dot prefix from status bar)
+    { pattern: '\\u00b7\\s*\\d+ local agents?', lines: 3 },  // sub-agents (status bar only)
   ],
   contextPattern: '(\\d+)\\s*tokens',
   idleThreshold: 2,
@@ -67,8 +67,8 @@ const CLAUDE_DETECTION = {
 
 const CODEX_DETECTION = {
   idlePatterns: [
-    '^[\\u203a\\u276f>]\\s',       // prompt chars (›, ❯, >)
-    '^[\\u203a\\u276f>]\\s*$',     // prompt at end of line
+    { pattern: '^[\\u203a\\u276f>]\\s', lines: 5 },       // prompt chars (›, ❯, >)
+    { pattern: '^[\\u203a\\u276f>]\\s*$', lines: 5 },     // prompt at end of line
   ],
   activePatterns: [
     '^[\\u25e6\\u2022]\\s*Working', // working indicator (◦/• Working)
@@ -81,11 +81,11 @@ const CODEX_DETECTION = {
 
 const OPENCODE_DETECTION = {
   idlePatterns: [
-    'ctrl\\+t\\s+variants',        // idle TUI hint
-    'ask anything',                 // input placeholder
+    { pattern: 'ctrl\\+t\\s+variants', lines: 3 },        // idle TUI hint
+    { pattern: 'ask anything', lines: 3 },                 // input placeholder
   ],
   activePatterns: [
-    'esc\\s+interrupt',             // processing indicator
+    { pattern: 'esc\\s+interrupt', lines: 3 },             // processing indicator
   ],
   contextPattern: '(\\d+)%\\s+used',
   idleThreshold: 2,

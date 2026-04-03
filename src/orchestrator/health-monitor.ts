@@ -25,8 +25,8 @@ import { resolveEffectiveConfig } from './engine-config-resolver.ts';
 type CompiledDetection = {
   json: string;
   config: DetectionConfig;
-  idlePatterns: RegExp[];
-  activePatterns: RegExp[];
+  idlePatterns: Array<{ re: RegExp; lines?: number }>;
+  activePatterns: Array<{ re: RegExp; lines?: number }>;
   contextPattern: RegExp | null;
 };
 
@@ -161,13 +161,17 @@ export class HealthMonitor {
 
     try {
       const config: DetectionConfig = JSON.parse(detectionJson);
-      const idlePatterns: RegExp[] = [];
-      const activePatterns: RegExp[] = [];
+      const idlePatterns: Array<{ re: RegExp; lines?: number }> = [];
+      const activePatterns: Array<{ re: RegExp; lines?: number }> = [];
       for (const p of config.idlePatterns ?? []) {
-        try { idlePatterns.push(new RegExp(p)); } catch { /* skip invalid */ }
+        const raw = typeof p === 'string' ? p : p.pattern;
+        const lines = typeof p === 'object' ? p.lines : undefined;
+        try { idlePatterns.push({ re: new RegExp(raw), lines }); } catch { /* skip invalid */ }
       }
       for (const p of config.activePatterns ?? []) {
-        try { activePatterns.push(new RegExp(p)); } catch { /* skip invalid */ }
+        const raw = typeof p === 'string' ? p : p.pattern;
+        const lines = typeof p === 'object' ? p.lines : undefined;
+        try { activePatterns.push({ re: new RegExp(raw), lines }); } catch { /* skip invalid */ }
       }
       let contextPattern: RegExp | null = null;
       if (config.contextPattern) {
@@ -198,19 +202,24 @@ export class HealthMonitor {
 
     // Pattern-based detection takes priority over screen-diff
     if (detection && (detection.idlePatterns.length > 0 || detection.activePatterns.length > 0)) {
-      const stripped = HealthMonitor.stripAnsi(paneOutput);
+      const fullStripped = HealthMonitor.stripAnsi(paneOutput);
+      const allLines = fullStripped.split('\n');
+      // Helper: get the text to match — either last N lines or full output
+      const textForPattern = (lines?: number) => {
+        if (lines && lines < allLines.length) return allLines.slice(-lines).join('\n');
+        return fullStripped;
+      };
       // Check active patterns first — if something indicates work, it's active
-      for (const re of detection.activePatterns) {
-        if (re.test(stripped)) {
+      for (const { re, lines } of detection.activePatterns) {
+        if (re.test(textForPattern(lines))) {
           this.unchangedCount.set(agent.name, 0);
           this.lastActivityDetected.set(agent.name, Date.now());
           return false;
         }
       }
       // Check idle patterns — if something indicates waiting, it's idle
-      for (const re of detection.idlePatterns) {
-        if (re.test(stripped)) {
-          // Idle pattern matched, but still respect threshold to avoid false positives
+      for (const { re, lines } of detection.idlePatterns) {
+        if (re.test(textForPattern(lines))) {
           const count = (this.unchangedCount.get(agent.name) ?? 0) + 1;
           this.unchangedCount.set(agent.name, count);
           return count >= idleThreshold;
