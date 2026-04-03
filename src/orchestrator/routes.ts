@@ -523,6 +523,16 @@ route('GET', '/api/dashboard/threads', async (req, res, _match, ctx) => {
   json(res, 200, threads);
 });
 
+
+route('GET', '/api/dashboard/messages/search', async (req, res, _match, ctx) => {
+  const url = new URL(req.url!, `http://${req.headers.host}`);
+  const q = url.searchParams.get('q')?.trim();
+  if (!q) return json(res, 400, { error: 'q (search query) required' });
+  const agent = url.searchParams.get('agent') || undefined;
+  const results = ctx.db.searchMessages(q, agent);
+  json(res, 200, results);
+});
+
 route('PUT', '/api/dashboard/read-cursor', async (req, res, _match, ctx) => {
   const body = await readJson(req);
   if (!body.agent || typeof body.agent !== 'string') {

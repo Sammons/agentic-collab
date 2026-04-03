@@ -11,7 +11,7 @@
  *   mobileBack()            -- hide thread panel on mobile
  */
 
-import { state } from '/dashboard/assets/state.ts';
+import { state, authHeaders } from '/dashboard/assets/state.ts';
 import { esc, renderMarkdown } from '/dashboard/assets/utils.ts';
 import { icon } from '/dashboard/assets/icons.ts';
 import { renderPersona, setup as setupPersonaEditor } from '/dashboard/assets/persona-editor.ts';
@@ -92,6 +92,71 @@ export function mobileBack() {
   document.querySelector('.layout').classList.remove('mobile-thread');
 }
 
+// ── Search State ──
+let _searchOpen = false;
+let _searchQuery = '';
+let _searchResults = [];
+let _searchDebounce: ReturnType<typeof setTimeout> | null = null;
+
+function highlightMatch(text, query) {
+  if (!query) return esc(text);
+  const escaped = esc(text);
+  const escapedQuery = esc(query);
+  const re = new RegExp(`(${escapedQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+  return escaped.replace(re, '<mark class="search-highlight">$1</mark>');
+}
+
+function snippetAround(text: string, query: string, radius = 80): string {
+  const lower = text.toLowerCase();
+  const idx = lower.indexOf(query.toLowerCase());
+  if (idx === -1) return text.slice(0, radius * 2);
+  const start = Math.max(0, idx - radius);
+  const end = Math.min(text.length, idx + query.length + radius);
+  let snippet = text.slice(start, end);
+  if (start > 0) snippet = '...' + snippet;
+  if (end < text.length) snippet = snippet + '...';
+  return snippet;
+}
+
+function renderSearchResults(container: HTMLElement): void {
+  if (_searchResults.length === 0 && _searchQuery.length > 0) {
+    container.innerHTML = '<div class="search-empty">No messages found</div>';
+    return;
+  }
+  if (_searchResults.length === 0) {
+    container.innerHTML = '';
+    return;
+  }
+  container.innerHTML = _searchResults.map(r => {
+    const snippet = snippetAround(r.message, _searchQuery);
+    const time = new Date(r.createdAt).toLocaleString();
+    return `<div class="search-result" data-msg-id="${r.id}">
+      <div class="search-result-meta"><span class="search-result-agent">${esc(r.agent)}</span><span class="search-result-time">${esc(time)}</span></div>
+      <div class="search-result-snippet">${highlightMatch(snippet, _searchQuery)}</div>
+    </div>`;
+  }).join('');
+}
+
+function doLocalSearch(query: string): void {
+  const thread = state.threads[state.selected!] || [];
+  const lower = query.toLowerCase();
+  _searchResults = thread
+    .filter(m => m.message.toLowerCase().includes(lower))
+    .slice(-200)
+    .reverse()
+    .map(m => ({ id: m.id, agent: m.agent, message: m.message, createdAt: m.createdAt }));
+}
+
+async function doGlobalSearch(query: string): Promise<void> {
+  const params = new URLSearchParams({ q: query });
+  const res = await fetch(`/api/dashboard/messages/search?${params}`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) return;
+  const data = await res.json();
+  _searchResults = data.map((m: any) => ({ id: m.id, agent: m.agent, message: m.message, createdAt: m.createdAt }));
+}
+
 // ── Thread Renderer ──
 
 export function renderThread() {
@@ -133,8 +198,73 @@ export function renderThread() {
     <button class="${state.threadView === 'persona' ? 'active' : ''}" data-tab="persona">Persona</button>
   </div>`;
   const actionsHtml = selectedAgent ? `<div class="thread-actions">${buildActionsHtml(selectedAgent)}</div>` : '';
-  header.innerHTML = `<div class="thread-header-top"><button class="mobile-back" id="mobileBackBtn">${icon.arrowLeft(16)}</button><span>${esc(state.selected)}</span>${headerBadge}${indicators}</div>${tabs}${actionsHtml}`;
+  const searchBtn = `<button class="thread-search-btn${_searchOpen ? ' active' : ''}" id="threadSearchBtn" title="Search messages">${icon.search(16)}</button>`;
+  const searchPanel = `<div class="thread-search-panel" id="threadSearchPanel" style="display:${_searchOpen ? 'flex' : 'none'}">
+    <div class="thread-search-row">
+      <input type="text" class="thread-search-input" id="threadSearchInput" placeholder="Search messages..." value="${esc(_searchQuery)}" />
+      <button class="thread-search-all-btn" id="threadSearchAllBtn" title="Search all agents">Search all</button>
+    </div>
+    <div class="thread-search-results" id="threadSearchResults"></div>
+  </div>`;
+  header.innerHTML = `<div class="thread-header-top"><button class="mobile-back" id="mobileBackBtn">${icon.arrowLeft(16)}</button><span>${esc(state.selected)}</span>${headerBadge}${indicators}${searchBtn}</div>${tabs}${actionsHtml}${searchPanel}`;
   document.getElementById('mobileBackBtn').onclick = mobileBack;
+
+  // ── Search wiring ──
+  const searchBtnEl = document.getElementById('threadSearchBtn')!;
+  const searchPanelEl = document.getElementById('threadSearchPanel')!;
+  const searchInputEl = document.getElementById('threadSearchInput') as HTMLInputElement;
+  const searchResultsEl = document.getElementById('threadSearchResults')!;
+  const searchAllBtnEl = document.getElementById('threadSearchAllBtn')!;
+
+  searchBtnEl.addEventListener('click', () => {
+    _searchOpen = !_searchOpen;
+    searchPanelEl.style.display = _searchOpen ? 'flex' : 'none';
+    searchBtnEl.classList.toggle('active', _searchOpen);
+    if (_searchOpen) searchInputEl.focus();
+    if (!_searchOpen) { _searchQuery = ''; _searchResults = []; searchResultsEl.innerHTML = ''; }
+  });
+
+  searchInputEl.addEventListener('input', () => {
+    _searchQuery = searchInputEl.value;
+    if (_searchDebounce) clearTimeout(_searchDebounce);
+    _searchDebounce = setTimeout(() => {
+      if (_searchQuery.length >= 2) {
+        doLocalSearch(_searchQuery);
+        renderSearchResults(searchResultsEl);
+      } else {
+        _searchResults = [];
+        searchResultsEl.innerHTML = '';
+      }
+    }, 200);
+  });
+
+  searchInputEl.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      _searchOpen = false;
+      _searchQuery = '';
+      _searchResults = [];
+      searchPanelEl.style.display = 'none';
+      searchBtnEl.classList.remove('active');
+      searchResultsEl.innerHTML = '';
+    }
+  });
+
+  searchAllBtnEl.addEventListener('click', async () => {
+    if (_searchQuery.length < 2) return;
+    searchAllBtnEl.textContent = 'Searching...';
+    searchAllBtnEl.classList.add('loading');
+    await doGlobalSearch(_searchQuery);
+    renderSearchResults(searchResultsEl);
+    searchAllBtnEl.textContent = 'Search all';
+    searchAllBtnEl.classList.remove('loading');
+  });
+
+  // Re-render search results if panel is open
+  if (_searchOpen && _searchQuery.length >= 2) {
+    doLocalSearch(_searchQuery);
+    renderSearchResults(searchResultsEl);
+  }
+
   header.querySelectorAll('.thread-tabs button').forEach(btn => {
     btn.onclick = () => { state.editingPersona = false; state.threadView = btn.dataset.tab; renderThread(); pushUrlState(); };
   });

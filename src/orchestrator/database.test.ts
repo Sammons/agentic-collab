@@ -267,6 +267,27 @@ describe('Database', () => {
       assert.ok(threads['thread-agent-a']);
       assert.equal(threads['thread-agent-b'], undefined);
     });
+
+    it('searches messages by text', () => {
+      db.addDashboardMessage('search-agent-a', 'to_agent', 'deploy the widget service');
+      db.addDashboardMessage('search-agent-a', 'from_agent', 'widget deployed successfully');
+      db.addDashboardMessage('search-agent-b', 'to_agent', 'check widget status');
+      db.addDashboardMessage('search-agent-b', 'from_agent', 'all systems nominal');
+
+      // Search across all agents
+      const widgetResults = db.searchMessages('widget');
+      assert.equal(widgetResults.length, 3);
+      assert.ok(widgetResults.every(m => m.message.toLowerCase().includes('widget')));
+
+      // Search filtered to one agent
+      const agentBResults = db.searchMessages('widget', 'search-agent-b');
+      assert.equal(agentBResults.length, 1);
+      assert.equal(agentBResults[0]!.agent, 'search-agent-b');
+
+      // Search with no matches
+      const noResults = db.searchMessages('nonexistent-term-xyz');
+      assert.equal(noResults.length, 0);
+    });
   });
 
   describe('proxies', () => {

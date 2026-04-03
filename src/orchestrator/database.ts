@@ -464,6 +464,24 @@ export class Database {
     return threads;
   }
 
+  searchMessages(query: string, agent?: string): DashboardMessage[] {
+    const pattern = `%${query}%`;
+    let sql = `
+      SELECT dm.*, pm.status AS delivery_status
+      FROM dashboard_messages dm
+      LEFT JOIN pending_messages pm ON dm.queue_id = pm.id
+      WHERE dm.message LIKE ?
+    `;
+    const params: unknown[] = [pattern];
+    if (agent) {
+      sql += ' AND dm.agent = ?';
+      params.push(agent);
+    }
+    sql += ' ORDER BY dm.created_at DESC LIMIT 200';
+    const rows = this.db.prepare(sql).all(...params) as Array<Record<string, unknown>>;
+    return rows.map(mapDashboardMessageRow);
+  }
+
   // ── Proxies ──
 
   registerProxy(proxyId: string, token: string, host: string, version?: string): ProxyRegistration {
