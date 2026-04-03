@@ -37,7 +37,7 @@ function configToYaml(cfg) {
         for (const step of steps) {
           if (step.type === 'shell' || step.command) {
             lines.push(`  - shell: ${step.command || step.shell}`);
-          } else if (step.type === 'wait' || step.wait) {
+          } else if (step.type === 'wait' || step.wait != null) {
             lines.push(`  - wait: ${step.wait || step.duration || 5000}`);
           } else if (step.type === 'capture' || step.capture) {
             lines.push(`  - capture:`);
@@ -45,8 +45,8 @@ function configToYaml(cfg) {
             if (c.lines) lines.push(`      lines: ${c.lines}`);
             if (c.regex) lines.push(`      regex: ${c.regex}`);
             if (c.var) lines.push(`      var: ${c.var}`);
-          } else if (step.type === 'keystroke' || step.keystroke) {
-            lines.push(`  - keystroke: ${step.keystroke}`);
+          } else if (step.type === 'keystroke' || step.key || step.keystroke) {
+            lines.push(`  - keystroke: ${step.key || step.keystroke}`);
           } else {
             // Fallback: show as JSON
             lines.push(`  - ${JSON.stringify(step)}`);
