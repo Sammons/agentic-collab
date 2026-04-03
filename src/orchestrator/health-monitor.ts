@@ -519,7 +519,10 @@ export class HealthMonitor {
       // Enforce grace period — don't transition to idle if recent activity was detected
       const detection = this.compiledDetection.get(agent.engine);
       const graceMs = detection?.config.activeGraceMs ?? HealthMonitor.ACTIVE_GRACE_MS;
-      const lastActivity = this.lastActivityDetected.get(agent.name) ?? Date.now();
+      // Default: 0 for screen-diff agents (grace always passes), Date.now() for
+      // detection-pattern agents (prevents instant idle on first poll)
+      const defaultActivity = detection ? Date.now() : 0;
+      const lastActivity = this.lastActivityDetected.get(agent.name) ?? defaultActivity;
       const elapsed = Date.now() - lastActivity;
       if (elapsed < graceMs) {
         return; // Still within grace period, stay active
