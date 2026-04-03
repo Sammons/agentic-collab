@@ -115,15 +115,45 @@ function renderPipelineSteps(lines, steps, indent) {
   }
 }
 
+/** Render indicator definitions as YAML. */
+function renderIndicatorsYaml(lines, indicators) {
+  lines.push('indicators:');
+  for (const [id, def] of Object.entries(indicators)) {
+    lines.push('  ' + id + ':');
+    if (def.regex) lines.push("    regex: '" + def.regex + "'");
+    if (def.badge) lines.push('    badge: ' + def.badge);
+    if (def.style) lines.push('    style: ' + def.style);
+    if (def.actions && typeof def.actions === 'object') {
+      lines.push('    actions:');
+      for (const [actionName, steps] of Object.entries(def.actions)) {
+        lines.push('      ' + actionName + ':');
+        for (const step of steps) {
+          if (step.type === 'keystroke' || step.keystroke) {
+            lines.push('        - keystroke: ' + (step.keystroke || step.key || ''));
+          } else if (step.type === 'shell' || step.command) {
+            lines.push('        - shell: ' + (step.command || step.shell || ''));
+          } else {
+            lines.push('        - ' + JSON.stringify(step));
+          }
+        }
+      }
+    }
+  }
+}
+
 /** Render a frontmatter object as YAML text. Handles nested objects and arrays. */
 function fmToYaml(fm) {
   const lines = [];
   for (const [key, val] of Object.entries(fm)) {
     if (val == null || val === '') continue;
+    // Special handling for indicators (deep nesting)
+    if (key === 'indicators' && typeof val === 'object' && !Array.isArray(val)) {
+      renderIndicatorsYaml(lines, val);
+      continue;
+    }
     if (typeof val === 'string' || typeof val === 'number' || typeof val === 'boolean') {
       lines.push(key + ': ' + val);
     } else if (Array.isArray(val)) {
-      // Top-level array — pipeline steps (e.g. exit:, start: with pipeline format)
       lines.push(key + ':');
       renderPipelineSteps(lines, val, 2);
     } else if (typeof val === 'object') {
@@ -131,10 +161,8 @@ function fmToYaml(fm) {
       for (const [sk, sv] of Object.entries(val)) {
         if (sv == null) continue;
         if (Array.isArray(sv)) {
-          // Array inside object — could be custom_buttons entries or send actions
           lines.push('  ' + sk + ':');
           if (sv.length > 0 && sv[0] && typeof sv[0] === 'object' && 'type' in sv[0]) {
-            // Pipeline steps (custom_buttons values)
             renderPipelineSteps(lines, sv, 4);
           } else {
             for (const item of sv) {
@@ -185,8 +213,25 @@ export async function renderPersona() {
     html += '</dl>';
   }
   const fm = data.frontmatter;
-  if (fm && Object.keys(fm).length > 0) {
-    html += '<details class="persona-fm-details"><summary>Frontmatter</summary><pre class="persona-yaml">' + esc(fmToYaml(fm)) + '</pre></details>';
+  // Engine dropdown — populated from engine configs
+  if (fm) {
+    const configs = state.engineConfigs || [];
+    const currentEngine = fm.engine || '';
+    const engineNames = [...new Set(configs.map(c => c.name))];
+    if (currentEngine && !engineNames.includes(currentEngine)) engineNames.push(currentEngine);
+    let selectHtml = '<div class="persona-engine-row"><label>Engine</label><select id="personaEngineSelect">';
+    for (const name of engineNames) {
+      selectHtml += '<option value="' + esc(name) + '"' + (name === currentEngine ? ' selected' : '') + '>' + esc(name) + '</option>';
+    }
+    selectHtml += '</select></div>';
+    html += selectHtml;
+  }
+  // Frontmatter YAML (excluding engine — shown in dropdown above)
+  if (fm && Object.keys(fm).length > 1) {
+    const fmWithoutEngine = Object.fromEntries(Object.entries(fm).filter(([k]) => k !== 'engine'));
+    if (Object.keys(fmWithoutEngine).length > 0) {
+      html += '<details class="persona-fm-details"><summary>Frontmatter</summary><pre class="persona-yaml">' + esc(fmToYaml(fmWithoutEngine)) + '</pre></details>';
+    }
   }
   if (data.body) {
     html += '<div class="persona-body">' + renderMarkdown(esc(data.body)) + '</div>';
@@ -195,6 +240,29 @@ export async function renderPersona() {
   const editBtn = document.getElementById('editPersonaBtn');
   if (editBtn) {
     editBtn.onclick = () => enterPersonaEdit(state.selected, data.content);
+  }
+  // Engine dropdown change handler — update persona file
+  const engineSelect = document.getElementById('personaEngineSelect');
+  if (engineSelect) {
+    engineSelect.addEventListener('change', async (e) => {
+      const newEngine = e.target.value;
+      if (!data.content || !state.selected) return;
+      // Replace engine in frontmatter
+      const updated = data.content.replace(/^engine:\s*.+$/m, 'engine: ' + newEngine);
+      try {
+        const res = await fetch('/api/personas/' + encodeURIComponent(state.selected), {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
+          body: JSON.stringify({ content: updated }),
+        });
+        if (res.ok) {
+          delete state.personaCache[state.selected];
+          showToast('Engine changed to ' + newEngine, 'success');
+        } else {
+          showToast('Failed to update engine', 'error');
+        }
+      } catch { showToast('Network error', 'error'); }
+    });
   }
 }
 
@@ -215,7 +283,7 @@ export function enterPersonaEdit(agentName, rawContent) {
           <div class="persona-cheatsheet-section">
             <strong>Frontmatter fields</strong> <span style="color:var(--text-dim)">(YAML between --- delimiters)</span>
             <dl>
-              <dt>engine</dt><dd>claude | codex | opencode <em>(required)</em></dd>
+              <dt>engine</dt><dd>Name of an engine config <em>(required)</em></dd>
               <dt>cwd</dt><dd>Working directory <em>(required)</em></dd>
               <dt>model</dt><dd>Model name (e.g. opus, sonnet, o3)</dd>
               <dt>thinking</dt><dd>low | medium | high</dd>

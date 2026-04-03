@@ -105,6 +105,30 @@
     user-select: none;
   }
   .persona-fm-details summary:hover { color: var(--text); }
+  .persona-engine-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+    font-size: 12px;
+  }
+  .persona-engine-row label {
+    font-weight: 600;
+    color: var(--text-dim);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+  }
+  .persona-engine-row select {
+    padding: 4px 8px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 12px;
+    outline: none;
+  }
+  .persona-engine-row select:focus { border-color: var(--accent); }
   .persona-yaml {
     font-size: 12px;
     padding: 12px;
