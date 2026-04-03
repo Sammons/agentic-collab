@@ -490,20 +490,22 @@ cmd('publish', 'collab publish <slug> <dir>', 'Publish a directory as a static p
   const tarData = execSync(`tar cf - -C ${JSON.stringify(resolved)} .`, { maxBuffer: 50 * 1024 * 1024 });
   const agent = process.env['COLLAB_AGENT'] ?? null;
   const qs = `slug=${encodeURIComponent(slug)}${agent ? '&agent=' + encodeURIComponent(agent) : ''}`;
-  const res = await fetch(`${BASE_URL}/api/pages?${qs}`, {
+  const h = { 'Content-Type': 'application/x-tar' };
+  if (_secret) h['Authorization'] = `Bearer ${_secret}`;
+  const res = await fetch(`${_host}/api/pages?${qs}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/x-tar', 'Authorization': `Bearer ${SECRET}` },
+    headers: h,
     body: tarData,
   });
   const body = await res.json();
   if (!res.ok) { console.error(body.error ?? 'Publish failed'); process.exit(1); }
-  console.log(`published: ${BASE_URL}/pages/${slug} (${body.fileCount} files, ${body.totalBytes} bytes)`);
+  console.log(`published: ${_host}/pages/${slug} (${body.fileCount} files, ${body.totalBytes} bytes)`);
 });
 
 cmd('pages', 'collab pages {list|delete}', 'Manage published pages', async (args) => {
   const sub = args[0];
   if (!sub || sub === 'list') {
-    const res = await fetch(`${BASE_URL}/api/pages`, { headers: { 'Authorization': `Bearer ${SECRET}` } });
+    const res = await api('GET', '/api/pages');
     const pages = await res.json();
     if (pages.length === 0) { console.log('No published pages'); return; }
     for (const p of pages) {
@@ -513,9 +515,11 @@ cmd('pages', 'collab pages {list|delete}', 'Manage published pages', async (args
   } else if (sub === 'delete') {
     const slug = args[1];
     if (!slug) { console.error('usage: collab pages delete <slug>'); process.exit(1); }
-    const res = await fetch(`${BASE_URL}/api/pages/${encodeURIComponent(slug)}`, {
+    const h = {};
+    if (_secret) h['Authorization'] = `Bearer ${_secret}`;
+    const res = await fetch(`${_host}/api/pages/${encodeURIComponent(slug)}`, {
       method: 'DELETE',
-      headers: { 'Authorization': `Bearer ${SECRET}` },
+      headers: h,
     });
     if (!res.ok) { const body = await res.json().catch(() => null); console.error(body?.error ?? 'Delete failed'); process.exit(1); }
     console.log(`deleted: ${slug}`);
