@@ -364,6 +364,12 @@ export async function startMockServer(port: number): Promise<MockServer> {
       return;
     }
 
+    // ── API: engine configs ──
+    if (method === 'GET' && path === '/api/engine-configs') {
+      logJson(res, fixtures.engineConfigs);
+      return;
+    }
+
     // ── API: voice status ──
     if (method === 'GET' && path === '/api/voice/status') {
       logJson(res, { enabled: false });
@@ -439,6 +445,16 @@ export async function startMockServer(port: number): Promise<MockServer> {
       fixtures.threads[body.agent]!.push(msg);
       const event: WsMessageEvent = { type: 'message', msg };
       wss.broadcast(JSON.stringify(event));
+      logJson(res, { ok: true });
+      return;
+    }
+
+    // ── Test Control: set-engine-configs ──
+    if (method === 'POST' && path === '/test/set-engine-configs') {
+      const rawBody = await readBody(req);
+      const body = JSON.parse(rawBody) as EngineConfigRecord[];
+      parsedRequestBody = body;
+      fixtures.engineConfigs = body;
       logJson(res, { ok: true });
       return;
     }

@@ -179,9 +179,17 @@ export function openCreateAgentModal() {
   const accountOptions = (state.accounts || []).map(a =>
     `<option value="${esc(a.name)}">${esc(a.name)}${a.email ? ` (${esc(a.email)})` : ''}</option>`
   ).join('');
+  const hasEngineConfigs = state.engineConfigs && state.engineConfigs.length > 0;
+  const engineConfigOptions = (state.engineConfigs || []).map(c =>
+    `<option value="${esc(c.name)}">${esc(c.name)} (${esc(c.engine)})</option>`
+  ).join('');
   overlay.innerHTML = `
     <div class="create-modal">
       <div class="create-modal-header">
+        <select id="createEngineConfigSelect" style="padding:8px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:14px;outline:none" ${hasEngineConfigs ? '' : 'disabled'}>
+          <option value="">— No config —</option>
+          ${hasEngineConfigs ? engineConfigOptions : ''}
+        </select>
         <select id="createEngineSelect" style="padding:8px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:14px;outline:none">
           <option value="claude" selected>Claude</option>
           <option value="codex">Codex</option>
@@ -232,6 +240,19 @@ export function openCreateAgentModal() {
     textarea.value = template;
   };
 
+  overlay.querySelector('#createEngineConfigSelect').onchange = (e) => {
+    const configName = e.target.value;
+    if (!configName) return;
+    const config = (state.engineConfigs || []).find(c => c.name === configName);
+    if (!config) return;
+    const engineSelect = overlay.querySelector('#createEngineSelect');
+    if (config.engine) {
+      engineSelect.value = config.engine;
+      // Trigger template swap
+      engineSelect.dispatchEvent(new Event('change'));
+    }
+  };
+
   async function createAgent(spawn) {
     const name = nameInput.value.trim();
     let content = overlay.querySelector('#createAgentContent').value;
@@ -239,6 +260,15 @@ export function openCreateAgentModal() {
     if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$/.test(name)) {
       showToast('Name: 1-63 chars, start alphanumeric, [a-zA-Z0-9_-]', 'error');
       return;
+    }
+
+    // Inject engine_config field into frontmatter if selected
+    const selectedEngineConfig = overlay.querySelector('#createEngineConfigSelect')?.value || '';
+    if (selectedEngineConfig) {
+      const fmEnd = content.indexOf('\n---', 1);
+      if (fmEnd !== -1) {
+        content = content.slice(0, fmEnd) + `\nengine_config: ${selectedEngineConfig}` + content.slice(fmEnd);
+      }
     }
 
     // Inject account field into frontmatter if selected

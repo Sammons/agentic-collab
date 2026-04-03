@@ -142,6 +142,7 @@ export function connect() {
         state.threads = data.threads;
         state.proxies = data.proxies || [];
         state.accounts = data.accounts || [];
+        state.engineConfigs = data.engineConfigs || [];
         state.indicators = data.indicators || {};
         // Restore unread counts from server, preserving any live increments
         if (data.unreadCounts) {
@@ -195,6 +196,15 @@ export function connect() {
           const agent = state.agents.find(a => a.name === data.agentName);
           if (card && agent) _patchAgentCard(card, agent);
           else _renderAgents(); }
+        break;
+      case 'engine_config_update': {
+        const idx = state.engineConfigs.findIndex(c => c.name === data.config.name);
+        if (idx >= 0) state.engineConfigs[idx] = data.config;
+        else state.engineConfigs.push(data.config);
+        break;
+      }
+      case 'engine_config_deleted':
+        state.engineConfigs = state.engineConfigs.filter(c => c.name !== data.name);
         break;
       case 'reminder_update':
         if (state.threadView === 'reminders') {

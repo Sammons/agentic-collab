@@ -20,6 +20,7 @@ export const state = {
   engineUsage: {},
   proxies: [],
   accounts: [],
+  engineConfigs: [],
   emptyGroups: [],
   drafts: {},
   topicPerAgent: {},

@@ -672,6 +672,56 @@ route('GET', '/api/queue', async (req, res, _match, ctx) => {
   json(res, 200, messages);
 });
 
+// ── Engine Configs ──
+
+route('GET', '/api/engine-configs', async (_req, res, _match, ctx) => {
+  json(res, 200, ctx.db.listEngineConfigs());
+});
+
+route('GET', '/api/engine-configs/:name', async (_req, res, match, ctx) => {
+  const name = match.pathname.groups['name']!;
+  const config = ctx.db.getEngineConfig(name);
+  if (!config) return json(res, 404, { error: 'Engine config not found' });
+  json(res, 200, config);
+});
+
+route('POST', '/api/engine-configs', async (req, res, _match, ctx) => {
+  const body = await readJson(req);
+  if (!body.name || !body.engine) return json(res, 400, { error: 'name and engine required' });
+  try {
+    ctx.db.createEngineConfig(body as Parameters<typeof ctx.db.createEngineConfig>[0]);
+    const config = ctx.db.getEngineConfig(body.name as string);
+    ctx.wss.broadcast(JSON.stringify({ type: 'engine_config_update', config }));
+    json(res, 201, config);
+  } catch (err) {
+    json(res, 409, { error: 'Engine config already exists' });
+  }
+});
+
+route('PUT', '/api/engine-configs/:name', async (req, res, match, ctx) => {
+  const name = match.pathname.groups['name']!;
+  const body = await readJson(req);
+  const updated = ctx.db.updateEngineConfig(name, body as Parameters<typeof ctx.db.updateEngineConfig>[1]);
+  if (!updated) return json(res, 404, { error: 'Engine config not found' });
+  const config = ctx.db.getEngineConfig(name);
+  ctx.wss.broadcast(JSON.stringify({ type: 'engine_config_update', config }));
+  json(res, 200, config);
+});
+
+route('DELETE', '/api/engine-configs/:name', async (_req, res, match, ctx) => {
+  const name = match.pathname.groups['name']!;
+  // Check if any agents reference this config
+  const agents = ctx.db.listAgents();
+  const refs = agents.filter(a => a.engineConfig === name);
+  if (refs.length > 0) {
+    return json(res, 409, { error: `Cannot delete: ${refs.length} agent(s) reference this config` });
+  }
+  const deleted = ctx.db.deleteEngineConfig(name);
+  if (!deleted) return json(res, 404, { error: 'Engine config not found' });
+  ctx.wss.broadcast(JSON.stringify({ type: 'engine_config_deleted', name }));
+  json(res, 200, { ok: true });
+});
+
 // ── Personas ──
 
 
