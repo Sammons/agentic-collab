@@ -119,32 +119,41 @@
 
   .agent-header {
     display: flex;
-    justify-content: space-between;
     align-items: center;
-    margin-bottom: 4px;
+    gap: 6px;
+    margin-bottom: 2px;
+  }
+  .agent-badges {
+    margin-left: auto;
+    display: flex;
+    gap: 4px;
+    align-items: center;
+    flex-shrink: 0;
   }
   .agent-star {
     background: none;
     border: none;
     cursor: pointer;
     padding: 0;
-    margin-right: 6px;
+    margin-right: 2px;
     color: var(--text-dim);
-    opacity: 0.4;
+    opacity: 0;
     transition: opacity 0.15s, color 0.15s;
     display: inline-flex;
     align-items: center;
     transform: translateY(1px);
+    width: 0;
+    overflow: hidden;
   }
+  .agent-card:hover .agent-star { opacity: 0.4; width: auto; overflow: visible; }
   .agent-star:hover { opacity: 1; color: #f5c518; }
-  .agent-star.starred { opacity: 0.8; color: #f5c518; }
+  .agent-star.starred { opacity: 0.8; color: #f5c518; width: auto; overflow: visible; }
   .agent-icon {
     font-size: 14px;
     margin-right: 4px;
   }
   .agent-name { font-weight: 600; font-size: 14px; }
   .state-badge {
-    margin-left: auto;
     font-size: 11px;
     padding: 2px 8px;
     border-radius: 12px;

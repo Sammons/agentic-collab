@@ -93,6 +93,11 @@ export class AgentCard extends HTMLElement {
     const starred = JSON.parse(localStorage.getItem('starredAgents') || '{}');
     const isStarred = !!starred[agent.name];
 
+    const indicatorBadges = (ctx.indicators || []).map(ind => {
+      const cls = ind.style || 'info';
+      return `<span class="indicator-badge ${cls}">${esc(ind.badge)}</span>`;
+    }).join('');
+
     this.innerHTML = `
       <div class="agent-header">
         <button class="agent-star${isStarred ? ' starred' : ''}" data-star-agent="${esc(agent.name)}" title="Star agent">
@@ -100,11 +105,10 @@ export class AgentCard extends HTMLElement {
         </button>
         ${agent.icon ? `<span class="agent-icon">${esc(agent.icon)}</span>` : ''}
         <span class="agent-name">${esc(agent.name)}${unreadBadge}</span>
-        <span class="state-badge state-${agent.state}">${agent.state}</span>
+        <span class="agent-badges"><span class="state-badge state-${agent.state}">${agent.state}</span>${indicatorBadges}</span>
       </div>
       <div class="agent-meta">${buildMetaHtml(agent, ctx.proxies)}</div>
       ${failureInfo}
-      ${buildIndicatorsHtml(ctx.indicators)}
       <div class="drag-handle" title="Drag to reorder or move to group">${icon.gripVertical(14)}</div>
     `;
   }
@@ -162,20 +166,15 @@ export class AgentCard extends HTMLElement {
     } else if (failEl) {
       failEl.remove();
     }
-    // Indicators
-    let indEl = this.querySelector('.indicator-badges');
-    const inds = ctx.indicators || [];
-    if (inds.length) {
-      const indHtml = buildIndicatorsHtml(inds).replace(/^<div class="indicator-badges">|<\/div>$/g, '');
-      if (!indEl) {
-        indEl = document.createElement('div');
-        indEl.className = 'indicator-badges';
-        const handle = this.querySelector('.drag-handle');
-        if (handle) handle.before(indEl);
-      }
-      indEl.innerHTML = indHtml;
-    } else if (indEl) {
-      indEl.remove();
+    // Badges (state + indicators) — inline in header
+    const badgesEl = this.querySelector('.agent-badges');
+    if (badgesEl) {
+      const inds = ctx.indicators || [];
+      const indicatorHtml = inds.map(ind => {
+        const cls = ind.style || 'info';
+        return `<span class="indicator-badge ${cls}">${esc(ind.badge)}</span>`;
+      }).join('');
+      badgesEl.innerHTML = `<span class="state-badge state-${agent.state}">${agent.state}</span>${indicatorHtml}`;
     }
     // Selected
     this.classList.toggle('selected', !!ctx.selected);
