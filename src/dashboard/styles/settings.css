@@ -2,13 +2,18 @@
   .settings-panel { padding: 20px; overflow-y: auto; }
   .settings-section { margin-bottom: 24px; }
   .settings-section h3 {
-    margin-bottom: 12px;
-    font-size: 14px;
+    margin-bottom: 8px;
     font-weight: 600;
     color: var(--text);
     text-transform: uppercase;
     letter-spacing: 0.3px;
     font-size: 11px;
+  }
+  .settings-hint {
+    font-size: 12px;
+    color: var(--text-dim);
+    margin-bottom: 12px;
+    line-height: 1.4;
   }
   .config-card {
     padding: 12px;
@@ -46,7 +51,6 @@
   }
   .config-action-btn:hover { border-color: var(--accent); color: var(--accent); }
   .config-delete-btn:hover { border-color: var(--red); color: var(--red); }
-  .config-fields { margin-top: 4px; }
   .config-field {
     display: flex;
     gap: 8px;
@@ -55,14 +59,9 @@
     font-size: 12px;
   }
   .config-field label {
-    min-width: 80px;
+    min-width: 60px;
     color: var(--text-dim);
     flex-shrink: 0;
-  }
-  .config-field span {
-    color: var(--text);
-    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
-    font-size: 12px;
   }
   .config-field input {
     flex: 1;
@@ -75,11 +74,45 @@
     outline: none;
   }
   .config-field input:focus { border-color: var(--accent); }
-  .config-field input:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
+  .config-yaml-display {
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text);
+    background: var(--bg);
+    padding: 8px 12px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    margin: 0;
+    white-space: pre-wrap;
+    overflow-x: auto;
   }
-  .config-edit-form { display: flex; flex-direction: column; gap: 2px; }
+  .config-yaml-editor {
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text);
+    background: var(--bg);
+    padding: 8px 12px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    width: 100%;
+    min-height: 120px;
+    resize: vertical;
+    outline: none;
+  }
+  .config-yaml-editor:focus { border-color: var(--accent); }
+  .config-name-input {
+    padding: 4px 8px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 12px;
+    outline: none;
+    margin-bottom: 6px;
+  }
+  .config-name-input:focus { border-color: var(--accent); }
   .config-edit-actions {
     display: flex;
     gap: 6px;
@@ -122,7 +155,7 @@
 
   @media (max-width: 768px) {
     .settings-panel { padding: 14px 10px; }
-    .config-field { flex-wrap: wrap; }
-    .config-field label { min-width: 60px; }
+    .config-yaml-editor { min-height: 100px; font-size: 11px; }
+    .config-yaml-display { font-size: 11px; }
     .pref-row { flex-direction: column; align-items: flex-start; gap: 4px; }
   }
