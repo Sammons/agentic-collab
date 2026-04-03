@@ -40,26 +40,19 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 4px 8px;
+    padding: 3px 8px;
     border-radius: 4px;
-    transition: background 0.1s;
+    font-size: 12px;
   }
   .files-item:hover { background: var(--surface); }
-  .files-item.is-dir .files-name { font-weight: 600; }
-  .files-icon {
-    color: var(--text-dim);
-    flex-shrink: 0;
-    display: flex;
-    align-items: center;
-  }
-  .files-item.is-dir .files-icon { color: var(--accent); }
-  .files-item.files-page .files-icon { color: var(--green); }
+  .files-item.is-dir .files-name { font-weight: 600; color: var(--accent); }
   .files-name {
     flex: 1;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     color: var(--text);
+    font-family: 'SFMono-Regular', Consolas, monospace;
   }
   .files-link {
     color: var(--accent);

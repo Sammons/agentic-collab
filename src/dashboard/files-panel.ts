@@ -46,17 +46,13 @@ export class FilesPanel extends HTMLElement {
       return a.name.localeCompare(b.name);
     });
 
-    let html = `<div class="files-header"><span class="files-cwd" title="${esc(cwd)}">${esc(cwd)}</span><span class="files-count">${files.length} items</span></div>`;
+    let html = `<div class="files-header"><span class="files-count">${files.length} items</span></div>`;
     html += '<div class="files-list">';
     for (const f of files) {
       const sizeStr = f.isDir ? '' : formatFileSize(f.size);
-      const iconHtml = f.isDir ? icon.folder(14) : icon.file(14);
-      const modified = f.modified ? new Date(f.modified).toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
       html += `<div class="files-item${f.isDir ? ' is-dir' : ''}">`;
-      html += `<span class="files-icon">${iconHtml}</span>`;
-      html += `<span class="files-name">${esc(f.name)}</span>`;
-      html += `<span class="files-meta">${modified}</span>`;
-      html += `<span class="files-size">${sizeStr}</span>`;
+      html += `<span class="files-name">${f.isDir ? '/' : ''}${esc(f.name)}</span>`;
+      if (sizeStr) html += `<span class="files-size">${sizeStr}</span>`;
       html += '</div>';
     }
     html += '</div>';
@@ -68,9 +64,7 @@ export class FilesPanel extends HTMLElement {
       html += '<div class="files-list">';
       for (const page of agentPages) {
         html += `<div class="files-item files-page">`;
-        html += `<span class="files-icon">${icon.globe(14)}</span>`;
         html += `<a class="files-name files-link" href="/pages/${esc(page.slug)}" target="_blank">${esc(page.slug)}</a>`;
-        html += `<span class="files-meta">${page.fileCount} files</span>`;
         html += `<span class="files-size">${formatFileSize(page.totalBytes)}</span>`;
         html += '</div>';
       }
