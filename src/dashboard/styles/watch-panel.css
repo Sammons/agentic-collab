@@ -47,9 +47,14 @@
     cursor: pointer;
     transition: all 0.1s;
     font-family: inherit;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+    touch-action: manipulation;
   }
   .watch-keys button:hover { border-color: var(--accent); color: var(--accent); }
   .watch-keys button:active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .watch-keys button.sent { background: var(--green); color: #fff; border-color: var(--green); }
   .watch-resize-btn { margin-left: auto; font-size: 12px !important; }
   .watch-type {
     display: flex;

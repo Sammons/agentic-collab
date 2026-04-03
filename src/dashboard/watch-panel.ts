@@ -80,6 +80,9 @@ export class WatchPanel extends HTMLElement {
           headers: { 'content-type': 'application/json', ...authHeaders() },
           body: JSON.stringify({ keys: btn.dataset.key }),
         });
+        // Brief green flash to confirm keystroke was sent
+        btn.classList.add('sent');
+        setTimeout(() => btn.classList.remove('sent'), 300);
       } catch (err) {
         console.error('[watch] Key send failed:', err);
       }
