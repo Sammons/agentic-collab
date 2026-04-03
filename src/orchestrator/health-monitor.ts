@@ -301,21 +301,23 @@ export class HealthMonitor {
           action: 'pane_activity',
           sessionName: sessionName(agent),
         } as ProxyCommand);
+        const resolved = this.resolveAgent(agent);
+        const hasDetectionPatterns = this.getDetection(resolved) !== null;
+
         if (activityResult.ok) {
           const currentTs = activityResult.data as number;
           const prevTs = this.lastActivityTs.get(agent.name);
           this.lastActivityTs.set(agent.name, currentTs);
-          if (prevTs !== undefined && currentTs === prevTs) {
-            // Pane unchanged — definitively idle, skip capture
+          if (prevTs !== undefined && currentTs === prevTs && !hasDetectionPatterns) {
+            // Pane unchanged and no detection patterns — definitively idle, skip capture
             this.handleIdleTransitions(agent, true);
             continue;
           }
         }
 
-        // Window_activity changed — capture to check real content change vs ANSI-only
+        // Capture pane output for detection patterns and/or screen-diff
         const paneOutput = await this.capturePaneOutput(agent);
         if (paneOutput === null) continue;
-        const resolved = this.resolveAgent(agent);
         this.evaluateIndicators(resolved, paneOutput);
         const isIdle = this.checkScreenDiff(resolved, paneOutput);
         this.handleIdleTransitions(agent, isIdle);
@@ -359,8 +361,10 @@ export class HealthMonitor {
     const agent = this.db.getAgent(agentSnapshot.name);
     if (!agent || !agent.proxyId || !canSuspend(agent)) return;
 
+    const resolved = this.resolveAgent(agent);
+    const hasDetectionPatterns = this.getDetection(resolved) !== null;
+
     // Fast path: check tmux window_activity timestamp before expensive capture.
-    // If pane hasn't received output since last poll, it's definitively idle.
     const activityResult = await this.proxyDispatch(agent.proxyId, {
       action: 'pane_activity',
       sessionName: sessionName(agent),
@@ -369,8 +373,8 @@ export class HealthMonitor {
       const currentTs = activityResult.data as number;
       const prevTs = this.lastActivityTs.get(agent.name);
       this.lastActivityTs.set(agent.name, currentTs);
-      if (prevTs !== undefined && currentTs === prevTs) {
-        // Pane unchanged — definitively idle, skip expensive capture
+      if (prevTs !== undefined && currentTs === prevTs && !hasDetectionPatterns) {
+        // Pane unchanged and no detection patterns — definitively idle
         this.handleIdleTransitions(agent, true);
         this.checkIdleSuspendTimeout(agent.name);
         return;
@@ -384,7 +388,6 @@ export class HealthMonitor {
     if (this.detectCliExit(agent, paneOutput)) return;
 
     this.recordContextPercent(agent, paneOutput);
-    const resolved = this.resolveAgent(agent);
     this.evaluateIndicators(resolved, paneOutput);
 
     const isIdle = this.checkScreenDiff(resolved, paneOutput);
