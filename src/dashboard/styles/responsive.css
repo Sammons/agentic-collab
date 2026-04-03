@@ -99,20 +99,21 @@
     .create-form-body select,
     .create-form-body textarea { font-size: 16px; } /* prevent iOS zoom */
     .thread-header {
-      flex-wrap: wrap;
       padding: 10px 12px;
       gap: 6px;
     }
-    .thread-header > span {
+    .thread-header-top {
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .thread-header-top > span {
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
-      max-width: 50vw;
+      max-width: 45vw;
     }
     .thread-tabs {
-      order: 10;
       width: 100%;
-      margin-left: 0;
       overflow-x: auto;
       -webkit-overflow-scrolling: touch;
       scrollbar-width: none;
@@ -123,7 +124,11 @@
       text-align: center;
       min-width: 0;
     }
-    .clear-chat-btn { margin-left: auto; }
+    .thread-actions {
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+      flex-wrap: nowrap;
+    }
     .thread-messages { padding: 12px 10px; }
     .msg-header {
       gap: 4px;

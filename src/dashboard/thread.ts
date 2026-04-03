@@ -128,7 +128,7 @@ export function renderThread() {
     <button class="${state.threadView === 'persona' ? 'active' : ''}" data-tab="persona">Persona</button>
   </div>`;
   const actionsHtml = selectedAgent ? `<div class="thread-actions">${buildActionsHtml(selectedAgent)}</div>` : '';
-  header.innerHTML = `<div class="thread-header-top"><button class="mobile-back" id="mobileBackBtn">${icon.arrowLeft(16)}</button><span>${esc(state.selected)}</span>${headerBadge}${tabs}</div>${actionsHtml}`;
+  header.innerHTML = `<div class="thread-header-top"><button class="mobile-back" id="mobileBackBtn">${icon.arrowLeft(16)}</button><span>${esc(state.selected)}</span>${headerBadge}</div>${tabs}${actionsHtml}`;
   document.getElementById('mobileBackBtn').onclick = mobileBack;
   header.querySelectorAll('.thread-tabs button').forEach(btn => {
     btn.onclick = () => { state.editingPersona = false; state.threadView = btn.dataset.tab; renderThread(); };

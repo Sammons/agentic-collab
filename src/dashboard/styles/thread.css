@@ -38,10 +38,10 @@
   .thread-tabs {
     display: flex;
     gap: 2px;
-    margin-left: auto;
     background: var(--bg);
     border-radius: var(--radius);
     padding: 2px;
+    align-self: flex-start;
   }
   .thread-tabs button {
     padding: 4px 12px;
