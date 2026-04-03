@@ -314,6 +314,8 @@
     gap: 6px;
     padding: 0 12px 8px;
     flex-wrap: wrap;
+    -webkit-user-select: none;
+    user-select: none;
   }
   .filter-chip {
     padding: 3px 10px;
@@ -327,6 +329,7 @@
     -webkit-user-select: none;
     user-select: none;
     -webkit-touch-callout: none;
+    -webkit-tap-highlight-color: transparent;
     touch-action: manipulation;
   }
   .filter-chip:hover { border-color: var(--accent); color: var(--accent); }

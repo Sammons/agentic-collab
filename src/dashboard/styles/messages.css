@@ -187,6 +187,7 @@
     outline: none;
     resize: none;
     overflow-y: auto;
+    min-height: 36px;
     height: 36px;
     max-height: 120px;
     line-height: 1.4;

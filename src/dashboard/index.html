@@ -11,6 +11,7 @@
 <link rel="stylesheet" href="/dashboard/assets/styles/watch-panel.css">
 <link rel="stylesheet" href="/dashboard/assets/styles/reminder-panel.css">
 <link rel="stylesheet" href="/dashboard/assets/styles/modals.css">
+<link rel="stylesheet" href="/dashboard/assets/styles/settings.css">
 <link rel="stylesheet" href="/dashboard/assets/styles/responsive.css">
 </head>
 <body>
@@ -23,6 +24,7 @@
     <kbd>Esc</kbd> close
   </div>
   <a href="/docs" target="_blank" style="color:var(--text-dim);text-decoration:none;font-size:13px;padding:4px 8px;border-radius:4px;border:1px solid var(--border)">Docs</a>
+  <button id="settingsBtn" style="color:var(--text-dim);background:transparent;font-size:13px;padding:4px 8px;border-radius:4px;border:1px solid var(--border);cursor:pointer">Settings</button>
   <div class="conn-status">
     <div class="conn-dot" id="connDot"></div>
     <span id="connLabel">Disconnected</span>
@@ -60,6 +62,7 @@
     </message-input>
     <span class="voice-partial" id="voicePartial" style="display:none"></span>
   </div>
+  <settings-panel id="settingsPanel" style="display:none" class="thread-panel"></settings-panel>
 </div>
 
 <script type="module">
@@ -71,6 +74,7 @@ import '/dashboard/assets/message-input.ts';
 import '/dashboard/assets/watch-panel.ts';
 import '/dashboard/assets/reminder-panel.ts';
 import '/dashboard/assets/archive-panel.ts';
+import '/dashboard/assets/settings.ts';
 import { agentAction, openCreateAgentModal, setup as setupLifecycle } from '/dashboard/assets/agent-lifecycle.ts';
 import { sendMessage, uploadFile, handleFileUpload, updateSendability, handleQueueUpdate, archiveChat, unarchiveChat, setup as setupMessageIO } from '/dashboard/assets/message-io.ts';
 import { voiceState, initVoice, initCommandPalette, setup as setupVoicePalette } from '/dashboard/assets/voice-palette.ts';
@@ -214,6 +218,18 @@ import { renderAgents, selectAgent, patchAgentCard, updateAgent, addMessage, han
       e.preventDefault();
       sidebarToggle.click();
     }
+  });
+
+  // ── Settings toggle ──
+  const settingsBtn = document.getElementById('settingsBtn');
+  const settingsPanel = document.getElementById('settingsPanel');
+  settingsBtn.addEventListener('click', () => {
+    const isOpen = settingsPanel.style.display !== 'none';
+    settingsPanel.style.display = isOpen ? 'none' : 'flex';
+    threadPanel.style.display = isOpen ? 'flex' : 'none';
+    settingsBtn.style.color = isOpen ? 'var(--text-dim)' : 'var(--accent)';
+    settingsBtn.style.borderColor = isOpen ? 'var(--border)' : 'var(--accent)';
+    if (!isOpen) settingsPanel.render();
   });
 
   // ── Init ──

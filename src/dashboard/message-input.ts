@@ -56,15 +56,32 @@ export class MessageInput extends HTMLElement {
       textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
     });
 
-    // Cmd+Enter (Mac) / Ctrl+Enter (Win) to send. Plain Enter inserts newline.
+    // Submit mode from preferences: 'enter' or 'cmd-enter' (default)
     textarea.onkeydown = (e) => {
-      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-        e.preventDefault();
-        this._emitSend();
+      const prefs = JSON.parse(localStorage.getItem('dashboardPrefs') || '{}');
+      const mode = prefs.submitMode || 'cmd-enter';
+      if (mode === 'enter') {
+        // Enter sends, Shift+Enter inserts newline
+        if (e.key === 'Enter' && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
+          e.preventDefault();
+          this._emitSend();
+        }
+      } else {
+        // Cmd/Ctrl+Enter sends, plain Enter inserts newline
+        if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+          e.preventDefault();
+          this._emitSend();
+        }
       }
     };
 
     sendBtn.onclick = () => this._emitSend();
+    // iOS: tap while keyboard is open blurs textarea first, absorbing the click.
+    // touchend fires before the blur, so we handle send there too.
+    sendBtn.addEventListener('touchend', (e) => {
+      e.preventDefault();
+      this._emitSend();
+    });
     interruptBtn.onclick = () => {
       if (this._agent) {
         this.dispatchEvent(new CustomEvent('msg-interrupt', { detail: { agent: this._agent.name } }));
@@ -85,6 +102,11 @@ export class MessageInput extends HTMLElement {
     const text = textarea.value.trim();
     if (!text || !this._agent) return;
     this.dispatchEvent(new CustomEvent('msg-send', { detail: { text } }));
+    // Close keyboard on send if preference is enabled (iOS)
+    const prefs = JSON.parse(localStorage.getItem('dashboardPrefs') || '{}');
+    if (prefs.closeKeyboardOnSend) {
+      textarea.blur();
+    }
   }
 
   /** Update button/input states based on agent. */
