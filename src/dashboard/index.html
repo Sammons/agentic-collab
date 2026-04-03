@@ -223,13 +223,27 @@ import { renderAgents, selectAgent, patchAgentCard, updateAgent, addMessage, han
   // ── Settings toggle ──
   const settingsBtn = document.getElementById('settingsBtn');
   const settingsPanel = document.getElementById('settingsPanel');
+  function closeSettings() {
+    settingsPanel.style.display = 'none';
+    threadPanel.style.display = '';  // Remove inline style — let CSS handle it
+    settingsBtn.style.color = 'var(--text-dim)';
+    settingsBtn.style.borderColor = 'var(--border)';
+  }
   settingsBtn.addEventListener('click', () => {
     const isOpen = settingsPanel.style.display !== 'none';
-    settingsPanel.style.display = isOpen ? 'none' : 'flex';
-    threadPanel.style.display = isOpen ? 'flex' : 'none';
-    settingsBtn.style.color = isOpen ? 'var(--text-dim)' : 'var(--accent)';
-    settingsBtn.style.borderColor = isOpen ? 'var(--border)' : 'var(--accent)';
-    if (!isOpen) settingsPanel.render();
+    if (isOpen) {
+      closeSettings();
+    } else {
+      settingsPanel.style.display = 'flex';
+      threadPanel.style.display = 'none';
+      settingsBtn.style.color = 'var(--accent)';
+      settingsBtn.style.borderColor = 'var(--accent)';
+      settingsPanel.render();
+    }
+  });
+  // Close settings when selecting an agent
+  document.getElementById('agentList').addEventListener('click', () => {
+    if (settingsPanel.style.display !== 'none') closeSettings();
   });
 
   // ── Init ──
