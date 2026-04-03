@@ -179,6 +179,8 @@ function showSendError(input, sendBtn) {
   setTimeout(() => { errEl.remove(); input.style.borderColor = ''; }, 3000);
 }
 
+let _optimisticId = 0;
+
 export async function sendMessage() {
   if (!state.selected) return;
   const inputEl = document.getElementById('threadInput');
@@ -188,8 +190,26 @@ export async function sendMessage() {
 
   const message = _voiceState.usedSinceSend ? VOICE_TO_TEXT_PREFIX + text : text;
   _voiceState.usedSinceSend = false;
-  // Optimistic clear — avoids lag where WS broadcast arrives before HTTP response
   inputEl.clear();
+
+  // Optimistic render — show message immediately with "sending" status
+  const optimisticMsg = {
+    id: `_optimistic_${++_optimisticId}`,
+    agent: state.selected,
+    message,
+    direction: 'to_agent',
+    topic,
+    createdAt: new Date().toISOString(),
+    deliveryStatus: 'pending',
+    _optimistic: true,
+  };
+  if (!state.threads[state.selected]) state.threads[state.selected] = [];
+  state.threads[state.selected].push(optimisticMsg);
+  if (state.threadView === 'messages') {
+    const messages = document.getElementById('threadMessages');
+    messages.appendMessage(optimisticMsg, state.selected);
+  }
+
   try {
     const res = await fetch('/api/dashboard/send', {
       method: 'POST',
@@ -201,16 +221,27 @@ export async function sendMessage() {
       let body = null;
       try { body = await res.json(); } catch (_) {}
       if (!(body && body.msg)) {
+        // Remove optimistic message and restore input
+        removeOptimistic(optimisticMsg.id);
         inputEl.setDraft(text);
         showToast('Send failed', 'error');
       }
     }
   } catch (err) {
+    removeOptimistic(optimisticMsg.id);
     inputEl.setDraft(text);
     showToast('Send failed — network error', 'error');
   } finally {
     updateSendability();
   }
+}
+
+function removeOptimistic(id) {
+  for (const agent of Object.keys(state.threads)) {
+    state.threads[agent] = state.threads[agent].filter(m => m.id !== id);
+  }
+  const el = document.querySelector(`[data-optimistic-id="${id}"]`);
+  if (el) el.remove();
 }
 
 // ── File Upload ──
