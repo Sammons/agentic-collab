@@ -141,7 +141,6 @@
     transition: opacity 0.15s, color 0.15s;
     display: inline-flex;
     align-items: center;
-    transform: translateY(1px);
   }
   .agent-star.starred { opacity: 0.8; color: #f5c518; }
   .agent-icon {
