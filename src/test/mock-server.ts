@@ -8,7 +8,7 @@ import { createServer, type IncomingMessage, type ServerResponse, type Server } 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { WebSocketServer } from '../shared/websocket-server.ts';
-import type { AgentRecord, DashboardMessage, ActiveIndicator, ProxyRegistration, WsInitEvent, WsAgentUpdateEvent, WsMessageEvent, WsIndicatorUpdateEvent } from '../shared/types.ts';
+import type { AgentRecord, DashboardMessage, ActiveIndicator, EngineConfigRecord, ProxyRegistration, WsInitEvent, WsAgentUpdateEvent, WsMessageEvent, WsIndicatorUpdateEvent } from '../shared/types.ts';
 
 // ── Fixture Defaults ──
 
@@ -26,6 +26,7 @@ function makeDefaultAgents(): AgentRecord[] {
       permissions: null,
       agentGroup: null,
       launchEnv: null,
+      engineConfig: null,
       sortOrder: 0,
       hookStart: null,
       hookResume: null,
@@ -61,6 +62,7 @@ function makeDefaultAgents(): AgentRecord[] {
       permissions: null,
       agentGroup: null,
       launchEnv: null,
+      engineConfig: null,
       sortOrder: 1,
       hookStart: null,
       hookResume: null,
@@ -96,6 +98,7 @@ function makeDefaultAgents(): AgentRecord[] {
       permissions: null,
       agentGroup: null,
       launchEnv: null,
+      engineConfig: null,
       sortOrder: 2,
       hookStart: null,
       hookResume: null,
@@ -157,6 +160,7 @@ export type WsLogEntry = {
 
 type FixtureState = {
   agents: AgentRecord[];
+  engineConfigs: EngineConfigRecord[];
   threads: Record<string, DashboardMessage[]>;
   proxies: ProxyRegistration[];
   indicators: Record<string, ActiveIndicator[]>;
@@ -169,6 +173,7 @@ type FixtureState = {
 function createFixtureState(): FixtureState {
   return {
     agents: makeDefaultAgents(),
+    engineConfigs: [],
     threads: {},
     proxies: [...DEFAULT_PROXIES],
     indicators: {},
@@ -458,6 +463,7 @@ export async function startMockServer(port: number): Promise<MockServer> {
     if (method === 'POST' && path === '/test/reset') {
       const fresh = createFixtureState();
       fixtures.agents = fresh.agents;
+      fixtures.engineConfigs = fresh.engineConfigs;
       fixtures.threads = fresh.threads;
       fixtures.proxies = fresh.proxies;
       fixtures.indicators = fresh.indicators;
@@ -497,6 +503,7 @@ export async function startMockServer(port: number): Promise<MockServer> {
     const initEvent: WsInitEvent = {
       type: 'init',
       agents: fixtures.agents,
+      engineConfigs: fixtures.engineConfigs,
       threads: fixtures.threads,
       proxies: fixtures.proxies,
       unreadCounts: {},

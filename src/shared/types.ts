@@ -80,6 +80,22 @@ export type ActiveIndicator = {
   actions?: Record<string, IndicatorAction>;
 };
 
+export type EngineConfigRecord = {
+  name: string;
+  engine: string;
+  model: string | null;
+  thinking: string | null;
+  permissions: string | null;
+  hookStart: string | null;
+  hookResume: string | null;
+  hookCompact: string | null;
+  hookExit: string | null;
+  hookInterrupt: string | null;
+  hookSubmit: string | null;
+  launchEnv: Record<string, string> | null;
+  createdAt: string;
+};
+
 export type AgentRecord = {
   name: string;
   engine: EngineType;
@@ -91,6 +107,7 @@ export type AgentRecord = {
   agentGroup: string | null; // grouping label from persona frontmatter
   launchEnv: LaunchEnv | null; // launch-time env injected on spawn/resume/reload
   account: string | null; // named credential account for HOME isolation
+  engineConfig: string | null; // FK reference to engine_configs.name
   sortOrder: number; // manual ordering within group
   /** Hook value for starting the agent (preset/file/inline). */
   hookStart: string | null;
@@ -206,6 +223,7 @@ export type ProxyRegistration = {
 export type WsInitEvent = {
   type: 'init';
   agents: AgentRecord[];
+  engineConfigs: EngineConfigRecord[];
   threads: Record<string, DashboardMessage[]>;
   proxies: ProxyRegistration[];
   unreadCounts: Record<string, number>;

@@ -111,6 +111,7 @@ export const CONFIG_FIELDS: readonly FieldDef[] = [
   { name: 'hookExit',           column: 'hook_exit',             personaKey: 'exit',                  kind: 'hook',   nested: true,  upsertable: true,  createOnly: false },
   { name: 'hookInterrupt',      column: 'hook_interrupt',        personaKey: 'interrupt',             kind: 'hook',   nested: true,  upsertable: true,  createOnly: false },
   { name: 'hookSubmit',         column: 'hook_submit',           personaKey: 'submit',                kind: 'hook',   nested: true,  upsertable: true,  createOnly: false },
+  { name: 'engineConfig',        column: 'engine_config',         personaKey: 'engine_config',         kind: 'scalar', nested: false, upsertable: true,  createOnly: false },
   { name: 'customButtons',      column: 'custom_buttons',        personaKey: 'custom_buttons',        kind: 'json',   nested: false, upsertable: true,  createOnly: false, serialize: serializeCustomButtons },
   { name: 'indicators',         column: 'indicators',            personaKey: 'indicators',            kind: 'json',   nested: false, upsertable: true,  createOnly: false, serialize: serializeIndicators },
 ];

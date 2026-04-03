@@ -61,6 +61,8 @@ export type PersonaFrontmatter = {
   custom_buttons?: Record<string, PipelineStep[]>;
   /** Indicators — regex patterns matched against tmux pane output. */
   indicators?: IndicatorDefinition[];
+  /** Engine config name — FK reference to engine_configs table. */
+  engine_config?: string;
 };
 
 export type ParsedPersona = {

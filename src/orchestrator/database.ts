@@ -8,6 +8,7 @@ import type {
   AgentRecord,
   AgentState,
   DashboardMessage,
+  EngineConfigRecord,
   EngineType,
   EventRecord,
   LaunchEnv,
@@ -109,6 +110,22 @@ const SCHEMA = `
   CREATE TABLE IF NOT EXISTS dashboard_read_cursors (
     agent           TEXT PRIMARY KEY,
     last_read_msg_id INTEGER NOT NULL DEFAULT 0
+  );
+
+  CREATE TABLE IF NOT EXISTS engine_configs (
+    name           TEXT PRIMARY KEY,
+    engine         TEXT NOT NULL,
+    model          TEXT,
+    thinking       TEXT,
+    permissions    TEXT,
+    hook_start     TEXT,
+    hook_resume    TEXT,
+    hook_compact   TEXT,
+    hook_exit      TEXT,
+    hook_interrupt TEXT,
+    hook_submit    TEXT,
+    launch_env     TEXT,
+    created_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
   );
 `;
 
@@ -765,6 +782,90 @@ export class Database {
     `).all() as Array<Record<string, unknown>>;
     return rows.map(mapReminderRow);
   }
+
+  // ── Engine Configs ──
+
+  createEngineConfig(opts: {
+    name: string;
+    engine: string;
+    model?: string | null;
+    thinking?: string | null;
+    permissions?: string | null;
+    hookStart?: string | null;
+    hookResume?: string | null;
+    hookCompact?: string | null;
+    hookExit?: string | null;
+    hookInterrupt?: string | null;
+    hookSubmit?: string | null;
+    launchEnv?: Record<string, string> | null;
+  }): EngineConfigRecord {
+    this.db.prepare(`
+      INSERT INTO engine_configs (name, engine, model, thinking, permissions, hook_start, hook_resume, hook_compact, hook_exit, hook_interrupt, hook_submit, launch_env)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      opts.name,
+      opts.engine,
+      opts.model ?? null,
+      opts.thinking ?? null,
+      opts.permissions ?? null,
+      opts.hookStart ?? null,
+      opts.hookResume ?? null,
+      opts.hookCompact ?? null,
+      opts.hookExit ?? null,
+      opts.hookInterrupt ?? null,
+      opts.hookSubmit ?? null,
+      opts.launchEnv ? JSON.stringify(opts.launchEnv) : null,
+    );
+    return this.getEngineConfig(opts.name)!;
+  }
+
+  getEngineConfig(name: string): EngineConfigRecord | null {
+    const row = this.db.prepare('SELECT * FROM engine_configs WHERE name = ?').get(name) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    return mapEngineConfigRow(row);
+  }
+
+  listEngineConfigs(): EngineConfigRecord[] {
+    const rows = this.db.prepare('SELECT * FROM engine_configs ORDER BY name ASC').all() as Array<Record<string, unknown>>;
+    return rows.map(mapEngineConfigRow);
+  }
+
+  updateEngineConfig(name: string, opts: {
+    engine?: string;
+    model?: string | null;
+    thinking?: string | null;
+    permissions?: string | null;
+    hookStart?: string | null;
+    hookResume?: string | null;
+    hookCompact?: string | null;
+    hookExit?: string | null;
+    hookInterrupt?: string | null;
+    hookSubmit?: string | null;
+    launchEnv?: Record<string, string> | null;
+  }): EngineConfigRecord | null {
+    const sets: string[] = [];
+    const params: unknown[] = [];
+    if (opts.engine !== undefined) { sets.push('engine = ?'); params.push(opts.engine); }
+    if (opts.model !== undefined) { sets.push('model = ?'); params.push(opts.model); }
+    if (opts.thinking !== undefined) { sets.push('thinking = ?'); params.push(opts.thinking); }
+    if (opts.permissions !== undefined) { sets.push('permissions = ?'); params.push(opts.permissions); }
+    if (opts.hookStart !== undefined) { sets.push('hook_start = ?'); params.push(opts.hookStart); }
+    if (opts.hookResume !== undefined) { sets.push('hook_resume = ?'); params.push(opts.hookResume); }
+    if (opts.hookCompact !== undefined) { sets.push('hook_compact = ?'); params.push(opts.hookCompact); }
+    if (opts.hookExit !== undefined) { sets.push('hook_exit = ?'); params.push(opts.hookExit); }
+    if (opts.hookInterrupt !== undefined) { sets.push('hook_interrupt = ?'); params.push(opts.hookInterrupt); }
+    if (opts.hookSubmit !== undefined) { sets.push('hook_submit = ?'); params.push(opts.hookSubmit); }
+    if (opts.launchEnv !== undefined) { sets.push('launch_env = ?'); params.push(opts.launchEnv ? JSON.stringify(opts.launchEnv) : null); }
+    if (sets.length === 0) return this.getEngineConfig(name);
+    params.push(name);
+    this.db.prepare(`UPDATE engine_configs SET ${sets.join(', ')} WHERE name = ?`).run(...params);
+    return this.getEngineConfig(name);
+  }
+
+  deleteEngineConfig(name: string): boolean {
+    const result = this.db.prepare('DELETE FROM engine_configs WHERE name = ?').run(name);
+    return result.changes > 0;
+  }
 }
 
 // ── Row Mappers ──
@@ -865,6 +966,38 @@ function mapProxyRow(row: Record<string, unknown>): ProxyRegistration {
     versionMatch: true, // computed by caller when orchestrator version is known
     lastHeartbeat: row['last_heartbeat'] as string,
     registeredAt: row['registered_at'] as string,
+  };
+}
+
+function mapEngineConfigRow(row: Record<string, unknown>): EngineConfigRecord {
+  let launchEnv: Record<string, string> | null = null;
+  const rawEnv = row['launch_env'];
+  if (typeof rawEnv === 'string' && rawEnv.length > 0) {
+    try {
+      const parsed = JSON.parse(rawEnv);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        const env: Record<string, string> = {};
+        for (const [key, val] of Object.entries(parsed)) {
+          if (typeof val === 'string') env[key] = val;
+        }
+        launchEnv = env;
+      }
+    } catch { /* ignore */ }
+  }
+  return {
+    name: row['name'] as string,
+    engine: row['engine'] as string,
+    model: (row['model'] as string | null) ?? null,
+    thinking: (row['thinking'] as string | null) ?? null,
+    permissions: (row['permissions'] as string | null) ?? null,
+    hookStart: (row['hook_start'] as string | null) ?? null,
+    hookResume: (row['hook_resume'] as string | null) ?? null,
+    hookCompact: (row['hook_compact'] as string | null) ?? null,
+    hookExit: (row['hook_exit'] as string | null) ?? null,
+    hookInterrupt: (row['hook_interrupt'] as string | null) ?? null,
+    hookSubmit: (row['hook_submit'] as string | null) ?? null,
+    launchEnv,
+    createdAt: row['created_at'] as string,
   };
 }
 

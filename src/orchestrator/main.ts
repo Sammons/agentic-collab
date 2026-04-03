@@ -297,9 +297,11 @@ wss.onConnect((client) => {
     if (active.length > 0) indicators[agent.name] = active;
   }
   const accounts = accountStore.list();
+  const engineConfigs = db.listEngineConfigs();
   wss.send(client, JSON.stringify({
     type: 'init',
     agents,
+    engineConfigs,
     threads,
     proxies,
     unreadCounts,
