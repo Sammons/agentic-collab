@@ -82,40 +82,62 @@ export async function sendMessage() {
 
   const message = _voiceState.usedSinceSend ? VOICE_TO_TEXT_PREFIX + text : text;
   _voiceState.usedSinceSend = false;
-  // Optimistic clear — message appears via WS broadcast, with HTTP fallback
+  // Optimistic: clear input and show message immediately
+  const agent = state.selected;
   inputEl.clear();
+  const optimisticId = -Date.now(); // negative ID = not yet confirmed
+  const optimisticMsg = {
+    id: optimisticId, agent, direction: 'to_agent', sourceAgent: 'dashboard',
+    targetAgent: agent, topic, message, queueId: null, deliveryStatus: 'pending',
+    withdrawn: false, createdAt: new Date().toISOString(),
+  };
+  if (!state.threads[agent]) state.threads[agent] = [];
+  state.threads[agent].push(optimisticMsg);
+  if (state.selected === agent && state.threadView === 'messages') {
+    const messagesEl = document.getElementById('threadMessages');
+    if (messagesEl?.appendMessage) messagesEl.appendMessage(optimisticMsg, agent);
+  }
+
   try {
     const res = await fetch('/api/dashboard/send', {
       method: 'POST',
       headers: authHeaders(),
-      body: JSON.stringify({ agent: state.selected, message, topic }),
+      body: JSON.stringify({ agent, message, topic }),
     });
     if (res.status === 401) { _handleAuthError(); return; }
     if (!res.ok) {
-      let body = null;
-      try { body = await res.json(); } catch (_) {}
-      if (!(body && body.msg)) {
-        inputEl.setDraft(text);
-        showToast('Send failed', 'error');
+      // Remove optimistic message on failure
+      const thread = state.threads[agent];
+      if (thread) {
+        const idx = thread.findIndex(m => m.id === optimisticId);
+        if (idx >= 0) thread.splice(idx, 1);
       }
+      inputEl.setDraft(text);
+      showToast('Send failed', 'error');
+      _renderThread();
     } else {
-      // Ensure message shows even if WS broadcast was missed (e.g. brief disconnect)
+      // Replace optimistic message with real one from server
       const body = await res.json().catch(() => null);
       if (body?.msg) {
-        const thread = state.threads[body.msg.agent];
-        if (thread && !thread.some(m => m.id === body.msg.id)) {
-          const linked = { ...body.msg, queueId: body.queueId ?? null, deliveryStatus: body.status ?? 'pending' };
-          thread.push(linked);
-          if (state.selected === body.msg.agent && state.threadView === 'messages') {
-            const messagesEl = document.getElementById('threadMessages');
-            if (messagesEl?.appendMessage) messagesEl.appendMessage(linked, body.msg.agent);
+        const thread = state.threads[agent];
+        if (thread) {
+          const idx = thread.findIndex(m => m.id === optimisticId);
+          if (idx >= 0) {
+            thread[idx] = { ...body.msg, queueId: body.queueId ?? null, deliveryStatus: body.status ?? 'pending' };
           }
         }
       }
     }
   } catch (err) {
+    // Remove optimistic message on network error
+    const thread = state.threads[agent];
+    if (thread) {
+      const idx = thread.findIndex(m => m.id === optimisticId);
+      if (idx >= 0) thread.splice(idx, 1);
+    }
     inputEl.setDraft(text);
     showToast('Send failed — network error', 'error');
+    _renderThread();
   } finally {
     updateSendability();
   }

@@ -72,7 +72,16 @@ export function updateAgent(agent) {
 
 export function addMessage(msg) {
   if (!state.threads[msg.agent]) state.threads[msg.agent] = [];
-  state.threads[msg.agent].push(msg);
+  const thread = state.threads[msg.agent];
+  // Dedup: if this message ID already exists (from HTTP fallback), skip.
+  // Also replace any optimistic message (negative ID) for the same content.
+  if (thread.some(m => m.id === msg.id)) return;
+  const optimisticIdx = thread.findIndex(m => m.id < 0 && m.message === msg.message && m.agent === msg.agent);
+  if (optimisticIdx >= 0) {
+    thread[optimisticIdx] = msg;
+    return; // DOM already has the optimistic render — WS dedup, no re-render needed
+  }
+  thread.push(msg);
   if (state.selected === msg.agent && state.threadView === 'messages') {
     // Append single message via component — no full re-render
     const messages = document.getElementById('threadMessages');

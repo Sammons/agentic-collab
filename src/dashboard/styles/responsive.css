@@ -41,8 +41,7 @@
       padding: 6px 8px;
     }
     .voice-controls {
-      order: 3;
-      flex: 0 1 auto;
+      display: none;
     }
     .voice-partial { display: none; }
     header h1 { font-size: 14px; }
