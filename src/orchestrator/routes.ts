@@ -7,7 +7,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { request as httpRequest } from 'node:http';
 import { pipeline } from 'node:stream/promises';
 import { timingSafeEqual } from 'node:crypto';
-import { readdirSync, readFileSync, writeFileSync, mkdirSync, unlinkSync, existsSync } from 'node:fs';
+import { readdirSync, readFileSync, writeFileSync, mkdirSync, unlinkSync, existsSync, rmSync, statSync, createWriteStream } from 'node:fs';
 import { join } from 'node:path';
 import { renderMarkdown, wrapInHtml, DOC_PAGES } from '../docs/render.ts';
 import { hostname } from 'node:os';
@@ -58,6 +58,7 @@ export type RouteContext = {
   usagePoller: UsagePoller;
   voiceEnabled: boolean;
   accountStore: import('./accounts.ts').AccountStore;
+  pagesDir: string;
 };
 
 /**
@@ -706,6 +707,136 @@ route('POST', '/api/engine-configs/reset-defaults', async (_req, res, _match, ct
   const configs = ctx.db.listEngineConfigs();
   ctx.wss.broadcast(JSON.stringify({ type: 'init', engineConfigs: configs }));
   json(res, 200, { ok: true, results });
+});
+
+// ── Pages (static hosting) ──
+
+const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$/;
+const MAX_PAGE_BYTES = 50 * 1024 * 1024; // 50 MB
+
+const MIME_TYPES: Record<string, string> = {
+  '.html': 'text/html', '.htm': 'text/html', '.css': 'text/css',
+  '.js': 'application/javascript', '.json': 'application/json',
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif', '.svg': 'image/svg+xml', '.ico': 'image/x-icon',
+  '.woff': 'font/woff', '.woff2': 'font/woff2', '.ttf': 'font/ttf',
+  '.pdf': 'application/pdf', '.txt': 'text/plain', '.xml': 'application/xml',
+};
+
+function pageMime(filePath: string): string {
+  const ext = filePath.substring(filePath.lastIndexOf('.')).toLowerCase();
+  return MIME_TYPES[ext] ?? 'application/octet-stream';
+}
+
+/** Recursively count files and total bytes in a directory. */
+function dirStats(dir: string): { fileCount: number; totalBytes: number } {
+  let fileCount = 0, totalBytes = 0;
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const p = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      const sub = dirStats(p);
+      fileCount += sub.fileCount;
+      totalBytes += sub.totalBytes;
+    } else {
+      fileCount++;
+      totalBytes += statSync(p).size;
+    }
+  }
+  return { fileCount, totalBytes };
+}
+
+// Publish a page: POST /api/pages?slug=<slug>&agent=<agent>&title=<title>
+// Body: tar stream (extracted to pages/<slug>/) OR single file with &filename=<name>
+route('POST', '/api/pages', async (req, res, _match, ctx) => {
+  const url = new URL(req.url!, `http://${req.headers.host}`);
+  const slug = url.searchParams.get('slug');
+  const agent = url.searchParams.get('agent') ?? null;
+  const title = url.searchParams.get('title') ?? null;
+
+  if (!slug || !SLUG_RE.test(slug)) return json(res, 400, { error: 'Invalid slug (kebab-case, 2-64 chars)' });
+
+  const pageDir = join(ctx.pagesDir, slug);
+  const filename = url.searchParams.get('filename');
+
+  // Collect body
+  const chunks: Buffer[] = [];
+  let totalSize = 0;
+  for await (const chunk of req) {
+    totalSize += (chunk as Buffer).length;
+    if (totalSize > MAX_PAGE_BYTES) return json(res, 413, { error: `Page exceeds ${MAX_PAGE_BYTES / 1024 / 1024}MB limit` });
+    chunks.push(chunk as Buffer);
+  }
+  const body = Buffer.concat(chunks);
+
+  if (filename) {
+    // Single file upload
+    mkdirSync(pageDir, { recursive: true });
+    writeFileSync(join(pageDir, filename), body);
+  } else {
+    // Tar stream — extract using node:child_process
+    mkdirSync(pageDir, { recursive: true });
+    const { execSync } = await import('node:child_process');
+    try {
+      execSync('tar xf -', { input: body, cwd: pageDir, stdio: ['pipe', 'pipe', 'pipe'] });
+    } catch (err) {
+      return json(res, 400, { error: 'Failed to extract tar: ' + (err as Error).message });
+    }
+  }
+
+  const stats = dirStats(pageDir);
+  const page = ctx.db.createPage({ slug, title, agent: agent ?? undefined, fileCount: stats.fileCount, totalBytes: stats.totalBytes });
+  ctx.wss.broadcast(JSON.stringify({ type: 'pages_update', pages: ctx.db.listPages() }));
+  json(res, 201, page);
+});
+
+route('GET', '/api/pages', async (_req, res, _match, ctx) => {
+  json(res, 200, ctx.db.listPages());
+});
+
+route('DELETE', '/api/pages/:slug', async (_req, res, match, ctx) => {
+  const slug = match.pathname.groups['slug']!;
+  const pageDir = join(ctx.pagesDir, slug);
+  if (existsSync(pageDir)) rmSync(pageDir, { recursive: true });
+  const deleted = ctx.db.deletePage(slug);
+  if (!deleted) return json(res, 404, { error: 'Page not found' });
+  ctx.wss.broadcast(JSON.stringify({ type: 'pages_update', pages: ctx.db.listPages() }));
+  json(res, 200, { ok: true });
+});
+
+// Public page serving (no auth)
+route('GET', '/pages/:slug', async (_req, res, match, ctx) => {
+  const slug = match.pathname.groups['slug']!;
+  const indexPath = join(ctx.pagesDir, slug, 'index.html');
+  if (!existsSync(indexPath)) {
+    // Try listing files if no index.html
+    const pageDir = join(ctx.pagesDir, slug);
+    if (!existsSync(pageDir)) return json(res, 404, { error: 'Page not found' });
+    const files = readdirSync(pageDir);
+    if (files.length === 1) {
+      // Single file — serve it directly
+      const filePath = join(pageDir, files[0]!);
+      res.writeHead(200, { 'Content-Type': pageMime(filePath) });
+      res.end(readFileSync(filePath));
+      return;
+    }
+    // List files as simple HTML
+    const links = files.map(f => `<li><a href="/pages/${slug}/${f}">${f}</a></li>`).join('');
+    res.writeHead(200, { 'Content-Type': 'text/html' });
+    res.end(`<!DOCTYPE html><html><head><title>${slug}</title></head><body><h1>${slug}</h1><ul>${links}</ul></body></html>`);
+    return;
+  }
+  res.writeHead(200, { 'Content-Type': 'text/html' });
+  res.end(readFileSync(indexPath));
+});
+
+route('GET', '/pages/:slug/:path+', async (_req, res, match, ctx) => {
+  const slug = match.pathname.groups['slug']!;
+  const filePath = match.pathname.groups['path']!;
+  if (filePath.includes('..')) return json(res, 400, { error: 'Invalid path' });
+  const fullPath = join(ctx.pagesDir, slug, filePath);
+  if (!existsSync(fullPath)) return json(res, 404, { error: 'File not found' });
+  res.writeHead(200, { 'Content-Type': pageMime(fullPath) });
+  res.end(readFileSync(fullPath));
 });
 
 // ── Personas ──

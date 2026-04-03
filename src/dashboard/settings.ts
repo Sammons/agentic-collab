@@ -397,6 +397,27 @@ export class SettingsPanel extends HTMLElement {
     html += '</div>';
     html += '</div>';
 
+    // ── Pages ──
+    html += '<div class="settings-section">';
+    html += '<h3>Published Pages</h3>';
+    const pages = state.pages || [];
+    if (pages.length === 0) {
+      html += '<p class="settings-hint">No pages published. Agents can publish via <code>collab publish &lt;slug&gt; &lt;dir&gt;</code></p>';
+    } else {
+      for (const page of pages) {
+        const size = page.totalBytes >= 1024 * 1024 ? (page.totalBytes / 1024 / 1024).toFixed(1) + ' MB' : (page.totalBytes / 1024).toFixed(0) + ' KB';
+        html += '<div class="config-card">';
+        html += `<div class="config-header">`;
+        html += `<span class="config-name"><a href="/pages/${esc(page.slug)}" target="_blank" style="color:var(--accent);text-decoration:none">${esc(page.slug)}</a></span>`;
+        html += `<span class="config-actions">`;
+        html += `<span style="font-size:11px;color:var(--text-dim)">${esc(String(page.fileCount))} files · ${size}${page.agent ? ' · ' + esc(page.agent) : ''}</span>`;
+        html += `<button class="config-action-btn config-delete-btn" data-page-delete="${esc(page.slug)}">${icon.trash(12)} Delete</button>`;
+        html += `</span></div>`;
+        html += '</div>';
+      }
+    }
+    html += '</div>';
+
     html += '</div>';
     this.innerHTML = html;
     this._bindEvents();
@@ -426,6 +447,25 @@ export class SettingsPanel extends HTMLElement {
       if (await confirmAction('Reset default engine configs (claude, codex, opencode) to built-in defaults? Custom edits to these configs will be lost.')) {
         await this._resetDefaults();
       }
+    });
+
+    this.querySelectorAll('[data-page-delete]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const slug = btn.dataset.pageDelete;
+        if (await confirmAction(`Delete page "${slug}"? This removes all published files.`)) {
+          try {
+            const res = await fetch(`/api/pages/${encodeURIComponent(slug)}`, { method: 'DELETE', headers: authHeaders() });
+            if (res.ok) {
+              state.pages = state.pages.filter(p => p.slug !== slug);
+              showToast('Deleted', 'success');
+              this.render();
+            } else {
+              const b = await res.json().catch(() => null);
+              showToast(b?.error || 'Delete failed', 'error');
+            }
+          } catch { showToast('Network error', 'error'); }
+        }
+      });
     });
 
     this.querySelectorAll('.config-action-btn').forEach((btn) => {

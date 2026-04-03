@@ -26,6 +26,7 @@ export const state = {
   topicPerAgent: {},
   editingPersona: false,
   indicators: {},
+  pages: [],
   // Internal tracking for progressive message loading
   _threadRenderedFrom: 0,
   _renderedAgent: null,

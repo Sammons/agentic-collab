@@ -93,6 +93,18 @@ export type DetectionConfig = {
   snapshotLines?: number;
 };
 
+// ── Pages ──
+
+export type PageRecord = {
+  slug: string;
+  title: string | null;
+  agent: string | null;
+  fileCount: number;
+  totalBytes: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type EngineConfigRecord = {
   name: string;
   engine: string;

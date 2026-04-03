@@ -18,6 +18,7 @@ import type {
   ProxyRegistration,
   Reminder,
   ReminderStatus,
+  PageRecord,
 } from '../shared/types.ts';
 import {
   configColumnMap,
@@ -128,6 +129,16 @@ const SCHEMA = `
     detection      TEXT,
     launch_env     TEXT,
     created_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS pages (
+    slug           TEXT PRIMARY KEY,
+    title          TEXT,
+    agent          TEXT,
+    file_count     INTEGER NOT NULL DEFAULT 0,
+    total_bytes    INTEGER NOT NULL DEFAULT 0,
+    created_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+    updated_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
   );
 `;
 
@@ -876,6 +887,38 @@ export class Database {
     const result = this.db.prepare('DELETE FROM engine_configs WHERE name = ?').run(name);
     return result.changes > 0;
   }
+
+  // ── Pages ──
+
+  createPage(opts: { slug: string; title?: string; agent?: string; fileCount: number; totalBytes: number }): PageRecord {
+    this.db.prepare(`
+      INSERT INTO pages (slug, title, agent, file_count, total_bytes)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(slug) DO UPDATE SET
+        title = excluded.title,
+        agent = excluded.agent,
+        file_count = excluded.file_count,
+        total_bytes = excluded.total_bytes,
+        updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
+    `).run(opts.slug, opts.title ?? null, opts.agent ?? null, opts.fileCount, opts.totalBytes);
+    return this.getPage(opts.slug)!;
+  }
+
+  getPage(slug: string): PageRecord | null {
+    const row = this.db.prepare('SELECT * FROM pages WHERE slug = ?').get(slug) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    return mapPageRow(row);
+  }
+
+  listPages(): PageRecord[] {
+    const rows = this.db.prepare('SELECT * FROM pages ORDER BY updated_at DESC').all() as Array<Record<string, unknown>>;
+    return rows.map(mapPageRow);
+  }
+
+  deletePage(slug: string): boolean {
+    const result = this.db.prepare('DELETE FROM pages WHERE slug = ?').run(slug);
+    return result.changes > 0;
+  }
 }
 
 // ── Row Mappers ──
@@ -1009,6 +1052,18 @@ function mapEngineConfigRow(row: Record<string, unknown>): EngineConfigRecord {
     detection: (row['detection'] as string | null) ?? null,
     launchEnv,
     createdAt: row['created_at'] as string,
+  };
+}
+
+function mapPageRow(row: Record<string, unknown>): PageRecord {
+  return {
+    slug: row['slug'] as string,
+    title: (row['title'] as string | null) ?? null,
+    agent: (row['agent'] as string | null) ?? null,
+    fileCount: (row['file_count'] as number) ?? 0,
+    totalBytes: (row['total_bytes'] as number) ?? 0,
+    createdAt: row['created_at'] as string,
+    updatedAt: row['updated_at'] as string,
   };
 }
 
