@@ -135,19 +135,15 @@
     border: none;
     cursor: pointer;
     padding: 0;
-    margin-right: 2px;
+    margin-right: 4px;
     color: var(--text-dim);
-    opacity: 0;
+    opacity: 0.3;
     transition: opacity 0.15s, color 0.15s;
     display: inline-flex;
     align-items: center;
     transform: translateY(1px);
-    width: 0;
-    overflow: hidden;
   }
-  .agent-card:hover .agent-star { opacity: 0.4; width: auto; overflow: visible; }
-  .agent-star:hover { opacity: 1; color: #f5c518; }
-  .agent-star.starred { opacity: 0.8; color: #f5c518; width: auto; overflow: visible; }
+  .agent-star.starred { opacity: 0.8; color: #f5c518; }
   .agent-icon {
     font-size: 14px;
     margin-right: 4px;
