@@ -148,8 +148,8 @@ export function renderAgents() {
     if (!groups.has(g)) groups.set(g, []);
     groups.get(g).push(agent);
   }
-  // Include empty groups created via "+ New Group"
-  if (state.emptyGroups) {
+  // Include empty groups created via "+ New Group" (only when no filter active)
+  if (state.emptyGroups && !state.quickFilter && !filter) {
     for (const g of state.emptyGroups) {
       if (!groups.has(g)) groups.set(g, []);
     }
@@ -179,6 +179,9 @@ export function renderAgents() {
 
   const collapsedGroups = JSON.parse(localStorage.getItem('collapsedGroups') || '[]');
   for (const groupName of sortedGroups) {
+    const groupAgents = groups.get(groupName);
+    // Hide empty groups when a filter is active
+    if ((state.quickFilter || filter) && (!groupAgents || groupAgents.length === 0)) continue;
     const isCollapsed = collapsedGroups.includes(groupName);
     const showHeader = sortedGroups.length > 1 || groupName !== 'General';
     if (showHeader) {
@@ -409,6 +412,7 @@ function handleAgentListEvent(e) {
   const starBtn = e.target.closest('.agent-star');
   if (starBtn) {
     e.stopPropagation();
+    e.preventDefault();
     const agentName = starBtn.dataset.starAgent;
     if (!agentName) return;
     const starred = JSON.parse(localStorage.getItem('starredAgents') || '{}');
