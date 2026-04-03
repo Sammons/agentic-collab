@@ -505,9 +505,8 @@ cmd('publish', 'collab publish <slug> <dir>', 'Publish a directory as a static p
 cmd('pages', 'collab pages {list|delete}', 'Manage published pages', async (args) => {
   const sub = args[0];
   if (!sub || sub === 'list') {
-    const res = await api('GET', '/api/pages');
-    const pages = await res.json();
-    if (pages.length === 0) { console.log('No published pages'); return; }
+    const pages = await api('GET', '/api/pages');
+    if (!Array.isArray(pages) || pages.length === 0) { console.log('No published pages'); return; }
     for (const p of pages) {
       const size = p.totalBytes >= 1024 * 1024 ? (p.totalBytes / 1024 / 1024).toFixed(1) + 'MB' : (p.totalBytes / 1024).toFixed(0) + 'KB';
       console.log(`  ${p.slug.padEnd(30)} ${String(p.fileCount).padStart(4)} files  ${size.padStart(8)}  ${p.agent ?? '-'}  ${p.updatedAt}`);
