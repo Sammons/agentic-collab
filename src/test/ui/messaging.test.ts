@@ -98,7 +98,6 @@ describe('Messaging', () => {
     assert.ok('queueId' in msg);
     assert.ok('deliveryStatus' in msg);
     assert.ok('withdrawn' in msg);
-    assert.ok('archivedAt' in msg);
     assert.equal(msg['withdrawn'], false);
   });
 

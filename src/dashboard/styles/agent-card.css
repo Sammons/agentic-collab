@@ -106,6 +106,7 @@
   .agent-group-header.drag-over-above { box-shadow: 0 -2px 0 var(--accent); }
   .agent-group-header.drag-over-below { box-shadow: 0 2px 0 var(--accent); }
   .agent-card[draggable="true"] { cursor: grab; }
+  .filtered .agent-card[draggable="true"] { cursor: pointer; }
   .agent-card.dragging { opacity: 0.4; }
   .agent-card.drag-over-above { box-shadow: 0 -2px 0 var(--accent); }
   .agent-card.drag-over-below { box-shadow: 0 2px 0 var(--accent); }

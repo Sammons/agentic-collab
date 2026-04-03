@@ -445,18 +445,6 @@ describe('Database', () => {
       assert.ok(updated.nextAttemptAt !== null);
     });
 
-    it('clearDashboardMessages removes all messages for agent', () => {
-      db.addDashboardMessage('clear-agent', 'to_agent', 'msg1');
-      db.addDashboardMessage('clear-agent', 'from_agent', 'msg2');
-      db.addDashboardMessage('clear-other', 'to_agent', 'msg3');
-
-      db.clearDashboardMessages('clear-agent');
-
-      const threads = db.getDashboardThreads();
-      assert.equal(threads['clear-agent'], undefined);
-      assert.ok(threads['clear-other']?.length === 1);
-    });
-
     it('clearPendingMessages removes only pending dashboard messages', () => {
       const pending = db.enqueueMessage({ sourceAgent: null, targetAgent: 'clear-pending', envelope: 'test' });
       const agentMsg = db.enqueueMessage({ sourceAgent: 'some-agent', targetAgent: 'clear-pending', envelope: 'from agent' });
@@ -508,14 +496,6 @@ describe('Database', () => {
 
       const counts = cursorDb.getUnreadCounts();
       assert.equal(counts['cursor-agent-a'], 1);
-    });
-
-    it('excludes archived messages from unread counts', () => {
-      cursorDb.addDashboardMessage('cursor-agent-b', 'from_agent', 'archived-msg');
-      cursorDb.clearDashboardMessages('cursor-agent-b');
-
-      const counts = cursorDb.getUnreadCounts();
-      assert.equal(counts['cursor-agent-b'] ?? 0, 0);
     });
 
     it('upserts read cursor idempotently', () => {

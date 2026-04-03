@@ -24,6 +24,7 @@ import { resolveSecret, getSecretPath } from '../shared/config.ts';
 import type { ProxyCommand, ProxyResponse, ProxyRegistration } from '../shared/types.ts';
 import { getVersion } from '../shared/version.ts';
 import { handleVoiceUpgrade, type VoiceProxyOptions } from './voice-proxy.ts';
+import { DEFAULT_ENGINE_CONFIGS } from './default-engine-configs.ts';
 
 const PORT = parseInt(process.env['PORT'] ?? '3000', 10);
 const DB_PATH = process.env['DB_PATH'] ?? join(process.env['HOME'] ?? '/data', '.agentic-collab', 'orchestrator.db');
@@ -44,52 +45,6 @@ const wss = new WebSocketServer();
 const locks = new LockManager(db.rawDb);
 
 // ── Seed Default Engine Configs ──
-
-const DEFAULT_ENGINE_CONFIGS: Array<Parameters<typeof db.createEngineConfig>[0]> = [
-  {
-    name: 'claude',
-    engine: 'claude',
-    model: 'opus',
-    thinking: 'high',
-    permissions: 'dangerously-skip',
-    hookStart: JSON.stringify([
-      { type: 'shell', command: 'claude --dangerously-skip-permissions --model opus --effort max --append-system-prompt $PERSONA_PROMPT' },
-      { type: 'wait', ms: 5000 },
-      { type: 'shell', command: '/status' },
-      { type: 'capture', lines: 30, regex: 'uuid', var: 'SESSION_ID' },
-      { type: 'keystroke', key: 'Escape' },
-    ]),
-    hookResume: JSON.stringify([
-      { type: 'shell', command: 'claude --resume $SESSION_ID --append-system-prompt $PERSONA_PROMPT' },
-      { type: 'wait', ms: 5000 },
-      { type: 'shell', command: '/status' },
-      { type: 'capture', lines: 30, regex: 'uuid', var: 'SESSION_ID' },
-      { type: 'keystroke', key: 'Escape' },
-    ]),
-  },
-  {
-    name: 'codex',
-    engine: 'codex',
-    model: 'gpt-4.1',
-    hookStart: JSON.stringify([
-      { type: 'shell', command: 'codex --dangerously-bypass-approvals-and-sandbox --no-alt-screen -p $AGENT_NAME' },
-    ]),
-    hookResume: JSON.stringify([
-      { type: 'shell', command: 'codex --dangerously-bypass-approvals-and-sandbox --no-alt-screen -p $AGENT_NAME resume $SESSION_ID' },
-    ]),
-  },
-  {
-    name: 'opencode',
-    engine: 'opencode',
-    model: 'sonnet',
-    hookStart: JSON.stringify([
-      { type: 'shell', command: 'opencode' },
-    ]),
-    hookResume: JSON.stringify([
-      { type: 'shell', command: 'opencode -s $SESSION_ID' },
-    ]),
-  },
-];
 
 for (const config of DEFAULT_ENGINE_CONFIGS) {
   if (!db.getEngineConfig(config.name)) {

@@ -68,6 +68,8 @@
       user-select: none;
     }
     .drag-handle:active { color: var(--accent); }
+    .filtered .drag-handle { display: none; }
+    .filtered .agent-card { padding-right: 10px; }
     .agent-card { position: relative; padding-right: 40px; }
     .agent-header { flex-wrap: wrap; gap: 4px; }
     .agent-name {

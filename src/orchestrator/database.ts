@@ -124,6 +124,7 @@ const SCHEMA = `
     hook_exit      TEXT,
     hook_interrupt TEXT,
     hook_submit    TEXT,
+    indicators     TEXT,
     launch_env     TEXT,
     created_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
   );
@@ -219,6 +220,12 @@ export class Database {
     const reminderColumns = this.db.prepare('PRAGMA table_info(reminders)').all() as Array<Record<string, unknown>>;
     if (!reminderColumns.some((c) => c['name'] === 'skip_if_active')) {
       this.db.exec('ALTER TABLE reminders ADD COLUMN skip_if_active INTEGER NOT NULL DEFAULT 0');
+    }
+
+    // Add indicators column to engine_configs if not present
+    const ecColumns = this.db.prepare('PRAGMA table_info(engine_configs)').all() as Array<Record<string, unknown>>;
+    if (ecColumns.length > 0 && !ecColumns.some((c) => c['name'] === 'indicators')) {
+      this.db.exec('ALTER TABLE engine_configs ADD COLUMN indicators TEXT');
     }
   }
 
@@ -419,14 +426,12 @@ export class Database {
     return mapDashboardMessageRow(row);
   }
 
-  getDashboardThreads(agentName?: string, opts?: { archived?: boolean }): Record<string, DashboardMessage[]> {
-    const showArchived = opts?.archived ?? false;
-    const archiveFilter = showArchived ? 'dm.archived_at IS NOT NULL' : 'dm.archived_at IS NULL';
+  getDashboardThreads(agentName?: string): Record<string, DashboardMessage[]> {
     const query = `
       SELECT dm.*, pm.status AS delivery_status
       FROM dashboard_messages dm
       LEFT JOIN pending_messages pm ON dm.queue_id = pm.id
-      WHERE ${archiveFilter}${agentName ? ' AND dm.agent = ?' : ''}
+      WHERE 1=1${agentName ? ' AND dm.agent = ?' : ''}
       ORDER BY dm.created_at ASC
     `;
     const rows = agentName
@@ -596,10 +601,6 @@ export class Database {
     this.db.prepare("UPDATE pending_messages SET status = 'failed', error = 'Withdrawn by sender' WHERE id = ? AND status = 'pending'").run(id);
   }
 
-  clearDashboardMessages(agentName: string): void {
-    this.db.prepare("UPDATE dashboard_messages SET archived_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE agent = ? AND archived_at IS NULL").run(agentName);
-  }
-
   // ── Dashboard Read Cursors ──
 
   updateReadCursor(agent: string): void {
@@ -616,8 +617,7 @@ export class Database {
       SELECT dm.agent, COUNT(*) AS cnt
       FROM dashboard_messages dm
       LEFT JOIN dashboard_read_cursors rc ON dm.agent = rc.agent
-      WHERE dm.archived_at IS NULL
-        AND dm.id > COALESCE(rc.last_read_msg_id, 0)
+      WHERE dm.id > COALESCE(rc.last_read_msg_id, 0)
       GROUP BY dm.agent
     `).all() as Array<Record<string, unknown>>;
 
@@ -626,10 +626,6 @@ export class Database {
       counts[row['agent'] as string] = row['cnt'] as number;
     }
     return counts;
-  }
-
-  unarchiveDashboardMessages(agentName: string): void {
-    this.db.prepare('UPDATE dashboard_messages SET archived_at = NULL WHERE agent = ? AND archived_at IS NOT NULL').run(agentName);
   }
 
   clearPendingMessages(agentName: string): void {
@@ -797,11 +793,12 @@ export class Database {
     hookExit?: string | null;
     hookInterrupt?: string | null;
     hookSubmit?: string | null;
+    indicators?: string | null;
     launchEnv?: Record<string, string> | null;
   }): EngineConfigRecord {
     this.db.prepare(`
-      INSERT INTO engine_configs (name, engine, model, thinking, permissions, hook_start, hook_resume, hook_compact, hook_exit, hook_interrupt, hook_submit, launch_env)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO engine_configs (name, engine, model, thinking, permissions, hook_start, hook_resume, hook_compact, hook_exit, hook_interrupt, hook_submit, indicators, launch_env)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       opts.name,
       opts.engine,
@@ -814,6 +811,7 @@ export class Database {
       opts.hookExit ?? null,
       opts.hookInterrupt ?? null,
       opts.hookSubmit ?? null,
+      opts.indicators ?? null,
       opts.launchEnv ? JSON.stringify(opts.launchEnv) : null,
     );
     return this.getEngineConfig(opts.name)!;
@@ -841,6 +839,7 @@ export class Database {
     hookExit?: string | null;
     hookInterrupt?: string | null;
     hookSubmit?: string | null;
+    indicators?: string | null;
     launchEnv?: Record<string, string> | null;
   }): EngineConfigRecord | null {
     const sets: string[] = [];
@@ -855,6 +854,7 @@ export class Database {
     if (opts.hookExit !== undefined) { sets.push('hook_exit = ?'); params.push(opts.hookExit); }
     if (opts.hookInterrupt !== undefined) { sets.push('hook_interrupt = ?'); params.push(opts.hookInterrupt); }
     if (opts.hookSubmit !== undefined) { sets.push('hook_submit = ?'); params.push(opts.hookSubmit); }
+    if (opts.indicators !== undefined) { sets.push('indicators = ?'); params.push(opts.indicators); }
     if (opts.launchEnv !== undefined) { sets.push('launch_env = ?'); params.push(opts.launchEnv ? JSON.stringify(opts.launchEnv) : null); }
     if (sets.length === 0) return this.getEngineConfig(name);
     params.push(name);
@@ -921,7 +921,6 @@ function mapDashboardMessageRow(row: Record<string, unknown>): DashboardMessage 
     deliveryStatus: (row['delivery_status'] as string | null) ?? null,
     withdrawn: (row['withdrawn'] as number) === 1,
     createdAt: row['created_at'] as string,
-    archivedAt: (row['archived_at'] as string | null) ?? null,
   };
 }
 
@@ -996,6 +995,7 @@ function mapEngineConfigRow(row: Record<string, unknown>): EngineConfigRecord {
     hookExit: (row['hook_exit'] as string | null) ?? null,
     hookInterrupt: (row['hook_interrupt'] as string | null) ?? null,
     hookSubmit: (row['hook_submit'] as string | null) ?? null,
+    indicators: (row['indicators'] as string | null) ?? null,
     launchEnv,
     createdAt: row['created_at'] as string,
   };

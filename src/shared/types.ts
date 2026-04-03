@@ -92,6 +92,7 @@ export type EngineConfigRecord = {
   hookExit: string | null;
   hookInterrupt: string | null;
   hookSubmit: string | null;
+  indicators: string | null;
   launchEnv: Record<string, string> | null;
   createdAt: string;
 };
@@ -167,7 +168,6 @@ export type DashboardMessage = {
   deliveryStatus: string | null;
   withdrawn: boolean;
   createdAt: string;
-  archivedAt: string | null;
 };
 
 // ── Message Queue ──

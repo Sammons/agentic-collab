@@ -67,7 +67,6 @@
     opacity: 0.7;
     white-space: nowrap;
   }
-  /* Used by archive panel which still shows full routing */
   .msg-sender {
     font-size: 10px;
     font-weight: 600;

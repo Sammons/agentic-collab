@@ -434,7 +434,6 @@ export async function startMockServer(port: number): Promise<MockServer> {
         deliveryStatus: null,
         withdrawn: false,
         createdAt: new Date().toISOString(),
-        archivedAt: null,
       };
       if (!fixtures.threads[body.agent]) {
         fixtures.threads[body.agent] = [];

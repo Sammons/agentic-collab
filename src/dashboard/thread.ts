@@ -3,7 +3,7 @@
  * Thread rendering, tab switching, topic breadcrumbs, page title updates.
  *
  * Exports:
- *   setup({ handleAuthError, updateSendability, archiveChat }) -- wire deps
+ *   setup({ handleAuthError, updateSendability }) -- wire deps
  *   renderThread()          -- main thread renderer (tabs, panel switching)
  *   getActiveTopic()        -- current topic for selected agent
  *   setActiveTopic(topic)   -- set topic for selected agent
@@ -14,18 +14,15 @@
 import { state } from '/dashboard/assets/state.ts';
 import { esc, renderMarkdown } from '/dashboard/assets/utils.ts';
 import { icon } from '/dashboard/assets/icons.ts';
-import { renderArchive } from '/dashboard/assets/message-io.ts';
 import { renderPersona, setup as setupPersonaEditor } from '/dashboard/assets/persona-editor.ts';
 
 // ── Dependencies injected via setup() ──
 let _handleAuthError = () => {};
 let _updateSendability = () => {};
-let _archiveChat = () => {};
 
-export function setup({ handleAuthError, updateSendability, archiveChat }) {
+export function setup({ handleAuthError, updateSendability }) {
   _handleAuthError = handleAuthError;
   _updateSendability = updateSendability;
-  _archiveChat = archiveChat;
   setupPersonaEditor({ handleAuthError });
 }
 
@@ -127,18 +124,15 @@ export function renderThread() {
     <button class="${state.threadView === 'persona' ? 'active' : ''}" data-tab="persona">Persona</button>
     <button class="${state.threadView === 'reminders' ? 'active' : ''}" data-tab="reminders">Reminders</button>
     <button class="${state.threadView === 'watch' ? 'active' : ''}" data-tab="watch">Watch</button>
-    <button class="${state.threadView === 'archive' ? 'active' : ''}" data-tab="archive">Archive</button>
   </div>`;
-  const clearBtn = `<button class="clear-chat-btn" id="clearChatBtn" title="Archive chat">${icon.x(14)}</button>`;
-  header.innerHTML = `<button class="mobile-back" id="mobileBackBtn">${icon.arrowLeft(16)}</button><span>${esc(state.selected)}</span>${headerBadge}${tabs}${clearBtn}`;
+  header.innerHTML = `<button class="mobile-back" id="mobileBackBtn">${icon.arrowLeft(16)}</button><span>${esc(state.selected)}</span>${headerBadge}${tabs}`;
   document.getElementById('mobileBackBtn').onclick = mobileBack;
-  document.getElementById('clearChatBtn').onclick = () => _archiveChat(state.selected);
   header.querySelectorAll('.thread-tabs button').forEach(btn => {
     btn.onclick = () => { state.editingPersona = false; state.threadView = btn.dataset.tab; renderThread(); };
   });
 
   const view = state.threadView;
-  messages.style.display = (view === 'messages' || view === 'archive') ? 'flex' : 'none';
+  messages.style.display = view === 'messages' ? 'flex' : 'none';
   personaPanel.style.display = view === 'persona' ? 'block' : 'none';
   reminderPanel.style.display = view === 'reminders' ? 'flex' : 'none';
   watchPanel.style.display = view === 'watch' ? 'flex' : 'none';
@@ -159,11 +153,6 @@ export function renderThread() {
 
   if (view === 'watch') {
     document.getElementById('watchPanel').start(state.selected);
-    return;
-  }
-
-  if (view === 'archive') {
-    renderArchive();
     return;
   }
 

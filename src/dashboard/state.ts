@@ -41,7 +41,7 @@ export const state = {
 //   'agent-selected'      — selected agent changed { name }
 //   'message-added'       — new message appended { agent, message }
 //   'message-withdrawn'   — message withdrawn { agent, id }
-//   'thread-changed'      — thread needs re-render (tab switch, archive)
+//   'thread-changed'      — thread needs re-render (tab switch)
 //   'connection-changed'  — WebSocket connected/disconnected
 //   'unread-changed'      — unread counts changed { agent }
 //   'indicators-changed'  — agent indicators changed { agent }

@@ -1,6 +1,6 @@
 /**
  * Message I/O module.
- * Send messages, upload files, queue status updates, archive/unarchive.
+ * Send messages, upload files, queue status updates.
  *
  * Exports:
  *   setup({ handleAuthError, getActiveTopic, renderThread, voiceState }) — wire deps
@@ -9,9 +9,6 @@
  *   handleFileUpload(files, msg)   — upload multiple files with UI
  *   updateSendability()            — enable/disable send based on agent state
  *   handleQueueUpdate(message)     — update delivery status badge
- *   archiveChat(agentName)         — archive messages
- *   unarchiveChat(agentName)       — restore archived messages
- *   renderArchive()                — render archived messages view
  */
 
 import { state, authHeaders, getToken } from '/dashboard/assets/state.ts';
@@ -61,109 +58,6 @@ export function handleQueueUpdate(message) {
     badge.innerHTML = message.status === 'delivered' ? icon.check(12) + ' delivered' :
                       message.status === 'failed' ? icon.x(12) + ' failed' :
                       icon.dots(12) + ' sending';
-  }
-}
-
-// ── Archive / Restore ──
-
-export async function archiveChat(agentName) {
-  if (!agentName) return;
-  try {
-    const res = await fetch(`/api/dashboard/messages/${encodeURIComponent(agentName)}`, {
-      method: 'DELETE',
-      headers: authHeaders(),
-    });
-    if (res.status === 401) { _handleAuthError(); return; }
-    if (res.ok) {
-      state.threads[agentName] = [];
-      _renderThread();
-    }
-  } catch (err) {
-    console.error('Archive chat failed:', err);
-  }
-}
-
-export async function unarchiveChat(agentName) {
-  if (!agentName) return;
-  try {
-    const res = await fetch(`/api/dashboard/messages/${encodeURIComponent(agentName)}/unarchive`, {
-      method: 'POST',
-      headers: authHeaders(),
-    });
-    if (res.status === 401) { _handleAuthError(); return; }
-    if (res.ok) {
-      const threadsRes = await fetch(`/api/dashboard/threads?agent=${encodeURIComponent(agentName)}`, {
-        headers: authHeaders(),
-      });
-      if (threadsRes.ok) {
-        const threads = await threadsRes.json();
-        state.threads[agentName] = threads[agentName] || [];
-      }
-      state.threadView = 'messages';
-      _renderThread();
-    }
-  } catch (err) {
-    console.error('Unarchive failed:', err);
-  }
-}
-
-export async function renderArchive() {
-  const messages = document.getElementById('threadMessages');
-  if (!state.selected) return;
-  messages.innerHTML = '<div class="thread-empty">Loading archive...</div>';
-  try {
-    const res = await fetch(`/api/dashboard/threads?agent=${encodeURIComponent(state.selected)}&archived=1`, {
-      headers: authHeaders(),
-    });
-    if (!res.ok) { messages.innerHTML = '<div class="thread-empty">Failed to load archive</div>'; return; }
-    const threads = await res.json();
-    const thread = threads[state.selected] || [];
-    if (thread.length === 0) {
-      messages.innerHTML = '<div class="thread-empty">No archived messages</div>';
-      return;
-    }
-    messages.innerHTML = '';
-    const restoreBar = document.createElement('div');
-    restoreBar.style.cssText = 'padding:8px 12px;text-align:center';
-    restoreBar.innerHTML = `<button onclick="document.dispatchEvent(new CustomEvent('unarchive-chat'))" style="padding:6px 16px;border-radius:6px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:13px;cursor:pointer">Restore to Messages</button>`;
-    messages.appendChild(restoreBar);
-    for (const msg of thread) {
-      const div = document.createElement('div');
-      const isSystem = msg.message && msg.message.startsWith('[system]');
-      const isUpload = msg.topic === 'file-upload' && msg.direction === 'to_agent';
-      if (isSystem) {
-        div.className = 'msg system-msg';
-      } else if (isUpload) {
-        div.className = 'msg to-agent file-upload';
-      } else {
-        div.className = `msg ${msg.direction === 'to_agent' ? 'to-agent' : 'from-agent'}`;
-      }
-      if (msg.withdrawn) div.classList.add('withdrawn');
-      const fromLabel = isSystem ? 'system' : (msg.sourceAgent || (msg.direction === 'to_agent' ? 'dashboard' : state.selected));
-      const toLabel = msg.targetAgent || (msg.direction === 'to_agent' ? state.selected : 'dashboard');
-      const time = new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      const topicBadge = msg.topic ? `<span class="msg-topic">${esc(msg.topic)}</span>` : '';
-      const routeStr = `${esc(fromLabel)} ${icon.arrowRightSmall(12)} ${esc(toLabel)}`;
-      const displayMsg = isSystem ? msg.message.replace(/^\[system\]\s*/, '') : msg.message;
-      const statusHtml = (msg.direction === 'to_agent' && msg.queueId)
-        ? `<span class="msg-status ${msg.deliveryStatus || 'pending'}" data-queue-id="${msg.queueId}">${
-            msg.deliveryStatus === 'delivered' ? icon.check(12) + ' delivered' :
-            msg.deliveryStatus === 'failed' ? icon.x(12) + ' failed' :
-            icon.dots(12) + ' sending'
-          }</span>`
-        : '';
-      const headerHtml = `<div class="msg-header"><span class="msg-sender">${routeStr}</span>${topicBadge}<span class="msg-meta"><span class="msg-time">${time}</span>${statusHtml}</span></div>`;
-      if (isUpload) {
-        div.innerHTML = `${headerHtml}<div class="file-info"><span class="file-icon">${icon.paperclip(14)}</span> ${esc(displayMsg)}</div>`;
-      } else {
-        div.innerHTML = `${headerHtml}<div class="msg-body">${renderMarkdown(esc(displayMsg))}</div>`;
-      }
-      messages.appendChild(div);
-    }
-    messages.scrollTop = messages.scrollHeight;
-  } catch (err) {
-    console.error('Archive load failed:', err);
-    messages.innerHTML = '<div class="thread-empty">Failed to load archive</div>';
   }
 }
 

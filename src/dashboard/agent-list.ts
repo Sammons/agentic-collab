@@ -141,6 +141,9 @@ export function renderAgents() {
     c.classList.toggle('active', c.dataset.filter === state.quickFilter);
   });
 
+  // Toggle filtered class on agent list — disables drag handles via CSS
+  list.classList.toggle('filtered', isFiltered());
+
   // Group agents
   const groups = new Map();
   for (const agent of filtered) {
@@ -462,6 +465,8 @@ function handleAgentListEvent(e) {
 
 // ── Drag-Drop ──
 
+function isFiltered() { return !!(state.quickFilter || state.searchFilter); }
+
 let draggedAgent = null;
 let draggedGroup = null;
 
@@ -597,6 +602,7 @@ export function initAgentListEvents() {
   // ── Desktop Drag-Drop ──
 
   agentListEl.addEventListener('dragstart', (e) => {
+    if (isFiltered()) { e.preventDefault(); return; }
     const card = e.target.closest('.agent-card[data-agent]');
     const header = e.target.closest('.agent-group-header[data-group]');
     if (card) {
@@ -721,6 +727,7 @@ export function initAgentListEvents() {
   // ── Touch Drag (mobile) ──
 
   agentListEl.addEventListener('touchstart', (e) => {
+    if (isFiltered()) return;
     const handle = e.target.closest('.drag-handle');
     if (!handle) return;
     const card = handle.closest('.agent-card[data-agent]');

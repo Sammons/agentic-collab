@@ -73,10 +73,9 @@ import '/dashboard/assets/message-list.ts';
 import '/dashboard/assets/message-input.ts';
 import '/dashboard/assets/watch-panel.ts';
 import '/dashboard/assets/reminder-panel.ts';
-import '/dashboard/assets/archive-panel.ts';
 import '/dashboard/assets/settings.ts';
 import { agentAction, openCreateAgentModal, setup as setupLifecycle } from '/dashboard/assets/agent-lifecycle.ts';
-import { sendMessage, uploadFile, handleFileUpload, updateSendability, handleQueueUpdate, archiveChat, unarchiveChat, setup as setupMessageIO } from '/dashboard/assets/message-io.ts';
+import { sendMessage, uploadFile, handleFileUpload, updateSendability, handleQueueUpdate, setup as setupMessageIO } from '/dashboard/assets/message-io.ts';
 import { voiceState, initVoice, initCommandPalette, setup as setupVoicePalette } from '/dashboard/assets/voice-palette.ts';
 import { handleAuthError, connect, fetchEngineUsage, setup as setupConnection } from '/dashboard/assets/connection.ts';
 import { renderThread, getActiveTopic, updatePageTitle, setup as setupThread } from '/dashboard/assets/thread.ts';
@@ -107,17 +106,10 @@ import { renderAgents, selectAgent, patchAgentCard, updateAgent, addMessage, han
   setupConnection({ renderAgents, renderThread, updatePageTitle, updateAgent, addMessage, handleMessageWithdrawn, handleQueueUpdate, patchAgentCard });
 
   // Wire thread/persona module dependencies
-  setupThread({ handleAuthError, updateSendability, archiveChat });
+  setupThread({ handleAuthError, updateSendability });
 
   // Wire agent-lifecycle module dependencies
   setupLifecycle({ handleAuthError, selectAgent });
-
-  // archiveChat, unarchiveChat — imported from message-io.js
-  document.addEventListener('unarchive-chat', () => {
-    if (state.selected) unarchiveChat(state.selected);
-  });
-
-  // sendMessage, uploadFile, handleFileUpload, showSendError — imported from message-io.js
 
   // Wire message-input component events
   const msgInputEl = document.getElementById('threadInput');

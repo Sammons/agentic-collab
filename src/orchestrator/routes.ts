@@ -518,19 +518,8 @@ route('POST', '/api/dashboard/reply', async (req, res, _match, ctx) => {
 route('GET', '/api/dashboard/threads', async (req, res, _match, ctx) => {
   const url = new URL(req.url!, `http://${req.headers.host}`);
   const agent = url.searchParams.get('agent') ?? undefined;
-  const archived = url.searchParams.get('archived') === '1';
-  const threads = ctx.db.getDashboardThreads(agent, { archived });
+  const threads = ctx.db.getDashboardThreads(agent);
   json(res, 200, threads);
-});
-
-route('DELETE', '/api/dashboard/messages/:agent', async (_req, res, match, ctx) => {
-  const agentName = match.pathname.groups['agent']!;
-  const agent = ctx.db.getAgent(agentName);
-  if (!agent) return json(res, 404, { error: 'Agent not found' });
-
-  ctx.db.clearDashboardMessages(agentName);
-  ctx.db.clearPendingMessages(agentName);
-  json(res, 200, { ok: true });
 });
 
 route('PUT', '/api/dashboard/read-cursor', async (req, res, _match, ctx) => {
@@ -539,15 +528,6 @@ route('PUT', '/api/dashboard/read-cursor', async (req, res, _match, ctx) => {
     return json(res, 400, { error: 'agent (string) required' });
   }
   ctx.db.updateReadCursor(body.agent as string);
-  json(res, 200, { ok: true });
-});
-
-route('POST', '/api/dashboard/messages/:agent/unarchive', async (_req, res, match, ctx) => {
-  const agentName = match.pathname.groups['agent']!;
-  const agent = ctx.db.getAgent(agentName);
-  if (!agent) return json(res, 404, { error: 'Agent not found' });
-
-  ctx.db.unarchiveDashboardMessages(agentName);
   json(res, 200, { ok: true });
 });
 
@@ -709,6 +689,24 @@ route('DELETE', '/api/engine-configs/:name', async (_req, res, match, ctx) => {
   if (!deleted) return json(res, 404, { error: 'Engine config not found' });
   ctx.wss.broadcast(JSON.stringify({ type: 'engine_config_deleted', name }));
   json(res, 200, { ok: true });
+});
+
+route('POST', '/api/engine-configs/reset-defaults', async (_req, res, _match, ctx) => {
+  const { DEFAULT_ENGINE_CONFIGS } = await import('./default-engine-configs.ts');
+  const results: string[] = [];
+  for (const config of DEFAULT_ENGINE_CONFIGS) {
+    const existing = ctx.db.getEngineConfig(config.name);
+    if (existing) {
+      ctx.db.updateEngineConfig(config.name, config);
+      results.push(`updated: ${config.name}`);
+    } else {
+      ctx.db.createEngineConfig(config);
+      results.push(`created: ${config.name}`);
+    }
+  }
+  const configs = ctx.db.listEngineConfigs();
+  ctx.wss.broadcast(JSON.stringify({ type: 'init', engineConfigs: configs }));
+  json(res, 200, { ok: true, results });
 });
 
 // ── Personas ──
