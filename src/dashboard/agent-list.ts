@@ -790,10 +790,12 @@ export function initAgentListEvents() {
     const chip = e.target.closest('.filter-chip');
     if (!chip) return;
     const f = chip.dataset.filter;
-    state.quickFilter = state.quickFilter === f ? null : f;
+    const wasActive = state.quickFilter === f;
+    state.quickFilter = wasActive ? null : f;
     document.querySelectorAll('.filter-chip').forEach(c => {
       c.classList.toggle('active', c.dataset.filter === state.quickFilter);
     });
-    applySearchFilter();
+    // Full rebuild when toggling filters (groups may need to appear/disappear)
+    renderAgents();
   });
 }
