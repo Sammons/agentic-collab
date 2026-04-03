@@ -528,6 +528,68 @@ cmd('pages', 'collab pages {list|delete}', 'Manage published pages', async (args
   }
 });
 
+// ── Data Stores ──
+
+cmd('db', 'collab db {create|query|schema|list|delete}', 'Manage agent data stores', async (args) => {
+  const sub = args[0];
+
+  if (sub === 'create') {
+    const name = args[1];
+    if (!name) { console.error('usage: collab db create <name>'); process.exit(1); }
+    const agent = agentName() ?? undefined;
+    const store = await api('POST', '/api/stores', { name, agent });
+    console.log(`created store: ${store.name}`);
+  }
+
+  else if (sub === 'query') {
+    const name = args[1];
+    const sql = args.slice(2).join(' ');
+    if (!name || !sql) { console.error('usage: collab db query <name> <sql>'); process.exit(1); }
+    const result = await api('POST', `/api/stores/${encodeURIComponent(name)}/query`, { sql });
+    console.log(JSON.stringify(result, null, 2));
+  }
+
+  else if (sub === 'schema') {
+    const name = args[1];
+    if (!name) { console.error('usage: collab db schema <name>'); process.exit(1); }
+    const schema = await api('GET', `/api/stores/${encodeURIComponent(name)}/schema`);
+    if (Object.keys(schema).length === 0) {
+      console.log('No tables');
+    } else {
+      for (const [table, cols] of Object.entries(schema)) {
+        console.log(`${table}:`);
+        for (const col of cols) {
+          const flags = [];
+          if (col.pk) flags.push('PK');
+          if (col.notnull) flags.push('NOT NULL');
+          console.log(`  ${col.name} ${col.type}${flags.length ? ' (' + flags.join(', ') + ')' : ''}`);
+        }
+      }
+    }
+  }
+
+  else if (!sub || sub === 'list') {
+    const stores = await api('GET', '/api/stores');
+    if (!Array.isArray(stores) || stores.length === 0) { console.log('No data stores'); return; }
+    for (const s of stores) {
+      console.log(`  ${s.name.padEnd(30)} ${(s.agent ?? '-').padEnd(20)}  ${s.updatedAt}`);
+    }
+  }
+
+  else if (sub === 'delete') {
+    const name = args[1];
+    if (!name) { console.error('usage: collab db delete <name>'); process.exit(1); }
+    await api('DELETE', `/api/stores/${encodeURIComponent(name)}`);
+    console.log(`deleted store: ${name}`);
+  }
+
+  else {
+    console.error(`unknown subcommand: ${sub}`);
+    console.error('usage: collab db {create|query|schema|list|delete}');
+    process.exit(1);
+  }
+});
+
 // ── Main ──
 
 function showHelp() {

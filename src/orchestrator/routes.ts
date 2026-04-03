@@ -9,6 +9,7 @@ import { pipeline } from 'node:stream/promises';
 import { timingSafeEqual } from 'node:crypto';
 import { readdirSync, readFileSync, writeFileSync, mkdirSync, unlinkSync, existsSync, rmSync, statSync, createWriteStream } from 'node:fs';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { renderMarkdown, wrapInHtml, DOC_PAGES } from '../docs/render.ts';
 import { hostname } from 'node:os';
 import type { Database } from './database.ts';
@@ -59,6 +60,7 @@ export type RouteContext = {
   voiceEnabled: boolean;
   accountStore: import('./accounts.ts').AccountStore;
   pagesDir: string;
+  storesDir: string;
 };
 
 /**
@@ -879,6 +881,172 @@ route('GET', '/pages/:slug/:path+', async (_req, res, match, ctx) => {
   if (!existsSync(fullPath)) return json(res, 404, { error: 'File not found' });
   res.writeHead(200, { 'Content-Type': pageMime(fullPath) });
   res.end(readFileSync(fullPath));
+});
+
+// ── Data Stores ──
+
+const MAX_STORE_BYTES = 10 * 1024 * 1024; // 10 MB
+const MAX_STORE_ROWS = 1000;
+
+/** SQL statements allowed in store queries. */
+const ALLOWED_SQL_RE = /^\s*(SELECT|INSERT|UPDATE|DELETE|CREATE\s+TABLE|ALTER\s+TABLE|DROP\s+TABLE)\b/i;
+
+/** Dangerous statements that must be rejected outright. */
+const DENIED_SQL_RE = /\b(ATTACH|DETACH)\b/i;
+
+/** PRAGMA whitelist — only table_info is allowed. */
+const PRAGMA_TABLE_INFO_RE = /^\s*PRAGMA\s+table_info\s*\(/i;
+
+function validateStoreSql(sql: string): string | null {
+  const trimmed = sql.trim();
+  if (!trimmed) return 'Empty SQL statement';
+
+  // Check for multiple statements (semicolons followed by more content)
+  const stmtParts = trimmed.split(';').filter(s => s.trim().length > 0);
+  if (stmtParts.length > 1) return 'Multiple statements not allowed';
+
+  // Check for denied keywords
+  if (DENIED_SQL_RE.test(trimmed)) return 'ATTACH/DETACH not allowed';
+
+  // Allow PRAGMA table_info specifically
+  if (/^\s*PRAGMA\b/i.test(trimmed)) {
+    if (!PRAGMA_TABLE_INFO_RE.test(trimmed)) return 'Only PRAGMA table_info is allowed';
+    return null;
+  }
+
+  // Check against allowed statement types
+  if (!ALLOWED_SQL_RE.test(trimmed)) return 'Only SELECT, INSERT, UPDATE, DELETE, CREATE TABLE, ALTER TABLE, DROP TABLE are allowed';
+
+  return null;
+}
+
+function openStoreDb(storesDir: string, name: string): DatabaseSync {
+  const dbPath = join(storesDir, `${name}.db`);
+  const storeDb = new DatabaseSync(dbPath);
+  storeDb.exec('PRAGMA journal_mode = WAL');
+  storeDb.exec('PRAGMA busy_timeout = 5000');
+  return storeDb;
+}
+
+function checkStoreSize(storesDir: string, name: string): boolean {
+  const dbPath = join(storesDir, `${name}.db`);
+  if (!existsSync(dbPath)) return true;
+  const stat = statSync(dbPath);
+  return stat.size <= MAX_STORE_BYTES;
+}
+
+route('POST', '/api/stores', async (req, res, _match, ctx) => {
+  const body = await readJson(req);
+  const name = body.name as string | undefined;
+  const agent = (body.agent as string | undefined) ?? null;
+
+  if (!name || !SLUG_RE.test(name)) return json(res, 400, { error: 'Invalid store name (kebab-case, 2-64 chars)' });
+
+  // Create the SQLite file to make it real
+  const storeDb = openStoreDb(ctx.storesDir, name);
+  storeDb.close();
+
+  const record = ctx.db.createStore({ name, agent: agent ?? undefined });
+  ctx.wss.broadcast(JSON.stringify({ type: 'stores_update', stores: ctx.db.listStores() }));
+  json(res, 201, record);
+});
+
+route('GET', '/api/stores', async (_req, res, _match, ctx) => {
+  json(res, 200, ctx.db.listStores());
+});
+
+route('GET', '/api/stores/:name/schema', async (_req, res, match, ctx) => {
+  const name = match.pathname.groups['name']!;
+  if (!SLUG_RE.test(name)) return json(res, 400, { error: 'Invalid store name' });
+
+  const record = ctx.db.getStore(name);
+  if (!record) return json(res, 404, { error: 'Store not found' });
+
+  const dbPath = join(ctx.storesDir, `${name}.db`);
+  if (!existsSync(dbPath)) return json(res, 404, { error: 'Store file not found' });
+
+  const storeDb = openStoreDb(ctx.storesDir, name);
+  try {
+    const tables = storeDb.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all() as Array<Record<string, unknown>>;
+    const schema: Record<string, Array<{ name: string; type: string; notnull: boolean; pk: boolean }>> = {};
+    for (const t of tables) {
+      const tableName = t['name'] as string;
+      const cols = storeDb.prepare(`PRAGMA table_info("${tableName.replace(/"/g, '""')}")`).all() as Array<Record<string, unknown>>;
+      schema[tableName] = cols.map(c => ({
+        name: c['name'] as string,
+        type: c['type'] as string,
+        notnull: (c['notnull'] as number) === 1,
+        pk: (c['pk'] as number) > 0,
+      }));
+    }
+    json(res, 200, schema);
+  } finally {
+    storeDb.close();
+  }
+});
+
+route('POST', '/api/stores/:name/query', async (req, res, match, ctx) => {
+  const name = match.pathname.groups['name']!;
+  if (!SLUG_RE.test(name)) return json(res, 400, { error: 'Invalid store name' });
+
+  const record = ctx.db.getStore(name);
+  if (!record) return json(res, 404, { error: 'Store not found' });
+
+  const body = await readJson(req);
+  const sql = body.sql as string | undefined;
+  const params = (body.params as unknown[]) ?? [];
+
+  if (!sql) return json(res, 400, { error: 'sql is required' });
+  const sqlErr = validateStoreSql(sql);
+  if (sqlErr) return json(res, 400, { error: sqlErr });
+
+  // Size check for mutating operations
+  const isRead = /^\s*SELECT\b/i.test(sql.trim());
+  if (!isRead && !checkStoreSize(ctx.storesDir, name)) {
+    return json(res, 413, { error: `Store exceeds ${MAX_STORE_BYTES / 1024 / 1024}MB limit` });
+  }
+
+  const dbPath = join(ctx.storesDir, `${name}.db`);
+  if (!existsSync(dbPath)) return json(res, 404, { error: 'Store file not found' });
+
+  const storeDb = openStoreDb(ctx.storesDir, name);
+  try {
+    const trimmed = sql.trim();
+    if (/^\s*SELECT\b/i.test(trimmed) || PRAGMA_TABLE_INFO_RE.test(trimmed)) {
+      const stmt = storeDb.prepare(trimmed);
+      const rows = stmt.all(...params) as unknown[];
+      const limited = rows.slice(0, MAX_STORE_ROWS);
+      json(res, 200, { rows: limited, truncated: rows.length > MAX_STORE_ROWS });
+    } else {
+      const stmt = storeDb.prepare(trimmed);
+      const result = stmt.run(...params);
+      ctx.db.touchStore(name);
+      json(res, 200, { changes: result.changes, lastInsertRowid: Number(result.lastInsertRowid) });
+    }
+  } catch (err) {
+    json(res, 400, { error: (err as Error).message });
+  } finally {
+    storeDb.close();
+  }
+});
+
+route('DELETE', '/api/stores/:name', async (_req, res, match, ctx) => {
+  const name = match.pathname.groups['name']!;
+  if (!SLUG_RE.test(name)) return json(res, 400, { error: 'Invalid store name' });
+
+  // Remove the SQLite file
+  const dbPath = join(ctx.storesDir, `${name}.db`);
+  if (existsSync(dbPath)) unlinkSync(dbPath);
+  // Also remove WAL/SHM if present
+  const walPath = `${dbPath}-wal`;
+  const shmPath = `${dbPath}-shm`;
+  if (existsSync(walPath)) unlinkSync(walPath);
+  if (existsSync(shmPath)) unlinkSync(shmPath);
+
+  const deleted = ctx.db.deleteStore(name);
+  if (!deleted) return json(res, 404, { error: 'Store not found' });
+  ctx.wss.broadcast(JSON.stringify({ type: 'stores_update', stores: ctx.db.listStores() }));
+  json(res, 200, { ok: true });
 });
 
 // ── Personas ──

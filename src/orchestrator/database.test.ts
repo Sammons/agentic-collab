@@ -846,4 +846,72 @@ describe('Database', () => {
       db.updateAgentCapturedVar('non-existent-agent', 'FOO', 'bar');
     });
   });
+
+  describe('data stores', () => {
+    let sDb: Database;
+    let sTmpDir: string;
+
+    before(() => {
+      sTmpDir = mkdtempSync(join(tmpdir(), 'agentic-stores-test-'));
+      sDb = new Database(join(sTmpDir, 'stores.db'));
+    });
+
+    after(() => {
+      sDb.close();
+      rmSync(sTmpDir, { recursive: true, force: true });
+    });
+
+    it('creates and retrieves a store', () => {
+      const store = sDb.createStore({ name: 'test-store', agent: 'my-agent' });
+      assert.equal(store.name, 'test-store');
+      assert.equal(store.agent, 'my-agent');
+      assert.ok(store.createdAt);
+      assert.ok(store.updatedAt);
+
+      const retrieved = sDb.getStore('test-store');
+      assert.ok(retrieved);
+      assert.equal(retrieved!.name, 'test-store');
+      assert.equal(retrieved!.agent, 'my-agent');
+    });
+
+    it('creates a store without agent', () => {
+      const store = sDb.createStore({ name: 'no-agent-store' });
+      assert.equal(store.name, 'no-agent-store');
+      assert.equal(store.agent, null);
+    });
+
+    it('upserts on conflict', () => {
+      sDb.createStore({ name: 'upsert-store', agent: 'first' });
+      const updated = sDb.createStore({ name: 'upsert-store', agent: 'second' });
+      assert.equal(updated.agent, 'second');
+    });
+
+    it('lists stores ordered by updated_at desc', () => {
+      const stores = sDb.listStores();
+      assert.ok(stores.length >= 2);
+      assert.ok(stores.some(s => s.name === 'test-store'));
+    });
+
+    it('deletes a store', () => {
+      sDb.createStore({ name: 'delete-me' });
+      assert.ok(sDb.getStore('delete-me'));
+      assert.equal(sDb.deleteStore('delete-me'), true);
+      assert.equal(sDb.getStore('delete-me'), null);
+      assert.equal(sDb.deleteStore('delete-me'), false);
+    });
+
+    it('returns null for non-existent store', () => {
+      assert.equal(sDb.getStore('nonexistent'), null);
+    });
+
+    it('touchStore updates the updated_at timestamp', () => {
+      sDb.createStore({ name: 'touch-test' });
+      const before = sDb.getStore('touch-test')!.updatedAt;
+      // Force a slight delay by setting updated_at to the past
+      sDb.rawDb.prepare("UPDATE data_stores SET updated_at = '2020-01-01T00:00:00Z' WHERE name = 'touch-test'").run();
+      sDb.touchStore('touch-test');
+      const after = sDb.getStore('touch-test')!.updatedAt;
+      assert.notEqual(after, '2020-01-01T00:00:00Z');
+    });
+  });
 });

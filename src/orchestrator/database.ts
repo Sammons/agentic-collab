@@ -19,6 +19,7 @@ import type {
   Reminder,
   ReminderStatus,
   PageRecord,
+  DataStoreRecord,
 } from '../shared/types.ts';
 import {
   configColumnMap,
@@ -244,6 +245,16 @@ export class Database {
         this.db.exec('ALTER TABLE engine_configs ADD COLUMN detection TEXT');
       }
     }
+
+    // Create data_stores table
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS data_stores (
+        name       TEXT PRIMARY KEY,
+        agent      TEXT,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+      )
+    `);
   }
 
   /** Expose raw handle for LockManager (shares same DB connection). */
@@ -937,6 +948,39 @@ export class Database {
     const result = this.db.prepare('DELETE FROM pages WHERE slug = ?').run(slug);
     return result.changes > 0;
   }
+
+  // ── Data Stores ──
+
+  createStore(opts: { name: string; agent?: string }): DataStoreRecord {
+    this.db.prepare(`
+      INSERT INTO data_stores (name, agent)
+      VALUES (?, ?)
+      ON CONFLICT(name) DO UPDATE SET
+        agent = excluded.agent,
+        updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
+    `).run(opts.name, opts.agent ?? null);
+    return this.getStore(opts.name)!;
+  }
+
+  getStore(name: string): DataStoreRecord | null {
+    const row = this.db.prepare('SELECT * FROM data_stores WHERE name = ?').get(name) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    return mapStoreRow(row);
+  }
+
+  listStores(): DataStoreRecord[] {
+    const rows = this.db.prepare('SELECT * FROM data_stores ORDER BY updated_at DESC').all() as Array<Record<string, unknown>>;
+    return rows.map(mapStoreRow);
+  }
+
+  touchStore(name: string): void {
+    this.db.prepare("UPDATE data_stores SET updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE name = ?").run(name);
+  }
+
+  deleteStore(name: string): boolean {
+    const result = this.db.prepare('DELETE FROM data_stores WHERE name = ?').run(name);
+    return result.changes > 0;
+  }
 }
 
 // ── Row Mappers ──
@@ -1080,6 +1124,15 @@ function mapPageRow(row: Record<string, unknown>): PageRecord {
     agent: (row['agent'] as string | null) ?? null,
     fileCount: (row['file_count'] as number) ?? 0,
     totalBytes: (row['total_bytes'] as number) ?? 0,
+    createdAt: row['created_at'] as string,
+    updatedAt: row['updated_at'] as string,
+  };
+}
+
+function mapStoreRow(row: Record<string, unknown>): DataStoreRecord {
+  return {
+    name: row['name'] as string,
+    agent: (row['agent'] as string | null) ?? null,
     createdAt: row['created_at'] as string,
     updatedAt: row['updated_at'] as string,
   };

@@ -37,10 +37,12 @@ if (!ORCHESTRATOR_SECRET) {
   console.log(`[orchestrator] Auth enabled (secret from ${process.env['ORCHESTRATOR_SECRET'] ? 'env' : getSecretPath()})`);
 }
 
-// Ensure DB + pages directories exist
+// Ensure DB + pages + stores directories exist
 mkdirSync(dirname(DB_PATH), { recursive: true });
 const PAGES_DIR = join(dirname(DB_PATH), 'pages');
 mkdirSync(PAGES_DIR, { recursive: true });
+const STORES_DIR = join(dirname(DB_PATH), 'stores');
+mkdirSync(STORES_DIR, { recursive: true });
 
 const db = new Database(DB_PATH);
 const wss = new WebSocketServer();
@@ -236,6 +238,7 @@ const routeCtx: RouteContext = {
   voiceEnabled: !!voiceOpts,
   accountStore,
   pagesDir: PAGES_DIR,
+  storesDir: STORES_DIR,
 };
 
 const router = createRouter(routeCtx);
@@ -312,6 +315,7 @@ wss.onConnect((client) => {
   const accounts = accountStore.list();
   const engineConfigs = db.listEngineConfigs();
   const pages = db.listPages();
+  const stores = db.listStores();
   wss.send(client, JSON.stringify({
     type: 'init',
     agents,
@@ -322,6 +326,7 @@ wss.onConnect((client) => {
     indicators,
     accounts,
     pages,
+    stores,
   }));
 });
 

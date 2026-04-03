@@ -105,6 +105,15 @@ export type PageRecord = {
   updatedAt: string;
 };
 
+// ── Data Stores ──
+
+export type DataStoreRecord = {
+  name: string;
+  agent: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type EngineConfigRecord = {
   name: string;
   engine: string;
@@ -254,6 +263,7 @@ export type WsInitEvent = {
   proxies: ProxyRegistration[];
   unreadCounts: Record<string, number>;
   indicators?: Record<string, ActiveIndicator[]>;
+  stores?: DataStoreRecord[];
 };
 
 export type WsAgentUpdateEvent = {
@@ -282,7 +292,12 @@ export type WsIndicatorUpdateEvent = {
   indicators: ActiveIndicator[];
 };
 
-export type WsEvent = WsInitEvent | WsAgentUpdateEvent | WsMessageEvent | WsProxyEvent | WsQueueUpdateEvent | WsIndicatorUpdateEvent;
+export type WsStoresUpdateEvent = {
+  type: 'stores_update';
+  stores: DataStoreRecord[];
+};
+
+export type WsEvent = WsInitEvent | WsAgentUpdateEvent | WsMessageEvent | WsProxyEvent | WsQueueUpdateEvent | WsIndicatorUpdateEvent | WsStoresUpdateEvent;
 
 // ── Proxy API ──
 

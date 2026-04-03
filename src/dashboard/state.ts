@@ -27,6 +27,7 @@ export const state = {
   editingPersona: false,
   indicators: {},
   pages: [],
+  stores: [],
   // Internal tracking for progressive message loading
   _threadRenderedFrom: 0,
   _renderedAgent: null,
