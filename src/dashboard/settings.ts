@@ -418,6 +418,27 @@ export class SettingsPanel extends HTMLElement {
     }
     html += '</div>';
 
+    // ── Data Stores ──
+    html += '<div class="settings-section">';
+    html += '<h3>Data Stores</h3>';
+    const stores = state.stores || [];
+    if (stores.length === 0) {
+      html += '<p class="settings-hint">No data stores. Agents can create stores via <code>collab store create &lt;name&gt;</code></p>';
+    } else {
+      for (const store of stores) {
+        const updated = store.updatedAt ? new Date(store.updatedAt).toLocaleDateString() : '';
+        html += '<div class="config-card">';
+        html += `<div class="config-header">`;
+        html += `<span class="config-name">${esc(store.name)}</span>`;
+        html += `<span class="config-actions">`;
+        html += `<span style="font-size:11px;color:var(--text-dim)">${updated ? 'updated ' + esc(updated) : ''}${store.agent ? (updated ? ' · ' : '') + esc(store.agent) : ''}</span>`;
+        html += `<button class="config-action-btn config-delete-btn" data-store-delete="${esc(store.name)}">${icon.trash(12)} Delete</button>`;
+        html += `</span></div>`;
+        html += '</div>';
+      }
+    }
+    html += '</div>';
+
     html += '</div>';
     this.innerHTML = html;
     this._bindEvents();
@@ -457,6 +478,25 @@ export class SettingsPanel extends HTMLElement {
             const res = await fetch(`/api/pages/${encodeURIComponent(slug)}`, { method: 'DELETE', headers: authHeaders() });
             if (res.ok) {
               state.pages = state.pages.filter(p => p.slug !== slug);
+              showToast('Deleted', 'success');
+              this.render();
+            } else {
+              const b = await res.json().catch(() => null);
+              showToast(b?.error || 'Delete failed', 'error');
+            }
+          } catch { showToast('Network error', 'error'); }
+        }
+      });
+    });
+
+    this.querySelectorAll('[data-store-delete]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const name = btn.dataset.storeDelete;
+        if (await confirmAction(`Delete data store "${name}"? This removes all stored data.`)) {
+          try {
+            const res = await fetch(`/api/stores/${encodeURIComponent(name)}`, { method: 'DELETE', headers: authHeaders() });
+            if (res.ok) {
+              state.stores = state.stores.filter(s => s.name !== name);
               showToast('Deleted', 'success');
               this.render();
             } else {
