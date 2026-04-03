@@ -347,6 +347,11 @@
     white-space: nowrap;
   }
 
+  /* Mobile mic toggle — hidden on desktop, shown on mobile via responsive.css */
+  .mobile-mic-btn {
+    display: none;
+  }
+
   .thread-panel.drag-over {
     outline: 2px dashed var(--accent);
     outline-offset: -4px;

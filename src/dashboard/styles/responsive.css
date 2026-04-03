@@ -136,4 +136,38 @@
     .persona-panel { padding: 14px 10px; }
     .reminder-panel { padding: 14px 10px; }
     .watch-panel { padding: 10px 8px; font-size: 11px; }
+
+    /* Mobile mic toggle button */
+    .mobile-mic-btn {
+      display: none; /* hidden until PTT mode active */
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      border: 2px solid var(--border);
+      background: var(--surface);
+      color: var(--text-dim);
+      cursor: pointer;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      flex-shrink: 0;
+      transition: all 0.15s;
+      touch-action: manipulation;
+      -webkit-touch-callout: none;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    .mobile-mic-btn.ptt-active {
+      display: flex;
+    }
+    .mobile-mic-btn.recording {
+      border-color: #e74c3c;
+      background: #e74c3c;
+      color: #fff;
+      animation: mobile-mic-pulse 1.5s ease-in-out infinite;
+    }
+    @keyframes mobile-mic-pulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(231, 76, 60, 0.4); }
+      50% { box-shadow: 0 0 0 8px rgba(231, 76, 60, 0); }
+    }
   }

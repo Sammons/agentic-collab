@@ -164,7 +164,7 @@ export async function initVoice() {
 
 // ── Voice internals ──
 
-function commitAndStopPtt() {
+export function commitAndStopPtt() {
   if (voiceState.ws && voiceState.ws.readyState === WebSocket.OPEN) {
     voiceState.ws.send(JSON.stringify({ type: 'commit' }));
   }
@@ -172,7 +172,7 @@ function commitAndStopPtt() {
   setTimeout(() => stopVoice(), 1500);
 }
 
-async function startVoice() {
+export async function startVoice() {
   if (voiceState.recording) return;
 
   // Use pre-acquired PTT stream if available, otherwise request mic

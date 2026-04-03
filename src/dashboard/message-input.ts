@@ -17,6 +17,7 @@
  */
 
 import { state } from '/dashboard/assets/state.ts';
+import { voiceState, startVoice, commitAndStopPtt } from '/dashboard/assets/voice-palette.ts';
 
 const CANT_RECEIVE = new Set(['void', 'failed', 'spawning']);
 
@@ -41,6 +42,7 @@ export class MessageInput extends HTMLElement {
         </div>
         <button class="voice-btn inactive" id="voiceBtn" title="Hold to talk (or hold Spacebar)"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z"/><path d="M19 10v2a7 7 0 01-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg></button>
       </div>
+      <button class="mobile-mic-btn" id="mobileMicBtn" title="Tap to toggle voice recording"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z"/><path d="M19 10v2a7 7 0 01-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg></button>
       <button id="interruptBtn" style="display:none">Interrupt</button>
       <button id="sendBtn" disabled>Send</button>
     `;
@@ -95,6 +97,35 @@ export class MessageInput extends HTMLElement {
       this.dispatchEvent(new CustomEvent('msg-upload', { detail: { files, message } }));
       fileInput.value = '';
     };
+
+    // Mobile mic toggle: tap-to-start, tap-to-stop
+    const mobileMicBtn = this.querySelector('#mobileMicBtn');
+    mobileMicBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      if (voiceState.mode !== 'ptt') return;
+      if (voiceState.recording) {
+        mobileMicBtn.classList.remove('recording');
+        commitAndStopPtt();
+      } else {
+        // Resume AudioContext within user gesture (required for iOS Safari)
+        if (voiceState.audioCtx && voiceState.audioCtx.state === 'suspended') {
+          voiceState.audioCtx.resume();
+        }
+        mobileMicBtn.classList.add('recording');
+        startVoice();
+      }
+    });
+    // Prevent mousedown from stealing focus/closing keyboard
+    mobileMicBtn.addEventListener('mousedown', (e) => { e.preventDefault(); });
+
+    // Sync mobile mic button state when recording stops externally
+    this._micObserver = setInterval(() => {
+      if (!voiceState.recording && mobileMicBtn.classList.contains('recording')) {
+        mobileMicBtn.classList.remove('recording');
+      }
+      // Show/hide based on PTT mode
+      mobileMicBtn.classList.toggle('ptt-active', voiceState.mode === 'ptt');
+    }, 200);
   }
 
   _emitSend() {
