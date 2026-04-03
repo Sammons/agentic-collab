@@ -4,7 +4,7 @@
  */
 
 import { createServer } from 'node:http';
-import { readFileSync, mkdirSync, watch, existsSync } from 'node:fs';
+import { readFileSync, mkdirSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { timingSafeEqual } from 'node:crypto';
 import { Database } from './database.ts';
@@ -410,35 +410,40 @@ server.listen(PORT, '0.0.0.0', async () => {
     console.error('[orchestrator] Persona sync failed:', err);
   }
 
-  // Watch persona directory for changes — re-sync and broadcast updates
+  // Poll persona directory for changes (fs.watch unreliable on Docker bind mounts)
   const personasDir = getPersonasDir();
   if (existsSync(personasDir)) {
-    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-    watch(personasDir, { persistent: false }, () => {
-      if (debounceTimer) clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(() => {
-        try {
-          const diff = syncPersonasWithDiff(db);
-          const changed = [...diff.created, ...diff.updated];
-          if (changed.length > 0) {
-            console.log(`[persona-watch] Hot-reloaded: ${changed.join(', ')}`);
-            // Broadcast updated agents to dashboard
-            const agents = db.listAgents();
-            const initPayload = JSON.stringify({
-              type: 'init',
-              agents,
-              threads: {},
-              engineConfigs: db.listEngineConfigs(),
-              indicators: {},
-            });
-            wss.broadcast(initPayload);
-          }
-        } catch (err) {
-          console.error('[persona-watch] Re-sync failed:', err);
+    let lastPersonaHash = '';
+    setInterval(() => {
+      try {
+        // Quick hash of file names + mtimes to detect changes
+        const files = readdirSync(personasDir).filter(f => f.endsWith('.md')).sort();
+        const hash = files.map(f => {
+          try { return f + ':' + statSync(join(personasDir, f)).mtimeMs; } catch { return f; }
+        }).join('|');
+        if (hash === lastPersonaHash) return;
+        if (lastPersonaHash === '') { lastPersonaHash = hash; return; } // skip first run
+        lastPersonaHash = hash;
+
+        const diff = syncPersonasWithDiff(db);
+        const changed = [...diff.created, ...diff.updated];
+        if (changed.length > 0) {
+          console.log(`[persona-watch] Hot-reloaded: ${changed.join(', ')}`);
+          const agents = db.listAgents();
+          const initPayload = JSON.stringify({
+            type: 'init',
+            agents,
+            threads: {},
+            engineConfigs: db.listEngineConfigs(),
+            indicators: {},
+          });
+          wss.broadcast(initPayload);
         }
-      }, 500);
-    });
-    console.log(`[persona-watch] Watching ${personasDir} for changes`);
+      } catch (err) {
+        console.error('[persona-watch] Re-sync failed:', err);
+      }
+    }, 5000);
+    console.log(`[persona-watch] Polling ${personasDir} every 5s for changes`);
   }
 
   // Start health monitor + usage poller + reminder dispatcher
