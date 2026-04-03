@@ -114,6 +114,7 @@ export const CONFIG_FIELDS: readonly FieldDef[] = [
   { name: 'engineConfig',        column: 'engine_config',         personaKey: 'engine_config',         kind: 'scalar', nested: false, upsertable: true,  createOnly: false },
   { name: 'customButtons',      column: 'custom_buttons',        personaKey: 'custom_buttons',        kind: 'json',   nested: false, upsertable: true,  createOnly: false, serialize: serializeCustomButtons },
   { name: 'indicators',         column: 'indicators',            personaKey: 'indicators',            kind: 'json',   nested: false, upsertable: true,  createOnly: false, serialize: serializeIndicators },
+  { name: 'icon',               column: 'icon',                  personaKey: 'icon',                  kind: 'scalar', nested: false, upsertable: true,  createOnly: false },
 ];
 
 // ── Derived Utilities ──

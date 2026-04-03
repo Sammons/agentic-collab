@@ -135,6 +135,7 @@ export type AgentRecord = {
   capturedVars: Record<string, string> | null;
   customButtons: string | null;
   indicators: string | null;
+  icon: string | null;
   version: number;
   spawnCount: number;
   createdAt: string;

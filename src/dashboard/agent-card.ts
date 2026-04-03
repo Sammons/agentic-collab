@@ -100,6 +100,7 @@ export class AgentCard extends HTMLElement {
         <button class="agent-star${isStarred ? ' starred' : ''}" data-star-agent="${esc(agent.name)}" title="Star agent">
           ${isStarred ? icon.starFilled(14) : icon.star(14)}
         </button>
+        ${agent.icon ? `<span class="agent-icon">${esc(agent.icon)}</span>` : ''}
         <span class="agent-name">${esc(agent.name)}${unreadBadge}</span>
         <span class="state-badge state-${agent.state}">${agent.state}</span>
       </div>
@@ -120,6 +121,19 @@ export class AgentCard extends HTMLElement {
       const isStarred = !!starred[agent.name];
       starBtn.className = `agent-star${isStarred ? ' starred' : ''}`;
       starBtn.innerHTML = isStarred ? icon.starFilled(14) : icon.star(14);
+    }
+    // Icon
+    let iconEl = this.querySelector('.agent-icon');
+    if (agent.icon) {
+      if (!iconEl) {
+        iconEl = document.createElement('span');
+        iconEl.className = 'agent-icon';
+        const nameEl2 = this.querySelector('.agent-name');
+        if (nameEl2) nameEl2.before(iconEl);
+      }
+      iconEl.textContent = agent.icon;
+    } else if (iconEl) {
+      iconEl.remove();
     }
     // State badge
     const badge = this.querySelector('.state-badge');

@@ -135,6 +135,10 @@
   }
   .agent-star:hover { opacity: 1; color: #f5c518; }
   .agent-star.starred { opacity: 0.8; color: #f5c518; }
+  .agent-icon {
+    font-size: 14px;
+    margin-right: 4px;
+  }
   .agent-name { font-weight: 600; font-size: 14px; }
   .state-badge {
     margin-left: auto;

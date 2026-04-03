@@ -78,7 +78,9 @@ export function updatePageTitle() {
   const unread = state.selected ? (state.unread[state.selected] || 0) : 0;
   const prefix = unread > 0 ? `(${unread}) ` : '';
   if (state.selected) {
-    document.title = `${prefix}${state.selected} — Agentic Collab`;
+    const agent = state.agents.find(a => a.name === state.selected);
+    const iconPrefix = agent?.icon ? `${agent.icon} ` : '';
+    document.title = `${prefix}${iconPrefix}${state.selected} — Agentic Collab`;
   } else {
     document.title = `${prefix}Dashboard — Agentic Collab`;
   }

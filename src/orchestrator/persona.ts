@@ -63,6 +63,8 @@ export type PersonaFrontmatter = {
   indicators?: IndicatorDefinition[];
   /** Engine config name — FK reference to engine_configs table. */
   engine_config?: string;
+  /** Emoji or short text shown on agent cards and in page title. */
+  icon?: string;
 };
 
 export type ParsedPersona = {
