@@ -434,13 +434,8 @@ export async function spawnAgent(
   const { tmuxSession, spawnCount } = phase1;
 
   // Resolve engine config defaults beneath agent-level fields
-  let effectiveCurrent = phase1.current;
-  if (phase1.current.engineConfig) {
-    const engineConfig = ctx.db.getEngineConfig(phase1.current.engineConfig);
-    if (engineConfig) {
-      effectiveCurrent = resolveEffectiveConfig(phase1.current, engineConfig);
-    }
-  }
+  const engineConfig = ctx.db.getEngineConfig(phase1.current.engine);
+  const effectiveCurrent = resolveEffectiveConfig(phase1.current, engineConfig);
   const engine = effectiveCurrent.engine;
   const permissions = effectiveCurrent.permissions;
   const hookStart = effectiveCurrent.hookStart;
@@ -584,13 +579,8 @@ export async function resumeAgent(
   const { proxyId, tmuxSession, cwd, persona, currentSessionId } = phase1;
 
   // Resolve engine config defaults beneath agent-level fields
-  let effectiveCurrent = phase1.current;
-  if (phase1.current.engineConfig) {
-    const engineConfig = ctx.db.getEngineConfig(phase1.current.engineConfig);
-    if (engineConfig) {
-      effectiveCurrent = resolveEffectiveConfig(phase1.current, engineConfig);
-    }
-  }
+  const engineConfig = ctx.db.getEngineConfig(phase1.current.engine);
+  const effectiveCurrent = resolveEffectiveConfig(phase1.current, engineConfig);
   const engine = effectiveCurrent.engine;
   const permissions = effectiveCurrent.permissions;
   const hookStart = effectiveCurrent.hookStart;
@@ -727,13 +717,8 @@ export async function suspendAgent(
   const { proxyId, tmuxSession } = phase1;
 
   // Resolve engine config defaults beneath agent-level fields
-  let effectiveCurrent = phase1.current;
-  if (phase1.current.engineConfig) {
-    const engineConfig = ctx.db.getEngineConfig(phase1.current.engineConfig);
-    if (engineConfig) {
-      effectiveCurrent = resolveEffectiveConfig(phase1.current, engineConfig);
-    }
-  }
+  const engineConfig = ctx.db.getEngineConfig(phase1.current.engine);
+  const effectiveCurrent = resolveEffectiveConfig(phase1.current, engineConfig);
   const hookExit = effectiveCurrent.hookExit;
 
   const watchdog = startWatchdog(ctx, name, 'suspending', SUSPEND_TIMEOUT_MS, proxyId, tmuxSession);
@@ -805,16 +790,8 @@ export async function destroyAgent(
     }
 
     // Clean up config profile for engines that use it (e.g. Codex)
-    // Resolve engine config to get the effective engine for adapter selection
-    let effectiveEngine = agent.engine;
-    if (agent.engineConfig) {
-      const engineConfig = ctx.db.getEngineConfig(agent.engineConfig);
-      if (engineConfig) {
-        effectiveEngine = resolveEffectiveConfig(agent, engineConfig).engine;
-      }
-    }
     if (agent.proxyId) {
-      const adapter = getAdapter(effectiveEngine);
+      const adapter = getAdapter(agent.engine);
       if (adapter.usesConfigProfile) {
         await ctx.proxyDispatch(agent.proxyId, {
           action: 'remove_codex_profile',
@@ -906,13 +883,8 @@ export async function reloadAgent(
   } = phase1;
 
   // Resolve engine config defaults beneath agent-level fields
-  let effectiveCurrent = phase1.current;
-  if (phase1.current.engineConfig) {
-    const engineConfig = ctx.db.getEngineConfig(phase1.current.engineConfig);
-    if (engineConfig) {
-      effectiveCurrent = resolveEffectiveConfig(phase1.current, engineConfig);
-    }
-  }
+  const engineConfig = ctx.db.getEngineConfig(phase1.current.engine);
+  const effectiveCurrent = resolveEffectiveConfig(phase1.current, engineConfig);
   const engine = effectiveCurrent.engine;
   const permissions = effectiveCurrent.permissions;
   const hookStart = effectiveCurrent.hookStart;
@@ -1046,13 +1018,8 @@ export async function interruptAgent(
     const proxyId = requireProxy(agent);
 
     // Resolve engine config defaults for hook fields
-    let effectiveAgent = agent;
-    if (agent.engineConfig) {
-      const engineConfig = ctx.db.getEngineConfig(agent.engineConfig);
-      if (engineConfig) {
-        effectiveAgent = resolveEffectiveConfig(agent, engineConfig);
-      }
-    }
+    const engineConfig = ctx.db.getEngineConfig(agent.engine);
+    const effectiveAgent = resolveEffectiveConfig(agent, engineConfig);
 
     // Send interrupt via hook resolver
     const interruptResult = resolveHook('interrupt', effectiveAgent.hookInterrupt, effectiveAgent);
@@ -1076,13 +1043,8 @@ export async function compactAgent(
     const proxyId = requireProxy(agent);
 
     // Resolve engine config defaults for hook fields
-    let effectiveAgent = agent;
-    if (agent.engineConfig) {
-      const engineConfig = ctx.db.getEngineConfig(agent.engineConfig);
-      if (engineConfig) {
-        effectiveAgent = resolveEffectiveConfig(agent, engineConfig);
-      }
-    }
+    const engineConfig = ctx.db.getEngineConfig(agent.engine);
+    const effectiveAgent = resolveEffectiveConfig(agent, engineConfig);
 
     // Send compact command via hook resolver
     const compactResult = resolveHook('compact', effectiveAgent.hookCompact, effectiveAgent);
@@ -1267,13 +1229,8 @@ export async function deliverToAgent(
   let error: string | null = null;
 
   // Resolve engine config defaults for hook fields
-  let effectiveAgent = agent;
-  if (agent.engineConfig) {
-    const engineConfig = ctx.db.getEngineConfig(agent.engineConfig);
-    if (engineConfig) {
-      effectiveAgent = resolveEffectiveConfig(agent, engineConfig);
-    }
-  }
+  const engineConfig = ctx.db.getEngineConfig(agent.engine);
+  const effectiveAgent = resolveEffectiveConfig(agent, engineConfig);
 
   await ctx.locks.withLock(agent.name, async () => {
     try {

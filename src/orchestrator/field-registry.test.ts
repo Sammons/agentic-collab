@@ -17,8 +17,8 @@ import {
 
 describe('field-registry', () => {
   describe('CONFIG_FIELDS', () => {
-    it('has 20 entries covering all config fields', () => {
-      assert.equal(CONFIG_FIELDS.length, 20);
+    it('has 19 entries covering all config fields', () => {
+      assert.equal(CONFIG_FIELDS.length, 19);
     });
 
     it('has unique field names', () => {
@@ -164,7 +164,7 @@ describe('field-registry', () => {
         'engine', 'model', 'thinking', 'cwd', 'persona', 'permissions',
         'proxy_id', 'agent_group', 'account', 'launch_env',
         'hook_start', 'hook_resume', 'hook_compact', 'hook_exit',
-        'hook_interrupt', 'hook_submit', 'engine_config', 'custom_buttons', 'indicators', 'icon',
+        'hook_interrupt', 'hook_submit', 'custom_buttons', 'indicators', 'icon',
       ];
       assert.deepEqual(cols, expected);
     });
@@ -182,7 +182,7 @@ describe('field-registry', () => {
         'engine', 'model', 'thinking', 'cwd', 'persona', 'permissions',
         'agent_group', 'account', 'launch_env',
         'hook_start', 'hook_resume', 'hook_compact', 'hook_exit',
-        'hook_interrupt', 'hook_submit', 'engine_config', 'custom_buttons', 'indicators', 'icon',
+        'hook_interrupt', 'hook_submit', 'custom_buttons', 'indicators', 'icon',
       ];
       assert.deepEqual(cols, expected);
     });
@@ -212,7 +212,7 @@ describe('field-registry', () => {
       };
 
       const params = serializeConfigParams(opts);
-      assert.equal(params.length, 20); // 20 config fields
+      assert.equal(params.length, 19); // 19 config fields
       assert.equal(params[0], 'claude'); // engine
       assert.equal(params[1], null);    // model
       assert.equal(params[2], null);    // thinking
@@ -296,7 +296,7 @@ describe('field-registry', () => {
       };
 
       const params = serializeConfigParams(opts);
-      assert.equal(params[18], null); // indicators at index 18
+      assert.equal(params[17], null); // indicators at index 17
     });
   });
 
@@ -312,7 +312,7 @@ describe('field-registry', () => {
       };
 
       const params = serializeUpsertParams(opts);
-      assert.equal(params.length, 19); // 20 - 1 (proxyId)
+      assert.equal(params.length, 18); // 19 - 1 (proxyId)
       // proxyId value 'p1' should NOT appear
       assert.ok(!params.includes('p1'));
     });

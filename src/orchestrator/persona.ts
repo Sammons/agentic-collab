@@ -61,8 +61,6 @@ export type PersonaFrontmatter = {
   custom_buttons?: Record<string, PipelineStep[]>;
   /** Indicators — regex patterns matched against tmux pane output. */
   indicators?: IndicatorDefinition[];
-  /** Engine config name — FK reference to engine_configs table. */
-  engine_config?: string;
   /** Emoji or short text shown on agent cards and in page title. */
   icon?: string;
 };
@@ -962,7 +960,6 @@ function serializeIndicators(value?: IndicatorDefinition[]): string | null {
 // ── Startup Sync ──
 
 import type { Database } from './database.ts';
-import type { EngineType } from '../shared/types.ts';
 
 const VALID_ENGINES = new Set<string>(['claude', 'codex', 'opencode']);
 
@@ -990,20 +987,10 @@ export function syncSinglePersona(db: Database, name: string, personasDir?: stri
   const fm = frontmatter as PersonaFrontmatter;
   const cwd = fm.cwd;
 
-  // Resolve engine: direct frontmatter value, or look up from engine_config
-  let resolvedEngine = fm.engine;
-  if (!resolvedEngine && fm.engine_config) {
-    const config = db.getEngineConfig(fm.engine_config);
-    if (config) {
-      resolvedEngine = config.engine;
-    }
-  }
+  const resolvedEngine = fm.engine;
   if (!resolvedEngine || !VALID_ENGINES.has(resolvedEngine) || !cwd) return false;
 
   const upsertOpts = buildUpsertOpts(name, fm);
-  if (!upsertOpts.engine && resolvedEngine) {
-    upsertOpts.engine = resolvedEngine as EngineType;
-  }
   db.upsertAgentFromPersona(upsertOpts);
   return true;
 }
@@ -1022,17 +1009,7 @@ export function syncPersonasToDb(db: Database, personasDir?: string): number {
     const { name, frontmatter } = persona;
     const cwd = frontmatter.cwd;
 
-    // Resolve engine: direct frontmatter value, or look up from engine_config
-    let resolvedEngine = frontmatter.engine;
-    if (!resolvedEngine && frontmatter.engine_config) {
-      const config = db.getEngineConfig(frontmatter.engine_config);
-      if (config) {
-        resolvedEngine = config.engine;
-      } else {
-        console.warn(`[persona-sync] Skipping "${name}.md": engine_config '${frontmatter.engine_config}' not found`);
-        continue;
-      }
-    }
+    const resolvedEngine = frontmatter.engine;
 
     // engine and cwd are required for an agent to be valid
     if (!resolvedEngine || !VALID_ENGINES.has(resolvedEngine) || !cwd) {
@@ -1041,9 +1018,6 @@ export function syncPersonasToDb(db: Database, personasDir?: string): number {
     }
 
     const upsertOpts = buildUpsertOpts(name, frontmatter);
-    if (!upsertOpts.engine && resolvedEngine) {
-      upsertOpts.engine = resolvedEngine as EngineType;
-    }
     db.upsertAgentFromPersona(upsertOpts);
 
     synced++;
@@ -1090,18 +1064,7 @@ export function syncPersonasWithDiff(db: Database, personasDir?: string): SyncDi
     const { name, frontmatter } = persona;
     const cwd = frontmatter.cwd;
 
-    // Resolve engine: direct frontmatter value, or look up from engine_config
-    let resolvedEngine = frontmatter.engine;
-    if (!resolvedEngine && frontmatter.engine_config) {
-      const config = db.getEngineConfig(frontmatter.engine_config);
-      if (config) {
-        resolvedEngine = config.engine;
-      } else {
-        console.warn(`[persona] ${name}: engine_config '${frontmatter.engine_config}' not found, skipping`);
-        result.skipped.push(name);
-        continue;
-      }
-    }
+    const resolvedEngine = frontmatter.engine;
 
     if (!resolvedEngine || !VALID_ENGINES.has(resolvedEngine) || !cwd) {
       result.skipped.push(name);
@@ -1112,10 +1075,6 @@ export function syncPersonasWithDiff(db: Database, personasDir?: string): SyncDi
 
     const existing = db.getAgent(name);
     const upsertOpts = buildUpsertOpts(name, frontmatter);
-    // If engine was resolved from engine_config, inject it into opts
-    if (!upsertOpts.engine && resolvedEngine) {
-      upsertOpts.engine = resolvedEngine as EngineType;
-    }
 
     if (!existing) {
       db.upsertAgentFromPersona(upsertOpts);
@@ -1153,14 +1112,7 @@ export function createPersonaAndAgent(
 
   const cwd = fm.cwd;
 
-  // Resolve engine: direct frontmatter value, or look up from engine_config
-  let resolvedEngine = fm.engine;
-  if (!resolvedEngine && fm.engine_config) {
-    const config = db.getEngineConfig(fm.engine_config);
-    if (config) {
-      resolvedEngine = config.engine;
-    }
-  }
+  const resolvedEngine = fm.engine;
   if (!resolvedEngine || !VALID_ENGINES.has(resolvedEngine) || !cwd) {
     throw new Error(`engine and cwd are required in frontmatter (got engine=${resolvedEngine ?? 'undefined'}, cwd=${cwd ?? 'undefined'})`);
   }
@@ -1172,9 +1124,6 @@ export function createPersonaAndAgent(
 
   // Upsert agent
   const upsertOpts = buildUpsertOpts(name, fm);
-  if (!upsertOpts.engine && resolvedEngine) {
-    upsertOpts.engine = resolvedEngine as EngineType;
-  }
   db.upsertAgentFromPersona(upsertOpts);
 
   return { name, frontmatter: fm, body };

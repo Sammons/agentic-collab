@@ -16,7 +16,6 @@ function makeAgent(overrides: Partial<AgentRecord> = {}): AgentRecord {
     agentGroup: null,
     launchEnv: null,
     account: null,
-    engineConfig: null,
     sortOrder: 0,
     hookStart: null,
     hookResume: null,

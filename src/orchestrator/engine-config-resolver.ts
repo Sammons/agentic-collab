@@ -13,7 +13,7 @@ export function resolveEffectiveConfig(
 
   return {
     ...agent,
-    engine: agent.engine ?? config.engine,
+    // engine is NOT merged — the agent's engine field is the lookup key
     model: agent.model ?? config.model,
     thinking: agent.thinking ?? config.thinking,
     permissions: agent.permissions ?? config.permissions,

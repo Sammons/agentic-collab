@@ -73,9 +73,8 @@ function buildMetaHtml(agent, proxies) {
   const modelStr = [agent.engine, agent.model, agent.thinking].filter(Boolean).join(' ');
   const ctxStr = agent.lastContextPct != null ? `${agent.lastContextPct}%` : '--';
   const permBadge = agent.permissions === 'skip' ? '<span class="perm-badge skip" title="Auto-approves all tool use — no confirmation prompts">unsafe</span>' : '';
-  const configBadge = agent.engineConfig ? `<span class="meta-config" title="engine config: ${esc(agent.engineConfig)}">${esc(agent.engineConfig)}</span>` : '';
   const accountSpan = agent.account ? `<span title="account: ${esc(agent.account)}">acct: ${esc(agent.account)}</span>` : '';
-  return `<span>${esc(modelStr)}</span><span>ctx: ${ctxStr}</span>${permBadge}${configBadge}${accountSpan}${agent.proxyId ? `<span title="proxy: ${esc(agent.proxyId)}">${esc(agent.proxyId)}${proxyWarning(agent.proxyId, proxies)}</span>` : ''}`;
+  return `<span>${esc(modelStr)}</span><span>ctx: ${ctxStr}</span>${permBadge}${accountSpan}${agent.proxyId ? `<span title="proxy: ${esc(agent.proxyId)}">${esc(agent.proxyId)}${proxyWarning(agent.proxyId, proxies)}</span>` : ''}`;
 }
 
 // ── Component ──

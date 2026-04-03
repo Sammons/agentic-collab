@@ -107,7 +107,6 @@ export type AgentRecord = {
   agentGroup: string | null; // grouping label from persona frontmatter
   launchEnv: LaunchEnv | null; // launch-time env injected on spawn/resume/reload
   account: string | null; // named credential account for HOME isolation
-  engineConfig: string | null; // FK reference to engine_configs.name
   sortOrder: number; // manual ordering within group
   /** Hook value for starting the agent (preset/file/inline). */
   hookStart: string | null;

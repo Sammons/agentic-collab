@@ -225,18 +225,9 @@ route('POST', '/api/agents', async (req, res, _match, ctx) => {
   const nameError = validateAgentName(body.name as string);
   if (nameError) return json(res, 400, { error: nameError });
 
-  // Resolve engine: direct value, or look up from engine_config
-  let resolvedEngine = body.engine as string | undefined;
-  if (!resolvedEngine && body.engine_config) {
-    const config = ctx.db.getEngineConfig(body.engine_config as string);
-    if (config) {
-      resolvedEngine = config.engine;
-    } else {
-      return json(res, 400, { error: `engine_config '${body.engine_config}' not found` });
-    }
-  }
+  const resolvedEngine = body.engine as string | undefined;
   if (!resolvedEngine) {
-    return json(res, 400, { error: 'engine or engine_config required' });
+    return json(res, 400, { error: 'engine is required' });
   }
 
   const VALID_ENGINES = new Set(['claude', 'codex', 'opencode']);
@@ -257,14 +248,12 @@ route('POST', '/api/agents', async (req, res, _match, ctx) => {
     permissions: body.permissions,
     proxyId: body.proxyId,
     agentGroup: body.group,
-    engineConfig: body.engine_config,
   });
 
   // Write persona file so agent config persists across restarts
   try {
     const fmLines: string[] = [];
     if (body.engine) fmLines.push(`engine: ${body.engine}`);
-    if (body.engine_config) fmLines.push(`engine_config: ${body.engine_config}`);
     if (body.model) fmLines.push(`model: ${body.model}`);
     if (body.thinking) fmLines.push(`thinking: ${body.thinking}`);
     fmLines.push(`cwd: ${body.cwd}`);
@@ -710,11 +699,11 @@ route('PUT', '/api/engine-configs/:name', async (req, res, match, ctx) => {
 
 route('DELETE', '/api/engine-configs/:name', async (_req, res, match, ctx) => {
   const name = match.pathname.groups['name']!;
-  // Check if any agents reference this config
+  // Check if any agents use this engine (engine field is the config lookup key)
   const agents = ctx.db.listAgents();
-  const refs = agents.filter(a => a.engineConfig === name);
+  const refs = agents.filter(a => a.engine === name);
   if (refs.length > 0) {
-    return json(res, 409, { error: `Cannot delete: ${refs.length} agent(s) reference this config` });
+    return json(res, 409, { error: `Cannot delete: ${refs.length} agent(s) use engine "${name}"` });
   }
   const deleted = ctx.db.deleteEngineConfig(name);
   if (!deleted) return json(res, 404, { error: 'Engine config not found' });

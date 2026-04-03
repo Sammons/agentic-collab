@@ -233,6 +233,9 @@ export function renderAgents() {
   }
   } // end group loop
 
+  // Hide New Group button + Engine summary when filtering
+  if (state.quickFilter || filter) return;
+
   // New Group button
   const newGroupBtn = document.createElement('button');
   newGroupBtn.className = 'secondary';
@@ -423,6 +426,8 @@ function handleAgentListEvent(e) {
     const isStarred = !!starred[agentName];
     starBtn.className = `agent-star${isStarred ? ' starred' : ''}`;
     starBtn.innerHTML = isStarred ? icon.starFilled(14) : icon.star(14);
+    // Re-filter if starred filter is active (un-starring should hide the card)
+    if (state.quickFilter === 'starred') renderAgents();
     return;
   }
 
