@@ -80,6 +80,17 @@ export type ActiveIndicator = {
   actions?: Record<string, IndicatorAction>;
 };
 
+// ── Detection ──
+
+export type DetectionConfig = {
+  idlePatterns?: string[];
+  activePatterns?: string[];
+  contextPattern?: string;
+  idleThreshold?: number;
+  activeGraceMs?: number;
+  snapshotLines?: number;
+};
+
 export type EngineConfigRecord = {
   name: string;
   engine: string;
@@ -93,6 +104,7 @@ export type EngineConfigRecord = {
   hookInterrupt: string | null;
   hookSubmit: string | null;
   indicators: string | null;
+  detection: string | null;
   launchEnv: Record<string, string> | null;
   createdAt: string;
 };

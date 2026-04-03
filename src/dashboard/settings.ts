@@ -89,6 +89,25 @@ function configToYaml(cfg) {
       }
     } catch { /* skip malformed indicators */ }
   }
+  // Detection — stored as JSON, display as YAML
+  if (cfg.detection) {
+    try {
+      const det = JSON.parse(cfg.detection);
+      lines.push('detection:');
+      if (det.idlePatterns?.length > 0) {
+        lines.push('  idlePatterns:');
+        for (const p of det.idlePatterns) lines.push(`    - '${p}'`);
+      }
+      if (det.activePatterns?.length > 0) {
+        lines.push('  activePatterns:');
+        for (const p of det.activePatterns) lines.push(`    - '${p}'`);
+      }
+      if (det.contextPattern) lines.push(`  contextPattern: '${det.contextPattern}'`);
+      if (det.idleThreshold != null) lines.push(`  idleThreshold: ${det.idleThreshold}`);
+      if (det.activeGraceMs != null) lines.push(`  activeGraceMs: ${det.activeGraceMs}`);
+      if (det.snapshotLines != null) lines.push(`  snapshotLines: ${det.snapshotLines}`);
+    } catch { /* skip malformed detection */ }
+  }
   if (cfg.launchEnv && typeof cfg.launchEnv === 'object' && Object.keys(cfg.launchEnv).length > 0) {
     lines.push('env:');
     for (const [k, v] of Object.entries(cfg.launchEnv)) {
@@ -109,6 +128,9 @@ function yamlToConfig(yaml, name) {
   let currentIndicator = null;
   let currentActionName = null;
   let currentActionSteps = null;
+  let inDetection = false;
+  let detectionObj = null;
+  let detectionListKey = null;
   const hookMap = { start: 'hookStart', resume: 'hookResume', compact: 'hookCompact', exit: 'hookExit', interrupt: 'hookInterrupt', submit: 'hookSubmit' };
 
   function flushIndicatorAction() {
@@ -144,6 +166,13 @@ function yamlToConfig(yaml, name) {
         inIndicators = false;
         indicatorDefs = [];
       }
+      // Flush detection if leaving that section
+      if (inDetection) {
+        if (detectionObj) fields.detection = JSON.stringify(detectionObj);
+        inDetection = false;
+        detectionObj = null;
+        detectionListKey = null;
+      }
 
       const key = kvMatch[1];
       const val = kvMatch[2].trim();
@@ -156,10 +185,39 @@ function yamlToConfig(yaml, name) {
         }
       } else if (key === 'indicators') {
         inIndicators = true;
+      } else if (key === 'detection') {
+        inDetection = true;
+        detectionObj = {};
       } else if (key === 'env') {
         fields.launchEnv = {};
       } else {
         fields[key] = val || null;
+      }
+    } else if (inDetection) {
+      // Detection parsing — 2 indent levels:
+      //   2-space: field (idlePatterns, activePatterns, contextPattern, etc.)
+      //   4-space: list item (- 'regex')
+      const indent = line.search(/\S/);
+      const content = trimmed.trim();
+      if (indent === 2 && content.match(/^(\w+):\s*(.*)$/)) {
+        const m = content.match(/^(\w+):\s*(.*)$/);
+        const fieldKey = m[1];
+        const fieldVal = m[2].trim().replace(/^'(.*)'$/, '$1');
+        if (fieldKey === 'idlePatterns' || fieldKey === 'activePatterns') {
+          detectionObj[fieldKey] = [];
+          detectionListKey = fieldKey;
+        } else if (fieldVal) {
+          detectionListKey = null;
+          // Numeric fields
+          if (['idleThreshold', 'activeGraceMs', 'snapshotLines'].includes(fieldKey)) {
+            detectionObj[fieldKey] = parseInt(fieldVal) || 0;
+          } else {
+            detectionObj[fieldKey] = fieldVal;
+          }
+        }
+      } else if (indent === 4 && content.startsWith('- ') && detectionListKey && detectionObj[detectionListKey]) {
+        const pattern = content.replace(/^-\s*/, '').replace(/^'(.*)'$/, '$1');
+        detectionObj[detectionListKey].push(pattern);
       }
     } else if (inIndicators) {
       // Indicator parsing — 4 indent levels:
@@ -245,6 +303,10 @@ function yamlToConfig(yaml, name) {
   if (inIndicators) {
     flushIndicator();
     if (indicatorDefs.length > 0) fields.indicators = JSON.stringify(indicatorDefs);
+  }
+  // Save detection if file ended while in detection section
+  if (inDetection && detectionObj) {
+    fields.detection = JSON.stringify(detectionObj);
   }
   return fields;
 }

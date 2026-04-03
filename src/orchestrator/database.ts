@@ -125,6 +125,7 @@ const SCHEMA = `
     hook_interrupt TEXT,
     hook_submit    TEXT,
     indicators     TEXT,
+    detection      TEXT,
     launch_env     TEXT,
     created_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
   );
@@ -222,10 +223,15 @@ export class Database {
       this.db.exec('ALTER TABLE reminders ADD COLUMN skip_if_active INTEGER NOT NULL DEFAULT 0');
     }
 
-    // Add indicators column to engine_configs if not present
+    // Add indicators and detection columns to engine_configs if not present
     const ecColumns = this.db.prepare('PRAGMA table_info(engine_configs)').all() as Array<Record<string, unknown>>;
-    if (ecColumns.length > 0 && !ecColumns.some((c) => c['name'] === 'indicators')) {
-      this.db.exec('ALTER TABLE engine_configs ADD COLUMN indicators TEXT');
+    if (ecColumns.length > 0) {
+      if (!ecColumns.some((c) => c['name'] === 'indicators')) {
+        this.db.exec('ALTER TABLE engine_configs ADD COLUMN indicators TEXT');
+      }
+      if (!ecColumns.some((c) => c['name'] === 'detection')) {
+        this.db.exec('ALTER TABLE engine_configs ADD COLUMN detection TEXT');
+      }
     }
   }
 
@@ -794,11 +800,12 @@ export class Database {
     hookInterrupt?: string | null;
     hookSubmit?: string | null;
     indicators?: string | null;
+    detection?: string | null;
     launchEnv?: Record<string, string> | null;
   }): EngineConfigRecord {
     this.db.prepare(`
-      INSERT INTO engine_configs (name, engine, model, thinking, permissions, hook_start, hook_resume, hook_compact, hook_exit, hook_interrupt, hook_submit, indicators, launch_env)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO engine_configs (name, engine, model, thinking, permissions, hook_start, hook_resume, hook_compact, hook_exit, hook_interrupt, hook_submit, indicators, detection, launch_env)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       opts.name,
       opts.engine,
@@ -812,6 +819,7 @@ export class Database {
       opts.hookInterrupt ?? null,
       opts.hookSubmit ?? null,
       opts.indicators ?? null,
+      opts.detection ?? null,
       opts.launchEnv ? JSON.stringify(opts.launchEnv) : null,
     );
     return this.getEngineConfig(opts.name)!;
@@ -840,6 +848,7 @@ export class Database {
     hookInterrupt?: string | null;
     hookSubmit?: string | null;
     indicators?: string | null;
+    detection?: string | null;
     launchEnv?: Record<string, string> | null;
   }): EngineConfigRecord | null {
     const sets: string[] = [];
@@ -855,6 +864,7 @@ export class Database {
     if (opts.hookInterrupt !== undefined) { sets.push('hook_interrupt = ?'); params.push(opts.hookInterrupt); }
     if (opts.hookSubmit !== undefined) { sets.push('hook_submit = ?'); params.push(opts.hookSubmit); }
     if (opts.indicators !== undefined) { sets.push('indicators = ?'); params.push(opts.indicators); }
+    if (opts.detection !== undefined) { sets.push('detection = ?'); params.push(opts.detection); }
     if (opts.launchEnv !== undefined) { sets.push('launch_env = ?'); params.push(opts.launchEnv ? JSON.stringify(opts.launchEnv) : null); }
     if (sets.length === 0) return this.getEngineConfig(name);
     params.push(name);
@@ -996,6 +1006,7 @@ function mapEngineConfigRow(row: Record<string, unknown>): EngineConfigRecord {
     hookInterrupt: (row['hook_interrupt'] as string | null) ?? null,
     hookSubmit: (row['hook_submit'] as string | null) ?? null,
     indicators: (row['indicators'] as string | null) ?? null,
+    detection: (row['detection'] as string | null) ?? null,
     launchEnv,
     createdAt: row['created_at'] as string,
   };

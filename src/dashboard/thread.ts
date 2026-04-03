@@ -121,9 +121,9 @@ export function renderThread() {
   const headerBadge = selectedAgent ? `<span class="state-badge state-${selectedAgent.state}">${selectedAgent.state}</span>` : '';
   const tabs = `<div class="thread-tabs">
     <button class="${state.threadView === 'messages' ? 'active' : ''}" data-tab="messages">Messages</button>
-    <button class="${state.threadView === 'persona' ? 'active' : ''}" data-tab="persona">Persona</button>
-    <button class="${state.threadView === 'reminders' ? 'active' : ''}" data-tab="reminders">Reminders</button>
     <button class="${state.threadView === 'watch' ? 'active' : ''}" data-tab="watch">Watch</button>
+    <button class="${state.threadView === 'reminders' ? 'active' : ''}" data-tab="reminders">Reminders</button>
+    <button class="${state.threadView === 'persona' ? 'active' : ''}" data-tab="persona">Persona</button>
   </div>`;
   header.innerHTML = `<button class="mobile-back" id="mobileBackBtn">${icon.arrowLeft(16)}</button><span>${esc(state.selected)}</span>${headerBadge}${tabs}`;
   document.getElementById('mobileBackBtn').onclick = mobileBack;

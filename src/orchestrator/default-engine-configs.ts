@@ -16,6 +16,7 @@ export type DefaultEngineConfig = {
   hookInterrupt?: string | null;
   hookSubmit?: string | null;
   indicators?: string | null;
+  detection?: string | null;
   launchEnv?: Record<string, string> | null;
 };
 
@@ -47,6 +48,49 @@ const CLAUDE_PLAN_INDICATOR = {
 };
 const LOGGED_OUT_INDICATOR = { id: 'logged-out', regex: 'Not logged in', badge: 'Logged Out', style: 'danger' };
 
+// Detection configs per engine — regex patterns for idle/active state detection
+const CLAUDE_DETECTION = {
+  idlePatterns: [
+    '^[\\u276f>]\\s*$',            // prompt waiting for input (❯ or >)
+  ],
+  activePatterns: [
+    '^\\s*(Read|Write|Edit|Bash|Glob|Grep|Agent|WebFetch|WebSearch)\\s',  // tool execution
+    '^[\\u280b\\u2819\\u2839\\u2838\\u283c\\u2834\\u2826\\u2827\\u2807\\u280f]',  // braille spinner
+  ],
+  contextPattern: '(\\d+)\\s*tokens',
+  idleThreshold: 2,
+  activeGraceMs: 10000,
+  snapshotLines: 30,
+};
+
+const CODEX_DETECTION = {
+  idlePatterns: [
+    '^[\\u203a\\u276f>]\\s',       // prompt chars (›, ❯, >)
+    '^[\\u203a\\u276f>]\\s*$',     // prompt at end of line
+  ],
+  activePatterns: [
+    '^[\\u25e6\\u2022]\\s*Working', // working indicator (◦/• Working)
+  ],
+  contextPattern: '(\\d+)%\\s+(?:context\\s+)?left',
+  idleThreshold: 2,
+  activeGraceMs: 10000,
+  snapshotLines: 30,
+};
+
+const OPENCODE_DETECTION = {
+  idlePatterns: [
+    'ctrl\\+t\\s+variants',        // idle TUI hint
+    'ask anything',                 // input placeholder
+  ],
+  activePatterns: [
+    'esc\\s+interrupt',             // processing indicator
+  ],
+  contextPattern: '(\\d+)%\\s+used',
+  idleThreshold: 2,
+  activeGraceMs: 10000,
+  snapshotLines: 30,
+};
+
 export const DEFAULT_ENGINE_CONFIGS: DefaultEngineConfig[] = [
   {
     name: 'claude',
@@ -76,6 +120,7 @@ export const DEFAULT_ENGINE_CONFIGS: DefaultEngineConfig[] = [
       CONTEXT_LIMIT_INDICATOR,
       LOGGED_OUT_INDICATOR,
     ]),
+    detection: JSON.stringify(CLAUDE_DETECTION),
   },
   {
     name: 'codex',
@@ -90,6 +135,7 @@ export const DEFAULT_ENGINE_CONFIGS: DefaultEngineConfig[] = [
     indicators: JSON.stringify([
       UNSAFE_INDICATOR,
     ]),
+    detection: JSON.stringify(CODEX_DETECTION),
   },
   {
     name: 'opencode',
@@ -105,5 +151,6 @@ export const DEFAULT_ENGINE_CONFIGS: DefaultEngineConfig[] = [
       LOW_CONTEXT_INDICATOR,
       CONTEXT_LIMIT_INDICATOR,
     ]),
+    detection: JSON.stringify(OPENCODE_DETECTION),
   },
 ];

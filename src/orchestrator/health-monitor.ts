@@ -16,10 +16,18 @@
 
 import type { Database } from './database.ts';
 import type { LockManager } from '../shared/lock.ts';
-import type { ProxyCommand, ProxyResponse, AgentRecord, PendingMessage, DashboardMessage, IndicatorDefinition, ActiveIndicator, PipelineStep } from '../shared/types.ts';
+import type { ProxyCommand, ProxyResponse, AgentRecord, PendingMessage, DashboardMessage, IndicatorDefinition, ActiveIndicator, PipelineStep, DetectionConfig } from '../shared/types.ts';
 import { sessionName, canSuspend } from '../shared/agent-entity.ts';
 import { getAdapter } from './adapters/index.ts';
 import { reloadAgent, type LifecycleContext } from './lifecycle.ts';
+
+type CompiledDetection = {
+  json: string;
+  config: DetectionConfig;
+  idlePatterns: RegExp[];
+  activePatterns: RegExp[];
+  contextPattern: RegExp | null;
+};
 
 export type HealthMonitorOptions = {
   db: Database;
@@ -89,6 +97,7 @@ export class HealthMonitor {
   private readonly onIndicatorUpdate: (agentName: string, indicators: ActiveIndicator[]) => void;
   private readonly activeIndicators = new Map<string, ActiveIndicator[]>();
   private readonly compiledIndicators = new Map<string, { json: string; entries: Array<{ def: IndicatorDefinition; re: RegExp }> }>();
+  private readonly compiledDetection = new Map<string, CompiledDetection>();
 
   constructor(opts: HealthMonitorOptions) {
     this.db = opts.db;
@@ -129,28 +138,92 @@ export class HealthMonitor {
   }
 
   /**
-   * Screen-diff idle detection: compare current pane snapshot to previous.
-   * Returns true if the agent appears idle (screen unchanged).
+   * Resolve and cache compiled detection config for an agent's engine.
+   * Returns null if the engine has no detection config.
    */
-  private checkScreenDiff(agentName: string, paneOutput: string): boolean {
-    const snapshot = HealthMonitor.takeSnapshot(paneOutput);
-    const prev = this.lastPaneSnapshot.get(agentName);
-    this.lastPaneSnapshot.set(agentName, snapshot);
+  private getDetection(agent: AgentRecord): CompiledDetection | null {
+    const engineConfig = this.db.getEngineConfig(agent.engine);
+    const detectionJson = engineConfig?.detection ?? null;
+    if (!detectionJson) {
+      this.compiledDetection.delete(agent.engine);
+      return null;
+    }
 
+    const cached = this.compiledDetection.get(agent.engine);
+    if (cached && cached.json === detectionJson) return cached;
+
+    try {
+      const config: DetectionConfig = JSON.parse(detectionJson);
+      const idlePatterns: RegExp[] = [];
+      const activePatterns: RegExp[] = [];
+      for (const p of config.idlePatterns ?? []) {
+        try { idlePatterns.push(new RegExp(p)); } catch { /* skip invalid */ }
+      }
+      for (const p of config.activePatterns ?? []) {
+        try { activePatterns.push(new RegExp(p)); } catch { /* skip invalid */ }
+      }
+      let contextPattern: RegExp | null = null;
+      if (config.contextPattern) {
+        try { contextPattern = new RegExp(config.contextPattern); } catch { /* skip */ }
+      }
+      const compiled: CompiledDetection = { json: detectionJson, config, idlePatterns, activePatterns, contextPattern };
+      this.compiledDetection.set(agent.engine, compiled);
+      return compiled;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Screen-diff idle detection, augmented by engine detection patterns.
+   * Pattern match takes priority: idle pattern match → idle, active pattern match → active.
+   * Falls back to screen-diff when no patterns match.
+   * Returns true if the agent appears idle.
+   */
+  private checkScreenDiff(agent: AgentRecord, paneOutput: string): boolean {
+    const detection = this.getDetection(agent);
+    const snapshotLines = detection?.config.snapshotLines ?? HealthMonitor.SNAPSHOT_LINES;
+    const idleThreshold = detection?.config.idleThreshold ?? HealthMonitor.IDLE_THRESHOLD;
+
+    const snapshot = HealthMonitor.takeSnapshot(paneOutput, snapshotLines);
+    const prev = this.lastPaneSnapshot.get(agent.name);
+    this.lastPaneSnapshot.set(agent.name, snapshot);
+
+    // Pattern-based detection takes priority over screen-diff
+    if (detection && (detection.idlePatterns.length > 0 || detection.activePatterns.length > 0)) {
+      const stripped = HealthMonitor.stripAnsi(paneOutput);
+      // Check active patterns first — if something indicates work, it's active
+      for (const re of detection.activePatterns) {
+        if (re.test(stripped)) {
+          this.unchangedCount.set(agent.name, 0);
+          this.lastActivityDetected.set(agent.name, Date.now());
+          return false;
+        }
+      }
+      // Check idle patterns — if something indicates waiting, it's idle
+      for (const re of detection.idlePatterns) {
+        if (re.test(stripped)) {
+          // Idle pattern matched, but still respect threshold to avoid false positives
+          const count = (this.unchangedCount.get(agent.name) ?? 0) + 1;
+          this.unchangedCount.set(agent.name, count);
+          return count >= idleThreshold;
+        }
+      }
+    }
+
+    // Fallback: screen-diff
     if (prev === undefined) {
-      // First capture — no comparison possible, assume active
-      this.unchangedCount.set(agentName, 0);
+      this.unchangedCount.set(agent.name, 0);
       return false;
     }
 
     if (snapshot === prev) {
-      const count = (this.unchangedCount.get(agentName) ?? 0) + 1;
-      this.unchangedCount.set(agentName, count);
-      return count >= HealthMonitor.IDLE_THRESHOLD;
+      const count = (this.unchangedCount.get(agent.name) ?? 0) + 1;
+      this.unchangedCount.set(agent.name, count);
+      return count >= idleThreshold;
     } else {
-      this.unchangedCount.set(agentName, 0);
-      // Reset grace period — activity detected
-      this.lastActivityDetected.set(agentName, Date.now());
+      this.unchangedCount.set(agent.name, 0);
+      this.lastActivityDetected.set(agent.name, Date.now());
       return false;
     }
   }
@@ -236,7 +309,7 @@ export class HealthMonitor {
         const paneOutput = await this.capturePaneOutput(agent);
         if (paneOutput === null) continue;
         this.evaluateIndicators(agent, paneOutput);
-        const isIdle = this.checkScreenDiff(agent.name, paneOutput);
+        const isIdle = this.checkScreenDiff(agent, paneOutput);
         this.handleIdleTransitions(agent, isIdle);
       } catch (err) {
         console.error(`[health] Fast poll error for ${agent.name}:`, err);
@@ -305,7 +378,7 @@ export class HealthMonitor {
     this.recordContextPercent(agent, paneOutput);
     this.evaluateIndicators(agent, paneOutput);
 
-    const isIdle = this.checkScreenDiff(agent.name, paneOutput);
+    const isIdle = this.checkScreenDiff(agent, paneOutput);
     this.handleIdleTransitions(agent, isIdle);
 
     this.checkIdleSuspendTimeout(agent.name);
@@ -384,19 +457,19 @@ export class HealthMonitor {
   }
 
   /**
-   * Screen-diff idle transitions.
+   * Idle transitions — augmented by engine detection config when available.
    *
-   * - active → idle: screen unchanged for IDLE_THRESHOLD consecutive polls
-   * - idle → active: screen changed (any content diff)
-   *
-   * No regex, no engine-specific patterns, no tmux activity timestamps.
+   * - active → idle: screen unchanged / idle pattern matched
+   * - idle → active: screen changed / active pattern matched
    */
   private handleIdleTransitions(agent: AgentRecord, isIdle: boolean): void {
     if (agent.state === 'active' && isIdle) {
       // Enforce grace period — don't transition to idle if recent activity was detected
+      const detection = this.compiledDetection.get(agent.engine);
+      const graceMs = detection?.config.activeGraceMs ?? HealthMonitor.ACTIVE_GRACE_MS;
       const lastActivity = this.lastActivityDetected.get(agent.name) ?? 0;
       const elapsed = Date.now() - lastActivity;
-      if (elapsed < HealthMonitor.ACTIVE_GRACE_MS) {
+      if (elapsed < graceMs) {
         return; // Still within grace period, stay active
       }
       const current = this.db.getAgent(agent.name);
