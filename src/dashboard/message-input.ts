@@ -50,6 +50,12 @@ export class MessageInput extends HTMLElement {
     const interruptBtn = this.querySelector('#interruptBtn');
     const fileInput = this.querySelector('#fileInput');
 
+    // Auto-resize textarea to fit content (capped at 5 lines)
+    textarea.addEventListener('input', () => {
+      textarea.style.height = 'auto';
+      textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
+    });
+
     // Cmd+Enter (Mac) / Ctrl+Enter (Win) to send. Plain Enter inserts newline.
     textarea.onkeydown = (e) => {
       if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
@@ -105,7 +111,11 @@ export class MessageInput extends HTMLElement {
 
   setDraft(text) {
     const textarea = this.querySelector('#msgInput');
-    if (textarea) textarea.value = text || '';
+    if (textarea) {
+      textarea.value = text || '';
+      textarea.style.height = 'auto';
+      textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
+    }
   }
 
   getDraft() {

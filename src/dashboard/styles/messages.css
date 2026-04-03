@@ -188,7 +188,7 @@
     resize: none;
     overflow-y: auto;
     height: 36px;
-    max-height: 36px;
+    max-height: 120px;
     line-height: 1.4;
   }
   .thread-input textarea:focus { border-color: var(--accent); }

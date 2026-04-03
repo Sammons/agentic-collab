@@ -349,7 +349,8 @@ export function selectAgent(name) {
     freshInput.setDraft(state.drafts[name] || '');
   }
   _updateSendability();
-  if (freshInput && freshInput.focus) freshInput.focus();
+  // Focus input on desktop only — mobile shouldn't auto-open keyboard
+  if (freshInput && freshInput.focus && window.innerWidth > 768) freshInput.focus();
 }
 
 // ── Group Management ──
