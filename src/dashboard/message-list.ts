@@ -35,12 +35,11 @@ function buildMessageEl(msg, agentName, renderMarkdown) {
   if (msg.withdrawn) div.classList.add('withdrawn');
   const time = new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   const displayMsg = isSystem ? msg.message.replace(/^\[system\]\s*/, '') : msg.message;
-  // Cross-agent routing label only when message comes from/goes to a different agent (not dashboard)
-  const crossAgent = msg.sourceAgent && msg.sourceAgent !== 'dashboard' && msg.direction === 'to_agent'
-    ? `<span class="msg-route">${icon.arrowRightSmall(10)} from ${esc(msg.sourceAgent)}</span>`
-    : msg.targetAgent && msg.targetAgent !== 'dashboard' && msg.direction === 'from_agent'
-    ? `<span class="msg-route">${icon.arrowRightSmall(10)} to ${esc(msg.targetAgent)}</span>`
-    : '';
+  // From → To routing header
+  const fromLabel = isSystem ? 'system' : (msg.sourceAgent || (msg.direction === 'to_agent' ? 'dashboard' : agentName));
+  const toLabel = msg.targetAgent || (msg.direction === 'to_agent' ? agentName : 'dashboard');
+  const topicBadge = msg.topic ? `<span class="msg-topic">${esc(msg.topic)}</span>` : '';
+  const routeStr = `<span class="msg-sender">${esc(fromLabel)} ${icon.arrowRightSmall(12)} ${esc(toLabel)}</span>${topicBadge}`;
   const statusHtml = (msg.direction === 'to_agent' && msg.queueId)
     ? `<span class="msg-status ${msg.deliveryStatus || 'pending'}" data-queue-id="${msg.queueId}">${
         msg.deliveryStatus === 'delivered' ? icon.check(12) :
@@ -51,7 +50,7 @@ function buildMessageEl(msg, agentName, renderMarkdown) {
   const canWithdraw = msg.direction === 'to_agent' && !isSystem && !msg.withdrawn && (!msg.sourceAgent || msg.sourceAgent === 'dashboard');
   const withdrawHtml = canWithdraw ? `<span class="msg-withdraw" data-msg-id="${msg.id}" title="Withdraw message">unsend</span>` : '';
   const copyBtnHtml = `<button class="msg-copy" title="Copy message">${icon.clipboard(14)}</button>`;
-  const headerHtml = `<div class="msg-header">${crossAgent}<span class="msg-meta"><span class="msg-time">${time}</span>${statusHtml}${copyBtnHtml}${withdrawHtml}</span></div>`;
+  const headerHtml = `<div class="msg-header">${routeStr}<span class="msg-meta"><span class="msg-time">${time}</span>${statusHtml}${copyBtnHtml}${withdrawHtml}</span></div>`;
   if (isUpload) {
     div.innerHTML = `${headerHtml}<div class="file-info"><span class="file-icon">${icon.paperclip(14)}</span> ${esc(displayMsg)}</div>`;
   } else {
