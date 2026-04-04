@@ -19,6 +19,9 @@
     display: flex;
     gap: 6px;
     flex-wrap: wrap;
+    margin-top: 4px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border);
   }
   .thread-actions button {
     font-size: 11px;

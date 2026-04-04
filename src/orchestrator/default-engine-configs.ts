@@ -46,6 +46,16 @@ const CLAUDE_PLAN_INDICATOR = {
     '$3': [{ type: 'keystroke', keystroke: '$3' }],
   },
 };
+const CLAUDE_RESUME_PROMPT_INDICATOR = {
+  id: 'resume-prompt',
+  regex: 'Resume from summary',
+  badge: 'Resume Prompt',
+  style: 'warning',
+  actions: {
+    'Summary': [{ type: 'keystroke', keystroke: 'Enter' }],
+    'Full': [{ type: 'keystroke', keystroke: 'Down' }, { type: 'keystroke', keystroke: 'Enter' }],
+  },
+};
 const LOGGED_OUT_INDICATOR = { id: 'logged-out', regex: 'Not logged in', badge: 'Logged Out', style: 'danger' };
 const LOCAL_AGENTS_INDICATOR = { id: 'local-agents', regex: '\\u00b7\\s*(\\d+) local agents?', badge: '$1 Local Agents', style: 'info' };
 
@@ -115,6 +125,7 @@ export const DEFAULT_ENGINE_CONFIGS: DefaultEngineConfig[] = [
       UNSAFE_INDICATOR,
       CLAUDE_APPROVAL_INDICATOR,
       CLAUDE_PLAN_INDICATOR,
+      CLAUDE_RESUME_PROMPT_INDICATOR,
       LOW_CONTEXT_INDICATOR,
       CONTEXT_LIMIT_INDICATOR,
       LOGGED_OUT_INDICATOR,

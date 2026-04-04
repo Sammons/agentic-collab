@@ -265,7 +265,9 @@ describe('Lifecycle', () => {
 
       const result = await resumeAgent(ctx, 'suspend-test');
       assert.equal(result.state, 'active');
-      assert.ok(proxyCommands.some(c => c.action === 'create_session'));
+      // Session already exists (mock returns has_session: true), so create_session is skipped
+      assert.ok(proxyCommands.some(c => c.action === 'has_session'));
+      assert.ok(!proxyCommands.some(c => c.action === 'create_session'));
       assert.ok(proxyCommands.some(c => c.action === 'paste'));
     });
 
@@ -294,6 +296,33 @@ describe('Lifecycle', () => {
       assert.ok(paste.text.includes(`COLLAB_AGENT=${shellQuote('resume-env')}`), 'should include base COLLAB_AGENT');
       assert.ok(paste.text.includes("COLLAB_PERSONA_FILE='"), 'should include COLLAB_PERSONA_FILE during resume');
       assert.ok(paste.text.includes(`GIT_AUTHOR_EMAIL=${shellQuote('resume agent@example.com')}`), 'should shell-quote launch env during resume');
+    });
+
+    it('creates tmux session when prior session is gone', async () => {
+      db.createAgent({ name: 'resume-no-session', engine: 'claude', cwd: '/tmp', proxyId: 'p1' });
+      const a = db.getAgent('resume-no-session')!;
+      db.updateAgentState('resume-no-session', 'suspended', a.version, {
+        tmuxSession: 'agent-resume-no-session',
+        proxyId: 'p1',
+        currentSessionId: 'session-gone',
+      });
+
+      const noSessionCtx: LifecycleContext = {
+        ...ctx,
+        proxyDispatch: async (_proxyId: string, command: ProxyCommand): Promise<ProxyResponse> => {
+          proxyCommands.push(command);
+          if (command.action === 'has_session') return { ok: true, data: false };
+          if (command.action === 'capture') return { ok: true, data: '> \n' };
+          return { ok: true };
+        },
+      };
+
+      proxyCommands = [];
+      const result = await resumeAgent(noSessionCtx, 'resume-no-session');
+      assert.equal(result.state, 'active');
+      assert.ok(proxyCommands.some(c => c.action === 'has_session'));
+      assert.ok(proxyCommands.some(c => c.action === 'create_session'));
+      assert.ok(proxyCommands.some(c => c.action === 'paste'));
     });
 
     it('marks agent failed when create_session returns ok:false', async () => {
