@@ -4,7 +4,7 @@
  */
 
 import { state, authHeaders } from '/dashboard/assets/state.ts';
-import { esc, formatFileSize, timeAgo } from '/dashboard/assets/utils.ts';
+import { esc, formatFileSize } from '/dashboard/assets/utils.ts';
 import { icon } from '/dashboard/assets/icons.ts';
 
 export class FilesPanel extends HTMLElement {
@@ -21,9 +21,6 @@ export class FilesPanel extends HTMLElement {
     const agentPages = (state.pages || []).filter(p => p.agent === agentName);
     const agentStores = (state.stores || []).filter(s => s.agent === agentName);
     const indicators = state.indicators[agentName] || [];
-    const thread = state.threads[agentName] || [];
-    const lastMsg = thread.length > 0 ? thread[thread.length - 1] : null;
-
     let html = '<div class="agent-profile">';
 
     // ── Header ──
@@ -69,19 +66,6 @@ export class FilesPanel extends HTMLElement {
       html += '</div>';
     }
 
-    // ── Recent Activity ──
-    if (lastMsg) {
-      html += '<div class="profile-section">';
-      html += '<div class="profile-section-title">Recent Message</div>';
-      html += '<div class="profile-card">';
-      const preview = lastMsg.message.length > 200 ? lastMsg.message.substring(0, 200) + '...' : lastMsg.message;
-      const dir = lastMsg.direction === 'to_agent' ? 'You → Agent' : 'Agent → You';
-      html += `<span class="profile-card-meta">${esc(dir)} · ${esc(timeAgo(lastMsg.createdAt))}</span>`;
-      html += `<div class="profile-message-preview">${esc(preview)}</div>`;
-      html += '</div>';
-      html += '</div>';
-    }
-
     // ── Workspace ──
     if (agent.cwd) {
       html += '<div class="profile-section">';
@@ -107,7 +91,7 @@ export class FilesPanel extends HTMLElement {
     }
 
     // ── Empty state ──
-    if (agentPages.length === 0 && agentStores.length === 0 && !lastMsg) {
+    if (agentPages.length === 0 && agentStores.length === 0) {
       html += '<div class="profile-section"><div class="profile-dim" style="text-align:center;padding:16px">No published pages, stores, or messages yet.</div></div>';
     }
 
