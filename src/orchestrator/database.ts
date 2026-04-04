@@ -20,6 +20,7 @@ import type {
   ReminderStatus,
   PageRecord,
   DataStoreRecord,
+  DestinationRecord,
 } from '../shared/types.ts';
 import {
   configColumnMap,
@@ -251,6 +252,18 @@ export class Database {
       CREATE TABLE IF NOT EXISTS data_stores (
         name       TEXT PRIMARY KEY,
         agent      TEXT,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+      )
+    `);
+
+    // Create destinations table (telegram, etc.)
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS destinations (
+        name       TEXT PRIMARY KEY,
+        type       TEXT NOT NULL,
+        config     TEXT NOT NULL,
+        enabled    INTEGER NOT NULL DEFAULT 1,
         created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
         updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
       )
@@ -981,6 +994,46 @@ export class Database {
     const result = this.db.prepare('DELETE FROM data_stores WHERE name = ?').run(name);
     return result.changes > 0;
   }
+
+  // ── Destinations ──
+
+  createDestination(opts: { name: string; type: string; config: Record<string, unknown> }): DestinationRecord {
+    this.db.prepare(`
+      INSERT INTO destinations (name, type, config)
+      VALUES (?, ?, ?)
+    `).run(opts.name, opts.type, JSON.stringify(opts.config));
+    return this.getDestination(opts.name)!;
+  }
+
+  getDestination(name: string): DestinationRecord | null {
+    const row = this.db.prepare('SELECT * FROM destinations WHERE name = ?').get(name) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    return mapDestinationRow(row);
+  }
+
+  listDestinations(): DestinationRecord[] {
+    const rows = this.db.prepare('SELECT * FROM destinations ORDER BY created_at ASC').all() as Array<Record<string, unknown>>;
+    return rows.map(mapDestinationRow);
+  }
+
+  updateDestination(name: string, updates: { config?: Record<string, unknown>; enabled?: boolean }): DestinationRecord | null {
+    const existing = this.getDestination(name);
+    if (!existing) return null;
+    if (updates.config !== undefined) {
+      this.db.prepare("UPDATE destinations SET config = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE name = ?")
+        .run(JSON.stringify(updates.config), name);
+    }
+    if (updates.enabled !== undefined) {
+      this.db.prepare("UPDATE destinations SET enabled = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE name = ?")
+        .run(updates.enabled ? 1 : 0, name);
+    }
+    return this.getDestination(name);
+  }
+
+  deleteDestination(name: string): boolean {
+    const result = this.db.prepare('DELETE FROM destinations WHERE name = ?').run(name);
+    return result.changes > 0;
+  }
 }
 
 // ── Row Mappers ──
@@ -1133,6 +1186,19 @@ function mapStoreRow(row: Record<string, unknown>): DataStoreRecord {
   return {
     name: row['name'] as string,
     agent: (row['agent'] as string | null) ?? null,
+    createdAt: row['created_at'] as string,
+    updatedAt: row['updated_at'] as string,
+  };
+}
+
+function mapDestinationRow(row: Record<string, unknown>): DestinationRecord {
+  let config: Record<string, unknown> = {};
+  try { config = JSON.parse(row['config'] as string); } catch { /* empty */ }
+  return {
+    name: row['name'] as string,
+    type: row['type'] as string,
+    config,
+    enabled: (row['enabled'] as number) === 1,
     createdAt: row['created_at'] as string,
     updatedAt: row['updated_at'] as string,
   };

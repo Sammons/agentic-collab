@@ -105,6 +105,17 @@ export type PageRecord = {
   updatedAt: string;
 };
 
+// ── Destinations ──
+
+export type DestinationRecord = {
+  name: string;
+  type: string;
+  config: Record<string, unknown>;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
 // ── Data Stores ──
 
 export type DataStoreRecord = {
@@ -297,7 +308,12 @@ export type WsStoresUpdateEvent = {
   stores: DataStoreRecord[];
 };
 
-export type WsEvent = WsInitEvent | WsAgentUpdateEvent | WsMessageEvent | WsProxyEvent | WsQueueUpdateEvent | WsIndicatorUpdateEvent | WsStoresUpdateEvent;
+export type WsDestinationsUpdateEvent = {
+  type: 'destinations_update';
+  destinations: DestinationRecord[];
+};
+
+export type WsEvent = WsInitEvent | WsAgentUpdateEvent | WsMessageEvent | WsProxyEvent | WsQueueUpdateEvent | WsIndicatorUpdateEvent | WsStoresUpdateEvent | WsDestinationsUpdateEvent;
 
 // ── Proxy API ──
 

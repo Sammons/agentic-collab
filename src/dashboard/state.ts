@@ -28,6 +28,7 @@ export const state = {
   indicators: {},
   pages: [],
   stores: [],
+  destinations: [],
   // Internal tracking for progressive message loading
   _threadRenderedFrom: 0,
   _renderedAgent: null,

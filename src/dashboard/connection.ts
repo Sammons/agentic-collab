@@ -149,6 +149,7 @@ export function connect() {
         state.indicators = data.indicators || {};
         state.pages = data.pages || [];
         state.stores = data.stores || [];
+        state.destinations = data.destinations || [];
         // Restore unread counts from server, preserving any live increments
         if (data.unreadCounts) {
           for (const [agent, count] of Object.entries(data.unreadCounts)) {
@@ -219,6 +220,11 @@ export function connect() {
         break;
       case 'stores_update':
         state.stores = data.stores || [];
+        break;
+      case 'destinations_update':
+        state.destinations = data.destinations || [];
+        { const sp = document.getElementById('settingsPanel');
+          if (sp && sp.style.display !== 'none' && sp.render) sp.render(); }
         break;
       case 'reminder_update':
         if (state.threadView === 'reminders') {

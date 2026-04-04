@@ -8,7 +8,8 @@ import { readFileSync, mkdirSync, readdirSync, statSync, existsSync } from 'node
 import { join, dirname } from 'node:path';
 import { timingSafeEqual } from 'node:crypto';
 import { Database } from './database.ts';
-import { createRouter, type RouteContext } from './routes.ts';
+import { createRouter, startTelegramPolling, type RouteContext } from './routes.ts';
+import { TelegramDispatcher } from './telegram.ts';
 import { WebSocketServer } from '../shared/websocket-server.ts';
 import { LockManager } from '../shared/lock.ts';
 import { HealthMonitor } from './health-monitor.ts';
@@ -225,6 +226,10 @@ if (voiceOpts) {
   console.log('[orchestrator] Voice dictation enabled (ElevenLabs API key set)');
 }
 
+// ── Telegram Dispatcher ──
+
+const telegramDispatcher = new TelegramDispatcher();
+
 const routeCtx: RouteContext = {
   db,
   wss,
@@ -239,6 +244,7 @@ const routeCtx: RouteContext = {
   accountStore,
   pagesDir: PAGES_DIR,
   storesDir: STORES_DIR,
+  telegramDispatcher,
 };
 
 const router = createRouter(routeCtx);
@@ -316,6 +322,7 @@ wss.onConnect((client) => {
   const engineConfigs = db.listEngineConfigs();
   const pages = db.listPages();
   const stores = db.listStores();
+  const destinations = db.listDestinations();
   wss.send(client, JSON.stringify({
     type: 'init',
     agents,
@@ -327,6 +334,7 @@ wss.onConnect((client) => {
     accounts,
     pages,
     stores,
+    destinations,
   }));
 });
 
@@ -377,6 +385,7 @@ const staleProxyTimer = setInterval(() => {
 async function shutdown(): Promise<void> {
   console.log('[orchestrator] Shutting down...');
   clearInterval(staleProxyTimer);
+  telegramDispatcher.stopPolling();
   healthMonitor.stop();
   messageDispatcher.stop();
   usagePoller.stop();
@@ -460,6 +469,13 @@ server.listen(PORT, '0.0.0.0', async () => {
   healthMonitor.start();
   usagePoller.start();
   reminderDispatcher.start();
+
+  // Start Telegram polling for enabled destinations
+  const telegramDests = db.listDestinations().filter(d => d.type === 'telegram' && d.enabled);
+  for (const dest of telegramDests) {
+    startTelegramPolling(routeCtx, dest);
+    console.log(`[telegram] Started polling for destination: ${dest.name}`);
+  }
 
   // Attempt network restore for agents that were running before last shutdown/crash
   try {

@@ -439,6 +439,28 @@ export class SettingsPanel extends HTMLElement {
     }
     html += '</div>';
 
+    // ── Destinations (Telegram, etc.) ──
+    html += '<div class="settings-section">';
+    html += '<h3>Destinations</h3>';
+    const destinations = state.destinations || [];
+    if (destinations.length === 0) {
+      html += '<p class="settings-hint">No destinations configured. Add a Telegram destination to send/receive messages.</p>';
+    } else {
+      for (const dest of destinations) {
+        const updated = dest.updatedAt ? new Date(dest.updatedAt).toLocaleDateString() : '';
+        html += '<div class="config-card">';
+        html += '<div class="config-header">';
+        html += `<span class="config-name">${esc(dest.name)} <span style="font-size:11px;color:var(--text-dim)">(${esc(dest.type)})</span></span>`;
+        html += '<span class="config-actions">';
+        html += `<span style="font-size:11px;color:var(--text-dim)">${dest.enabled ? 'enabled' : 'disabled'}${updated ? ' · ' + esc(updated) : ''}</span>`;
+        html += `<button class="config-action-btn" data-dest-test="${esc(dest.name)}">Test</button>`;
+        html += `<button class="config-action-btn config-delete-btn" data-dest-delete="${esc(dest.name)}">${icon.trash(12)} Delete</button>`;
+        html += '</span></div>';
+        html += '</div>';
+      }
+    }
+    html += '</div>';
+
     html += '</div>';
     this.innerHTML = html;
     this._bindEvents();
@@ -478,6 +500,40 @@ export class SettingsPanel extends HTMLElement {
             const res = await fetch(`/api/pages/${encodeURIComponent(slug)}`, { method: 'DELETE', headers: authHeaders() });
             if (res.ok) {
               state.pages = state.pages.filter(p => p.slug !== slug);
+              showToast('Deleted', 'success');
+              this.render();
+            } else {
+              const b = await res.json().catch(() => null);
+              showToast(b?.error || 'Delete failed', 'error');
+            }
+          } catch { showToast('Network error', 'error'); }
+        }
+      });
+    });
+
+    this.querySelectorAll('[data-dest-test]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const name = btn.dataset.destTest;
+        try {
+          const res = await fetch(`/api/destinations/${encodeURIComponent(name)}/test`, { method: 'POST', headers: authHeaders() });
+          if (res.ok) {
+            showToast('Test message sent', 'success');
+          } else {
+            const b = await res.json().catch(() => null);
+            showToast(b?.error || 'Test failed', 'error');
+          }
+        } catch { showToast('Network error', 'error'); }
+      });
+    });
+
+    this.querySelectorAll('[data-dest-delete]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const name = btn.dataset.destDelete;
+        if (await confirmAction(`Delete destination "${name}"?`)) {
+          try {
+            const res = await fetch(`/api/destinations/${encodeURIComponent(name)}`, { method: 'DELETE', headers: authHeaders() });
+            if (res.ok) {
+              state.destinations = state.destinations.filter(d => d.name !== name);
               showToast('Deleted', 'success');
               this.render();
             } else {

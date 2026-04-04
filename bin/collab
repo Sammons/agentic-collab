@@ -162,7 +162,45 @@ function parseSendArgs(args, implicitTarget = null) {
   };
 }
 
+async function resolveDestination(target) {
+  // Check if target is a destination: "telegram" (first of type) or "telegram:name" (by name)
+  const colonIdx = target.indexOf(':');
+  if (colonIdx > 0) {
+    const type = target.slice(0, colonIdx);
+    const name = target.slice(colonIdx + 1);
+    if (type === 'telegram') {
+      return name;
+    }
+  }
+  // Check if target matches a destination type (e.g. "telegram" → first telegram dest)
+  if (target === 'telegram') {
+    const dests = await api('GET', '/api/destinations');
+    const match = dests.find(d => d.type === 'telegram' && d.enabled);
+    if (match) return match.name;
+    console.error('error: no enabled telegram destination found');
+    process.exit(1);
+  }
+  return null;
+}
+
 async function dispatchSend({ target, topic, message, replyReminder, inReplyTo }) {
+  // Destination routing: "telegram" or "telegram:name"
+  const destName = await resolveDestination(target);
+  if (destName) {
+    if (!message) {
+      console.error('usage: collab send telegram "message"');
+      process.exit(1);
+    }
+    const formattedMessage = formatReplyContext(message, inReplyTo);
+    const fromAgent = agentName() || undefined;
+    await api('POST', `/api/destinations/${encodeURIComponent(destName)}/send`, {
+      message: formattedMessage,
+      fromAgent,
+    });
+    console.log('sent to telegram');
+    return;
+  }
+
   if (!target || !topic || !message) {
     console.error('usage: collab send <target> --topic <topic> [--in-reply-to <text>] <message>');
     process.exit(1);
@@ -662,6 +700,62 @@ cmd('db', 'collab db {create|query|schema|list|delete}', 'Manage agent data stor
   else {
     console.error(`unknown subcommand: ${sub}`);
     console.error('usage: collab db {create|query|schema|list|delete}');
+    process.exit(1);
+  }
+});
+
+// ── Destinations ���─
+
+cmd('destinations', 'destinations {list|add|delete|test}', 'Manage notification destinations (telegram, etc.)', async (args) => {
+  const sub = args[0];
+
+  if (!sub || sub === 'list') {
+    const dests = await api('GET', '/api/destinations');
+    if (!Array.isArray(dests) || dests.length === 0) { console.log('No destinations'); return; }
+    for (const d of dests) {
+      const status = d.enabled ? 'enabled' : 'disabled';
+      console.log(`  ${d.name.padEnd(20)} ${d.type.padEnd(12)} ${status.padEnd(10)}  ${d.updatedAt}`);
+    }
+  }
+
+  else if (sub === 'add') {
+    // collab destinations add <name> telegram --bot-token <token> --chat-id <id>
+    const name = args[1];
+    const type = args[2];
+    if (!name || !type) {
+      console.error('usage: collab destinations add <name> telegram --bot-token <token> --chat-id <id>');
+      process.exit(1);
+    }
+    const config = {};
+    for (let i = 3; i < args.length; i++) {
+      if (args[i] === '--bot-token' && args[i + 1]) { config.botToken = args[++i]; }
+      else if (args[i] === '--chat-id' && args[i + 1]) { config.chatId = args[++i]; }
+    }
+    if (type === 'telegram' && (!config.botToken || !config.chatId)) {
+      console.error('error: telegram requires --bot-token and --chat-id');
+      process.exit(1);
+    }
+    const dest = await api('POST', '/api/destinations', { name, type, config });
+    console.log(`created destination: ${dest.name} (${dest.type})`);
+  }
+
+  else if (sub === 'delete') {
+    const name = args[1];
+    if (!name) { console.error('usage: collab destinations delete <name>'); process.exit(1); }
+    await api('DELETE', `/api/destinations/${encodeURIComponent(name)}`);
+    console.log(`deleted destination: ${name}`);
+  }
+
+  else if (sub === 'test') {
+    const name = args[1];
+    if (!name) { console.error('usage: collab destinations test <name>'); process.exit(1); }
+    await api('POST', `/api/destinations/${encodeURIComponent(name)}/test`);
+    console.log('test message sent');
+  }
+
+  else {
+    console.error(`unknown subcommand: ${sub}`);
+    console.error('usage: collab destinations {list|add|delete|test}');
     process.exit(1);
   }
 });

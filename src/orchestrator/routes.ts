@@ -14,7 +14,8 @@ import { renderMarkdown, wrapInHtml, DOC_PAGES } from '../docs/render.ts';
 import { hostname } from 'node:os';
 import type { Database } from './database.ts';
 import type { WebSocketServer } from '../shared/websocket-server.ts';
-import type { AgentState, DashboardMessage, EngineType, PendingMessage, ProxyCommand, ProxyResponse, ProxyRegistration } from '../shared/types.ts';
+import type { AgentState, DashboardMessage, DestinationRecord, EngineType, PendingMessage, ProxyCommand, ProxyResponse, ProxyRegistration } from '../shared/types.ts';
+import type { TelegramDispatcher } from './telegram.ts';
 import { sanitizeMessage, generateMessageId } from '../shared/sanitize.ts';
 import { getVersion } from '../shared/version.ts';
 import type { LockManager } from '../shared/lock.ts';
@@ -61,6 +62,7 @@ export type RouteContext = {
   accountStore: import('./accounts.ts').AccountStore;
   pagesDir: string;
   storesDir: string;
+  telegramDispatcher: TelegramDispatcher;
 };
 
 /**
@@ -1049,6 +1051,104 @@ route('DELETE', '/api/stores/:name', async (_req, res, match, ctx) => {
   json(res, 200, { ok: true });
 });
 
+// ── Destinations (Telegram, etc.) ──
+
+route('POST', '/api/destinations', async (req, res, _match, ctx) => {
+  const body = await readJson(req);
+  const name = body.name as string | undefined;
+  const type = body.type as string | undefined;
+  const config = body.config as Record<string, unknown> | undefined;
+
+  if (!name || typeof name !== 'string' || name.length < 1 || name.length > 64) {
+    return json(res, 400, { error: 'name required (1-64 chars)' });
+  }
+  if (!type || typeof type !== 'string') {
+    return json(res, 400, { error: 'type required (e.g. "telegram")' });
+  }
+  if (!config || typeof config !== 'object') {
+    return json(res, 400, { error: 'config required (object)' });
+  }
+  if (type === 'telegram') {
+    if (!config.botToken || !config.chatId) {
+      return json(res, 400, { error: 'telegram config requires botToken and chatId' });
+    }
+  }
+
+  if (ctx.db.getDestination(name)) {
+    return json(res, 409, { error: `Destination "${name}" already exists` });
+  }
+
+  const record = ctx.db.createDestination({ name, type, config });
+  ctx.wss.broadcast(JSON.stringify({ type: 'destinations_update', destinations: ctx.db.listDestinations() }));
+
+  // Start polling for newly created telegram destinations
+  if (type === 'telegram' && record.enabled) {
+    startTelegramPolling(ctx, record);
+  }
+
+  json(res, 201, record);
+});
+
+route('GET', '/api/destinations', async (_req, res, _match, ctx) => {
+  json(res, 200, ctx.db.listDestinations());
+});
+
+route('DELETE', '/api/destinations/:name', async (_req, res, match, ctx) => {
+  const name = match.pathname.groups['name']!;
+  const existing = ctx.db.getDestination(name);
+  if (!existing) return json(res, 404, { error: 'Destination not found' });
+
+  // Stop polling if telegram
+  if (existing.type === 'telegram') {
+    ctx.telegramDispatcher.stopPolling();
+  }
+
+  const deleted = ctx.db.deleteDestination(name);
+  if (!deleted) return json(res, 404, { error: 'Destination not found' });
+  ctx.wss.broadcast(JSON.stringify({ type: 'destinations_update', destinations: ctx.db.listDestinations() }));
+  json(res, 200, { ok: true });
+});
+
+route('POST', '/api/destinations/:name/send', async (req, res, match, ctx) => {
+  const name = match.pathname.groups['name']!;
+  const dest = ctx.db.getDestination(name);
+  if (!dest) return json(res, 404, { error: 'Destination not found' });
+  if (!dest.enabled) return json(res, 400, { error: 'Destination is disabled' });
+
+  const body = await readJson(req);
+  const message = body.message as string | undefined;
+  if (!message) return json(res, 400, { error: 'message required' });
+
+  const fromAgent = body.fromAgent as string | undefined;
+  const text = fromAgent ? `[${fromAgent}] ${message}` : message;
+
+  if (dest.type === 'telegram') {
+    const botToken = dest.config.botToken as string;
+    const chatId = dest.config.chatId as string;
+    const ok = await ctx.telegramDispatcher.send(botToken, chatId, text);
+    if (!ok) return json(res, 502, { error: 'Telegram send failed' });
+    json(res, 200, { ok: true });
+  } else {
+    json(res, 400, { error: `Unsupported destination type: ${dest.type}` });
+  }
+});
+
+route('POST', '/api/destinations/:name/test', async (_req, res, match, ctx) => {
+  const name = match.pathname.groups['name']!;
+  const dest = ctx.db.getDestination(name);
+  if (!dest) return json(res, 404, { error: 'Destination not found' });
+
+  if (dest.type === 'telegram') {
+    const botToken = dest.config.botToken as string;
+    const chatId = dest.config.chatId as string;
+    const ok = await ctx.telegramDispatcher.send(botToken, chatId, `[agentic-collab] Test message from destination "${name}"`);
+    if (!ok) return json(res, 502, { error: 'Telegram test send failed' });
+    json(res, 200, { ok: true });
+  } else {
+    json(res, 400, { error: `Unsupported destination type: ${dest.type}` });
+  }
+});
+
 // ── Personas ──
 
 
@@ -1989,4 +2089,53 @@ function makeLifecycleCtx(ctx: RouteContext): LifecycleContext {
     orchestratorHost: ctx.orchestratorHost,
     accountStore: ctx.accountStore,
   };
+}
+
+/**
+ * Start Telegram long polling for a destination.
+ * Routes inbound messages to agents via @agent-name prefix or to dashboard.
+ * Exported for use in main.ts on startup.
+ */
+export function startTelegramPolling(ctx: RouteContext, dest: DestinationRecord): void {
+  const botToken = dest.config.botToken as string;
+
+  ctx.telegramDispatcher.startPolling(botToken, (incomingChatId: string, text: string) => {
+    console.log(`[telegram] Inbound from chat ${incomingChatId}: ${text.slice(0, 100)}`);
+
+    // Parse @agent-name prefix
+    const agentMatch = text.match(/^@([a-zA-Z0-9_-]+)\s+([\s\S]+)$/);
+    let targetAgent: string | null = null;
+    let messageText = text;
+
+    if (agentMatch) {
+      targetAgent = agentMatch[1]!;
+      messageText = agentMatch[2]!.trim();
+    }
+
+    if (targetAgent) {
+      // Route to specific agent via message queue
+      const agent = ctx.db.getAgent(targetAgent);
+      if (!agent) {
+        ctx.telegramDispatcher.send(botToken, incomingChatId, `Agent "${targetAgent}" not found`).catch(() => {});
+        return;
+      }
+
+      enqueueAndDeliver(ctx, {
+        agentName: targetAgent,
+        displayMessage: messageText,
+        envelope: messageText,
+        topic: 'telegram',
+        sourceAgent: `telegram:${dest.name}`,
+      });
+
+      console.log(`[telegram] Routed message to agent: ${targetAgent}`);
+    } else {
+      // No agent prefix — create a dashboard message visible under a virtual "telegram" thread
+      const msg = ctx.db.addDashboardMessage('telegram', 'from_agent', messageText, {
+        sourceAgent: `telegram:${dest.name}`,
+      });
+      ctx.wss.broadcast(JSON.stringify({ type: 'message', msg }));
+      console.log('[telegram] Routed message to dashboard');
+    }
+  });
 }
