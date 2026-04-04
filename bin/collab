@@ -138,6 +138,7 @@ function parseSendArgs(args, implicitTarget = null) {
   let topic = null;
   let replyReminder = null;
   let inReplyTo = null;
+  let notify = null;
   const target = implicitTarget ?? args[0];
   const positional = [];
   const startIdx = implicitTarget ? 0 : 1;
@@ -145,6 +146,11 @@ function parseSendArgs(args, implicitTarget = null) {
   for (let i = startIdx; i < args.length; i++) {
     if (args[i] === '--topic' && args[i + 1]) { topic = args[++i]; }
     else if (args[i] === '--in-reply-to' && args[i + 1]) { inReplyTo = args[++i]; }
+    else if (args[i] === '--notify') {
+      const next = args[i + 1];
+      if (next && !next.startsWith('-')) { notify = args[++i]; }
+      else { notify = 'normal'; }
+    }
     else if (args[i] === '--reply-reminder') {
       const next = args[i + 1];
       if (next && !next.startsWith('-')) { replyReminder = parseInt(args[++i], 10); }
@@ -158,6 +164,7 @@ function parseSendArgs(args, implicitTarget = null) {
     topic,
     replyReminder,
     inReplyTo,
+    notify,
     message: positional.join(' '),
   };
 }
@@ -183,7 +190,7 @@ async function resolveDestination(target) {
   return null;
 }
 
-async function dispatchSend({ target, topic, message, replyReminder, inReplyTo }) {
+async function dispatchSend({ target, topic, message, replyReminder, inReplyTo, notify }) {
   // Destination routing: "telegram" or "telegram:name"
   const destName = await resolveDestination(target);
   if (destName) {
@@ -198,11 +205,15 @@ async function dispatchSend({ target, topic, message, replyReminder, inReplyTo }
       fromAgent,
     });
     console.log('sent to telegram');
+    if (notify) {
+      const fromAgent = agentName() || undefined;
+      await api('POST', '/api/notify', { agent: fromAgent, message: formattedMessage, priority: notify }).catch(() => {});
+    }
     return;
   }
 
   if (!target || !topic || !message) {
-    console.error('usage: collab send <target> --topic <topic> [--in-reply-to <text>] <message>');
+    console.error('usage: collab send <target> --topic <topic> [--in-reply-to <text>] [--notify [priority]] <message>');
     process.exit(1);
   }
 
@@ -215,6 +226,9 @@ async function dispatchSend({ target, topic, message, replyReminder, inReplyTo }
     const agent = requireAgentName();
     await api('POST', '/api/dashboard/reply', { agent, message: formattedMessage, topic });
     console.log('sent');
+    if (notify) {
+      await api('POST', '/api/notify', { agent, message: formattedMessage, priority: notify }).catch(() => {});
+    }
     return;
   }
 
@@ -223,6 +237,12 @@ async function dispatchSend({ target, topic, message, replyReminder, inReplyTo }
   if (replyReminder) body.replyReminder = replyReminder;
   const data = await api('POST', '/api/agents/send', body);
   console.log(`queued (id:${data.queueId})`);
+
+  // Fire notification after normal send if --notify was passed
+  if (notify) {
+    const agent = agentName() || undefined;
+    await api('POST', '/api/notify', { agent, message: formattedMessage, priority: notify }).catch(() => {});
+  }
 }
 
 cmd('agents', 'agents', 'List all agents', async () => {
@@ -251,7 +271,7 @@ cmd('status', 'status', 'Orchestrator status', async () => {
   }
 });
 
-cmd('send', 'send <target> --topic <topic> [--in-reply-to <text>] <message>', 'Send a message to operator or another agent', async (args) => {
+cmd('send', 'send <target> --topic <topic> [--in-reply-to <text>] [--notify [priority]] <message>', 'Send a message to operator or another agent', async (args) => {
   await dispatchSend(parseSendArgs(args));
 });
 

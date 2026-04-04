@@ -232,6 +232,14 @@ export function connect() {
           if (rp && rp.load && state.selected) rp.load(state.selected);
         }
         break;
+      case 'notification':
+        if (document.hidden && 'Notification' in window && Notification.permission === 'granted') {
+          const title = data.agent ? `[${data.agent}]` : 'Agentic Collab';
+          new Notification(title, { body: data.message, tag: 'collab-notify' });
+        } else if ('Notification' in window && Notification.permission === 'default') {
+          Notification.requestPermission();
+        }
+        break;
     }
   };
 }

@@ -1819,6 +1819,41 @@ route('DELETE', '/api/accounts/:name', async (_req, res, match, ctx) => {
   json(res, 200, { ok: true, deleted: name });
 });
 
+// ── Notify ──
+
+route('POST', '/api/notify', async (req, res, _match, ctx) => {
+  const body = await readJson(req);
+  const agent = body.agent as string | undefined;
+  const message = body.message as string | undefined;
+  const priority = (body.priority as string) ?? 'normal';
+  if (!message) return json(res, 400, { error: 'message required' });
+
+  const destinations = ctx.db.listDestinations().filter(d => d.enabled);
+  let sent = 0;
+
+  for (const dest of destinations) {
+    const text = agent ? `[${agent}] ${message}` : message;
+    try {
+      if (dest.type === 'telegram') {
+        const botToken = dest.config.botToken as string;
+        const chatId = dest.config.chatId as string;
+        const ok = await ctx.telegramDispatcher.send(botToken, chatId, text);
+        if (ok) sent++;
+      }
+    } catch { /* best-effort per destination */ }
+  }
+
+  // Broadcast to dashboard for browser notifications
+  ctx.wss.broadcast(JSON.stringify({
+    type: 'notification',
+    agent: agent ?? null,
+    message,
+    priority,
+  }));
+
+  json(res, 200, { ok: true, sent });
+});
+
   return routes;
 }
 

@@ -313,7 +313,14 @@ export type WsDestinationsUpdateEvent = {
   destinations: DestinationRecord[];
 };
 
-export type WsEvent = WsInitEvent | WsAgentUpdateEvent | WsMessageEvent | WsProxyEvent | WsQueueUpdateEvent | WsIndicatorUpdateEvent | WsStoresUpdateEvent | WsDestinationsUpdateEvent;
+export type WsNotificationEvent = {
+  type: 'notification';
+  agent: string | null;
+  message: string;
+  priority: string;
+};
+
+export type WsEvent = WsInitEvent | WsAgentUpdateEvent | WsMessageEvent | WsProxyEvent | WsQueueUpdateEvent | WsIndicatorUpdateEvent | WsStoresUpdateEvent | WsDestinationsUpdateEvent | WsNotificationEvent;
 
 // ── Proxy API ──
 
