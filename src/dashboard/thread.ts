@@ -217,7 +217,7 @@ export function renderThread() {
     <button class="${state.threadView === 'messages' ? 'active' : ''}" data-tab="messages">Messages</button>
     <button class="${state.threadView === 'watch' ? 'active' : ''}" data-tab="watch">Watch</button>
     <button class="${state.threadView === 'reminders' ? 'active' : ''}" data-tab="reminders">Reminders</button>
-    <button class="${state.threadView === 'files' ? 'active' : ''}" data-tab="files">Files</button>
+    <button class="${state.threadView === 'files' ? 'active' : ''}" data-tab="files">Pages</button>
     <button class="${state.threadView === 'persona' ? 'active' : ''}" data-tab="persona">Persona</button>
   </div>`;
   const actionsHtml = selectedAgent ? `<div class="thread-actions">${buildActionsHtml(selectedAgent)}</div>` : '';
