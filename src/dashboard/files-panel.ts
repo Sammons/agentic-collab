@@ -1,76 +1,117 @@
 /**
  * <files-panel> Web Component.
- * Displays files in an agent's working directory.
+ * Agent profile / index page — summary, published pages, data stores, workspace info.
  */
 
 import { state, authHeaders } from '/dashboard/assets/state.ts';
-import { esc, formatFileSize, showToast } from '/dashboard/assets/utils.ts';
+import { esc, formatFileSize, timeAgo } from '/dashboard/assets/utils.ts';
 import { icon } from '/dashboard/assets/icons.ts';
 
 export class FilesPanel extends HTMLElement {
   _agent = null;
-  _loading = false;
 
   async load(agentName) {
     this._agent = agentName;
-    this._loading = true;
-    this.innerHTML = '<div class="files-empty">Loading files\u2026</div>';
-
-    try {
-      const res = await fetch(`/api/agents/${encodeURIComponent(agentName)}/files`, {
-        headers: authHeaders(),
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => null);
-        this.innerHTML = `<div class="files-empty">${esc(body?.error || 'Failed to load files')}</div>`;
-        return;
-      }
-      const data = await res.json();
-      this._renderFiles(data.files || [], data.cwd || '');
-    } catch {
-      this.innerHTML = '<div class="files-empty">Failed to load files</div>';
-    } finally {
-      this._loading = false;
-    }
-  }
-
-  _renderFiles(files, cwd) {
-    if (files.length === 0) {
-      this.innerHTML = `<div class="files-empty">No files in ${esc(cwd)}</div>`;
+    const agent = state.agents.find(a => a.name === agentName);
+    if (!agent) {
+      this.innerHTML = '<div class="files-empty">Agent not found</div>';
       return;
     }
 
-    // Sort: dirs first, then alphabetical
-    files.sort((a, b) => {
-      if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
-      return a.name.localeCompare(b.name);
-    });
+    const agentPages = (state.pages || []).filter(p => p.agent === agentName);
+    const agentStores = (state.stores || []).filter(s => s.agent === agentName);
+    const indicators = state.indicators[agentName] || [];
+    const thread = state.threads[agentName] || [];
+    const lastMsg = thread.length > 0 ? thread[thread.length - 1] : null;
 
-    let html = `<div class="files-header"><span class="files-count">${files.length} items</span></div>`;
-    html += '<div class="files-list">';
-    for (const f of files) {
-      const sizeStr = f.isDir ? '' : formatFileSize(f.size);
-      html += `<div class="files-item${f.isDir ? ' is-dir' : ''}">`;
-      html += `<span class="files-name">${f.isDir ? '/' : ''}${esc(f.name)}</span>`;
-      if (sizeStr) html += `<span class="files-size">${sizeStr}</span>`;
+    let html = '<div class="agent-profile">';
+
+    // ── Header ──
+    html += '<div class="profile-section">';
+    html += `<div class="profile-name">${agent.icon ? esc(agent.icon) + ' ' : ''}${esc(agent.name)}</div>`;
+    html += `<div class="profile-meta">`;
+    html += `<span class="state-badge state-${agent.state}">${agent.state}</span>`;
+    html += ` <span class="profile-dim">${esc(agent.engine || '')}</span>`;
+    if (agent.cwd) html += ` <span class="profile-dim">· ${esc(agent.cwd)}</span>`;
+    html += '</div>';
+    if (indicators.length > 0) {
+      html += '<div class="profile-indicators">';
+      for (const ind of indicators) {
+        html += `<span class="indicator-badge ${ind.style || 'info'}">${esc(ind.badge)}</span>`;
+      }
       html += '</div>';
     }
     html += '</div>';
 
-    // Bookmarked pages for this agent
-    const agentPages = (state.pages || []).filter(p => p.agent === this._agent);
+    // ── Published Pages ──
     if (agentPages.length > 0) {
-      html += '<div class="files-section-label">Published Pages</div>';
-      html += '<div class="files-list">';
+      html += '<div class="profile-section">';
+      html += '<div class="profile-section-title">Published Pages</div>';
       for (const page of agentPages) {
-        html += `<div class="files-item files-page">`;
-        html += `<a class="files-name files-link" href="/pages/${esc(page.slug)}" target="_blank">${esc(page.slug)}</a>`;
-        html += `<span class="files-size">${formatFileSize(page.totalBytes)}</span>`;
+        html += `<a class="profile-card profile-link" href="/pages/${esc(page.slug)}" target="_blank">`;
+        html += `<span class="profile-card-title">${icon.globe(14)} ${esc(page.slug)}</span>`;
+        html += `<span class="profile-card-meta">${page.fileCount} files · ${formatFileSize(page.totalBytes)}</span>`;
+        html += '</a>';
+      }
+      html += '</div>';
+    }
+
+    // ── Data Stores ──
+    if (agentStores.length > 0) {
+      html += '<div class="profile-section">';
+      html += '<div class="profile-section-title">Data Stores</div>';
+      for (const store of agentStores) {
+        html += '<div class="profile-card">';
+        html += `<span class="profile-card-title">${icon.file(14)} ${esc(store.name)}</span>`;
+        html += `<span class="profile-card-meta">updated ${esc(store.updatedAt ? new Date(store.updatedAt).toLocaleDateString() : '')}</span>`;
         html += '</div>';
       }
       html += '</div>';
     }
 
+    // ── Recent Activity ──
+    if (lastMsg) {
+      html += '<div class="profile-section">';
+      html += '<div class="profile-section-title">Recent Message</div>';
+      html += '<div class="profile-card">';
+      const preview = lastMsg.message.length > 200 ? lastMsg.message.substring(0, 200) + '...' : lastMsg.message;
+      const dir = lastMsg.direction === 'to_agent' ? 'You → Agent' : 'Agent → You';
+      html += `<span class="profile-card-meta">${esc(dir)} · ${esc(timeAgo(lastMsg.createdAt))}</span>`;
+      html += `<div class="profile-message-preview">${esc(preview)}</div>`;
+      html += '</div>';
+      html += '</div>';
+    }
+
+    // ── Workspace ──
+    if (agent.cwd) {
+      html += '<div class="profile-section">';
+      html += '<div class="profile-section-title">Workspace</div>';
+      try {
+        const res = await fetch(`/api/agents/${encodeURIComponent(agentName)}/files`, { headers: authHeaders() });
+        if (res.ok) {
+          const data = await res.json();
+          const files = (data.files || []).slice(0, 10);
+          if (files.length > 0) {
+            html += '<div class="profile-card">';
+            html += `<span class="profile-card-meta">${esc(data.cwd)}</span>`;
+            for (const f of files) {
+              const sizeStr = f.isDir ? '' : ' · ' + formatFileSize(f.size);
+              html += `<div class="profile-file">${f.isDir ? '📁' : '📄'} ${esc(f.name)}${sizeStr}</div>`;
+            }
+            if (data.files.length > 10) html += `<div class="profile-dim">+ ${data.files.length - 10} more</div>`;
+            html += '</div>';
+          }
+        }
+      } catch { /* skip workspace listing on error */ }
+      html += '</div>';
+    }
+
+    // ── Empty state ──
+    if (agentPages.length === 0 && agentStores.length === 0 && !lastMsg) {
+      html += '<div class="profile-section"><div class="profile-dim" style="text-align:center;padding:16px">No published pages, stores, or messages yet.</div></div>';
+    }
+
+    html += '</div>';
     this.innerHTML = html;
   }
 }
