@@ -314,6 +314,31 @@
     padding: 12px;
     font-size: 12px;
   }
+  .search-result-full {
+    margin-top: 6px;
+    border-top: 1px solid var(--border);
+    padding-top: 6px;
+  }
+  .search-result-text {
+    font-size: 12px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: var(--fg);
+    margin: 0 0 6px;
+    max-height: 200px;
+    overflow-y: auto;
+  }
+  .search-copy-btn {
+    font-size: 11px;
+    padding: 2px 10px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-dim);
+    cursor: pointer;
+  }
+  .search-copy-btn:hover { border-color: var(--accent); color: var(--accent); }
 
   /* ── Mobile back button ── */
   .mobile-back {

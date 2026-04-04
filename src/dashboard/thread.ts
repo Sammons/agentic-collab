@@ -133,8 +133,30 @@ function renderSearchResults(container) {
     return `<div class="search-result" data-msg-id="${r.id}">
       <div class="search-result-meta"><span class="search-result-agent">${esc(r.agent)}</span><span class="search-result-time">${esc(time)}</span></div>
       <div class="search-result-snippet">${highlightMatch(snippet, _searchQuery)}</div>
+      <div class="search-result-full" style="display:none"><pre class="search-result-text">${esc(r.message)}</pre><button class="search-copy-btn">Copy</button></div>
     </div>`;
   }).join('');
+
+  // Click to expand, copy button
+  container.querySelectorAll('.search-result').forEach(el => {
+    el.addEventListener('click', (e) => {
+      if (e.target.closest('.search-copy-btn')) return;
+      const full = el.querySelector('.search-result-full');
+      const isOpen = full.style.display !== 'none';
+      // Close all others
+      container.querySelectorAll('.search-result-full').forEach(f => f.style.display = 'none');
+      if (!isOpen) full.style.display = 'block';
+    });
+    el.querySelector('.search-copy-btn')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const text = el.querySelector('.search-result-text').textContent;
+      const btn = e.target;
+      navigator.clipboard.writeText(text).then(() => {
+        btn.textContent = 'Copied!';
+        setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+      });
+    });
+  });
 }
 
 function doLocalSearch(query) {
