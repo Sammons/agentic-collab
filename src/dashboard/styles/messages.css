@@ -346,6 +346,8 @@
     white-space: nowrap;
   }
 
+  .voice-controls.voice-enabled { display: flex; }
+
   /* Mobile mic toggle — hidden on desktop, shown on mobile via responsive.css */
   .mobile-mic-btn {
     display: none;

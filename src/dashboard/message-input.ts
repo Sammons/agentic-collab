@@ -111,8 +111,13 @@ export class MessageInput extends HTMLElement {
         if (voiceState.audioCtx && voiceState.audioCtx.state === 'suspended') {
           voiceState.audioCtx.resume();
         }
-        mobileMicBtn.classList.add('recording');
-        startVoice();
+        mobileMicBtn.classList.add('loading');
+        startVoice().then(() => {
+          mobileMicBtn.classList.remove('loading');
+          mobileMicBtn.classList.add('recording');
+        }).catch(() => {
+          mobileMicBtn.classList.remove('loading');
+        });
       }
     });
     // Prevent mousedown from stealing focus/closing keyboard

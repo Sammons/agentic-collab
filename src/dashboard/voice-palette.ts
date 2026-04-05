@@ -43,7 +43,7 @@ export async function initVoice() {
 
   // Check browser capabilities first — getUserMedia requires HTTPS (or localhost)
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    controls.style.display = 'flex';
+    controls.classList.add('voice-enabled');
     toggle.querySelectorAll('button').forEach(b => { b.disabled = true; b.style.opacity = '0.4'; });
     toggle.title = window.isSecureContext
       ? 'Voice unavailable — browser does not support getUserMedia'
@@ -58,7 +58,7 @@ export async function initVoice() {
     });
     const data = await resp.json();
     if (!data.enabled) {
-      controls.style.display = 'flex';
+      controls.classList.add('voice-enabled');
       toggle.querySelectorAll('button').forEach(b => { b.disabled = true; b.style.opacity = '0.4'; });
       toggle.title = 'Voice unavailable — ELEVENLABS_API_KEY not configured on server';
       return;
@@ -67,7 +67,7 @@ export async function initVoice() {
     return; // Server unreachable, hide controls entirely
   }
 
-  controls.style.display = 'flex';
+  controls.classList.add('voice-enabled');
 
   async function setVoiceMode(mode) {
     voiceState.mode = mode;

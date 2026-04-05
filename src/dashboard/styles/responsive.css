@@ -40,7 +40,7 @@
       font-size: 16px; /* prevent iOS zoom */
       padding: 6px 8px;
     }
-    .voice-controls {
+    .voice-controls, .voice-controls.voice-enabled {
       display: none;
     }
     .voice-partial { display: none; }
@@ -158,6 +158,11 @@
     }
     .mobile-mic-btn.ptt-active {
       display: flex;
+    }
+    .mobile-mic-btn.loading {
+      border-color: var(--accent);
+      opacity: 0.5;
+      pointer-events: none;
     }
     .mobile-mic-btn.recording {
       border-color: #e74c3c;
