@@ -4,9 +4,11 @@ You're looking at the Agentic Collab dashboard. Here's how to use it.
 
 ## Dashboard layout
 
-- **Sidebar** (left): Agent cards showing name, engine, state, and context percentage. Click a card to select it.
-- **Thread panel** (right): Messages to/from the selected agent. Tabs at the top switch between Messages, Persona, Watch, Reminders, and Archive.
-- **Header**: New Agent button, search (Cmd+K), Docs link, connection status.
+- **Sidebar** (left): Agent cards showing name, engine, and inline badges (state + indicators like context percentage). Click a card to select it.
+- **Thread panel** (right): Messages to/from the selected agent. Tabs at the top switch between Messages, Watch, Reminders, Pages, and Persona. Action buttons live in the thread header, not on agent cards.
+- **Header**: New Agent button, Settings button, Docs link, connection status.
+- **Browser navigation**: The URL updates when you select an agent or switch tabs. Back/forward buttons work as expected.
+- **Search**: Click the search icon in the thread header (or Cmd+K) to search messages locally and across agents. Results are expandable with copy support.
 
 ## Create your first agent
 
@@ -18,11 +20,19 @@ You're looking at the Agentic Collab dashboard. Here's how to use it.
 
 The agent appears in the sidebar and starts running in a tmux session.
 
+## Settings
+
+Click the **Settings** button in the header to open the settings page. From here you can manage engine configurations, user preferences, pages, data stores, and destinations (including Telegram for external messaging).
+
 ## Talk to your agent
 
 Click the agent card to open its thread. Type a message in the input box and hit Send. Your message gets pasted into the agent's tmux session.
 
 The **Watch** tab shows a live view of the agent's tmux pane output, refreshing every few seconds. Use it to see what the agent is doing without leaving the dashboard.
+
+The **Pages** tab is the agent's profile — it shows published pages, data stores, and workspace content for that agent.
+
+On mobile, a **PTT (push-to-talk)** mic button appears — tap to toggle voice input.
 
 ## Agent states
 

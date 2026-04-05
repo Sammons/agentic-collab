@@ -961,7 +961,10 @@ function serializeIndicators(value?: IndicatorDefinition[]): string | null {
 
 import type { Database } from './database.ts';
 
-const VALID_ENGINES = new Set<string>(['claude', 'codex', 'opencode']);
+/** Any non-empty engine string is valid. Engine configs provide defaults but are not required. */
+function isValidEngine(engine: string | undefined | null): engine is string {
+  return typeof engine === 'string' && engine.length > 0;
+}
 
 function buildUpsertOpts(name: string, fm: PersonaFrontmatter): Parameters<Database['upsertAgentFromPersona']>[0] {
   return buildUpsertOptsFromFrontmatter(name, fm) as Parameters<Database['upsertAgentFromPersona']>[0];
@@ -988,7 +991,7 @@ export function syncSinglePersona(db: Database, name: string, personasDir?: stri
   const cwd = fm.cwd;
 
   const resolvedEngine = fm.engine;
-  if (!resolvedEngine || !VALID_ENGINES.has(resolvedEngine) || !cwd) return false;
+  if (!resolvedEngine || !isValidEngine(resolvedEngine) || !cwd) return false;
 
   const upsertOpts = buildUpsertOpts(name, fm);
   db.upsertAgentFromPersona(upsertOpts);
@@ -1012,7 +1015,7 @@ export function syncPersonasToDb(db: Database, personasDir?: string): number {
     const resolvedEngine = frontmatter.engine;
 
     // engine and cwd are required for an agent to be valid
-    if (!resolvedEngine || !VALID_ENGINES.has(resolvedEngine) || !cwd) {
+    if (!resolvedEngine || !isValidEngine(resolvedEngine) || !cwd) {
       console.warn(`[persona-sync] Skipping "${name}.md": engine and cwd are required (got engine=${resolvedEngine ?? 'undefined'}, cwd=${cwd ?? 'undefined'})`);
       continue;
     }
@@ -1066,7 +1069,7 @@ export function syncPersonasWithDiff(db: Database, personasDir?: string): SyncDi
 
     const resolvedEngine = frontmatter.engine;
 
-    if (!resolvedEngine || !VALID_ENGINES.has(resolvedEngine) || !cwd) {
+    if (!resolvedEngine || !isValidEngine(resolvedEngine) || !cwd) {
       result.skipped.push(name);
       continue;
     }
@@ -1113,7 +1116,7 @@ export function createPersonaAndAgent(
   const cwd = fm.cwd;
 
   const resolvedEngine = fm.engine;
-  if (!resolvedEngine || !VALID_ENGINES.has(resolvedEngine) || !cwd) {
+  if (!resolvedEngine || !isValidEngine(resolvedEngine) || !cwd) {
     throw new Error(`engine and cwd are required in frontmatter (got engine=${resolvedEngine ?? 'undefined'}, cwd=${cwd ?? 'undefined'})`);
   }
   validateFrontmatter(name, fm);

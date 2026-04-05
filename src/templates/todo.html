@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{TITLE}}</title>
+<style>
+  :root { --bg: #0d1117; --surface: #161b22; --border: #30363d; --text: #e6edf3; --dim: #8b949e; --accent: #58a6ff; --green: #3fb950; --red: #f85149; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: var(--bg); color: var(--text); padding: 24px; max-width: 600px; margin: 0 auto; }
+  h1 { font-size: 20px; margin-bottom: 16px; }
+  .add-form { display: flex; gap: 8px; margin-bottom: 16px; }
+  .add-form input { flex: 1; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); font-size: 14px; outline: none; }
+  .add-form input:focus { border-color: var(--accent); }
+  .add-form button { padding: 8px 16px; border: none; border-radius: 6px; background: var(--accent); color: #fff; font-size: 13px; cursor: pointer; }
+  .task { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; margin-bottom: 4px; background: var(--surface); }
+  .task.done { opacity: 0.5; }
+  .task.done .task-title { text-decoration: line-through; }
+  .task-check { width: 18px; height: 18px; accent-color: var(--green); cursor: pointer; }
+  .task-title { flex: 1; font-size: 14px; }
+  .task-delete { background: none; border: none; color: var(--dim); cursor: pointer; font-size: 16px; padding: 2px 6px; }
+  .task-delete:hover { color: var(--red); }
+  .empty { color: var(--dim); text-align: center; padding: 24px; font-style: italic; }
+  .stats { font-size: 12px; color: var(--dim); margin-top: 12px; text-align: center; }
+</style>
+</head>
+<body>
+<h1>{{TITLE}}</h1>
+<div class="add-form">
+  <input type="text" id="newTask" placeholder="Add a task..." />
+  <button onclick="addTask()">Add</button>
+</div>
+<div id="tasks"></div>
+<div class="stats" id="stats"></div>
+
+<script src="/dashboard/assets/pages-sdk.ts"></script>
+<script>
+  const STORE = '{{STORE}}';
+  const sdk = new CollabPages({ token: '{{TOKEN}}' });
+
+  // Create table if not exists
+  sdk.query(STORE, `CREATE TABLE IF NOT EXISTS tasks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    done INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )`).catch(() => {});
+
+  function render(rows) {
+    const el = document.getElementById('tasks');
+    if (!rows.length) {
+      el.innerHTML = '<div class="empty">No tasks yet</div>';
+    } else {
+      el.innerHTML = rows.map(r => `
+        <div class="task${r.done ? ' done' : ''}">
+          <input type="checkbox" class="task-check" ${r.done ? 'checked' : ''} onchange="toggleTask(${r.id}, this.checked)" />
+          <span class="task-title">${esc(r.title)}</span>
+          <button class="task-delete" onclick="deleteTask(${r.id})">&times;</button>
+        </div>
+      `).join('');
+    }
+    const done = rows.filter(r => r.done).length;
+    document.getElementById('stats').textContent = `${done}/${rows.length} complete`;
+  }
+
+  function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+  async function addTask() {
+    const input = document.getElementById('newTask');
+    const title = input.value.trim();
+    if (!title) return;
+    await sdk.query(STORE, 'INSERT INTO tasks (title) VALUES (?)', [title]);
+    input.value = '';
+    refresh();
+  }
+
+  async function toggleTask(id, done) {
+    await sdk.query(STORE, 'UPDATE tasks SET done = ? WHERE id = ?', [done ? 1 : 0, id]);
+    refresh();
+  }
+
+  async function deleteTask(id) {
+    await sdk.query(STORE, 'DELETE FROM tasks WHERE id = ?', [id]);
+    refresh();
+  }
+
+  async function refresh() {
+    const rows = await sdk.query(STORE, 'SELECT * FROM tasks ORDER BY done ASC, created_at DESC');
+    render(rows);
+  }
+
+  // Enter key to add
+  document.getElementById('newTask').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') addTask();
+  });
+
+  // Initial load + poll every 5s
+  sdk.poll(STORE, 'SELECT * FROM tasks ORDER BY done ASC, created_at DESC', 5000, render);
+</script>
+</body>
+</html>

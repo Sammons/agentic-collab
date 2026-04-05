@@ -34,12 +34,30 @@
   header {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    gap: 12px;
     padding: 12px 20px;
     background: var(--surface);
     border-bottom: 1px solid var(--border);
   }
   header h1 { font-size: 16px; font-weight: 600; }
+  .header-actions {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .header-btn {
+    color: var(--text-dim);
+    background: transparent;
+    text-decoration: none;
+    font-size: 12px;
+    padding: 4px 10px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .header-btn:hover { border-color: var(--accent); color: var(--accent); }
   .hotkey-hints {
     display: flex;
     gap: 12px;
@@ -210,7 +228,7 @@
   .auth-box button.secondary { background: transparent; border: 1px solid var(--border); color: var(--text-dim); }
   .auth-box button:hover { opacity: 0.9; }
   /* ── Indicators ── */
-  .indicator-badges { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; }
+  .indicator-badges { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 2px; }
   .indicator-badge {
     font-size: 10px; padding: 2px 8px; border-radius: 10px;
     font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px;

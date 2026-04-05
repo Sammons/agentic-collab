@@ -2,6 +2,57 @@
 
 All notable changes to agentic-collab are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## 2.0.0 — 2026-04-03
+
+### Breaking Changes
+- **`engine` field is now the config lookup key** — the separate `engineConfig` foreign key field is removed. Each agent's `engine` name is looked up in the `engine_configs` table for defaults (model, thinking, permissions, hooks). Persona frontmatter fields override config defaults. Default engine configs seeded on startup: claude (opus), codex (gpt-4.1), opencode (sonnet).
+- **Archive feature removed** — `<archive-panel>` Web Component deleted, archive tab removed from thread view, archive API endpoints removed. Progressive scroll-back replaces archive for message history.
+
+### Features
+- **Browser back/forward navigation** — agent selection, tab switches, and Settings open/close push to the History API. URL format: `/dashboard?agent=NAME&tab=TAB` or `/dashboard?settings=1`. On initial load, URL params restore state; defers agent selection until WebSocket init completes if needed.
+- **Engine config contextPattern for context % parsing** — health monitor uses the engine config's `contextPattern` regex as the primary source for context percentage, converting token counts via 200k window assumption, falling back to per-engine adapters.
+- **Pages** — static file hosting under the orchestrator. Agents and CLI can publish HTML/assets to named pages served at `/pages/<slug>`. Admin via `POST /api/pages` (tar/file upload), `GET /api/pages` (list), `DELETE /api/pages/:slug`. Public serving at `GET /pages/<slug>`. Published Pages section in Settings with delete. CLI `publish`/`pages list`/`pages delete` commands.
+- **Settings page** — new dashboard page with engine config management (list/create/edit/delete via YAML frontmatter editor) and global preferences (submit mode, close keyboard on send). Accessible from header button.
+- **Engine config indicators** — engine configs support an `indicators` field with default indicator badges: claude (6 indicators including unsafe, approval, plan-review), codex (unsafe), opencode (context indicators). Indicator badges shown on agent cards and in thread header alongside state badge.
+- **Configurable detection patterns** — engine configs support a `detection` field with `idlePatterns`, `activePatterns`, `contextPattern`, and tuning knobs (`idleThreshold`, `activeGraceMs`, `snapshotLines`). Active patterns checked first, then idle patterns, then screen-diff fallback. Detection config cached per engine with invalidation on change.
+- **Per-pattern line capture** — detection patterns can specify how many trailing lines to match against via `{ pattern: '...', lines: N }` format, preventing false positives from conversation content matching status bar patterns.
+- **Local agents indicator** — shows 'N Local Agents' info badge when Claude sub-agents are running, and marks the agent as active to prevent idle transition.
+- **Accept any engine string** — the hardcoded `VALID_ENGINES` set (claude, codex, opencode) is removed. Any non-empty engine string is accepted. Engine configs provide defaults but are not required.
+- **Hot-reload persona files** — persona directory watched for file changes with 500ms debounce; changes re-sync to DB and broadcast to dashboard.
+- **Engine dropdown in persona view** — persona tab shows an engine dropdown populated from engine configs. Changing the dropdown updates the persona file via API.
+- **Redesigned agent cards** — compact 2-row layout with inline indicator badges in header row, stars hidden until hover (always visible when starred). Action buttons moved from cards to thread header for progressive disclosure.
+- **Collapse engine config YAML** — engine configs in Settings show as collapsed `<details>` by default to reduce visual noise.
+- **Agent card meta simplified** — ctx% and unsafe permission badge removed from card meta line; driven by indicators now.
+- **Reset defaults button** — Settings page has Reset Defaults button that deletes and recreates engine configs to clear stale fields.
+- **`POST /api/engine-configs/reset-defaults`** endpoint for resetting engine configs to defaults.
+
+### Fixes
+- **model/thinking/permissions removed from default engine configs** — these fields are now persona-level overrides only, not engine config defaults. Send message fallback improved.
+- **Health monitor resolves engine config** for indicators and detection on each poll cycle.
+- **Persona watcher switched from fs.watch to polling** — fs.watch was unreliable across filesystems.
+- **Keystroke steps showing 'undefined'** in engine config YAML rendering fixed.
+- **Fast poll path skips detection patterns** when pane content unchanged.
+- **Local agents regex anchored** to status bar middle dot prefix to prevent false matches.
+- **Settings panel no longer breaks mobile back button**.
+- **Filter chip toggle rebuilds DOM** — un-filtering now restores all groups correctly.
+- **Hide empty groups during filtering**, prevent star click from selecting agent.
+- **Prevent text selection** on filter chip tap (mobile) and watch panel keys.
+- **No auto-keyboard on mobile** agent select, textarea auto-resizes.
+- **Sent flash** visual feedback added to watch panel.
+- **Star icon alignment** — margin, nudge, and translateY fixes for consistent vertical alignment.
+- **Agent card spacing** tightened for consistent vertical rhythm.
+- **Thread header layout** — tabs above actions, all rows visible on mobile.
+- **Active tab** gets accent border and taller padding (4px to 6px).
+- **Star always visible and tappable** — removed hover dependency.
+- **CLI pages commands** use correct variable names and `api()` helper.
+- **Indicator badges row** bottom margin added.
+- **Agent cards not draggable** while search/filter is active (desktop and mobile).
+
+### UI/UX
+- **Tab order changed** — Messages, Watch, Reminders, Persona (was Messages, Persona, Watch, Reminders).
+- **Agent action buttons relocated** — Compact, Reload, Exit, Kill, Copy tmux, Resume, Spawn, Destroy buttons now appear in thread header when an agent is selected instead of on each card.
+- **Indicator badges in thread header** — shown alongside state badge for the selected agent.
+
 ## 0.1.1 — 2026-04-01
 
 ### Added

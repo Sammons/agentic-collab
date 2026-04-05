@@ -19,8 +19,7 @@ export const voiceState = {
   ws: null,        // WebSocket to orchestrator /ws/voice
   mode: 'off',     // off | vad | ptt
   recording: false,
-  stream: null,    // MediaStream (active recording)
-  pttStream: null, // MediaStream (pre-acquired for instant PTT)
+  stream: null,    // MediaStream (active recording, acquired per press)
   audioCtx: null,  // AudioContext
   processor: null,  // ScriptProcessorNode
   sid: null,       // session ID
@@ -44,7 +43,7 @@ export async function initVoice() {
 
   // Check browser capabilities first — getUserMedia requires HTTPS (or localhost)
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    controls.style.display = 'flex';
+    controls.classList.add('voice-enabled');
     toggle.querySelectorAll('button').forEach(b => { b.disabled = true; b.style.opacity = '0.4'; });
     toggle.title = window.isSecureContext
       ? 'Voice unavailable — browser does not support getUserMedia'
@@ -59,7 +58,7 @@ export async function initVoice() {
     });
     const data = await resp.json();
     if (!data.enabled) {
-      controls.style.display = 'flex';
+      controls.classList.add('voice-enabled');
       toggle.querySelectorAll('button').forEach(b => { b.disabled = true; b.style.opacity = '0.4'; });
       toggle.title = 'Voice unavailable — ELEVENLABS_API_KEY not configured on server';
       return;
@@ -68,17 +67,13 @@ export async function initVoice() {
     return; // Server unreachable, hide controls entirely
   }
 
-  controls.style.display = 'flex';
+  controls.classList.add('voice-enabled');
 
   async function setVoiceMode(mode) {
     voiceState.mode = mode;
     toggle.querySelectorAll('button').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
     if (mode === 'off') {
       stopVoice();
-      if (voiceState.pttStream) {
-        voiceState.pttStream.getTracks().forEach(t => t.stop());
-        voiceState.pttStream = null;
-      }
       if (voiceState.audioCtx) {
         voiceState.audioCtx.close().catch(() => {});
         voiceState.audioCtx = null;
@@ -87,22 +82,21 @@ export async function initVoice() {
     } else if (mode === 'ptt') {
       stopVoice();
       btn.classList.remove('inactive');
-      // Pre-acquire mic and AudioContext within user gesture (required for iOS Safari)
+      // Pre-create AudioContext within user gesture (required for iOS Safari).
+      // Do NOT acquire mic here — iOS shows hot-mic indicator for any live
+      // MediaStream. Mic is acquired fresh on each press (pointerdown/touchstart
+      // are user gestures so getUserMedia is allowed).
       try {
-        voiceState.pttStream = await navigator.mediaDevices.getUserMedia({
-          audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-        });
-        // Create AudioContext in user gesture so iOS Safari doesn't block it
         if (!voiceState.audioCtx || voiceState.audioCtx.state === 'closed') {
           voiceState.audioCtx = new AudioContext({ sampleRate: 16000 });
         }
         if (voiceState.audioCtx.state === 'suspended') {
           await voiceState.audioCtx.resume();
         }
-        console.log('[voice] PTT ready — mic acquired, AudioContext state:', voiceState.audioCtx.state, 'rate:', voiceState.audioCtx.sampleRate);
+        console.log('[voice] PTT ready — AudioContext state:', voiceState.audioCtx.state, 'rate:', voiceState.audioCtx.sampleRate);
       } catch (err) {
-        console.error('[voice] Mic access denied:', err);
-        document.getElementById('voicePartial').textContent = 'Mic denied';
+        console.error('[voice] AudioContext creation failed:', err);
+        document.getElementById('voicePartial').textContent = 'Audio init failed';
         setTimeout(() => { document.getElementById('voicePartial').textContent = ''; }, 3000);
         setVoiceMode('off');
       }
@@ -164,7 +158,7 @@ export async function initVoice() {
 
 // ── Voice internals ──
 
-function commitAndStopPtt() {
+export function commitAndStopPtt() {
   if (voiceState.ws && voiceState.ws.readyState === WebSocket.OPEN) {
     voiceState.ws.send(JSON.stringify({ type: 'commit' }));
   }
@@ -172,23 +166,21 @@ function commitAndStopPtt() {
   setTimeout(() => stopVoice(), 1500);
 }
 
-async function startVoice() {
+export async function startVoice() {
   if (voiceState.recording) return;
 
-  // Use pre-acquired PTT stream if available, otherwise request mic
-  if (voiceState.pttStream) {
-    voiceState.stream = voiceState.pttStream;
-  } else {
-    try {
-      voiceState.stream = await navigator.mediaDevices.getUserMedia({
-        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-      });
-    } catch (err) {
-      console.error('[voice] Mic access denied:', err);
-      document.getElementById('voicePartial').textContent = 'Mic denied';
-      setTimeout(() => { document.getElementById('voicePartial').textContent = ''; }, 3000);
-      return;
-    }
+  // Acquire mic fresh on each press — iOS Safari requires getUserMedia within
+  // a user gesture, and pointerdown/touchstart qualify. This avoids keeping
+  // a persistent stream that triggers the hot-mic indicator.
+  try {
+    voiceState.stream = await navigator.mediaDevices.getUserMedia({
+      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    });
+  } catch (err) {
+    console.error('[voice] Mic access denied:', err);
+    document.getElementById('voicePartial').textContent = 'Mic denied';
+    setTimeout(() => { document.getElementById('voicePartial').textContent = ''; }, 3000);
+    return;
   }
 
   voiceState.sid = crypto.randomUUID();
@@ -258,12 +250,20 @@ async function startVoice() {
   };
 
   ws.onclose = () => {
-    if (voiceState.recording) stopVoiceLocal();
+    if (voiceState.recording) {
+      const partial = document.getElementById('voicePartial');
+      partial.textContent = 'Voice disconnected';
+      partial.style.color = 'var(--red)';
+      setTimeout(() => { partial.textContent = ''; partial.style.color = ''; }, 3000);
+      stopVoiceLocal();
+    }
   };
 
   ws.onerror = () => {
-    document.getElementById('voicePartial').textContent = 'Connection failed';
-    setTimeout(() => { document.getElementById('voicePartial').textContent = ''; }, 3000);
+    const partial = document.getElementById('voicePartial');
+    partial.textContent = 'Voice connection failed';
+    partial.style.color = 'var(--red)';
+    setTimeout(() => { partial.textContent = ''; partial.style.color = ''; }, 3000);
     stopVoiceLocal();
   };
 
@@ -315,10 +315,7 @@ function stopVoiceLocal() {
     voiceState.audioCtx = null;
   }
   if (voiceState.stream) {
-    // Don't close the pre-acquired PTT stream — it's reused across presses
-    if (voiceState.stream !== voiceState.pttStream) {
-      voiceState.stream.getTracks().forEach(t => t.stop());
-    }
+    voiceState.stream.getTracks().forEach(t => t.stop());
     voiceState.stream = null;
   }
   voiceState.ws = null;

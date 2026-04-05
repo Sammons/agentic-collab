@@ -54,8 +54,9 @@
   }
   .msg-header {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 6px;
+    gap: 2px 6px;
     width: 100%;
     margin-bottom: 2px;
     font-size: 10px;
@@ -67,14 +68,11 @@
     opacity: 0.7;
     white-space: nowrap;
   }
-  /* Used by archive panel which still shows full routing */
   .msg-sender {
     font-size: 10px;
     font-weight: 600;
     white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    min-width: 0;
+    width: 100%;
   }
   .msg-topic {
     font-size: 10px;
@@ -277,10 +275,13 @@
 
   /* ── Voice Dictation ── */
   .voice-controls {
-    display: flex;
+    display: none;
     align-items: center;
     gap: 6px;
     order: 2;
+  }
+  .voice-controls.voice-enabled {
+    display: flex;
   }
   .voice-toggle {
     display: flex;
@@ -346,6 +347,11 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  /* Mobile mic toggle — hidden on desktop, shown on mobile via responsive.css */
+  .mobile-mic-btn {
+    display: none;
   }
 
   .thread-panel.drag-over {

@@ -80,6 +80,51 @@ export type ActiveIndicator = {
   actions?: Record<string, IndicatorAction>;
 };
 
+// ── Detection ──
+
+export type DetectionPattern = string | { pattern: string; lines?: number };
+
+export type DetectionConfig = {
+  idlePatterns?: DetectionPattern[];
+  activePatterns?: DetectionPattern[];
+  contextPattern?: string;
+  idleThreshold?: number;
+  activeGraceMs?: number;
+  snapshotLines?: number;
+};
+
+// ── Pages ──
+
+export type PageRecord = {
+  slug: string;
+  title: string | null;
+  agent: string | null;
+  fileCount: number;
+  totalBytes: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+// ── Destinations ──
+
+export type DestinationRecord = {
+  name: string;
+  type: string;
+  config: Record<string, unknown>;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+// ── Data Stores ──
+
+export type DataStoreRecord = {
+  name: string;
+  agent: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type EngineConfigRecord = {
   name: string;
   engine: string;
@@ -92,6 +137,8 @@ export type EngineConfigRecord = {
   hookExit: string | null;
   hookInterrupt: string | null;
   hookSubmit: string | null;
+  indicators: string | null;
+  detection: string | null;
   launchEnv: Record<string, string> | null;
   createdAt: string;
 };
@@ -167,7 +214,6 @@ export type DashboardMessage = {
   deliveryStatus: string | null;
   withdrawn: boolean;
   createdAt: string;
-  archivedAt: string | null;
 };
 
 // ── Message Queue ──
@@ -228,6 +274,7 @@ export type WsInitEvent = {
   proxies: ProxyRegistration[];
   unreadCounts: Record<string, number>;
   indicators?: Record<string, ActiveIndicator[]>;
+  stores?: DataStoreRecord[];
 };
 
 export type WsAgentUpdateEvent = {
@@ -256,7 +303,24 @@ export type WsIndicatorUpdateEvent = {
   indicators: ActiveIndicator[];
 };
 
-export type WsEvent = WsInitEvent | WsAgentUpdateEvent | WsMessageEvent | WsProxyEvent | WsQueueUpdateEvent | WsIndicatorUpdateEvent;
+export type WsStoresUpdateEvent = {
+  type: 'stores_update';
+  stores: DataStoreRecord[];
+};
+
+export type WsDestinationsUpdateEvent = {
+  type: 'destinations_update';
+  destinations: DestinationRecord[];
+};
+
+export type WsNotificationEvent = {
+  type: 'notification';
+  agent: string | null;
+  message: string;
+  priority: string;
+};
+
+export type WsEvent = WsInitEvent | WsAgentUpdateEvent | WsMessageEvent | WsProxyEvent | WsQueueUpdateEvent | WsIndicatorUpdateEvent | WsStoresUpdateEvent | WsDestinationsUpdateEvent | WsNotificationEvent;
 
 // ── Proxy API ──
 
@@ -274,7 +338,8 @@ export type ProxyCommand =
   | { action: 'write_codex_profile'; profileName: string; developerInstructions: string }
   | { action: 'remove_codex_profile'; profileName: string }
   | { action: 'exec'; command: string; cwd?: string; timeoutMs?: number }
-  | { action: 'resize_pane'; sessionName: string; width: number; height: number };
+  | { action: 'resize_pane'; sessionName: string; width: number; height: number }
+  | { action: 'clear_history'; sessionName: string };
 
 export type ProxyResponse = {
   ok: boolean;

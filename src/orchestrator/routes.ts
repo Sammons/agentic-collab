@@ -7,13 +7,15 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { request as httpRequest } from 'node:http';
 import { pipeline } from 'node:stream/promises';
 import { timingSafeEqual } from 'node:crypto';
-import { readdirSync, readFileSync, writeFileSync, mkdirSync, unlinkSync, existsSync } from 'node:fs';
+import { readdirSync, readFileSync, writeFileSync, mkdirSync, unlinkSync, existsSync, rmSync, statSync, createWriteStream } from 'node:fs';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { renderMarkdown, wrapInHtml, DOC_PAGES } from '../docs/render.ts';
 import { hostname } from 'node:os';
 import type { Database } from './database.ts';
 import type { WebSocketServer } from '../shared/websocket-server.ts';
-import type { AgentState, DashboardMessage, EngineType, PendingMessage, ProxyCommand, ProxyResponse, ProxyRegistration } from '../shared/types.ts';
+import type { AgentState, DashboardMessage, DestinationRecord, EngineType, PendingMessage, ProxyCommand, ProxyResponse, ProxyRegistration } from '../shared/types.ts';
+import type { TelegramDispatcher } from './telegram.ts';
 import { sanitizeMessage, generateMessageId } from '../shared/sanitize.ts';
 import { getVersion } from '../shared/version.ts';
 import type { LockManager } from '../shared/lock.ts';
@@ -58,6 +60,9 @@ export type RouteContext = {
   usagePoller: UsagePoller;
   voiceEnabled: boolean;
   accountStore: import('./accounts.ts').AccountStore;
+  pagesDir: string;
+  storesDir: string;
+  telegramDispatcher: TelegramDispatcher;
 };
 
 /**
@@ -518,19 +523,17 @@ route('POST', '/api/dashboard/reply', async (req, res, _match, ctx) => {
 route('GET', '/api/dashboard/threads', async (req, res, _match, ctx) => {
   const url = new URL(req.url!, `http://${req.headers.host}`);
   const agent = url.searchParams.get('agent') ?? undefined;
-  const archived = url.searchParams.get('archived') === '1';
-  const threads = ctx.db.getDashboardThreads(agent, { archived });
+  const threads = ctx.db.getDashboardThreads(agent);
   json(res, 200, threads);
 });
 
-route('DELETE', '/api/dashboard/messages/:agent', async (_req, res, match, ctx) => {
-  const agentName = match.pathname.groups['agent']!;
-  const agent = ctx.db.getAgent(agentName);
-  if (!agent) return json(res, 404, { error: 'Agent not found' });
-
-  ctx.db.clearDashboardMessages(agentName);
-  ctx.db.clearPendingMessages(agentName);
-  json(res, 200, { ok: true });
+route('GET', '/api/dashboard/messages/search', async (req, res, _match, ctx) => {
+  const url = new URL(req.url!, `http://${req.headers.host}`);
+  const q = url.searchParams.get('q')?.trim();
+  if (!q) return json(res, 400, { error: 'q (search query) required' });
+  const agent = url.searchParams.get('agent') || undefined;
+  const results = ctx.db.searchMessages(q, agent);
+  json(res, 200, results);
 });
 
 route('PUT', '/api/dashboard/read-cursor', async (req, res, _match, ctx) => {
@@ -539,15 +542,6 @@ route('PUT', '/api/dashboard/read-cursor', async (req, res, _match, ctx) => {
     return json(res, 400, { error: 'agent (string) required' });
   }
   ctx.db.updateReadCursor(body.agent as string);
-  json(res, 200, { ok: true });
-});
-
-route('POST', '/api/dashboard/messages/:agent/unarchive', async (_req, res, match, ctx) => {
-  const agentName = match.pathname.groups['agent']!;
-  const agent = ctx.db.getAgent(agentName);
-  if (!agent) return json(res, 404, { error: 'Agent not found' });
-
-  ctx.db.unarchiveDashboardMessages(agentName);
   json(res, 200, { ok: true });
 });
 
@@ -661,6 +655,39 @@ route('GET', '/api/queue', async (req, res, _match, ctx) => {
   json(res, 200, messages);
 });
 
+// ── Agent Files ──
+
+route('GET', '/api/agents/:name/files', async (_req, res, match, ctx) => {
+  const name = match.pathname.groups['name']!;
+  const agent = ctx.db.getAgent(name);
+  if (!agent) return json(res, 404, { error: 'Agent not found' });
+  if (!agent.cwd) return json(res, 400, { error: 'Agent has no working directory' });
+  if (!agent.proxyId) return json(res, 400, { error: 'Agent has no proxy' });
+
+  try {
+    const result = await ctx.proxyDispatch(agent.proxyId, {
+      action: 'exec',
+      command: `find . -maxdepth 1 -not -name '.' -printf '%T@\\t%s\\t%y\\t%f\\n' 2>/dev/null | sort -rn | head -100`,
+      cwd: agent.cwd,
+      timeoutMs: 5000,
+    } as any);
+    if (!result.ok) return json(res, 500, { error: 'Failed to list files' });
+
+    const files = (result.data as string).split('\n').filter(Boolean).map(line => {
+      const [mtime, size, type, ...nameParts] = line.split('\t');
+      return {
+        name: nameParts.join('\t'),
+        size: parseInt(size ?? '0', 10),
+        isDir: type === 'd',
+        modified: new Date(parseFloat(mtime ?? '0') * 1000).toISOString(),
+      };
+    });
+    json(res, 200, { cwd: agent.cwd, files });
+  } catch {
+    json(res, 500, { error: 'Failed to list files' });
+  }
+});
+
 // ── Engine Configs ──
 
 route('GET', '/api/engine-configs', async (_req, res, _match, ctx) => {
@@ -709,6 +736,417 @@ route('DELETE', '/api/engine-configs/:name', async (_req, res, match, ctx) => {
   if (!deleted) return json(res, 404, { error: 'Engine config not found' });
   ctx.wss.broadcast(JSON.stringify({ type: 'engine_config_deleted', name }));
   json(res, 200, { ok: true });
+});
+
+route('POST', '/api/engine-configs/reset-defaults', async (_req, res, _match, ctx) => {
+  const { DEFAULT_ENGINE_CONFIGS } = await import('./default-engine-configs.ts');
+  const results: string[] = [];
+  for (const config of DEFAULT_ENGINE_CONFIGS) {
+    const existing = ctx.db.getEngineConfig(config.name);
+    if (existing) {
+      // Delete and recreate to clear stale fields not in the new defaults
+      ctx.db.deleteEngineConfig(config.name);
+    }
+    ctx.db.createEngineConfig(config);
+    results.push(existing ? `reset: ${config.name}` : `created: ${config.name}`);
+  }
+  const configs = ctx.db.listEngineConfigs();
+  ctx.wss.broadcast(JSON.stringify({ type: 'init', engineConfigs: configs }));
+  json(res, 200, { ok: true, results });
+});
+
+// ── Pages (static hosting) ──
+
+const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$/;
+const MAX_PAGE_BYTES = 50 * 1024 * 1024; // 50 MB
+
+const MIME_TYPES: Record<string, string> = {
+  '.html': 'text/html', '.htm': 'text/html', '.css': 'text/css',
+  '.js': 'application/javascript', '.json': 'application/json',
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif', '.svg': 'image/svg+xml', '.ico': 'image/x-icon',
+  '.woff': 'font/woff', '.woff2': 'font/woff2', '.ttf': 'font/ttf',
+  '.pdf': 'application/pdf', '.txt': 'text/plain', '.xml': 'application/xml',
+};
+
+function pageMime(filePath: string): string {
+  const ext = filePath.substring(filePath.lastIndexOf('.')).toLowerCase();
+  return MIME_TYPES[ext] ?? 'application/octet-stream';
+}
+
+/** Recursively count files and total bytes in a directory. */
+function dirStats(dir: string): { fileCount: number; totalBytes: number } {
+  let fileCount = 0, totalBytes = 0;
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const p = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      const sub = dirStats(p);
+      fileCount += sub.fileCount;
+      totalBytes += sub.totalBytes;
+    } else {
+      fileCount++;
+      totalBytes += statSync(p).size;
+    }
+  }
+  return { fileCount, totalBytes };
+}
+
+// Publish a page: POST /api/pages?slug=<slug>&agent=<agent>&title=<title>
+// Body: tar stream (extracted to pages/<slug>/) OR single file with &filename=<name>
+route('POST', '/api/pages', async (req, res, _match, ctx) => {
+  const url = new URL(req.url!, `http://${req.headers.host}`);
+  const slug = url.searchParams.get('slug');
+  const agent = url.searchParams.get('agent') ?? null;
+  const title = url.searchParams.get('title') ?? null;
+
+  if (!slug || !SLUG_RE.test(slug)) return json(res, 400, { error: 'Invalid slug (kebab-case, 2-64 chars)' });
+
+  const pageDir = join(ctx.pagesDir, slug);
+  const filename = url.searchParams.get('filename');
+
+  // Collect body
+  const chunks: Buffer[] = [];
+  let totalSize = 0;
+  for await (const chunk of req) {
+    totalSize += (chunk as Buffer).length;
+    if (totalSize > MAX_PAGE_BYTES) return json(res, 413, { error: `Page exceeds ${MAX_PAGE_BYTES / 1024 / 1024}MB limit` });
+    chunks.push(chunk as Buffer);
+  }
+  const body = Buffer.concat(chunks);
+
+  if (filename) {
+    // Single file upload
+    mkdirSync(pageDir, { recursive: true });
+    writeFileSync(join(pageDir, filename), body);
+  } else {
+    // Tar stream — extract using node:child_process
+    mkdirSync(pageDir, { recursive: true });
+    const { execSync } = await import('node:child_process');
+    try {
+      execSync('tar xf -', { input: body, cwd: pageDir, stdio: ['pipe', 'pipe', 'pipe'] });
+    } catch (err) {
+      return json(res, 400, { error: 'Failed to extract tar: ' + (err as Error).message });
+    }
+  }
+
+  const stats = dirStats(pageDir);
+  const page = ctx.db.createPage({ slug, title, agent: agent ?? undefined, fileCount: stats.fileCount, totalBytes: stats.totalBytes });
+  ctx.wss.broadcast(JSON.stringify({ type: 'pages_update', pages: ctx.db.listPages() }));
+  json(res, 201, page);
+});
+
+route('GET', '/api/pages', async (_req, res, _match, ctx) => {
+  json(res, 200, ctx.db.listPages());
+});
+
+route('DELETE', '/api/pages/:slug', async (_req, res, match, ctx) => {
+  const slug = match.pathname.groups['slug']!;
+  const pageDir = join(ctx.pagesDir, slug);
+  if (existsSync(pageDir)) rmSync(pageDir, { recursive: true });
+  const deleted = ctx.db.deletePage(slug);
+  if (!deleted) return json(res, 404, { error: 'Page not found' });
+  ctx.wss.broadcast(JSON.stringify({ type: 'pages_update', pages: ctx.db.listPages() }));
+  json(res, 200, { ok: true });
+});
+
+// Public page serving (no auth)
+route('GET', '/pages/:slug', async (_req, res, match, ctx) => {
+  const slug = match.pathname.groups['slug']!;
+  const indexPath = join(ctx.pagesDir, slug, 'index.html');
+  if (!existsSync(indexPath)) {
+    // Try listing files if no index.html
+    const pageDir = join(ctx.pagesDir, slug);
+    if (!existsSync(pageDir)) return json(res, 404, { error: 'Page not found' });
+    const files = readdirSync(pageDir);
+    if (files.length === 1) {
+      // Single file — serve it directly
+      const filePath = join(pageDir, files[0]!);
+      res.writeHead(200, { 'Content-Type': pageMime(filePath) });
+      res.end(readFileSync(filePath));
+      return;
+    }
+    // List files as simple HTML
+    const links = files.map(f => `<li><a href="/pages/${slug}/${f}">${f}</a></li>`).join('');
+    res.writeHead(200, { 'Content-Type': 'text/html' });
+    res.end(`<!DOCTYPE html><html><head><title>${slug}</title></head><body><h1>${slug}</h1><ul>${links}</ul></body></html>`);
+    return;
+  }
+  res.writeHead(200, { 'Content-Type': 'text/html' });
+  res.end(readFileSync(indexPath));
+});
+
+route('GET', '/pages/:slug/:path+', async (_req, res, match, ctx) => {
+  const slug = match.pathname.groups['slug']!;
+  const filePath = match.pathname.groups['path']!;
+  if (filePath.includes('..')) return json(res, 400, { error: 'Invalid path' });
+  const fullPath = join(ctx.pagesDir, slug, filePath);
+  if (!existsSync(fullPath)) return json(res, 404, { error: 'File not found' });
+  res.writeHead(200, { 'Content-Type': pageMime(fullPath) });
+  res.end(readFileSync(fullPath));
+});
+
+// ── Data Stores ──
+
+const MAX_STORE_BYTES = 10 * 1024 * 1024; // 10 MB
+const MAX_STORE_ROWS = 1000;
+
+/** SQL statements allowed in store queries. */
+const ALLOWED_SQL_RE = /^\s*(SELECT|INSERT|UPDATE|DELETE|CREATE\s+TABLE|ALTER\s+TABLE|DROP\s+TABLE)\b/i;
+
+/** Dangerous statements that must be rejected outright. */
+const DENIED_SQL_RE = /\b(ATTACH|DETACH)\b/i;
+
+/** PRAGMA whitelist — only table_info is allowed. */
+const PRAGMA_TABLE_INFO_RE = /^\s*PRAGMA\s+table_info\s*\(/i;
+
+function validateStoreSql(sql: string): string | null {
+  const trimmed = sql.trim();
+  if (!trimmed) return 'Empty SQL statement';
+
+  // Check for multiple statements (semicolons followed by more content)
+  const stmtParts = trimmed.split(';').filter(s => s.trim().length > 0);
+  if (stmtParts.length > 1) return 'Multiple statements not allowed';
+
+  // Check for denied keywords
+  if (DENIED_SQL_RE.test(trimmed)) return 'ATTACH/DETACH not allowed';
+
+  // Allow PRAGMA table_info specifically
+  if (/^\s*PRAGMA\b/i.test(trimmed)) {
+    if (!PRAGMA_TABLE_INFO_RE.test(trimmed)) return 'Only PRAGMA table_info is allowed';
+    return null;
+  }
+
+  // Check against allowed statement types
+  if (!ALLOWED_SQL_RE.test(trimmed)) return 'Only SELECT, INSERT, UPDATE, DELETE, CREATE TABLE, ALTER TABLE, DROP TABLE are allowed';
+
+  return null;
+}
+
+function openStoreDb(storesDir: string, name: string): DatabaseSync {
+  const dbPath = join(storesDir, `${name}.db`);
+  const storeDb = new DatabaseSync(dbPath);
+  storeDb.exec('PRAGMA journal_mode = WAL');
+  storeDb.exec('PRAGMA busy_timeout = 5000');
+  return storeDb;
+}
+
+function checkStoreSize(storesDir: string, name: string): boolean {
+  const dbPath = join(storesDir, `${name}.db`);
+  if (!existsSync(dbPath)) return true;
+  const stat = statSync(dbPath);
+  return stat.size <= MAX_STORE_BYTES;
+}
+
+route('POST', '/api/stores', async (req, res, _match, ctx) => {
+  const body = await readJson(req);
+  const name = body.name as string | undefined;
+  const agent = (body.agent as string | undefined) ?? null;
+
+  if (!name || !SLUG_RE.test(name)) return json(res, 400, { error: 'Invalid store name (kebab-case, 2-64 chars)' });
+
+  // Create the SQLite file to make it real
+  const storeDb = openStoreDb(ctx.storesDir, name);
+  storeDb.close();
+
+  const record = ctx.db.createStore({ name, agent: agent ?? undefined });
+  ctx.wss.broadcast(JSON.stringify({ type: 'stores_update', stores: ctx.db.listStores() }));
+  json(res, 201, record);
+});
+
+route('GET', '/api/stores', async (_req, res, _match, ctx) => {
+  json(res, 200, ctx.db.listStores());
+});
+
+route('GET', '/api/stores/:name/schema', async (_req, res, match, ctx) => {
+  const name = match.pathname.groups['name']!;
+  if (!SLUG_RE.test(name)) return json(res, 400, { error: 'Invalid store name' });
+
+  const record = ctx.db.getStore(name);
+  if (!record) return json(res, 404, { error: 'Store not found' });
+
+  const dbPath = join(ctx.storesDir, `${name}.db`);
+  if (!existsSync(dbPath)) return json(res, 404, { error: 'Store file not found' });
+
+  const storeDb = openStoreDb(ctx.storesDir, name);
+  try {
+    const tables = storeDb.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all() as Array<Record<string, unknown>>;
+    const schema: Record<string, Array<{ name: string; type: string; notnull: boolean; pk: boolean }>> = {};
+    for (const t of tables) {
+      const tableName = t['name'] as string;
+      const cols = storeDb.prepare(`PRAGMA table_info("${tableName.replace(/"/g, '""')}")`).all() as Array<Record<string, unknown>>;
+      schema[tableName] = cols.map(c => ({
+        name: c['name'] as string,
+        type: c['type'] as string,
+        notnull: (c['notnull'] as number) === 1,
+        pk: (c['pk'] as number) > 0,
+      }));
+    }
+    json(res, 200, schema);
+  } finally {
+    storeDb.close();
+  }
+});
+
+route('POST', '/api/stores/:name/query', async (req, res, match, ctx) => {
+  const name = match.pathname.groups['name']!;
+  if (!SLUG_RE.test(name)) return json(res, 400, { error: 'Invalid store name' });
+
+  const record = ctx.db.getStore(name);
+  if (!record) return json(res, 404, { error: 'Store not found' });
+
+  const body = await readJson(req);
+  const sql = body.sql as string | undefined;
+  const params = (body.params as unknown[]) ?? [];
+
+  if (!sql) return json(res, 400, { error: 'sql is required' });
+  const sqlErr = validateStoreSql(sql);
+  if (sqlErr) return json(res, 400, { error: sqlErr });
+
+  // Size check for mutating operations
+  const isRead = /^\s*SELECT\b/i.test(sql.trim());
+  if (!isRead && !checkStoreSize(ctx.storesDir, name)) {
+    return json(res, 413, { error: `Store exceeds ${MAX_STORE_BYTES / 1024 / 1024}MB limit` });
+  }
+
+  const dbPath = join(ctx.storesDir, `${name}.db`);
+  if (!existsSync(dbPath)) return json(res, 404, { error: 'Store file not found' });
+
+  const storeDb = openStoreDb(ctx.storesDir, name);
+  try {
+    const trimmed = sql.trim();
+    if (/^\s*SELECT\b/i.test(trimmed) || PRAGMA_TABLE_INFO_RE.test(trimmed)) {
+      const stmt = storeDb.prepare(trimmed);
+      const rows = stmt.all(...params) as unknown[];
+      const limited = rows.slice(0, MAX_STORE_ROWS);
+      json(res, 200, { rows: limited, truncated: rows.length > MAX_STORE_ROWS });
+    } else {
+      const stmt = storeDb.prepare(trimmed);
+      const result = stmt.run(...params);
+      ctx.db.touchStore(name);
+      json(res, 200, { changes: result.changes, lastInsertRowid: Number(result.lastInsertRowid) });
+    }
+  } catch (err) {
+    json(res, 400, { error: (err as Error).message });
+  } finally {
+    storeDb.close();
+  }
+});
+
+route('DELETE', '/api/stores/:name', async (_req, res, match, ctx) => {
+  const name = match.pathname.groups['name']!;
+  if (!SLUG_RE.test(name)) return json(res, 400, { error: 'Invalid store name' });
+
+  // Remove the SQLite file
+  const dbPath = join(ctx.storesDir, `${name}.db`);
+  if (existsSync(dbPath)) unlinkSync(dbPath);
+  // Also remove WAL/SHM if present
+  const walPath = `${dbPath}-wal`;
+  const shmPath = `${dbPath}-shm`;
+  if (existsSync(walPath)) unlinkSync(walPath);
+  if (existsSync(shmPath)) unlinkSync(shmPath);
+
+  const deleted = ctx.db.deleteStore(name);
+  if (!deleted) return json(res, 404, { error: 'Store not found' });
+  ctx.wss.broadcast(JSON.stringify({ type: 'stores_update', stores: ctx.db.listStores() }));
+  json(res, 200, { ok: true });
+});
+
+// ── Destinations (Telegram, etc.) ──
+
+route('POST', '/api/destinations', async (req, res, _match, ctx) => {
+  const body = await readJson(req);
+  const name = body.name as string | undefined;
+  const type = body.type as string | undefined;
+  const config = body.config as Record<string, unknown> | undefined;
+
+  if (!name || typeof name !== 'string' || name.length < 1 || name.length > 64) {
+    return json(res, 400, { error: 'name required (1-64 chars)' });
+  }
+  if (!type || typeof type !== 'string') {
+    return json(res, 400, { error: 'type required (e.g. "telegram")' });
+  }
+  if (!config || typeof config !== 'object') {
+    return json(res, 400, { error: 'config required (object)' });
+  }
+  if (type === 'telegram') {
+    if (!config.botToken || !config.chatId) {
+      return json(res, 400, { error: 'telegram config requires botToken and chatId' });
+    }
+  }
+
+  if (ctx.db.getDestination(name)) {
+    return json(res, 409, { error: `Destination "${name}" already exists` });
+  }
+
+  const record = ctx.db.createDestination({ name, type, config });
+  ctx.wss.broadcast(JSON.stringify({ type: 'destinations_update', destinations: ctx.db.listDestinations() }));
+
+  // Start polling for newly created telegram destinations
+  if (type === 'telegram' && record.enabled) {
+    startTelegramPolling(ctx, record);
+  }
+
+  json(res, 201, record);
+});
+
+route('GET', '/api/destinations', async (_req, res, _match, ctx) => {
+  json(res, 200, ctx.db.listDestinations());
+});
+
+route('DELETE', '/api/destinations/:name', async (_req, res, match, ctx) => {
+  const name = match.pathname.groups['name']!;
+  const existing = ctx.db.getDestination(name);
+  if (!existing) return json(res, 404, { error: 'Destination not found' });
+
+  // Stop polling if telegram
+  if (existing.type === 'telegram') {
+    ctx.telegramDispatcher.stopPolling();
+  }
+
+  const deleted = ctx.db.deleteDestination(name);
+  if (!deleted) return json(res, 404, { error: 'Destination not found' });
+  ctx.wss.broadcast(JSON.stringify({ type: 'destinations_update', destinations: ctx.db.listDestinations() }));
+  json(res, 200, { ok: true });
+});
+
+route('POST', '/api/destinations/:name/send', async (req, res, match, ctx) => {
+  const name = match.pathname.groups['name']!;
+  const dest = ctx.db.getDestination(name);
+  if (!dest) return json(res, 404, { error: 'Destination not found' });
+  if (!dest.enabled) return json(res, 400, { error: 'Destination is disabled' });
+
+  const body = await readJson(req);
+  const message = body.message as string | undefined;
+  if (!message) return json(res, 400, { error: 'message required' });
+
+  const fromAgent = body.fromAgent as string | undefined;
+  const text = fromAgent ? `[${fromAgent}] ${message}` : message;
+
+  if (dest.type === 'telegram') {
+    const botToken = dest.config.botToken as string;
+    const chatId = dest.config.chatId as string;
+    const ok = await ctx.telegramDispatcher.send(botToken, chatId, text);
+    if (!ok) return json(res, 502, { error: 'Telegram send failed' });
+    json(res, 200, { ok: true });
+  } else {
+    json(res, 400, { error: `Unsupported destination type: ${dest.type}` });
+  }
+});
+
+route('POST', '/api/destinations/:name/test', async (_req, res, match, ctx) => {
+  const name = match.pathname.groups['name']!;
+  const dest = ctx.db.getDestination(name);
+  if (!dest) return json(res, 404, { error: 'Destination not found' });
+
+  if (dest.type === 'telegram') {
+    const botToken = dest.config.botToken as string;
+    const chatId = dest.config.chatId as string;
+    const ok = await ctx.telegramDispatcher.send(botToken, chatId, `[agentic-collab] Test message from destination "${name}"`);
+    if (!ok) return json(res, 502, { error: 'Telegram test send failed' });
+    json(res, 200, { ok: true });
+  } else {
+    json(res, 400, { error: `Unsupported destination type: ${dest.type}` });
+  }
 });
 
 // ── Personas ──
@@ -1381,6 +1819,41 @@ route('DELETE', '/api/accounts/:name', async (_req, res, match, ctx) => {
   json(res, 200, { ok: true, deleted: name });
 });
 
+// ── Notify ──
+
+route('POST', '/api/notify', async (req, res, _match, ctx) => {
+  const body = await readJson(req);
+  const agent = body.agent as string | undefined;
+  const message = body.message as string | undefined;
+  const priority = (body.priority as string) ?? 'normal';
+  if (!message) return json(res, 400, { error: 'message required' });
+
+  const destinations = ctx.db.listDestinations().filter(d => d.enabled);
+  let sent = 0;
+
+  for (const dest of destinations) {
+    const text = agent ? `[${agent}] ${message}` : message;
+    try {
+      if (dest.type === 'telegram') {
+        const botToken = dest.config.botToken as string;
+        const chatId = dest.config.chatId as string;
+        const ok = await ctx.telegramDispatcher.send(botToken, chatId, text);
+        if (ok) sent++;
+      }
+    } catch { /* best-effort per destination */ }
+  }
+
+  // Broadcast to dashboard for browser notifications
+  ctx.wss.broadcast(JSON.stringify({
+    type: 'notification',
+    agent: agent ?? null,
+    message,
+    priority,
+  }));
+
+  json(res, 200, { ok: true, sent });
+});
+
   return routes;
 }
 
@@ -1651,4 +2124,53 @@ function makeLifecycleCtx(ctx: RouteContext): LifecycleContext {
     orchestratorHost: ctx.orchestratorHost,
     accountStore: ctx.accountStore,
   };
+}
+
+/**
+ * Start Telegram long polling for a destination.
+ * Routes inbound messages to agents via @agent-name prefix or to dashboard.
+ * Exported for use in main.ts on startup.
+ */
+export function startTelegramPolling(ctx: RouteContext, dest: DestinationRecord): void {
+  const botToken = dest.config.botToken as string;
+
+  ctx.telegramDispatcher.startPolling(botToken, (incomingChatId: string, text: string) => {
+    console.log(`[telegram] Inbound from chat ${incomingChatId}: ${text.slice(0, 100)}`);
+
+    // Parse @agent-name prefix
+    const agentMatch = text.match(/^@([a-zA-Z0-9_-]+)\s+([\s\S]+)$/);
+    let targetAgent: string | null = null;
+    let messageText = text;
+
+    if (agentMatch) {
+      targetAgent = agentMatch[1]!;
+      messageText = agentMatch[2]!.trim();
+    }
+
+    if (targetAgent) {
+      // Route to specific agent via message queue
+      const agent = ctx.db.getAgent(targetAgent);
+      if (!agent) {
+        ctx.telegramDispatcher.send(botToken, incomingChatId, `Agent "${targetAgent}" not found`).catch(() => {});
+        return;
+      }
+
+      enqueueAndDeliver(ctx, {
+        agentName: targetAgent,
+        displayMessage: messageText,
+        envelope: messageText,
+        topic: 'telegram',
+        sourceAgent: `telegram:${dest.name}`,
+      });
+
+      console.log(`[telegram] Routed message to agent: ${targetAgent}`);
+    } else {
+      // No agent prefix — create a dashboard message visible under a virtual "telegram" thread
+      const msg = ctx.db.addDashboardMessage('telegram', 'from_agent', messageText, {
+        sourceAgent: `telegram:${dest.name}`,
+      });
+      ctx.wss.broadcast(JSON.stringify({ type: 'message', msg }));
+      console.log('[telegram] Routed message to dashboard');
+    }
+  });
 }

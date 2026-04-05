@@ -40,9 +40,8 @@
       font-size: 16px; /* prevent iOS zoom */
       padding: 6px 8px;
     }
-    .voice-controls {
-      order: 3;
-      flex: 0 1 auto;
+    .voice-controls.voice-enabled .voice-btn {
+      display: none;
     }
     .voice-partial { display: none; }
     header h1 { font-size: 14px; }
@@ -68,6 +67,8 @@
       user-select: none;
     }
     .drag-handle:active { color: var(--accent); }
+    .filtered .drag-handle { display: none; }
+    .filtered .agent-card { padding-right: 10px; }
     .agent-card { position: relative; padding-right: 40px; }
     .agent-header { flex-wrap: wrap; gap: 4px; }
     .agent-name {
@@ -97,20 +98,21 @@
     .create-form-body select,
     .create-form-body textarea { font-size: 16px; } /* prevent iOS zoom */
     .thread-header {
-      flex-wrap: wrap;
       padding: 10px 12px;
       gap: 6px;
     }
-    .thread-header > span {
+    .thread-header-top {
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .thread-header-top > span {
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
-      max-width: 50vw;
+      max-width: 45vw;
     }
     .thread-tabs {
-      order: 10;
       width: 100%;
-      margin-left: 0;
       overflow-x: auto;
       -webkit-overflow-scrolling: touch;
       scrollbar-width: none;
@@ -121,7 +123,11 @@
       text-align: center;
       min-width: 0;
     }
-    .clear-chat-btn { margin-left: auto; }
+    .thread-actions {
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+      flex-wrap: nowrap;
+    }
     .thread-messages { padding: 12px 10px; }
     .msg-header {
       gap: 4px;
@@ -129,4 +135,43 @@
     .persona-panel { padding: 14px 10px; }
     .reminder-panel { padding: 14px 10px; }
     .watch-panel { padding: 10px 8px; font-size: 11px; }
+
+    /* Mobile mic toggle button */
+    .mobile-mic-btn {
+      display: none; /* hidden until PTT mode active */
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      border: 2px solid var(--border);
+      background: var(--surface);
+      color: var(--text-dim);
+      cursor: pointer;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      flex-shrink: 0;
+      transition: all 0.15s;
+      touch-action: manipulation;
+      -webkit-touch-callout: none;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    .mobile-mic-btn.ptt-active {
+      display: flex;
+    }
+    .mobile-mic-btn.loading {
+      border-color: var(--accent);
+      opacity: 0.5;
+      pointer-events: none;
+    }
+    .mobile-mic-btn.recording {
+      border-color: #e74c3c;
+      background: #e74c3c;
+      color: #fff;
+      animation: mobile-mic-pulse 1.5s ease-in-out infinite;
+    }
+    @keyframes mobile-mic-pulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(231, 76, 60, 0.4); }
+      50% { box-shadow: 0 0 0 8px rgba(231, 76, 60, 0); }
+    }
   }

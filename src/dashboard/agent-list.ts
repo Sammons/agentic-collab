@@ -18,6 +18,7 @@ import { state, authHeaders, getToken } from '/dashboard/assets/state.ts';
 import { esc, renderMarkdown, timeAgo, showToast, promptInput } from '/dashboard/assets/utils.ts';
 import { agentAction, openCreateAgentModal } from '/dashboard/assets/agent-lifecycle.ts';
 import { icon } from '/dashboard/assets/icons.ts';
+import { pushUrlState } from '/dashboard/assets/url-state.ts';
 
 // ── Dependencies injected via setup() ──
 let _renderThread = () => {};
@@ -71,7 +72,16 @@ export function updateAgent(agent) {
 
 export function addMessage(msg) {
   if (!state.threads[msg.agent]) state.threads[msg.agent] = [];
-  state.threads[msg.agent].push(msg);
+  const thread = state.threads[msg.agent];
+  // Dedup: if this message ID already exists (from HTTP fallback), skip.
+  // Also replace any optimistic message (negative ID) for the same content.
+  if (thread.some(m => m.id === msg.id)) return;
+  const optimisticIdx = thread.findIndex(m => m.id < 0 && m.message === msg.message && m.agent === msg.agent);
+  if (optimisticIdx >= 0) {
+    thread[optimisticIdx] = msg;
+    return; // DOM already has the optimistic render — WS dedup, no re-render needed
+  }
+  thread.push(msg);
   if (state.selected === msg.agent && state.threadView === 'messages') {
     // Append single message via component — no full re-render
     const messages = document.getElementById('threadMessages');
@@ -140,6 +150,9 @@ export function renderAgents() {
   document.querySelectorAll('.filter-chip').forEach(c => {
     c.classList.toggle('active', c.dataset.filter === state.quickFilter);
   });
+
+  // Toggle filtered class on agent list — disables drag handles via CSS
+  list.classList.toggle('filtered', isFiltered());
 
   // Group agents
   const groups = new Map();
@@ -346,6 +359,7 @@ export function selectAgent(name) {
   // Preserve current tab (messages/persona/watch) when switching agents
   renderAgents();
   _renderThread();
+  pushUrlState();
   // Restore draft and focus via component
   const freshInput = document.getElementById('threadInput');
   if (freshInput && freshInput.setDraft) {
@@ -461,6 +475,8 @@ function handleAgentListEvent(e) {
 }
 
 // ── Drag-Drop ──
+
+function isFiltered() { return !!(state.quickFilter || state.searchFilter); }
 
 let draggedAgent = null;
 let draggedGroup = null;
@@ -597,6 +613,7 @@ export function initAgentListEvents() {
   // ── Desktop Drag-Drop ──
 
   agentListEl.addEventListener('dragstart', (e) => {
+    if (isFiltered()) { e.preventDefault(); return; }
     const card = e.target.closest('.agent-card[data-agent]');
     const header = e.target.closest('.agent-group-header[data-group]');
     if (card) {
@@ -721,6 +738,7 @@ export function initAgentListEvents() {
   // ── Touch Drag (mobile) ──
 
   agentListEl.addEventListener('touchstart', (e) => {
+    if (isFiltered()) return;
     const handle = e.target.closest('.drag-handle');
     if (!handle) return;
     const card = handle.closest('.agent-card[data-agent]');

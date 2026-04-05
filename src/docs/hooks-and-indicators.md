@@ -114,6 +114,17 @@ If you want fully automatic tool approval without clicking, use `permissions: sk
 
 The health monitor checks tmux output every 2-30 seconds (faster for active agents). Regex patterns use JavaScript syntax.
 
+### Engine config indicators
+
+Indicators defined on an engine config cascade to **every agent using that engine**. Agent-level indicators override the engine config defaults (agent frontmatter takes priority). This means you define common indicators once on the engine config and only override at the agent level when you need something different.
+
+The resolution order is:
+
+1. Agent-level `indicators` (from persona frontmatter)
+2. Engine config `indicators` (from Settings → Engine Configs)
+
+If the agent has its own indicators, those are used. Otherwise, the engine config indicators apply. Manage engine config indicators via **Settings → Engine Configs** in the dashboard.
+
 ### Basic indicator
 
 ```
@@ -157,15 +168,89 @@ Action names can reference regex capture groups (`$1`, `$2`, etc.). In the examp
 | warning | Yellow | Needs attention (approvals, prompts) |
 | danger | Red | Critical (low context, logged out, errors) |
 
-### Built-in indicators (Claude template)
+### Built-in default indicators
 
-The default Claude engine template includes:
+Each engine ships with a set of built-in indicators. These are restored when you click **Reset Defaults** on the Engine Configs settings page.
 
-| Indicator | Matches | Badge | Style |
-|-----------|---------|-------|-------|
-| approval | `(Yes)\s*/\s*(No)\s*/\s*(Always allow)` | Needs Approval | warning |
-| low-context | `Context left until` | Low Context | danger |
-| logged-out | `Not logged in` | Logged Out | danger |
-| context-limit | `Context limit reached` | Context Limit | danger |
+| Indicator | Regex | Badge | Style | Engines |
+|-----------|-------|-------|-------|---------|
+| unsafe | `.` | Unsafe | danger | claude, codex |
+| approval | `(Yes)\s*/\s*(No)\s*/\s*(Always allow)` | Needs Approval | warning | claude |
+| plan-review | `(approve)\s*/\s*(deny)\s*/\s*(edit)` | Plan Review | warning | claude |
+| low-context | `Context left until` | Low Context | danger | claude, opencode |
+| context-limit | `Context limit reached` | Context Limit | danger | claude, opencode |
+| logged-out | `Not logged in` | Logged Out | danger | claude |
+| local-agents | `·\s*(\d+) local agents?` | $1 Local Agents | info | claude |
+
+The `approval` and `plan-review` indicators include actions that resolve capture groups into clickable buttons (Yes/No/Always allow and approve/deny/edit respectively). The `local-agents` indicator uses a capture group in its badge text to display the count dynamically.
 
 Add your own in the persona frontmatter to detect engine-specific patterns.
+
+## Detection
+
+Detection controls how the health monitor determines whether an agent is **active** or **idle**. Each engine config can define a `detection` block with regex patterns and tuning knobs. Like indicators, detection config is defined on the engine config and cascades to all agents using that engine.
+
+### Detection patterns
+
+There are three categories of patterns:
+
+- **`activePatterns`** — regex patterns that indicate the agent is doing work (tool calls, spinners, sub-agent activity). If any active pattern matches, the agent is immediately considered active.
+- **`idlePatterns`** — regex patterns that indicate the agent is waiting for input (prompt characters, empty input lines). If an idle pattern matches and no active pattern matched, the agent trends toward idle.
+- **`contextPattern`** — a single regex with a capture group that extracts context usage (token count or percentage) from pane output.
+
+Each pattern can be either a plain string or an object with a `lines` field to restrict matching to the last N lines of pane output:
+
+```yaml
+# Plain string — matches against full pane output
+activePatterns:
+  - '^\s*(Read|Write|Edit|Bash)\s'
+
+# Object with lines scope — matches only last 5 lines
+idlePatterns:
+  - pattern: '^[❯>]\s*$'
+    lines: 5
+```
+
+The `lines` field is useful for patterns that only appear in specific regions of the output (e.g., prompt characters at the bottom, status bar indicators in the last few lines).
+
+### Detection priority
+
+The health monitor evaluates patterns in this order on each poll cycle:
+
+1. **Active patterns** — checked first. If any match, the agent is marked active and the idle counter resets. The `activeGraceMs` timer restarts.
+2. **Idle patterns** — checked second. If any match (and no active pattern matched), the idle counter increments. The agent transitions to idle when the counter reaches `idleThreshold`.
+3. **Screen-diff fallback** — if no detection patterns are configured (or none matched), the monitor falls back to comparing raw pane snapshots between poll cycles. If the output is unchanged across `idleThreshold` consecutive polls, the agent is considered idle.
+
+This priority means active signals always win. An agent producing intermittent output won't flicker between active and idle thanks to the grace period.
+
+### Detection tuning knobs
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `idleThreshold` | number | 2 | Consecutive idle-pattern matches (or unchanged snapshots) required before marking idle |
+| `activeGraceMs` | number | 10000 | Milliseconds after last detected activity before allowing idle transition |
+| `snapshotLines` | number | 30 | Number of trailing pane lines captured for screen-diff comparison |
+
+With the default fast-poll interval of 2 seconds and an `idleThreshold` of 2, idle detection takes roughly 4-6 seconds after the agent stops producing output.
+
+### Example detection config
+
+Here is the built-in detection block for the Claude engine (YAML representation):
+
+```yaml
+detection:
+  idlePatterns:
+    - pattern: '^[❯>]\s*$'
+      lines: 5
+  activePatterns:
+    - '^\s*(Read|Write|Edit|Bash|Glob|Grep|Agent|WebFetch|WebSearch)\s'
+    - '^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]'
+    - pattern: '·\s*\d+ local agents?'
+      lines: 3
+  contextPattern: '(\d+)\s*tokens'
+  idleThreshold: 2
+  activeGraceMs: 10000
+  snapshotLines: 30
+```
+
+The Codex and OpenCode engines have their own detection defaults tuned for their respective TUI layouts. All three can be viewed and edited via **Settings → Engine Configs** in the dashboard. Click **Reset Defaults** to restore the built-in detection config for any engine.

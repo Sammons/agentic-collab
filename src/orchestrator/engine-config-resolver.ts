@@ -23,6 +23,7 @@ export function resolveEffectiveConfig(
     hookExit: agent.hookExit ?? config.hookExit,
     hookInterrupt: agent.hookInterrupt ?? config.hookInterrupt,
     hookSubmit: agent.hookSubmit ?? config.hookSubmit,
+    indicators: agent.indicators ?? config.indicators,
     launchEnv: agent.launchEnv ?? config.launchEnv,
   };
 }

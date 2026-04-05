@@ -165,6 +165,7 @@ type FixtureState = {
   proxies: ProxyRegistration[];
   indicators: Record<string, ActiveIndicator[]>;
   personas: Record<string, unknown>;
+  stores: unknown[];
   messageIdCounter: number;
   requestLog: RequestLogEntry[];
   wsLog: WsLogEntry[];
@@ -178,6 +179,7 @@ function createFixtureState(): FixtureState {
     proxies: [...DEFAULT_PROXIES],
     indicators: {},
     personas: {},
+    stores: [],
     messageIdCounter: 1,
     requestLog: [],
     wsLog: [],
@@ -367,6 +369,12 @@ export async function startMockServer(port: number): Promise<MockServer> {
       return;
     }
 
+    // ── API: stores ──
+    if (method === 'GET' && path === '/api/stores') {
+      logJson(res, fixtures.stores);
+      return;
+    }
+
     // ── API: voice status ──
     if (method === 'GET' && path === '/api/voice/status') {
       logJson(res, { enabled: false });
@@ -434,7 +442,6 @@ export async function startMockServer(port: number): Promise<MockServer> {
         deliveryStatus: null,
         withdrawn: false,
         createdAt: new Date().toISOString(),
-        archivedAt: null,
       };
       if (!fixtures.threads[body.agent]) {
         fixtures.threads[body.agent] = [];
@@ -483,6 +490,7 @@ export async function startMockServer(port: number): Promise<MockServer> {
       fixtures.threads = fresh.threads;
       fixtures.proxies = fresh.proxies;
       fixtures.indicators = fresh.indicators;
+      fixtures.stores = fresh.stores;
       fixtures.messageIdCounter = fresh.messageIdCounter;
       fixtures.requestLog = fresh.requestLog;
       fixtures.wsLog = fresh.wsLog;
@@ -524,6 +532,7 @@ export async function startMockServer(port: number): Promise<MockServer> {
       proxies: fixtures.proxies,
       unreadCounts: {},
       indicators: fixtures.indicators,
+      stores: fixtures.stores as WsInitEvent['stores'],
     };
     wss.send(client, JSON.stringify(initEvent));
   });

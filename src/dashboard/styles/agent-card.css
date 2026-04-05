@@ -41,10 +41,10 @@
   }
   .agent-list {
     overflow-y: auto;
-    padding: 12px;
+    padding: 8px;
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 4px;
     flex: 1;
   }
 
@@ -52,7 +52,7 @@
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    padding: 12px;
+    padding: 10px 12px;
     cursor: pointer;
     transition: border-color 0.15s;
   }
@@ -106,6 +106,7 @@
   .agent-group-header.drag-over-above { box-shadow: 0 -2px 0 var(--accent); }
   .agent-group-header.drag-over-below { box-shadow: 0 2px 0 var(--accent); }
   .agent-card[draggable="true"] { cursor: grab; }
+  .filtered .agent-card[draggable="true"] { cursor: pointer; }
   .agent-card.dragging { opacity: 0.4; }
   .agent-card.drag-over-above { box-shadow: 0 -2px 0 var(--accent); }
   .agent-card.drag-over-below { box-shadow: 0 2px 0 var(--accent); }
@@ -118,22 +119,29 @@
 
   .agent-header {
     display: flex;
-    justify-content: space-between;
     align-items: center;
-    margin-bottom: 6px;
+    gap: 6px;
+    margin-bottom: 2px;
+  }
+  .agent-badges {
+    margin-left: auto;
+    display: flex;
+    gap: 4px;
+    align-items: center;
+    flex-shrink: 0;
   }
   .agent-star {
     background: none;
     border: none;
     cursor: pointer;
     padding: 0;
+    margin-right: 4px;
     color: var(--text-dim);
-    opacity: 0.4;
+    opacity: 0.3;
     transition: opacity 0.15s, color 0.15s;
     display: inline-flex;
     align-items: center;
   }
-  .agent-star:hover { opacity: 1; color: #f5c518; }
   .agent-star.starred { opacity: 0.8; color: #f5c518; }
   .agent-icon {
     font-size: 14px;
@@ -141,7 +149,6 @@
   }
   .agent-name { font-weight: 600; font-size: 14px; }
   .state-badge {
-    margin-left: auto;
     font-size: 11px;
     padding: 2px 8px;
     border-radius: 12px;
@@ -163,7 +170,7 @@
     gap: 12px;
     font-size: 12px;
     color: var(--text-dim);
-    margin-bottom: 8px;
+    margin-bottom: 2px;
   }
   .agent-meta span { display: flex; align-items: center; gap: 4px; }
 

@@ -595,23 +595,42 @@ export async function resumeAgent(
     // 1. Compose system prompt (no proxy dependency)
     const systemPrompt = buildSystemPrompt(ctx, name, peers, persona);
 
-    // 2. Create new tmux session + write config profile
-    const createResult = await createSessionAndWriteProfile(ctx, proxyId, tmuxSession, cwd, adapter, name, systemPrompt);
-    if (!createResult.ok) {
-      await ctx.locks.withLock(name, async () => {
-        const latest = ctx.db.getAgent(name);
-        if (latest && latest.state === 'resuming') {
-          ctx.db.updateAgentState(name, 'failed', latest.version, {
-            failedAt: new Date().toISOString(),
-            failureReason: `Failed to create tmux session: ${createResult.error ?? 'unknown'}`,
-          });
-          ctx.db.logEvent(name, 'resume_failed', undefined, { reason: createResult.error });
-        }
-      });
-      throw new Error(`Resume failed: could not create tmux session for "${name}": ${createResult.error ?? 'unknown'}`);
+    // 2. Reuse existing tmux session if it survived suspend (preserves Watch-tab
+    //    attachments and any manual operator tweaks). Only create fresh if gone.
+    const hasResult = await ctx.proxyDispatch(proxyId, {
+      action: 'has_session',
+      sessionName: tmuxSession,
+    }).catch(() => ({ ok: false, data: false }));
+    const sessionExists = hasResult.ok && hasResult.data === true;
+
+    if (!sessionExists) {
+      const createResult = await createSessionAndWriteProfile(ctx, proxyId, tmuxSession, cwd, adapter, name, systemPrompt);
+      if (!createResult.ok) {
+        await ctx.locks.withLock(name, async () => {
+          const latest = ctx.db.getAgent(name);
+          if (latest && latest.state === 'resuming') {
+            ctx.db.updateAgentState(name, 'failed', latest.version, {
+              failedAt: new Date().toISOString(),
+              failureReason: `Failed to create tmux session: ${createResult.error ?? 'unknown'}`,
+            });
+            ctx.db.logEvent(name, 'resume_failed', undefined, { reason: createResult.error });
+          }
+        });
+        throw new Error(`Resume failed: could not create tmux session for "${name}": ${createResult.error ?? 'unknown'}`);
+      }
+    } else {
+      // Session alive — write updated config profile if needed
+      const personaAdapter = getAdapter(engine);
+      if (personaAdapter.usesConfigProfile && systemPrompt) {
+        await ctx.proxyDispatch(proxyId, {
+          action: 'write_codex_profile',
+          profileName: name,
+          developerInstructions: systemPrompt,
+        }).catch(() => {});
+      }
     }
 
-    // 3. Build and paste resume command (or spawn with new session ID if none)
+    // 4. Build and paste resume command (or spawn with new session ID if none)
     //    Use hook resolver: hookResume for existing session, hookStart for fresh spawn.
     const personaFile = resolvePersonaFilePath(name, persona);
 
@@ -659,10 +678,10 @@ export async function resumeAgent(
 
     await dispatchHookResult(ctx, proxyId, tmuxSession, wrappedResume, { agentName: name });
 
-    // 4. /rename injection
+    // 5. /rename injection
     await injectRename(ctx, proxyId, tmuxSession, adapter, name);
 
-    // 5. Paste task if provided (and resuming existing session).
+    // 6. Paste task if provided (and resuming existing session).
     // Skip if the engine consumed the task inline via buildResumeCommand.
     if (opts?.task && currentSessionId && !adapter.supportsResumePrompt) {
       await sleep(POST_RENAME_TASK_DELAY_MS);

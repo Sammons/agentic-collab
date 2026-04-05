@@ -4,11 +4,12 @@
  */
 
 import { createServer } from 'node:http';
-import { readFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, mkdirSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { timingSafeEqual } from 'node:crypto';
 import { Database } from './database.ts';
-import { createRouter, type RouteContext } from './routes.ts';
+import { createRouter, startTelegramPolling, type RouteContext } from './routes.ts';
+import { TelegramDispatcher } from './telegram.ts';
 import { WebSocketServer } from '../shared/websocket-server.ts';
 import { LockManager } from '../shared/lock.ts';
 import { HealthMonitor } from './health-monitor.ts';
@@ -17,13 +18,14 @@ import { UsagePoller } from './usage-poller.ts';
 import { ReminderDispatcher } from './reminder-dispatcher.ts';
 import { shutdownAgents, restoreAllAgents } from './network.ts';
 import type { LifecycleContext } from './lifecycle.ts';
-import { syncPersonasToDb } from './persona.ts';
+import { syncPersonasToDb, syncPersonasWithDiff, getPersonasDir } from './persona.ts';
 import { AccountStore } from './accounts.ts';
 import { isRunning } from '../shared/agent-entity.ts';
 import { resolveSecret, getSecretPath } from '../shared/config.ts';
 import type { ProxyCommand, ProxyResponse, ProxyRegistration } from '../shared/types.ts';
 import { getVersion } from '../shared/version.ts';
 import { handleVoiceUpgrade, type VoiceProxyOptions } from './voice-proxy.ts';
+import { DEFAULT_ENGINE_CONFIGS } from './default-engine-configs.ts';
 
 const PORT = parseInt(process.env['PORT'] ?? '3000', 10);
 const DB_PATH = process.env['DB_PATH'] ?? join(process.env['HOME'] ?? '/data', '.agentic-collab', 'orchestrator.db');
@@ -36,60 +38,18 @@ if (!ORCHESTRATOR_SECRET) {
   console.log(`[orchestrator] Auth enabled (secret from ${process.env['ORCHESTRATOR_SECRET'] ? 'env' : getSecretPath()})`);
 }
 
-// Ensure DB directory exists
+// Ensure DB + pages + stores directories exist
 mkdirSync(dirname(DB_PATH), { recursive: true });
+const PAGES_DIR = join(dirname(DB_PATH), 'pages');
+mkdirSync(PAGES_DIR, { recursive: true });
+const STORES_DIR = join(dirname(DB_PATH), 'stores');
+mkdirSync(STORES_DIR, { recursive: true });
 
 const db = new Database(DB_PATH);
 const wss = new WebSocketServer();
 const locks = new LockManager(db.rawDb);
 
 // ── Seed Default Engine Configs ──
-
-const DEFAULT_ENGINE_CONFIGS: Array<Parameters<typeof db.createEngineConfig>[0]> = [
-  {
-    name: 'claude',
-    engine: 'claude',
-    model: 'opus',
-    thinking: 'high',
-    permissions: 'dangerously-skip',
-    hookStart: JSON.stringify([
-      { type: 'shell', command: 'claude --dangerously-skip-permissions --model opus --effort max --append-system-prompt $PERSONA_PROMPT' },
-      { type: 'wait', ms: 5000 },
-      { type: 'shell', command: '/status' },
-      { type: 'capture', lines: 30, regex: 'uuid', var: 'SESSION_ID' },
-      { type: 'keystroke', key: 'Escape' },
-    ]),
-    hookResume: JSON.stringify([
-      { type: 'shell', command: 'claude --resume $SESSION_ID --append-system-prompt $PERSONA_PROMPT' },
-      { type: 'wait', ms: 5000 },
-      { type: 'shell', command: '/status' },
-      { type: 'capture', lines: 30, regex: 'uuid', var: 'SESSION_ID' },
-      { type: 'keystroke', key: 'Escape' },
-    ]),
-  },
-  {
-    name: 'codex',
-    engine: 'codex',
-    model: 'gpt-4.1',
-    hookStart: JSON.stringify([
-      { type: 'shell', command: 'codex --dangerously-bypass-approvals-and-sandbox --no-alt-screen -p $AGENT_NAME' },
-    ]),
-    hookResume: JSON.stringify([
-      { type: 'shell', command: 'codex --dangerously-bypass-approvals-and-sandbox --no-alt-screen -p $AGENT_NAME resume $SESSION_ID' },
-    ]),
-  },
-  {
-    name: 'opencode',
-    engine: 'opencode',
-    model: 'sonnet',
-    hookStart: JSON.stringify([
-      { type: 'shell', command: 'opencode' },
-    ]),
-    hookResume: JSON.stringify([
-      { type: 'shell', command: 'opencode -s $SESSION_ID' },
-    ]),
-  },
-];
 
 for (const config of DEFAULT_ENGINE_CONFIGS) {
   if (!db.getEngineConfig(config.name)) {
@@ -266,6 +226,10 @@ if (voiceOpts) {
   console.log('[orchestrator] Voice dictation enabled (ElevenLabs API key set)');
 }
 
+// ── Telegram Dispatcher ──
+
+const telegramDispatcher = new TelegramDispatcher();
+
 const routeCtx: RouteContext = {
   db,
   wss,
@@ -278,6 +242,9 @@ const routeCtx: RouteContext = {
   usagePoller,
   voiceEnabled: !!voiceOpts,
   accountStore,
+  pagesDir: PAGES_DIR,
+  storesDir: STORES_DIR,
+  telegramDispatcher,
 };
 
 const router = createRouter(routeCtx);
@@ -353,6 +320,9 @@ wss.onConnect((client) => {
   }
   const accounts = accountStore.list();
   const engineConfigs = db.listEngineConfigs();
+  const pages = db.listPages();
+  const stores = db.listStores();
+  const destinations = db.listDestinations();
   wss.send(client, JSON.stringify({
     type: 'init',
     agents,
@@ -362,6 +332,9 @@ wss.onConnect((client) => {
     unreadCounts,
     indicators,
     accounts,
+    pages,
+    stores,
+    destinations,
   }));
 });
 
@@ -412,6 +385,7 @@ const staleProxyTimer = setInterval(() => {
 async function shutdown(): Promise<void> {
   console.log('[orchestrator] Shutting down...');
   clearInterval(staleProxyTimer);
+  telegramDispatcher.stopPolling();
   healthMonitor.stop();
   messageDispatcher.stop();
   usagePoller.stop();
@@ -455,10 +429,53 @@ server.listen(PORT, '0.0.0.0', async () => {
     console.error('[orchestrator] Persona sync failed:', err);
   }
 
+  // Poll persona directory for changes (fs.watch unreliable on Docker bind mounts)
+  const personasDir = getPersonasDir();
+  if (existsSync(personasDir)) {
+    let lastPersonaHash = '';
+    setInterval(() => {
+      try {
+        // Quick hash of file names + mtimes to detect changes
+        const files = readdirSync(personasDir).filter(f => f.endsWith('.md')).sort();
+        const hash = files.map(f => {
+          try { return f + ':' + statSync(join(personasDir, f)).mtimeMs; } catch { return f; }
+        }).join('|');
+        if (hash === lastPersonaHash) return;
+        if (lastPersonaHash === '') { lastPersonaHash = hash; return; } // skip first run
+        lastPersonaHash = hash;
+
+        const diff = syncPersonasWithDiff(db);
+        const changed = [...diff.created, ...diff.updated];
+        if (changed.length > 0) {
+          console.log(`[persona-watch] Hot-reloaded: ${changed.join(', ')}`);
+          const agents = db.listAgents();
+          const initPayload = JSON.stringify({
+            type: 'init',
+            agents,
+            threads: {},
+            engineConfigs: db.listEngineConfigs(),
+            indicators: {},
+          });
+          wss.broadcast(initPayload);
+        }
+      } catch (err) {
+        console.error('[persona-watch] Re-sync failed:', err);
+      }
+    }, 5000);
+    console.log(`[persona-watch] Polling ${personasDir} every 5s for changes`);
+  }
+
   // Start health monitor + usage poller + reminder dispatcher
   healthMonitor.start();
   usagePoller.start();
   reminderDispatcher.start();
+
+  // Start Telegram polling for enabled destinations
+  const telegramDests = db.listDestinations().filter(d => d.type === 'telegram' && d.enabled);
+  for (const dest of telegramDests) {
+    startTelegramPolling(routeCtx, dest);
+    console.log(`[telegram] Started polling for destination: ${dest.name}`);
+  }
 
   // Attempt network restore for agents that were running before last shutdown/crash
   try {

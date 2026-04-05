@@ -59,6 +59,61 @@ function configToYaml(cfg) {
       lines.push(`${yamlKey}: ${val}`);
     }
   }
+  // Indicators — stored as JSON string, display as YAML
+  if (cfg.indicators) {
+    try {
+      const defs = JSON.parse(cfg.indicators);
+      if (Array.isArray(defs) && defs.length > 0) {
+        lines.push('indicators:');
+        for (const def of defs) {
+          lines.push(`  ${def.id}:`);
+          if (def.regex) lines.push(`    regex: '${def.regex}'`);
+          if (def.badge) lines.push(`    badge: ${def.badge}`);
+          if (def.style) lines.push(`    style: ${def.style}`);
+          if (def.actions && typeof def.actions === 'object') {
+            lines.push('    actions:');
+            for (const [actionName, steps] of Object.entries(def.actions)) {
+              lines.push(`      ${actionName}:`);
+              for (const step of steps) {
+                if (step.type === 'keystroke' || step.keystroke) {
+                  lines.push(`        - keystroke: ${step.keystroke || step.key || ''}`);
+                } else if (step.type === 'shell' || step.command) {
+                  lines.push(`        - shell: ${step.command || step.shell || ''}`);
+                } else {
+                  lines.push(`        - ${JSON.stringify(step)}`);
+                }
+              }
+            }
+          }
+        }
+      }
+    } catch { /* skip malformed indicators */ }
+  }
+  // Detection — stored as JSON, display as YAML
+  if (cfg.detection) {
+    try {
+      const det = JSON.parse(cfg.detection);
+      lines.push('detection:');
+      const renderPatternList = (key, patterns) => {
+        if (!patterns?.length) return;
+        lines.push(`  ${key}:`);
+        for (const p of patterns) {
+          if (typeof p === 'string') {
+            lines.push(`    - '${p}'`);
+          } else {
+            lines.push(`    - pattern: '${p.pattern}'`);
+            if (p.lines != null) lines.push(`      lines: ${p.lines}`);
+          }
+        }
+      };
+      renderPatternList('idlePatterns', det.idlePatterns);
+      renderPatternList('activePatterns', det.activePatterns);
+      if (det.contextPattern) lines.push(`  contextPattern: '${det.contextPattern}'`);
+      if (det.idleThreshold != null) lines.push(`  idleThreshold: ${det.idleThreshold}`);
+      if (det.activeGraceMs != null) lines.push(`  activeGraceMs: ${det.activeGraceMs}`);
+      if (det.snapshotLines != null) lines.push(`  snapshotLines: ${det.snapshotLines}`);
+    } catch { /* skip malformed detection */ }
+  }
   if (cfg.launchEnv && typeof cfg.launchEnv === 'object' && Object.keys(cfg.launchEnv).length > 0) {
     lines.push('env:');
     for (const [k, v] of Object.entries(cfg.launchEnv)) {
@@ -74,7 +129,30 @@ function yamlToConfig(yaml, name) {
   const lines = yaml.split('\n');
   let currentKey = null;
   let currentSteps = null;
+  let inIndicators = false;
+  let indicatorDefs = [];
+  let currentIndicator = null;
+  let currentActionName = null;
+  let currentActionSteps = null;
+  let inDetection = false;
+  let detectionObj = null;
+  let detectionListKey = null;
   const hookMap = { start: 'hookStart', resume: 'hookResume', compact: 'hookCompact', exit: 'hookExit', interrupt: 'hookInterrupt', submit: 'hookSubmit' };
+
+  function flushIndicatorAction() {
+    if (currentActionName && currentActionSteps && currentIndicator) {
+      if (!currentIndicator.actions) currentIndicator.actions = {};
+      currentIndicator.actions[currentActionName] = currentActionSteps;
+    }
+    currentActionName = null;
+    currentActionSteps = null;
+  }
+
+  function flushIndicator() {
+    flushIndicatorAction();
+    if (currentIndicator) indicatorDefs.push(currentIndicator);
+    currentIndicator = null;
+  }
 
   for (const line of lines) {
     const trimmed = line.trimEnd();
@@ -87,6 +165,20 @@ function yamlToConfig(yaml, name) {
       }
       currentKey = null;
       currentSteps = null;
+      // Flush indicators if leaving that section
+      if (inIndicators) {
+        flushIndicator();
+        if (indicatorDefs.length > 0) fields.indicators = JSON.stringify(indicatorDefs);
+        inIndicators = false;
+        indicatorDefs = [];
+      }
+      // Flush detection if leaving that section
+      if (inDetection) {
+        if (detectionObj) fields.detection = JSON.stringify(detectionObj);
+        inDetection = false;
+        detectionObj = null;
+        detectionListKey = null;
+      }
 
       const key = kvMatch[1];
       const val = kvMatch[2].trim();
@@ -97,10 +189,98 @@ function yamlToConfig(yaml, name) {
           currentKey = hookMap[key];
           currentSteps = [];
         }
+      } else if (key === 'indicators') {
+        inIndicators = true;
+      } else if (key === 'detection') {
+        inDetection = true;
+        detectionObj = {};
       } else if (key === 'env') {
         fields.launchEnv = {};
       } else {
         fields[key] = val || null;
+      }
+    } else if (inDetection) {
+      // Detection parsing — 2 indent levels:
+      //   2-space: field (idlePatterns, activePatterns, contextPattern, etc.)
+      //   4-space: list item (- 'regex')
+      const indent = line.search(/\S/);
+      const content = trimmed.trim();
+      if (indent === 2 && content.match(/^(\w+):\s*(.*)$/)) {
+        const m = content.match(/^(\w+):\s*(.*)$/);
+        const fieldKey = m[1];
+        const fieldVal = m[2].trim().replace(/^'(.*)'$/, '$1');
+        if (fieldKey === 'idlePatterns' || fieldKey === 'activePatterns') {
+          detectionObj[fieldKey] = [];
+          detectionListKey = fieldKey;
+        } else if (fieldVal) {
+          detectionListKey = null;
+          // Numeric fields
+          if (['idleThreshold', 'activeGraceMs', 'snapshotLines'].includes(fieldKey)) {
+            detectionObj[fieldKey] = parseInt(fieldVal) || 0;
+          } else {
+            detectionObj[fieldKey] = fieldVal;
+          }
+        }
+      } else if (indent === 4 && content.startsWith('- ') && detectionListKey && detectionObj[detectionListKey]) {
+        const itemStr = content.replace(/^-\s*/, '');
+        const patternKv = itemStr.match(/^pattern:\s*(.*)$/);
+        if (patternKv) {
+          // Object format: - pattern: '...'
+          const patternObj = { pattern: patternKv[1].trim().replace(/^'(.*)'$/, '$1') };
+          detectionObj[detectionListKey].push(patternObj);
+        } else {
+          // String format: - '...'
+          detectionObj[detectionListKey].push(itemStr.replace(/^'(.*)'$/, '$1'));
+        }
+      } else if (indent === 6 && detectionListKey && detectionObj[detectionListKey]?.length > 0) {
+        // Sub-field of object pattern (e.g. lines: 3)
+        const last = detectionObj[detectionListKey][detectionObj[detectionListKey].length - 1];
+        if (typeof last === 'object') {
+          const subKv = content.match(/^(\w+):\s*(.*)$/);
+          if (subKv) last[subKv[1]] = parseInt(subKv[2]) || subKv[2].trim();
+        }
+      }
+    } else if (inIndicators) {
+      // Indicator parsing — 4 indent levels:
+      //   2-space: indicator id
+      //   4-space: indicator field (regex, badge, style, actions)
+      //   6-space: action name
+      //   8-space: action step
+      const indent = line.search(/\S/);
+      const content = trimmed.trim();
+      const subKv = content.match(/^([^\s:]+):\s*(.*)$/);
+
+      if (indent === 2 && subKv && !content.startsWith('-')) {
+        // New indicator definition
+        flushIndicator();
+        currentIndicator = { id: subKv[1] };
+      } else if (indent === 4 && subKv && currentIndicator) {
+        // Indicator field
+        const fieldKey = subKv[1];
+        const fieldVal = subKv[2].trim().replace(/^'(.*)'$/, '$1');
+        if (fieldKey === 'actions') {
+          // actions: (block start)
+        } else {
+          currentIndicator[fieldKey] = fieldVal;
+        }
+      } else if (indent === 6 && subKv && currentIndicator) {
+        // Action name
+        flushIndicatorAction();
+        currentActionName = subKv[1];
+        currentActionSteps = [];
+      } else if (indent >= 8 && content.startsWith('- ') && currentActionSteps) {
+        // Action step
+        const stepStr = content.replace(/^-\s*/, '');
+        const stepKv = stepStr.match(/^(\w+):\s*(.*)$/);
+        if (stepKv) {
+          const stepType = stepKv[1];
+          const stepVal = stepKv[2].trim();
+          if (stepType === 'keystroke') {
+            currentActionSteps.push({ type: 'keystroke', keystroke: stepVal });
+          } else if (stepType === 'shell') {
+            currentActionSteps.push({ type: 'shell', command: stepVal });
+          }
+        }
       }
     } else if (trimmed.startsWith('  - ') && currentSteps) {
       // Pipeline step
@@ -140,6 +320,15 @@ function yamlToConfig(yaml, name) {
   if (currentKey && currentSteps) {
     fields[currentKey] = JSON.stringify(currentSteps);
   }
+  // Save indicators if file ended while in indicators section
+  if (inIndicators) {
+    flushIndicator();
+    if (indicatorDefs.length > 0) fields.indicators = JSON.stringify(indicatorDefs);
+  }
+  // Save detection if file ended while in detection section
+  if (inDetection && detectionObj) {
+    fields.detection = JSON.stringify(detectionObj);
+  }
   return fields;
 }
 
@@ -173,7 +362,7 @@ export class SettingsPanel extends HTMLElement {
         html += `<textarea class="config-yaml-editor" data-config-name="${esc(cfg.name)}">${esc(configToYaml(cfg))}</textarea>`;
         html += '<div class="config-edit-actions"><button class="settings-btn settings-btn-save" data-action="save">Save</button><button class="settings-btn settings-btn-cancel" data-action="cancel">Cancel</button></div>';
       } else {
-        html += `<pre class="config-yaml-display">${esc(configToYaml(cfg))}</pre>`;
+        html += `<details class="config-details"><summary>Show YAML</summary><pre class="config-yaml-display">${esc(configToYaml(cfg))}</pre></details>`;
       }
       html += '</div>';
     }
@@ -187,31 +376,192 @@ export class SettingsPanel extends HTMLElement {
       html += '</div>';
     }
 
+    html += '<div class="config-btn-row">';
     html += `<button class="settings-btn settings-btn-new" id="newConfigBtn">${icon.plus(12)} New Engine Config</button>`;
+    html += `<button class="settings-btn" id="resetDefaultsBtn">Reset Defaults</button>`;
+    html += '</div>';
     html += '</div>';
 
     // ── Preferences ──
     html += '<div class="settings-section">';
     html += '<h3>Preferences</h3>';
+    html += '<div class="config-card">';
     html += '<div class="pref-row">';
-    html += '<label>Submit mode:</label>';
-    html += `<label><input type="radio" name="submitMode" value="cmd-enter" ${submitMode === 'cmd-enter' ? 'checked' : ''} /> Cmd/Ctrl+Enter</label>`;
-    html += `<label><input type="radio" name="submitMode" value="enter" ${submitMode === 'enter' ? 'checked' : ''} /> Enter</label>`;
+    html += '<label class="pref-label">Submit mode</label>';
+    html += `<label class="pref-option"><input type="radio" name="submitMode" value="cmd-enter" ${submitMode === 'cmd-enter' ? 'checked' : ''} /> Cmd/Ctrl+Enter</label>`;
+    html += `<label class="pref-option"><input type="radio" name="submitMode" value="enter" ${submitMode === 'enter' ? 'checked' : ''} /> Enter</label>`;
     html += '</div>';
     html += '<div class="pref-row">';
-    html += `<label><input type="checkbox" id="closeKbPref" ${closeKb ? 'checked' : ''} /> Close keyboard on send (iOS)</label>`;
+    html += `<label class="pref-option"><input type="checkbox" id="closeKbPref" ${closeKb ? 'checked' : ''} /> Close keyboard on send (iOS)</label>`;
     html += '</div>';
+    html += '</div>';
+    html += '</div>';
+
+    // ── Pages ──
+    html += '<div class="settings-section">';
+    html += '<h3>Published Pages</h3>';
+    const pages = state.pages || [];
+    if (pages.length === 0) {
+      html += '<p class="settings-hint">No pages published. Agents can publish via <code>collab publish &lt;slug&gt; &lt;dir&gt;</code></p>';
+    } else {
+      for (const page of pages) {
+        const size = page.totalBytes >= 1024 * 1024 ? (page.totalBytes / 1024 / 1024).toFixed(1) + ' MB' : (page.totalBytes / 1024).toFixed(0) + ' KB';
+        html += '<div class="config-card">';
+        html += `<div class="config-header">`;
+        html += `<span class="config-name"><a href="/pages/${esc(page.slug)}" target="_blank" style="color:var(--accent);text-decoration:none">${esc(page.slug)}</a></span>`;
+        html += `<span class="config-actions">`;
+        html += `<span style="font-size:11px;color:var(--text-dim)">${esc(String(page.fileCount))} files · ${size}${page.agent ? ' · ' + esc(page.agent) : ''}</span>`;
+        html += `<button class="config-action-btn config-delete-btn" data-page-delete="${esc(page.slug)}">${icon.trash(12)} Delete</button>`;
+        html += `</span></div>`;
+        html += '</div>';
+      }
+    }
+    html += '</div>';
+
+    // ── Data Stores ──
+    html += '<div class="settings-section">';
+    html += '<h3>Data Stores</h3>';
+    const stores = state.stores || [];
+    if (stores.length === 0) {
+      html += '<p class="settings-hint">No data stores. Agents can create stores via <code>collab store create &lt;name&gt;</code></p>';
+    } else {
+      for (const store of stores) {
+        const updated = store.updatedAt ? new Date(store.updatedAt).toLocaleDateString() : '';
+        html += '<div class="config-card">';
+        html += `<div class="config-header">`;
+        html += `<span class="config-name">${esc(store.name)}</span>`;
+        html += `<span class="config-actions">`;
+        html += `<span style="font-size:11px;color:var(--text-dim)">${updated ? 'updated ' + esc(updated) : ''}${store.agent ? (updated ? ' · ' : '') + esc(store.agent) : ''}</span>`;
+        html += `<button class="config-action-btn config-delete-btn" data-store-delete="${esc(store.name)}">${icon.trash(12)} Delete</button>`;
+        html += `</span></div>`;
+        html += '</div>';
+      }
+    }
+    html += '</div>';
+
+    // ── Destinations (Telegram, etc.) ──
+    html += '<div class="settings-section">';
+    html += '<h3>Destinations</h3>';
+    const destinations = state.destinations || [];
+    if (destinations.length === 0) {
+      html += '<p class="settings-hint">No destinations configured. Add a Telegram destination to send/receive messages.</p>';
+    } else {
+      for (const dest of destinations) {
+        const updated = dest.updatedAt ? new Date(dest.updatedAt).toLocaleDateString() : '';
+        html += '<div class="config-card">';
+        html += '<div class="config-header">';
+        html += `<span class="config-name">${esc(dest.name)} <span style="font-size:11px;color:var(--text-dim)">(${esc(dest.type)})</span></span>`;
+        html += '<span class="config-actions">';
+        html += `<span style="font-size:11px;color:var(--text-dim)">${dest.enabled ? 'enabled' : 'disabled'}${updated ? ' · ' + esc(updated) : ''}</span>`;
+        html += `<button class="config-action-btn" data-dest-test="${esc(dest.name)}">Test</button>`;
+        html += `<button class="config-action-btn config-delete-btn" data-dest-delete="${esc(dest.name)}">${icon.trash(12)} Delete</button>`;
+        html += '</span></div>';
+        html += '</div>';
+      }
+    }
     html += '</div>';
 
     html += '</div>';
     this.innerHTML = html;
     this._bindEvents();
+    // Auto-size textareas to fit content
+    this.querySelectorAll('.config-yaml-editor').forEach((ta) => {
+      ta.style.height = 'auto';
+      ta.style.height = ta.scrollHeight + 'px';
+      ta.addEventListener('input', () => {
+        ta.style.height = 'auto';
+        ta.style.height = ta.scrollHeight + 'px';
+      });
+    });
+    // Scroll editing card into view
+    if (this._editingConfig) {
+      const card = this.querySelector(`[data-config="${this._editingConfig}"]`);
+      if (card) card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
   }
 
   _bindEvents() {
     this.querySelector('#newConfigBtn')?.addEventListener('click', () => {
       this._editingConfig = '__new__';
       this.render();
+    });
+
+    this.querySelector('#resetDefaultsBtn')?.addEventListener('click', async () => {
+      if (await confirmAction('Reset default engine configs (claude, codex, opencode) to built-in defaults? Custom edits to these configs will be lost.')) {
+        await this._resetDefaults();
+      }
+    });
+
+    this.querySelectorAll('[data-page-delete]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const slug = btn.dataset.pageDelete;
+        if (await confirmAction(`Delete page "${slug}"? This removes all published files.`)) {
+          try {
+            const res = await fetch(`/api/pages/${encodeURIComponent(slug)}`, { method: 'DELETE', headers: authHeaders() });
+            if (res.ok) {
+              state.pages = state.pages.filter(p => p.slug !== slug);
+              showToast('Deleted', 'success');
+              this.render();
+            } else {
+              const b = await res.json().catch(() => null);
+              showToast(b?.error || 'Delete failed', 'error');
+            }
+          } catch { showToast('Network error', 'error'); }
+        }
+      });
+    });
+
+    this.querySelectorAll('[data-dest-test]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const name = btn.dataset.destTest;
+        try {
+          const res = await fetch(`/api/destinations/${encodeURIComponent(name)}/test`, { method: 'POST', headers: authHeaders() });
+          if (res.ok) {
+            showToast('Test message sent', 'success');
+          } else {
+            const b = await res.json().catch(() => null);
+            showToast(b?.error || 'Test failed', 'error');
+          }
+        } catch { showToast('Network error', 'error'); }
+      });
+    });
+
+    this.querySelectorAll('[data-dest-delete]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const name = btn.dataset.destDelete;
+        if (await confirmAction(`Delete destination "${name}"?`)) {
+          try {
+            const res = await fetch(`/api/destinations/${encodeURIComponent(name)}`, { method: 'DELETE', headers: authHeaders() });
+            if (res.ok) {
+              state.destinations = state.destinations.filter(d => d.name !== name);
+              showToast('Deleted', 'success');
+              this.render();
+            } else {
+              const b = await res.json().catch(() => null);
+              showToast(b?.error || 'Delete failed', 'error');
+            }
+          } catch { showToast('Network error', 'error'); }
+        }
+      });
+    });
+
+    this.querySelectorAll('[data-store-delete]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const name = btn.dataset.storeDelete;
+        if (await confirmAction(`Delete data store "${name}"? This removes all stored data.`)) {
+          try {
+            const res = await fetch(`/api/stores/${encodeURIComponent(name)}`, { method: 'DELETE', headers: authHeaders() });
+            if (res.ok) {
+              state.stores = state.stores.filter(s => s.name !== name);
+              showToast('Deleted', 'success');
+              this.render();
+            } else {
+              const b = await res.json().catch(() => null);
+              showToast(b?.error || 'Delete failed', 'error');
+            }
+          } catch { showToast('Network error', 'error'); }
+        }
+      });
     });
 
     this.querySelectorAll('.config-action-btn').forEach((btn) => {
@@ -302,6 +652,19 @@ export class SettingsPanel extends HTMLElement {
       if (!res.ok) { const b = await res.json().catch(() => null); showToast(b?.error || 'Delete failed', 'error'); return; }
       state.engineConfigs = state.engineConfigs.filter(c => c.name !== name);
       showToast('Deleted', 'success');
+      this.render();
+    } catch { showToast('Network error', 'error'); }
+  }
+
+  async _resetDefaults() {
+    try {
+      const res = await fetch('/api/engine-configs/reset-defaults', { method: 'POST', headers: authHeaders() });
+      if (!res.ok) { const b = await res.json().catch(() => null); showToast(b?.error || 'Reset failed', 'error'); return; }
+      // Refresh full list from server
+      const listRes = await fetch('/api/engine-configs', { headers: authHeaders() });
+      if (listRes.ok) state.engineConfigs = await listRes.json();
+      this._editingConfig = null;
+      showToast('Defaults restored', 'success');
       this.render();
     } catch { showToast('Network error', 'error'); }
   }

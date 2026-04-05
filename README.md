@@ -9,7 +9,7 @@ Zero-dependency orchestrator for managing AI coding agents (Claude, Codex, OpenC
 
 ## Dashboard
 
-Real-time dashboard for monitoring and controlling agents. Search/filter, send messages, upload files, view persona config — all from the browser. Mobile responsive. Features cmd+k command palette for quick agent navigation, markdown rendering (tables, code blocks, lists), and voice-to-text input tagged as `sent via voice-to-text:`.
+Real-time dashboard for monitoring and controlling agents. Search/filter, send messages, upload files, view persona config, manage engine configs via Settings, and publish static pages — all from the browser. Mobile responsive. Features cmd+k command palette for quick agent navigation, markdown rendering (tables, code blocks, lists), and voice-to-text input tagged as `sent via voice-to-text:`.
 
 | Desktop | Mobile |
 |---------|--------|
@@ -182,7 +182,7 @@ You are a research specialist focused on codebase exploration.
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `engine` | yes | `claude`, `codex`, or `opencode` |
+| `engine` | yes | Engine name (e.g., `claude`, `codex`, `opencode`). Any non-empty string accepted; engine configs provide defaults but are not required. |
 | `cwd` | yes | Working directory for the agent |
 | `model` | no | Model override (e.g., `sonnet`, `opus`) |
 | `thinking` | no | Thinking mode (`high`, `low`) |
@@ -515,6 +515,26 @@ All `POST`/`DELETE` endpoints require `Authorization: Bearer <secret>` when `ORC
 | `GET` | `/api/proxies` | List registered proxies |
 | `POST` | `/api/sync-personas` | Sync persona files to DB (returns created/updated/unchanged) |
 
+### Engine Configs
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/engine-configs` | List all engine configs |
+| `POST` | `/api/engine-configs` | Create engine config |
+| `PUT` | `/api/engine-configs/:name` | Update engine config |
+| `DELETE` | `/api/engine-configs/:name` | Delete engine config (blocked if agents reference it) |
+| `POST` | `/api/engine-configs/reset-defaults` | Reset engine configs to built-in defaults |
+
+### Pages
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/pages?slug=&agent=&title=` | Publish a page (tar or file body, 50MB max) |
+| `GET` | `/api/pages` | List published pages |
+| `DELETE` | `/api/pages/:slug` | Delete a published page |
+| `GET` | `/pages/:slug` | Serve page (public, no auth) |
+| `GET` | `/pages/:slug/:path+` | Serve page asset (public, no auth) |
+
 ### WebSocket
 
 Connect to `/ws?token=<secret>` for real-time updates. Core events: `init`, `agent_update`, `message`, `proxy_update`, `queue_update`.
@@ -528,7 +548,9 @@ The orchestrator observes agent sessions on two cadences:
 
 Current health monitor responsibilities:
 
-- **Screen-diff idle detection**: compares trailing pane snapshots and transitions agents between `active` and `idle`
+- **Pattern-based detection**: engine configs can define `idlePatterns` (force idle) and `activePatterns` (force active) with per-pattern line capture limits. Active patterns checked first, then idle patterns, then screen-diff fallback. Detection config cached per engine with invalidation on config change.
+- **Screen-diff idle detection**: compares trailing pane snapshots and transitions agents between `active` and `idle` (fallback when no patterns match)
+- **Indicator evaluation**: resolves engine config indicators on each poll cycle and broadcasts badge state (e.g., unsafe, local agents, approval prompts)
 - **Context tracking**: records adapter-parsed context percentages for dashboard display only
 - **CLI exit detection**: marks agents `failed` if the engine drops back to a shell prompt or prints a known fatal error
 - **Capture failure handling**: marks agents `failed` after repeated pane capture failures
@@ -580,6 +602,8 @@ src/
 │   ├── hook-resolver.ts    # Hook resolution: preset/shell/send modes
 │   ├── accounts.ts         # Per-agent credential account management
 │   ├── field-registry.ts   # Schema-driven config field registry
+│   ├── default-engine-configs.ts # Default engine config definitions
+│   ├── engine-config-resolver.ts # Engine config resolution + merging
 │   ├── reminder-dispatcher.ts # Reminder scheduling + delivery
 │   └── adapters/           # Engine-specific behavior
 │       ├── claude.ts
@@ -607,12 +631,15 @@ src/
 │   ├── connection.ts       # WebSocket, auth, engine polling
 │   ├── agent-list.ts       # Agent list rendering + search + filters
 │   ├── agent-lifecycle.ts  # Agent actions (create, destroy, reload)
-│   ├── message-io.ts       # Send, upload, archive, queue status
+│   ├── message-io.ts       # Send, upload, queue status
 │   ├── thread.ts           # Thread rendering + tab title
 │   ├── voice-palette.ts    # Voice dictation + command palette
 │   ├── persona-editor.ts   # Persona editor modal
+│   ├── settings.ts         # Settings page: engine configs, preferences, pages
+│   ├── files-panel.ts      # Agent file browser panel
+│   ├── url-state.ts        # History API URL state management
 │   ├── utils.ts            # Markdown, escaping, toast, confirm
-│   └── styles/             # 8 component-scoped CSS files
+│   └── styles/             # Component-scoped CSS files
 └── test/
     ├── mock-server.ts      # Dashboard mock server for UI tests
     ├── runner.ts           # Test probe + browser automation

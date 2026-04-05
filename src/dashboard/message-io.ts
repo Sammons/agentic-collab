@@ -1,6 +1,6 @@
 /**
  * Message I/O module.
- * Send messages, upload files, queue status updates, archive/unarchive.
+ * Send messages, upload files, queue status updates.
  *
  * Exports:
  *   setup({ handleAuthError, getActiveTopic, renderThread, voiceState }) — wire deps
@@ -9,9 +9,6 @@
  *   handleFileUpload(files, msg)   — upload multiple files with UI
  *   updateSendability()            — enable/disable send based on agent state
  *   handleQueueUpdate(message)     — update delivery status badge
- *   archiveChat(agentName)         — archive messages
- *   unarchiveChat(agentName)       — restore archived messages
- *   renderArchive()                — render archived messages view
  */
 
 import { state, authHeaders, getToken } from '/dashboard/assets/state.ts';
@@ -64,109 +61,6 @@ export function handleQueueUpdate(message) {
   }
 }
 
-// ── Archive / Restore ──
-
-export async function archiveChat(agentName) {
-  if (!agentName) return;
-  try {
-    const res = await fetch(`/api/dashboard/messages/${encodeURIComponent(agentName)}`, {
-      method: 'DELETE',
-      headers: authHeaders(),
-    });
-    if (res.status === 401) { _handleAuthError(); return; }
-    if (res.ok) {
-      state.threads[agentName] = [];
-      _renderThread();
-    }
-  } catch (err) {
-    console.error('Archive chat failed:', err);
-  }
-}
-
-export async function unarchiveChat(agentName) {
-  if (!agentName) return;
-  try {
-    const res = await fetch(`/api/dashboard/messages/${encodeURIComponent(agentName)}/unarchive`, {
-      method: 'POST',
-      headers: authHeaders(),
-    });
-    if (res.status === 401) { _handleAuthError(); return; }
-    if (res.ok) {
-      const threadsRes = await fetch(`/api/dashboard/threads?agent=${encodeURIComponent(agentName)}`, {
-        headers: authHeaders(),
-      });
-      if (threadsRes.ok) {
-        const threads = await threadsRes.json();
-        state.threads[agentName] = threads[agentName] || [];
-      }
-      state.threadView = 'messages';
-      _renderThread();
-    }
-  } catch (err) {
-    console.error('Unarchive failed:', err);
-  }
-}
-
-export async function renderArchive() {
-  const messages = document.getElementById('threadMessages');
-  if (!state.selected) return;
-  messages.innerHTML = '<div class="thread-empty">Loading archive...</div>';
-  try {
-    const res = await fetch(`/api/dashboard/threads?agent=${encodeURIComponent(state.selected)}&archived=1`, {
-      headers: authHeaders(),
-    });
-    if (!res.ok) { messages.innerHTML = '<div class="thread-empty">Failed to load archive</div>'; return; }
-    const threads = await res.json();
-    const thread = threads[state.selected] || [];
-    if (thread.length === 0) {
-      messages.innerHTML = '<div class="thread-empty">No archived messages</div>';
-      return;
-    }
-    messages.innerHTML = '';
-    const restoreBar = document.createElement('div');
-    restoreBar.style.cssText = 'padding:8px 12px;text-align:center';
-    restoreBar.innerHTML = `<button onclick="document.dispatchEvent(new CustomEvent('unarchive-chat'))" style="padding:6px 16px;border-radius:6px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:13px;cursor:pointer">Restore to Messages</button>`;
-    messages.appendChild(restoreBar);
-    for (const msg of thread) {
-      const div = document.createElement('div');
-      const isSystem = msg.message && msg.message.startsWith('[system]');
-      const isUpload = msg.topic === 'file-upload' && msg.direction === 'to_agent';
-      if (isSystem) {
-        div.className = 'msg system-msg';
-      } else if (isUpload) {
-        div.className = 'msg to-agent file-upload';
-      } else {
-        div.className = `msg ${msg.direction === 'to_agent' ? 'to-agent' : 'from-agent'}`;
-      }
-      if (msg.withdrawn) div.classList.add('withdrawn');
-      const fromLabel = isSystem ? 'system' : (msg.sourceAgent || (msg.direction === 'to_agent' ? 'dashboard' : state.selected));
-      const toLabel = msg.targetAgent || (msg.direction === 'to_agent' ? state.selected : 'dashboard');
-      const time = new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      const topicBadge = msg.topic ? `<span class="msg-topic">${esc(msg.topic)}</span>` : '';
-      const routeStr = `${esc(fromLabel)} ${icon.arrowRightSmall(12)} ${esc(toLabel)}`;
-      const displayMsg = isSystem ? msg.message.replace(/^\[system\]\s*/, '') : msg.message;
-      const statusHtml = (msg.direction === 'to_agent' && msg.queueId)
-        ? `<span class="msg-status ${msg.deliveryStatus || 'pending'}" data-queue-id="${msg.queueId}">${
-            msg.deliveryStatus === 'delivered' ? icon.check(12) + ' delivered' :
-            msg.deliveryStatus === 'failed' ? icon.x(12) + ' failed' :
-            icon.dots(12) + ' sending'
-          }</span>`
-        : '';
-      const headerHtml = `<div class="msg-header"><span class="msg-sender">${routeStr}</span>${topicBadge}<span class="msg-meta"><span class="msg-time">${time}</span>${statusHtml}</span></div>`;
-      if (isUpload) {
-        div.innerHTML = `${headerHtml}<div class="file-info"><span class="file-icon">${icon.paperclip(14)}</span> ${esc(displayMsg)}</div>`;
-      } else {
-        div.innerHTML = `${headerHtml}<div class="msg-body">${renderMarkdown(esc(displayMsg))}</div>`;
-      }
-      messages.appendChild(div);
-    }
-    messages.scrollTop = messages.scrollHeight;
-  } catch (err) {
-    console.error('Archive load failed:', err);
-    messages.innerHTML = '<div class="thread-empty">Failed to load archive</div>';
-  }
-}
-
 // ── Send Message ──
 
 function showSendError(input, sendBtn) {
@@ -188,26 +82,62 @@ export async function sendMessage() {
 
   const message = _voiceState.usedSinceSend ? VOICE_TO_TEXT_PREFIX + text : text;
   _voiceState.usedSinceSend = false;
-  // Optimistic clear — the message will appear via WS broadcast with queue status
+  // Optimistic: clear input and show message immediately
+  const agent = state.selected;
   inputEl.clear();
+  const optimisticId = -Date.now(); // negative ID = not yet confirmed
+  const optimisticMsg = {
+    id: optimisticId, agent, direction: 'to_agent', sourceAgent: 'dashboard',
+    targetAgent: agent, topic, message, queueId: null, deliveryStatus: 'pending',
+    withdrawn: false, createdAt: new Date().toISOString(),
+  };
+  if (!state.threads[agent]) state.threads[agent] = [];
+  state.threads[agent].push(optimisticMsg);
+  if (state.selected === agent && state.threadView === 'messages') {
+    const messagesEl = document.getElementById('threadMessages');
+    if (messagesEl?.appendMessage) messagesEl.appendMessage(optimisticMsg, agent);
+  }
+
   try {
     const res = await fetch('/api/dashboard/send', {
       method: 'POST',
       headers: authHeaders(),
-      body: JSON.stringify({ agent: state.selected, message, topic }),
+      body: JSON.stringify({ agent, message, topic }),
     });
     if (res.status === 401) { _handleAuthError(); return; }
     if (!res.ok) {
-      let body = null;
-      try { body = await res.json(); } catch (_) {}
-      if (!(body && body.msg)) {
-        inputEl.setDraft(text);
-        showToast('Send failed', 'error');
+      // Remove optimistic message on failure
+      const thread = state.threads[agent];
+      if (thread) {
+        const idx = thread.findIndex(m => m.id === optimisticId);
+        if (idx >= 0) thread.splice(idx, 1);
+      }
+      inputEl.setDraft(text);
+      showToast('Send failed', 'error');
+      _renderThread();
+    } else {
+      // Replace optimistic message with real one from server
+      const body = await res.json().catch(() => null);
+      if (body?.msg) {
+        const thread = state.threads[agent];
+        if (thread) {
+          const idx = thread.findIndex(m => m.id === optimisticId);
+          if (idx >= 0) {
+            thread[idx] = { ...body.msg, queueId: body.queueId ?? null, deliveryStatus: body.status ?? 'pending' };
+          }
+        }
       }
     }
   } catch (err) {
+    // Remove optimistic message on network error
+    const thread = state.threads[agent];
+    if (thread) {
+      const idx = thread.findIndex(m => m.id === optimisticId);
+      if (idx >= 0) thread.splice(idx, 1);
+    }
     inputEl.setDraft(text);
     showToast('Send failed — network error', 'error');
+    _renderThread();
   } finally {
     updateSendability();
   }

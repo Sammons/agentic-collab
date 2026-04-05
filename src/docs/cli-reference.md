@@ -187,6 +187,133 @@ collab reminder swap <id1> <id2>
 
 Controls which reminder is delivered first (lower sort order = delivered first).
 
+### Pages
+
+Publish static content to the orchestrator's built-in web server. Pages are served at `<orchestrator>/pages/<slug>`.
+
+**Publish a directory:**
+```
+collab publish <slug> <dir>
+collab publish my-report ./output
+```
+
+Tars the directory contents and uploads them. The slug becomes the URL path.
+
+**Publish from a template:**
+```
+collab publish <slug> --template <name> --store <store> --title <title>
+collab publish metrics-dash --template dashboard --store metrics --title "Metrics Dashboard"
+```
+
+Renders an HTML template with the given store and title injected, then publishes it. `--title` defaults to the slug if omitted. Run `collab templates` to see available templates.
+
+**List published pages:**
+```
+collab pages list
+collab pages         # same — list is the default
+```
+
+Shows slug, file count, size, publishing agent, and last update time.
+
+**Delete a page:**
+```
+collab pages delete <slug>
+collab pages delete my-report
+```
+
+**List available templates:**
+```
+collab templates
+```
+
+Shows template names from `src/templates/`. Each can be used with `collab publish --template`.
+
+### Data Stores
+
+SQLite-backed data stores that agents can create, query, and share. Each store is a separate database managed by the orchestrator.
+
+**Create a store:**
+```
+collab db create <name>
+collab db create metrics
+```
+
+Creates an empty SQLite store. If `COLLAB_AGENT` is set, the store is associated with that agent.
+
+**Execute SQL:**
+```
+collab db query <name> <sql>
+collab db query metrics "CREATE TABLE events (id INTEGER PRIMARY KEY, name TEXT, ts TEXT)"
+collab db query metrics "INSERT INTO events (name, ts) VALUES ('deploy', '2026-04-03')"
+collab db query metrics "SELECT * FROM events"
+```
+
+Returns results as JSON. Any valid SQL is accepted — CREATE, INSERT, SELECT, etc.
+
+**Show schema:**
+```
+collab db schema <name>
+collab db schema metrics
+```
+
+Lists all tables and their columns with types, primary key, and NOT NULL constraints.
+
+**List all stores:**
+```
+collab db list
+collab db            # same — list is the default
+```
+
+Shows store name, owning agent, and last update time.
+
+**Delete a store:**
+```
+collab db delete <name>
+collab db delete metrics
+```
+
+### Destinations
+
+External notification targets (e.g. Telegram). Agents can send messages to destinations using the standard `collab send` command.
+
+**Add a destination:**
+```
+collab destinations add <name> <type> --bot-token <token> --chat-id <id>
+collab destinations add my-telegram telegram --bot-token 123:ABC --chat-id -100123
+```
+
+Currently supported type: `telegram` (requires `--bot-token` and `--chat-id`).
+
+**List destinations:**
+```
+collab destinations list
+collab destinations       # same — list is the default
+```
+
+Shows name, type, enabled/disabled status, and last update time.
+
+**Delete a destination:**
+```
+collab destinations delete <name>
+collab destinations delete my-telegram
+```
+
+**Send a test message:**
+```
+collab destinations test <name>
+collab destinations test my-telegram
+```
+
+Sends a test message through the destination to verify the configuration works.
+
+**Send via a destination:**
+```
+collab send telegram "message"
+collab send telegram:my-telegram "message with specific destination"
+```
+
+Routes through the existing `send` command. Bare `telegram` picks the first enabled telegram destination. `telegram:<name>` targets a specific one by name. Supports `--topic` and `--in-reply-to` flags like normal sends.
+
 ### Status
 
 **Orchestrator status:**

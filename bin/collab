@@ -13,9 +13,9 @@
  *   COLLAB_AGENT            — Default agent name for send/reply (set by orchestrator)
  */
 
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, mkdtempSync, writeFileSync, readdirSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { execSync } from 'node:child_process';
 
 // ── Config Resolution ──
@@ -138,6 +138,7 @@ function parseSendArgs(args, implicitTarget = null) {
   let topic = null;
   let replyReminder = null;
   let inReplyTo = null;
+  let notify = null;
   const target = implicitTarget ?? args[0];
   const positional = [];
   const startIdx = implicitTarget ? 0 : 1;
@@ -145,6 +146,11 @@ function parseSendArgs(args, implicitTarget = null) {
   for (let i = startIdx; i < args.length; i++) {
     if (args[i] === '--topic' && args[i + 1]) { topic = args[++i]; }
     else if (args[i] === '--in-reply-to' && args[i + 1]) { inReplyTo = args[++i]; }
+    else if (args[i] === '--notify') {
+      const next = args[i + 1];
+      if (next && !next.startsWith('-')) { notify = args[++i]; }
+      else { notify = 'normal'; }
+    }
     else if (args[i] === '--reply-reminder') {
       const next = args[i + 1];
       if (next && !next.startsWith('-')) { replyReminder = parseInt(args[++i], 10); }
@@ -158,14 +164,68 @@ function parseSendArgs(args, implicitTarget = null) {
     topic,
     replyReminder,
     inReplyTo,
+    notify,
     message: positional.join(' '),
   };
 }
 
-async function dispatchSend({ target, topic, message, replyReminder, inReplyTo }) {
-  if (!target || !topic || !message) {
-    console.error('usage: collab send <target> --topic <topic> [--in-reply-to <text>] <message>');
+async function resolveDestination(target) {
+  // Check if target is a destination: "telegram" (first of type) or "telegram:name" (by name)
+  const colonIdx = target.indexOf(':');
+  if (colonIdx > 0) {
+    const type = target.slice(0, colonIdx);
+    const name = target.slice(colonIdx + 1);
+    if (type === 'telegram') {
+      return name;
+    }
+  }
+  // Check if target matches a destination type (e.g. "telegram" → first telegram dest)
+  if (target === 'telegram') {
+    const dests = await api('GET', '/api/destinations');
+    const match = dests.find(d => d.type === 'telegram' && d.enabled);
+    if (match) return match.name;
+    console.error('error: no enabled telegram destination found');
     process.exit(1);
+  }
+  return null;
+}
+
+async function dispatchSend({ target, topic, message, replyReminder, inReplyTo, notify }) {
+  // Destination routing: "telegram" or "telegram:name"
+  const destName = await resolveDestination(target);
+  if (destName) {
+    if (!message) {
+      console.error('usage: collab send telegram "message"');
+      process.exit(1);
+    }
+    const formattedMessage = formatReplyContext(message, inReplyTo);
+    const fromAgent = agentName() || undefined;
+    await api('POST', `/api/destinations/${encodeURIComponent(destName)}/send`, {
+      message: formattedMessage,
+      fromAgent,
+    });
+    console.log('sent to telegram');
+    if (notify) {
+      const fromAgent = agentName() || undefined;
+      await api('POST', '/api/notify', { agent: fromAgent, message: formattedMessage, priority: notify }).catch(() => {});
+    }
+    return;
+  }
+
+  if (!target || !topic || !message) {
+    console.error('usage: collab send <target> --topic <topic> [--in-reply-to <text>] [--notify [priority]] <message>');
+    process.exit(1);
+  }
+
+  // Validate target before sending
+  if (target !== 'operator' && target !== 'dashboard') {
+    const agents = await api('GET', '/api/agents');
+    const agentNames = agents.map(a => a.name);
+    if (!agentNames.includes(target)) {
+      console.error(`error: unknown target "${target}"`);
+      console.error(`valid targets: operator, dashboard, ${agentNames.join(', ')}`);
+      process.exit(1);
+    }
   }
 
   const formattedMessage = formatReplyContext(message, inReplyTo);
@@ -177,6 +237,9 @@ async function dispatchSend({ target, topic, message, replyReminder, inReplyTo }
     const agent = requireAgentName();
     await api('POST', '/api/dashboard/reply', { agent, message: formattedMessage, topic });
     console.log('sent');
+    if (notify) {
+      await api('POST', '/api/notify', { agent, message: formattedMessage, priority: notify }).catch(() => {});
+    }
     return;
   }
 
@@ -185,6 +248,12 @@ async function dispatchSend({ target, topic, message, replyReminder, inReplyTo }
   if (replyReminder) body.replyReminder = replyReminder;
   const data = await api('POST', '/api/agents/send', body);
   console.log(`queued (id:${data.queueId})`);
+
+  // Fire notification after normal send if --notify was passed
+  if (notify) {
+    const agent = agentName() || undefined;
+    await api('POST', '/api/notify', { agent, message: formattedMessage, priority: notify }).catch(() => {});
+  }
 }
 
 cmd('agents', 'agents', 'List all agents', async () => {
@@ -213,7 +282,7 @@ cmd('status', 'status', 'Orchestrator status', async () => {
   }
 });
 
-cmd('send', 'send <target> --topic <topic> [--in-reply-to <text>] <message>', 'Send a message to operator or another agent', async (args) => {
+cmd('send', 'send <target> --topic <topic> [--in-reply-to <text>] [--notify [priority]] <message>', 'Send a message to operator or another agent', async (args) => {
   await dispatchSend(parseSendArgs(args));
 });
 
@@ -468,6 +537,256 @@ cmd('reminder', 'reminder <sub> [args...]', 'Manage reminders (add|list|done|can
   else {
     console.error(`unknown subcommand: ${sub}`);
     console.error('usage: collab reminder {add|list|done|cancel|swap}');
+    process.exit(1);
+  }
+});
+
+// ── Pages ──
+
+const templatesDir = join(new URL('.', import.meta.url).pathname, '..', 'src', 'templates');
+
+function publishTar(dirPath) {
+  return execSync(`tar cf - -C ${JSON.stringify(dirPath)} .`, { maxBuffer: 50 * 1024 * 1024 });
+}
+
+async function uploadTar(slug, tarData) {
+  const agent = process.env['COLLAB_AGENT'] ?? null;
+  const qs = `slug=${encodeURIComponent(slug)}${agent ? '&agent=' + encodeURIComponent(agent) : ''}`;
+  const h = { 'Content-Type': 'application/x-tar' };
+  if (_secret) h['Authorization'] = `Bearer ${_secret}`;
+  const res = await fetch(`${_host}/api/pages?${qs}`, {
+    method: 'POST',
+    headers: h,
+    body: tarData,
+  });
+  const body = await res.json();
+  if (!res.ok) { console.error(body.error ?? 'Publish failed'); process.exit(1); }
+  console.log(`published: ${_host}/pages/${slug} (${body.fileCount} files, ${body.totalBytes} bytes)`);
+}
+
+cmd('publish', 'collab publish <slug> <dir> [--template <name> --store <store> --title <title>]', 'Publish a directory or template as a page', async (args) => {
+  let slug = null;
+  let dir = null;
+  let template = null;
+  let store = null;
+  let title = null;
+
+  // Parse flags and positional args
+  const positional = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--template' && args[i + 1]) { template = args[++i]; }
+    else if (args[i] === '--store' && args[i + 1]) { store = args[++i]; }
+    else if (args[i] === '--title' && args[i + 1]) { title = args[++i]; }
+    else { positional.push(args[i]); }
+  }
+
+  slug = positional[0];
+  dir = positional[1];
+
+  if (!slug) {
+    console.error('usage: collab publish <slug> <directory>');
+    console.error('       collab publish <slug> --template <name> --store <store> --title <title>');
+    process.exit(1);
+  }
+
+  if (template) {
+    // Template-based publish
+    if (!store) { console.error('error: --store is required when using --template'); process.exit(1); }
+    if (!title) title = slug;
+
+    const templatePath = join(templatesDir, `${template}.html`);
+    if (!existsSync(templatePath)) {
+      console.error(`error: template not found: ${template}`);
+      console.error(`  looked at: ${templatePath}`);
+      console.error(`  run 'collab templates' to see available templates`);
+      process.exit(1);
+    }
+
+    let html = readFileSync(templatePath, 'utf-8');
+    html = html.replaceAll('{{STORE}}', store);
+    html = html.replaceAll('{{TITLE}}', title);
+    html = html.replaceAll('{{TOKEN}}', _secret ?? '');
+
+    const tmpDir = mkdtempSync(join(tmpdir(), 'collab-template-'));
+    writeFileSync(join(tmpDir, 'index.html'), html);
+
+    const tarData = publishTar(tmpDir);
+    await uploadTar(slug, tarData);
+  } else {
+    // Directory-based publish (original flow)
+    if (!dir) {
+      console.error('usage: collab publish <slug> <directory>');
+      console.error('       collab publish <slug> --template <name> --store <store> --title <title>');
+      process.exit(1);
+    }
+    const resolved = resolve(dir);
+    if (!existsSync(resolved)) {
+      console.error(`directory not found: ${resolved}`);
+      process.exit(1);
+    }
+    const tarData = publishTar(resolved);
+    await uploadTar(slug, tarData);
+  }
+});
+
+cmd('templates', 'collab templates', 'List available page templates', async () => {
+  if (!existsSync(templatesDir)) {
+    console.log('No templates directory found');
+    return;
+  }
+  const files = readdirSync(templatesDir).filter(f => f.endsWith('.html')).sort();
+  if (files.length === 0) {
+    console.log('No templates available');
+    return;
+  }
+  console.log('Available templates:\n');
+  for (const f of files) {
+    const name = f.replace(/\.html$/, '');
+    console.log(`  ${name}`);
+  }
+  console.log(`\nUsage: collab publish <slug> --template <name> --store <store> --title <title>`);
+});
+
+cmd('pages', 'collab pages {list|delete}', 'Manage published pages', async (args) => {
+  const sub = args[0];
+  if (!sub || sub === 'list') {
+    const pages = await api('GET', '/api/pages');
+    if (!Array.isArray(pages) || pages.length === 0) { console.log('No published pages'); return; }
+    for (const p of pages) {
+      const size = p.totalBytes >= 1024 * 1024 ? (p.totalBytes / 1024 / 1024).toFixed(1) + 'MB' : (p.totalBytes / 1024).toFixed(0) + 'KB';
+      console.log(`  ${p.slug.padEnd(30)} ${String(p.fileCount).padStart(4)} files  ${size.padStart(8)}  ${p.agent ?? '-'}  ${p.updatedAt}`);
+    }
+  } else if (sub === 'delete') {
+    const slug = args[1];
+    if (!slug) { console.error('usage: collab pages delete <slug>'); process.exit(1); }
+    const h = {};
+    if (_secret) h['Authorization'] = `Bearer ${_secret}`;
+    const res = await fetch(`${_host}/api/pages/${encodeURIComponent(slug)}`, {
+      method: 'DELETE',
+      headers: h,
+    });
+    if (!res.ok) { const body = await res.json().catch(() => null); console.error(body?.error ?? 'Delete failed'); process.exit(1); }
+    console.log(`deleted: ${slug}`);
+  } else {
+    console.error('usage: collab pages {list|delete <slug>}');
+    process.exit(1);
+  }
+});
+
+// ── Data Stores ──
+
+cmd('db', 'collab db {create|query|schema|list|delete}', 'Manage agent data stores', async (args) => {
+  const sub = args[0];
+
+  if (sub === 'create') {
+    const name = args[1];
+    if (!name) { console.error('usage: collab db create <name>'); process.exit(1); }
+    const agent = agentName() ?? undefined;
+    const store = await api('POST', '/api/stores', { name, agent });
+    console.log(`created store: ${store.name}`);
+  }
+
+  else if (sub === 'query') {
+    const name = args[1];
+    const sql = args.slice(2).join(' ');
+    if (!name || !sql) { console.error('usage: collab db query <name> <sql>'); process.exit(1); }
+    const result = await api('POST', `/api/stores/${encodeURIComponent(name)}/query`, { sql });
+    console.log(JSON.stringify(result, null, 2));
+  }
+
+  else if (sub === 'schema') {
+    const name = args[1];
+    if (!name) { console.error('usage: collab db schema <name>'); process.exit(1); }
+    const schema = await api('GET', `/api/stores/${encodeURIComponent(name)}/schema`);
+    if (Object.keys(schema).length === 0) {
+      console.log('No tables');
+    } else {
+      for (const [table, cols] of Object.entries(schema)) {
+        console.log(`${table}:`);
+        for (const col of cols) {
+          const flags = [];
+          if (col.pk) flags.push('PK');
+          if (col.notnull) flags.push('NOT NULL');
+          console.log(`  ${col.name} ${col.type}${flags.length ? ' (' + flags.join(', ') + ')' : ''}`);
+        }
+      }
+    }
+  }
+
+  else if (!sub || sub === 'list') {
+    const stores = await api('GET', '/api/stores');
+    if (!Array.isArray(stores) || stores.length === 0) { console.log('No data stores'); return; }
+    for (const s of stores) {
+      console.log(`  ${s.name.padEnd(30)} ${(s.agent ?? '-').padEnd(20)}  ${s.updatedAt}`);
+    }
+  }
+
+  else if (sub === 'delete') {
+    const name = args[1];
+    if (!name) { console.error('usage: collab db delete <name>'); process.exit(1); }
+    await api('DELETE', `/api/stores/${encodeURIComponent(name)}`);
+    console.log(`deleted store: ${name}`);
+  }
+
+  else {
+    console.error(`unknown subcommand: ${sub}`);
+    console.error('usage: collab db {create|query|schema|list|delete}');
+    process.exit(1);
+  }
+});
+
+// ── Destinations ���─
+
+cmd('destinations', 'destinations {list|add|delete|test}', 'Manage notification destinations (telegram, etc.)', async (args) => {
+  const sub = args[0];
+
+  if (!sub || sub === 'list') {
+    const dests = await api('GET', '/api/destinations');
+    if (!Array.isArray(dests) || dests.length === 0) { console.log('No destinations'); return; }
+    for (const d of dests) {
+      const status = d.enabled ? 'enabled' : 'disabled';
+      console.log(`  ${d.name.padEnd(20)} ${d.type.padEnd(12)} ${status.padEnd(10)}  ${d.updatedAt}`);
+    }
+  }
+
+  else if (sub === 'add') {
+    // collab destinations add <name> telegram --bot-token <token> --chat-id <id>
+    const name = args[1];
+    const type = args[2];
+    if (!name || !type) {
+      console.error('usage: collab destinations add <name> telegram --bot-token <token> --chat-id <id>');
+      process.exit(1);
+    }
+    const config = {};
+    for (let i = 3; i < args.length; i++) {
+      if (args[i] === '--bot-token' && args[i + 1]) { config.botToken = args[++i]; }
+      else if (args[i] === '--chat-id' && args[i + 1]) { config.chatId = args[++i]; }
+    }
+    if (type === 'telegram' && (!config.botToken || !config.chatId)) {
+      console.error('error: telegram requires --bot-token and --chat-id');
+      process.exit(1);
+    }
+    const dest = await api('POST', '/api/destinations', { name, type, config });
+    console.log(`created destination: ${dest.name} (${dest.type})`);
+  }
+
+  else if (sub === 'delete') {
+    const name = args[1];
+    if (!name) { console.error('usage: collab destinations delete <name>'); process.exit(1); }
+    await api('DELETE', `/api/destinations/${encodeURIComponent(name)}`);
+    console.log(`deleted destination: ${name}`);
+  }
+
+  else if (sub === 'test') {
+    const name = args[1];
+    if (!name) { console.error('usage: collab destinations test <name>'); process.exit(1); }
+    await api('POST', `/api/destinations/${encodeURIComponent(name)}/test`);
+    console.log('test message sent');
+  }
+
+  else {
+    console.error(`unknown subcommand: ${sub}`);
+    console.error('usage: collab destinations {list|add|delete|test}');
     process.exit(1);
   }
 });

@@ -12,6 +12,7 @@
 <link rel="stylesheet" href="/dashboard/assets/styles/reminder-panel.css">
 <link rel="stylesheet" href="/dashboard/assets/styles/modals.css">
 <link rel="stylesheet" href="/dashboard/assets/styles/settings.css">
+<link rel="stylesheet" href="/dashboard/assets/styles/files-panel.css">
 <link rel="stylesheet" href="/dashboard/assets/styles/responsive.css">
 </head>
 <body>
@@ -23,11 +24,13 @@
     <kbd>Space</kbd> PTT
     <kbd>Esc</kbd> close
   </div>
-  <a href="/docs" target="_blank" style="color:var(--text-dim);text-decoration:none;font-size:13px;padding:4px 8px;border-radius:4px;border:1px solid var(--border)">Docs</a>
-  <button id="settingsBtn" style="color:var(--text-dim);background:transparent;font-size:13px;padding:4px 8px;border-radius:4px;border:1px solid var(--border);cursor:pointer">Settings</button>
-  <div class="conn-status">
-    <div class="conn-dot" id="connDot"></div>
-    <span id="connLabel">Disconnected</span>
+  <div class="header-actions">
+    <a href="/docs" target="_blank" class="header-btn">Docs</a>
+    <button id="settingsBtn" class="header-btn">Settings</button>
+    <div class="conn-status">
+      <div class="conn-dot" id="connDot"></div>
+      <span id="connLabel">Disconnected</span>
+    </div>
   </div>
 </header>
 <div class="layout">
@@ -57,6 +60,7 @@
     <div class="persona-panel" id="personaPanel" style="display:none"></div>
     <reminder-panel class="reminder-panel" id="reminderPanel" style="display:none"></reminder-panel>
     <watch-panel class="watch-panel" id="watchPanel" style="display:none"></watch-panel>
+    <files-panel class="files-panel" id="filesPanel" style="display:none"></files-panel>
     <div class="topic-breadcrumbs" id="topicBreadcrumbs" style="display:none"></div>
     <message-input class="thread-input" id="threadInput" style="display:none">
     </message-input>
@@ -73,14 +77,15 @@ import '/dashboard/assets/message-list.ts';
 import '/dashboard/assets/message-input.ts';
 import '/dashboard/assets/watch-panel.ts';
 import '/dashboard/assets/reminder-panel.ts';
-import '/dashboard/assets/archive-panel.ts';
+import '/dashboard/assets/files-panel.ts';
 import '/dashboard/assets/settings.ts';
 import { agentAction, openCreateAgentModal, setup as setupLifecycle } from '/dashboard/assets/agent-lifecycle.ts';
-import { sendMessage, uploadFile, handleFileUpload, updateSendability, handleQueueUpdate, archiveChat, unarchiveChat, setup as setupMessageIO } from '/dashboard/assets/message-io.ts';
+import { sendMessage, uploadFile, handleFileUpload, updateSendability, handleQueueUpdate, setup as setupMessageIO } from '/dashboard/assets/message-io.ts';
 import { voiceState, initVoice, initCommandPalette, setup as setupVoicePalette } from '/dashboard/assets/voice-palette.ts';
 import { handleAuthError, connect, fetchEngineUsage, setup as setupConnection } from '/dashboard/assets/connection.ts';
 import { renderThread, getActiveTopic, updatePageTitle, setup as setupThread } from '/dashboard/assets/thread.ts';
 import { renderAgents, selectAgent, patchAgentCard, updateAgent, addMessage, handleMessageWithdrawn, applySearchFilter, initAgentListEvents, setup as setupAgentList } from '/dashboard/assets/agent-list.ts';
+import { pushUrlState, restorePendingAgent, setup as setupUrlState } from '/dashboard/assets/url-state.ts';
 {
 
   // handleAuthError, promptForToken — imported from connection.js
@@ -104,20 +109,13 @@ import { renderAgents, selectAgent, patchAgentCard, updateAgent, addMessage, han
   // mobileBack — imported from thread.js
 
   // Wire connection module dependencies (must precede lifecycle + message-io which depend on handleAuthError)
-  setupConnection({ renderAgents, renderThread, updatePageTitle, updateAgent, addMessage, handleMessageWithdrawn, handleQueueUpdate, patchAgentCard });
+  setupConnection({ renderAgents, renderThread, updatePageTitle, updateAgent, addMessage, handleMessageWithdrawn, handleQueueUpdate, patchAgentCard, onInit: restorePendingAgent });
 
   // Wire thread/persona module dependencies
-  setupThread({ handleAuthError, updateSendability, archiveChat });
+  setupThread({ handleAuthError, updateSendability });
 
   // Wire agent-lifecycle module dependencies
   setupLifecycle({ handleAuthError, selectAgent });
-
-  // archiveChat, unarchiveChat — imported from message-io.js
-  document.addEventListener('unarchive-chat', () => {
-    if (state.selected) unarchiveChat(state.selected);
-  });
-
-  // sendMessage, uploadFile, handleFileUpload, showSendError — imported from message-io.js
 
   // Wire message-input component events
   const msgInputEl = document.getElementById('threadInput');
@@ -229,22 +227,30 @@ import { renderAgents, selectAgent, patchAgentCard, updateAgent, addMessage, han
     settingsBtn.style.color = 'var(--text-dim)';
     settingsBtn.style.borderColor = 'var(--border)';
   }
+  function openSettings() {
+    settingsPanel.style.display = 'flex';
+    threadPanel.style.display = 'none';
+    settingsBtn.style.color = 'var(--accent)';
+    settingsBtn.style.borderColor = 'var(--accent)';
+    settingsPanel.render();
+  }
   settingsBtn.addEventListener('click', () => {
     const isOpen = settingsPanel.style.display !== 'none';
     if (isOpen) {
       closeSettings();
+      pushUrlState({ settings: false });
     } else {
-      settingsPanel.style.display = 'flex';
-      threadPanel.style.display = 'none';
-      settingsBtn.style.color = 'var(--accent)';
-      settingsBtn.style.borderColor = 'var(--accent)';
-      settingsPanel.render();
+      openSettings();
+      pushUrlState({ settings: true });
     }
   });
   // Close settings when selecting an agent
   document.getElementById('agentList').addEventListener('click', () => {
     if (settingsPanel.style.display !== 'none') closeSettings();
   });
+
+  // ── URL State (History API) ──
+  setupUrlState({ selectAgent, renderThread, renderAgents, openSettings, closeSettings });
 
   // ── Init ──
   // Always try connecting first. If the server requires auth and we don't have

@@ -267,6 +267,27 @@ describe('Database', () => {
       assert.ok(threads['thread-agent-a']);
       assert.equal(threads['thread-agent-b'], undefined);
     });
+
+    it('searches messages by text', () => {
+      db.addDashboardMessage('search-agent-a', 'to_agent', 'deploy the widget service');
+      db.addDashboardMessage('search-agent-a', 'from_agent', 'widget deployed successfully');
+      db.addDashboardMessage('search-agent-b', 'to_agent', 'check widget status');
+      db.addDashboardMessage('search-agent-b', 'from_agent', 'all systems nominal');
+
+      // Search across all agents
+      const widgetResults = db.searchMessages('widget');
+      assert.equal(widgetResults.length, 3);
+      assert.ok(widgetResults.every(m => m.message.toLowerCase().includes('widget')));
+
+      // Search filtered to one agent
+      const agentBResults = db.searchMessages('widget', 'search-agent-b');
+      assert.equal(agentBResults.length, 1);
+      assert.equal(agentBResults[0]!.agent, 'search-agent-b');
+
+      // Search with no matches
+      const noResults = db.searchMessages('nonexistent-term-xyz');
+      assert.equal(noResults.length, 0);
+    });
   });
 
   describe('proxies', () => {
@@ -445,18 +466,6 @@ describe('Database', () => {
       assert.ok(updated.nextAttemptAt !== null);
     });
 
-    it('clearDashboardMessages removes all messages for agent', () => {
-      db.addDashboardMessage('clear-agent', 'to_agent', 'msg1');
-      db.addDashboardMessage('clear-agent', 'from_agent', 'msg2');
-      db.addDashboardMessage('clear-other', 'to_agent', 'msg3');
-
-      db.clearDashboardMessages('clear-agent');
-
-      const threads = db.getDashboardThreads();
-      assert.equal(threads['clear-agent'], undefined);
-      assert.ok(threads['clear-other']?.length === 1);
-    });
-
     it('clearPendingMessages removes only pending dashboard messages', () => {
       const pending = db.enqueueMessage({ sourceAgent: null, targetAgent: 'clear-pending', envelope: 'test' });
       const agentMsg = db.enqueueMessage({ sourceAgent: 'some-agent', targetAgent: 'clear-pending', envelope: 'from agent' });
@@ -508,14 +517,6 @@ describe('Database', () => {
 
       const counts = cursorDb.getUnreadCounts();
       assert.equal(counts['cursor-agent-a'], 1);
-    });
-
-    it('excludes archived messages from unread counts', () => {
-      cursorDb.addDashboardMessage('cursor-agent-b', 'from_agent', 'archived-msg');
-      cursorDb.clearDashboardMessages('cursor-agent-b');
-
-      const counts = cursorDb.getUnreadCounts();
-      assert.equal(counts['cursor-agent-b'] ?? 0, 0);
     });
 
     it('upserts read cursor idempotently', () => {
@@ -843,6 +844,74 @@ describe('Database', () => {
     it('ignores update for non-existent agent', () => {
       // Should not throw
       db.updateAgentCapturedVar('non-existent-agent', 'FOO', 'bar');
+    });
+  });
+
+  describe('data stores', () => {
+    let sDb: Database;
+    let sTmpDir: string;
+
+    before(() => {
+      sTmpDir = mkdtempSync(join(tmpdir(), 'agentic-stores-test-'));
+      sDb = new Database(join(sTmpDir, 'stores.db'));
+    });
+
+    after(() => {
+      sDb.close();
+      rmSync(sTmpDir, { recursive: true, force: true });
+    });
+
+    it('creates and retrieves a store', () => {
+      const store = sDb.createStore({ name: 'test-store', agent: 'my-agent' });
+      assert.equal(store.name, 'test-store');
+      assert.equal(store.agent, 'my-agent');
+      assert.ok(store.createdAt);
+      assert.ok(store.updatedAt);
+
+      const retrieved = sDb.getStore('test-store');
+      assert.ok(retrieved);
+      assert.equal(retrieved!.name, 'test-store');
+      assert.equal(retrieved!.agent, 'my-agent');
+    });
+
+    it('creates a store without agent', () => {
+      const store = sDb.createStore({ name: 'no-agent-store' });
+      assert.equal(store.name, 'no-agent-store');
+      assert.equal(store.agent, null);
+    });
+
+    it('upserts on conflict', () => {
+      sDb.createStore({ name: 'upsert-store', agent: 'first' });
+      const updated = sDb.createStore({ name: 'upsert-store', agent: 'second' });
+      assert.equal(updated.agent, 'second');
+    });
+
+    it('lists stores ordered by updated_at desc', () => {
+      const stores = sDb.listStores();
+      assert.ok(stores.length >= 2);
+      assert.ok(stores.some(s => s.name === 'test-store'));
+    });
+
+    it('deletes a store', () => {
+      sDb.createStore({ name: 'delete-me' });
+      assert.ok(sDb.getStore('delete-me'));
+      assert.equal(sDb.deleteStore('delete-me'), true);
+      assert.equal(sDb.getStore('delete-me'), null);
+      assert.equal(sDb.deleteStore('delete-me'), false);
+    });
+
+    it('returns null for non-existent store', () => {
+      assert.equal(sDb.getStore('nonexistent'), null);
+    });
+
+    it('touchStore updates the updated_at timestamp', () => {
+      sDb.createStore({ name: 'touch-test' });
+      const before = sDb.getStore('touch-test')!.updatedAt;
+      // Force a slight delay by setting updated_at to the past
+      sDb.rawDb.prepare("UPDATE data_stores SET updated_at = '2020-01-01T00:00:00Z' WHERE name = 'touch-test'").run();
+      sDb.touchStore('touch-test');
+      const after = sDb.getStore('touch-test')!.updatedAt;
+      assert.notEqual(after, '2020-01-01T00:00:00Z');
     });
   });
 });
