@@ -217,6 +217,17 @@ async function dispatchSend({ target, topic, message, replyReminder, inReplyTo, 
     process.exit(1);
   }
 
+  // Validate target before sending
+  if (target !== 'operator' && target !== 'dashboard') {
+    const agents = await api('GET', '/api/agents');
+    const agentNames = agents.map(a => a.name);
+    if (!agentNames.includes(target)) {
+      console.error(`error: unknown target "${target}"`);
+      console.error(`valid targets: operator, dashboard, ${agentNames.join(', ')}`);
+      process.exit(1);
+    }
+  }
+
   const formattedMessage = formatReplyContext(message, inReplyTo);
   if (target === 'operator' || target === 'dashboard') {
     if (replyReminder) {
