@@ -73,6 +73,7 @@ const CLAUDE_DETECTION = {
   idleThreshold: 2,
   activeGraceMs: 10000,
   snapshotLines: 30,
+  autoRecover: true,
 };
 
 const CODEX_DETECTION = {

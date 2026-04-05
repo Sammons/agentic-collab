@@ -22,7 +22,7 @@ import type { LockManager } from '../shared/lock.ts';
 import { getPersonasDir, parseFrontmatter, createPersonaAndAgent, syncSinglePersona, syncPersonasWithDiff, updateFrontmatterField, resolvePersonaPath, toHostPath } from './persona.ts';
 import {
   spawnAgent, resumeAgent, suspendAgent, destroyAgent,
-  reloadAgent, interruptAgent, compactAgent, killAgent,
+  reloadAgent, recoverAgent, interruptAgent, compactAgent, killAgent,
   executeCustomButton, executeIndicatorAction,
   type LifecycleContext,
 } from './lifecycle.ts';
@@ -1312,6 +1312,20 @@ route('POST', '/api/agents/:name/reload', async (req, res, match, ctx) => {
       immediate: body.immediate as boolean | undefined,
       task: body.task as string | undefined,
     });
+    broadcastAgentUpdate(ctx, name);
+    json(res, 200, result);
+  } catch (err) {
+    json(res, 400, { error: (err as Error).message });
+  }
+});
+
+route('POST', '/api/agents/:name/recover', async (_req, res, match, ctx) => {
+  const name = match.pathname.groups['name']!;
+
+  try {
+    const lifecycleCtx = makeLifecycleCtx(ctx);
+    syncSinglePersona(ctx.db, name);
+    const result = await recoverAgent(lifecycleCtx, name);
     broadcastAgentUpdate(ctx, name);
     json(res, 200, result);
   } catch (err) {

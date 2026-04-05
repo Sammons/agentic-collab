@@ -1023,6 +1023,135 @@ export async function reloadAgent(
   }
 }
 
+const RECOVER_TIMEOUT_MS = parseInt(process.env['RECOVER_TIMEOUT_MS'] ?? '60000', 10);
+
+/**
+ * Recover a failed agent by killing its old session and starting fresh.
+ * Sends a reconstruction prompt that tells the agent to read its own durable
+ * state (collab queue, persona, git log) rather than trying to restore the
+ * ephemeral session transcript.
+ *
+ * Accepts agents in 'failed' state only. Three-phase locking.
+ */
+export async function recoverAgent(
+  ctx: LifecycleContext,
+  name: string,
+): Promise<AgentRecord> {
+  const peers = computePeers(ctx, name);
+
+  // ── Phase 1: validate + transition to 'spawning' ──
+  const phase1 = await ctx.locks.withLock(name, async () => {
+    const agent = ctx.db.getAgent(name);
+    if (!agent) throw new Error(`Agent "${name}" not found`);
+    if (agent.state !== 'failed') {
+      throw new Error(`Agent "${name}" is in state "${agent.state}", recovery requires 'failed'`);
+    }
+    const proxyId = requireProxy(agent);
+
+    const current = ctx.db.updateAgentState(name, 'spawning', agent.version, {
+      lastActivity: new Date().toISOString(),
+    });
+
+    return {
+      current,
+      proxyId,
+      cwd: agent.cwd,
+      persona: agent.persona,
+      spawnCount: agent.spawnCount,
+      oldTmuxSession: sessionName(agent),
+    };
+  });
+
+  const { proxyId, cwd, persona, spawnCount, oldTmuxSession } = phase1;
+
+  const engineConfig = ctx.db.getEngineConfig(phase1.current.engine);
+  const effectiveCurrent = resolveEffectiveConfig(phase1.current, engineConfig);
+  const engine = effectiveCurrent.engine;
+  const permissions = effectiveCurrent.permissions;
+  const hookStart = effectiveCurrent.hookStart;
+
+  const watchdog = startWatchdog(ctx, name, 'spawning', RECOVER_TIMEOUT_MS, proxyId, oldTmuxSession);
+
+  try {
+    // ── Phase 2: slow proxy work (no lock) ──
+    const adapter = getAdapter(engine);
+
+    // 1. Kill old tmux session (best-effort — it may already be gone)
+    await ctx.proxyDispatch(proxyId, {
+      action: 'kill_session',
+      sessionName: oldTmuxSession,
+    }).catch(() => {});
+
+    // 2. Compose system prompt
+    const systemPrompt = buildSystemPrompt(ctx, name, peers, persona);
+
+    // 3. Create fresh tmux session
+    const tmuxSession = `agent-${name}`;
+    await createSessionAndWriteProfile(ctx, proxyId, tmuxSession, cwd, adapter, name, systemPrompt);
+
+    // 4. Build spawn command with new session ID
+    const generatedSessionId = randomUUID();
+    const personaFile = resolvePersonaFilePath(name, persona);
+    const templateVars: TemplateVars = {
+      AGENT_NAME: name,
+      AGENT_CWD: cwd,
+      SESSION_ID: generatedSessionId,
+      PERSONA_PROMPT: systemPrompt,
+      PERSONA_PROMPT_FILEPATH: personaFile ?? undefined,
+    };
+
+    const recoveryTask = [
+      'Your previous session was lost. Reconstruct your context from durable state:',
+      '1. Your persona and role are already loaded via system prompt',
+      `2. Check recent git activity: \`git log --oneline -20\``,
+      '3. Check for any pending collab messages: \`collab list-agents\` to see peer status',
+      '4. Notify the operator you have recovered: \`collab send operator --topic recovery "Session recovered, reconstructing context"\`',
+      'Resume your work from where you left off.',
+    ].join('\n');
+
+    const startResult = resolveHook('start', hookStart, effectiveCurrent, {
+      spawnOpts: {
+        name,
+        cwd,
+        task: recoveryTask,
+        appendSystemPrompt: systemPrompt,
+        dangerouslySkipPermissions: permissions === 'skip',
+        sessionId: generatedSessionId,
+      },
+      templateVars,
+    });
+
+    // Scaffold isolated HOME if agent has an account configured
+    let accountHome: string | undefined;
+    if (phase1.current.account && ctx.accountStore) {
+      const home = ctx.accountStore.scaffoldAgentHome(name, phase1.current.account);
+      if (home) accountHome = home;
+    }
+
+    const wrappedStart = wrapLaunchResult(startResult, effectiveCurrent, personaFile, accountHome);
+    await dispatchHookResult(ctx, proxyId, tmuxSession, wrappedStart, { agentName: name });
+
+    // 5. Inject rename
+    await injectRename(ctx, proxyId, tmuxSession, adapter, name);
+    await sleep(POST_SPAWN_ACTIVE_DELAY_MS);
+
+    // ── Phase 3: finalize ──
+    return await finalizeToActive(ctx, name, 'spawning', 'recover_interrupted', {
+      tmuxSession,
+      spawnCount: spawnCount + 1,
+      lastContextPct: 0,
+      lastActivity: new Date().toISOString(),
+      currentSessionId: generatedSessionId,
+    }, 'recovered', {
+      engine,
+      sessionId: generatedSessionId,
+      reason: 'auto-recovery from failed state',
+    }, 'recover');
+  } finally {
+    clearTimeout(watchdog);
+  }
+}
+
 /**
  * Interrupt an active agent: send escape keys to cancel current operation.
  * Single-phase lock — fast operation.

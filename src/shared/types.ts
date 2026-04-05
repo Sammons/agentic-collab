@@ -91,6 +91,9 @@ export type DetectionConfig = {
   idleThreshold?: number;
   activeGraceMs?: number;
   snapshotLines?: number;
+  /** When true, automatically recover failed agents by starting a fresh session
+   *  with a reconstruction prompt instead of leaving them in 'failed' state. */
+  autoRecover?: boolean;
 };
 
 // ── Pages ──
