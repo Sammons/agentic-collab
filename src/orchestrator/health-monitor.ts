@@ -20,7 +20,7 @@ import type { LockManager } from '../shared/lock.ts';
 import type { ProxyCommand, ProxyResponse, AgentRecord, PendingMessage, DashboardMessage, IndicatorDefinition, ActiveIndicator, PipelineStep, DetectionConfig } from '../shared/types.ts';
 import { sessionName, canSuspend } from '../shared/agent-entity.ts';
 import { getAdapter } from './adapters/index.ts';
-import { reloadAgent, type LifecycleContext } from './lifecycle.ts';
+import { reloadAgent, recoverAgent, type LifecycleContext } from './lifecycle.ts';
 import { resolveEffectiveConfig } from './engine-config-resolver.ts';
 
 type CompiledDetection = {
@@ -398,7 +398,10 @@ export class HealthMonitor {
     if (paneOutput === null) return;
 
     // Check if the CLI exited back to a bare shell prompt (e.g. session not found)
-    if (this.detectCliExit(agent, paneOutput)) return;
+    if (this.detectCliExit(agent, paneOutput)) {
+      this.maybeAutoRecover(agent);
+      return;
+    }
 
     this.recordContextPercent(agent, paneOutput);
     this.evaluateIndicators(resolved, paneOutput);
@@ -817,6 +820,30 @@ export class HealthMonitor {
       console.error(`[health] Reload failed for ${agent.name}:`, err);
       this.onAgentUpdate(agent.name);
     }
+  }
+
+  /**
+   * Check if an agent that just failed should be auto-recovered.
+   * Reads the engine's detection config for the autoRecover flag.
+   * Fires asynchronously — does not block the poll cycle.
+   */
+  private maybeAutoRecover(agent: AgentRecord): void {
+    const resolved = this.resolveAgent(agent);
+    const detection = this.getDetection(resolved);
+    if (!detection?.config.autoRecover) return;
+
+    console.log(`[health] ${agent.name}: autoRecover enabled — scheduling recovery`);
+    this.db.logEvent(agent.name, 'auto_recover_triggered');
+
+    // Fire-and-forget — recovery is a full lifecycle operation
+    const lifecycleCtx = this.makeLifecycleCtx();
+    recoverAgent(lifecycleCtx, agent.name).then(() => {
+      console.log(`[health] ${agent.name}: auto-recovery completed`);
+      this.onAgentUpdate(agent.name);
+    }).catch((err) => {
+      console.error(`[health] ${agent.name}: auto-recovery failed:`, err);
+      this.onAgentUpdate(agent.name);
+    });
   }
 
   /** Get currently active indicators for an agent. */
