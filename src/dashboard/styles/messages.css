@@ -71,9 +71,6 @@
     font-size: 10px;
     font-weight: 600;
     white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    min-width: 0;
   }
   .msg-topic {
     font-size: 10px;
