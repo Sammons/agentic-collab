@@ -39,7 +39,7 @@ function buildMessageEl(msg, agentName, renderMarkdown) {
   const fromLabel = isSystem ? 'system' : (msg.sourceAgent || (msg.direction === 'to_agent' ? 'dashboard' : agentName));
   const toLabel = msg.targetAgent || (msg.direction === 'to_agent' ? agentName : 'dashboard');
   const topicBadge = msg.topic ? `<span class="msg-topic">${esc(msg.topic)}</span>` : '';
-  const routeStr = `<span class="msg-sender">${esc(fromLabel)} ${icon.arrowRightSmall(12)} ${esc(toLabel)}</span>${topicBadge}`;
+  const routeStr = `<span class="msg-sender">${esc(fromLabel)} ${icon.arrowRightSmall(12)} ${esc(toLabel)} ${topicBadge}</span>`;
   const statusHtml = (msg.direction === 'to_agent' && msg.queueId)
     ? `<span class="msg-status ${msg.deliveryStatus || 'pending'}" data-queue-id="${msg.queueId}">${
         msg.deliveryStatus === 'delivered' ? icon.check(12) :
