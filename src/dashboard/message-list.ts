@@ -47,10 +47,8 @@ function buildMessageEl(msg, agentName, renderMarkdown) {
         icon.dots(12)
       }</span>`
     : '';
-  const canWithdraw = msg.direction === 'to_agent' && !isSystem && !msg.withdrawn && (!msg.sourceAgent || msg.sourceAgent === 'dashboard');
-  const withdrawHtml = canWithdraw ? `<span class="msg-withdraw" data-msg-id="${msg.id}" title="Withdraw message">unsend</span>` : '';
   const copyBtnHtml = `<button class="msg-copy" title="Copy message">${icon.clipboard(14)}</button>`;
-  const headerHtml = `<div class="msg-header">${routeStr}<span class="msg-meta"><span class="msg-time">${time}</span>${statusHtml}${copyBtnHtml}${withdrawHtml}</span></div>`;
+  const headerHtml = `<div class="msg-header">${routeStr}<span class="msg-meta"><span class="msg-time">${time}</span>${statusHtml}${copyBtnHtml}</span></div>`;
   if (isUpload) {
     div.innerHTML = `${headerHtml}<div class="file-info"><span class="file-icon">${icon.paperclip(14)}</span> ${esc(displayMsg)}</div>`;
   } else {
