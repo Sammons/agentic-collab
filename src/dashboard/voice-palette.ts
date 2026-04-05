@@ -99,7 +99,11 @@ export async function initVoice() {
         if (voiceState.audioCtx.state === 'suspended') {
           await voiceState.audioCtx.resume();
         }
-        console.log('[voice] PTT ready — mic acquired, AudioContext state:', voiceState.audioCtx.state, 'rate:', voiceState.audioCtx.sampleRate);
+        // Mute tracks immediately — keeps the stream object alive (no getUserMedia
+        // latency on press) but tells the OS the mic is inactive so iPhone won't
+        // show the hot-mic indicator until the user actually presses the button.
+        voiceState.pttStream.getAudioTracks().forEach(t => { t.enabled = false; });
+        console.log('[voice] PTT ready — mic acquired (muted), AudioContext state:', voiceState.audioCtx.state, 'rate:', voiceState.audioCtx.sampleRate);
       } catch (err) {
         console.error('[voice] Mic access denied:', err);
         document.getElementById('voicePartial').textContent = 'Mic denied';
@@ -177,6 +181,7 @@ export async function startVoice() {
 
   // Use pre-acquired PTT stream if available, otherwise request mic
   if (voiceState.pttStream) {
+    voiceState.pttStream.getAudioTracks().forEach(t => { t.enabled = true; });
     voiceState.stream = voiceState.pttStream;
   } else {
     try {
@@ -326,6 +331,9 @@ function stopVoiceLocal() {
     // Don't close the pre-acquired PTT stream — it's reused across presses
     if (voiceState.stream !== voiceState.pttStream) {
       voiceState.stream.getTracks().forEach(t => t.stop());
+    } else {
+      // Mute PTT stream tracks so OS stops showing mic-hot indicator
+      voiceState.pttStream.getAudioTracks().forEach(t => { t.enabled = false; });
     }
     voiceState.stream = null;
   }
