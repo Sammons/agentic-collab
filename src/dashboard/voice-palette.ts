@@ -19,8 +19,7 @@ export const voiceState = {
   ws: null,        // WebSocket to orchestrator /ws/voice
   mode: 'off',     // off | vad | ptt
   recording: false,
-  stream: null,    // MediaStream (active recording)
-  pttStream: null, // MediaStream (pre-acquired for instant PTT)
+  stream: null,    // MediaStream (active recording, acquired per press)
   audioCtx: null,  // AudioContext
   processor: null,  // ScriptProcessorNode
   sid: null,       // session ID
@@ -75,10 +74,6 @@ export async function initVoice() {
     toggle.querySelectorAll('button').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
     if (mode === 'off') {
       stopVoice();
-      if (voiceState.pttStream) {
-        voiceState.pttStream.getTracks().forEach(t => t.stop());
-        voiceState.pttStream = null;
-      }
       if (voiceState.audioCtx) {
         voiceState.audioCtx.close().catch(() => {});
         voiceState.audioCtx = null;
@@ -87,26 +82,21 @@ export async function initVoice() {
     } else if (mode === 'ptt') {
       stopVoice();
       btn.classList.remove('inactive');
-      // Pre-acquire mic and AudioContext within user gesture (required for iOS Safari)
+      // Pre-create AudioContext within user gesture (required for iOS Safari).
+      // Do NOT acquire mic here — iOS shows hot-mic indicator for any live
+      // MediaStream. Mic is acquired fresh on each press (pointerdown/touchstart
+      // are user gestures so getUserMedia is allowed).
       try {
-        voiceState.pttStream = await navigator.mediaDevices.getUserMedia({
-          audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-        });
-        // Create AudioContext in user gesture so iOS Safari doesn't block it
         if (!voiceState.audioCtx || voiceState.audioCtx.state === 'closed') {
           voiceState.audioCtx = new AudioContext({ sampleRate: 16000 });
         }
         if (voiceState.audioCtx.state === 'suspended') {
           await voiceState.audioCtx.resume();
         }
-        // Mute tracks immediately — keeps the stream object alive (no getUserMedia
-        // latency on press) but tells the OS the mic is inactive so iPhone won't
-        // show the hot-mic indicator until the user actually presses the button.
-        voiceState.pttStream.getAudioTracks().forEach(t => { t.enabled = false; });
-        console.log('[voice] PTT ready — mic acquired (muted), AudioContext state:', voiceState.audioCtx.state, 'rate:', voiceState.audioCtx.sampleRate);
+        console.log('[voice] PTT ready — AudioContext state:', voiceState.audioCtx.state, 'rate:', voiceState.audioCtx.sampleRate);
       } catch (err) {
-        console.error('[voice] Mic access denied:', err);
-        document.getElementById('voicePartial').textContent = 'Mic denied';
+        console.error('[voice] AudioContext creation failed:', err);
+        document.getElementById('voicePartial').textContent = 'Audio init failed';
         setTimeout(() => { document.getElementById('voicePartial').textContent = ''; }, 3000);
         setVoiceMode('off');
       }
@@ -179,21 +169,18 @@ export function commitAndStopPtt() {
 export async function startVoice() {
   if (voiceState.recording) return;
 
-  // Use pre-acquired PTT stream if available, otherwise request mic
-  if (voiceState.pttStream) {
-    voiceState.pttStream.getAudioTracks().forEach(t => { t.enabled = true; });
-    voiceState.stream = voiceState.pttStream;
-  } else {
-    try {
-      voiceState.stream = await navigator.mediaDevices.getUserMedia({
-        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-      });
-    } catch (err) {
-      console.error('[voice] Mic access denied:', err);
-      document.getElementById('voicePartial').textContent = 'Mic denied';
-      setTimeout(() => { document.getElementById('voicePartial').textContent = ''; }, 3000);
-      return;
-    }
+  // Acquire mic fresh on each press — iOS Safari requires getUserMedia within
+  // a user gesture, and pointerdown/touchstart qualify. This avoids keeping
+  // a persistent stream that triggers the hot-mic indicator.
+  try {
+    voiceState.stream = await navigator.mediaDevices.getUserMedia({
+      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    });
+  } catch (err) {
+    console.error('[voice] Mic access denied:', err);
+    document.getElementById('voicePartial').textContent = 'Mic denied';
+    setTimeout(() => { document.getElementById('voicePartial').textContent = ''; }, 3000);
+    return;
   }
 
   voiceState.sid = crypto.randomUUID();
@@ -328,13 +315,7 @@ function stopVoiceLocal() {
     voiceState.audioCtx = null;
   }
   if (voiceState.stream) {
-    // Don't close the pre-acquired PTT stream — it's reused across presses
-    if (voiceState.stream !== voiceState.pttStream) {
-      voiceState.stream.getTracks().forEach(t => t.stop());
-    } else {
-      // Mute PTT stream tracks so OS stops showing mic-hot indicator
-      voiceState.pttStream.getAudioTracks().forEach(t => { t.enabled = false; });
-    }
+    voiceState.stream.getTracks().forEach(t => t.stop());
     voiceState.stream = null;
   }
   voiceState.ws = null;
