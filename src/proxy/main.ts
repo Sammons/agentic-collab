@@ -256,6 +256,10 @@ async function executeCommand(command: ProxyCommand): Promise<ProxyResponse> {
         tmux.resizePane(command.sessionName, command.width, command.height);
         return { ok: true };
 
+      case 'clear_history':
+        tmux.clearHistory(command.sessionName);
+        return { ok: true };
+
       default:
         return { ok: false, error: `Unknown action: ${(command as Record<string, unknown>).action}` };
     }

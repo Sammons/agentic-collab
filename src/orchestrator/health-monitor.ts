@@ -100,6 +100,9 @@ export class HealthMonitor {
   private readonly activeIndicators = new Map<string, ActiveIndicator[]>();
   private readonly compiledIndicators = new Map<string, { json: string; entries: Array<{ def: IndicatorDefinition; re: RegExp }> }>();
   private readonly compiledDetection = new Map<string, CompiledDetection>();
+  /** Timestamp when an agent was healed — used to suppress stale exit-message
+   *  re-detection during the grace period after healing. */
+  private readonly healedAt = new Map<string, number>();
 
   constructor(opts: HealthMonitorOptions) {
     this.db = opts.db;
@@ -566,6 +569,14 @@ export class HealthMonitor {
     const key = `shell_${agent.name}`;
     const lines = paneOutput.split('\n');
 
+    // Grace period after healing: stale error text may linger in the scrollback
+    // for a few poll cycles. Suppress exit detection for 60s after a heal event.
+    const healed = this.healedAt.get(agent.name);
+    if (healed !== undefined && Date.now() - healed < 60_000) {
+      this.consecutiveFailures.delete(key);
+      return false;
+    }
+
     // Find the last non-empty line
     let lastLine = '';
     for (let i = lines.length - 1; i >= 0; i--) {
@@ -573,8 +584,10 @@ export class HealthMonitor {
       if (trimmed) { lastLine = trimmed; break; }
     }
 
-    // Signal 1: Known CLI exit messages anywhere in the pane output.
-    // These are unambiguous — no CLI prompt would contain them.
+    // Signal 1: Known CLI exit messages in RECENT output only (last 8 lines).
+    // Only scanning recent lines prevents stale error text in tmux scrollback
+    // from re-triggering false positives after an agent heals and restarts.
+    const recentLines = lines.slice(-8).join('\n');
     const exitPatterns = [
       /No conversation found with session ID/,      // claude --resume <stale-id>
       /Session .+ not found/i,                       // generic session lookup failure
@@ -582,7 +595,7 @@ export class HealthMonitor {
       /command not found.*codex/i,                   // codex not installed
       /command not found.*opencode/i,                // opencode not installed
     ];
-    const hasExitMessage = exitPatterns.some(re => re.test(paneOutput));
+    const hasExitMessage = exitPatterns.some(re => re.test(recentLines));
 
     // Signal 2: Bare shell prompt at the bottom of the pane.
     // Covers common shell configurations:
@@ -609,11 +622,11 @@ export class HealthMonitor {
 
     if (count < 2) return false; // need 2 consecutive to confirm
 
-    // Determine reason from pane context
+    // Determine reason from recent pane context
     let reason = 'CLI exited to shell prompt';
-    if (/No conversation found/i.test(paneOutput)) {
+    if (/No conversation found/i.test(recentLines)) {
       reason = 'CLI session not found — resume failed';
-    } else if (/command not found/i.test(paneOutput)) {
+    } else if (/command not found/i.test(recentLines)) {
       reason = 'CLI binary not found';
     } else if (hasExitMessage) {
       reason = 'CLI exited unexpectedly';
@@ -727,7 +740,17 @@ export class HealthMonitor {
 
     this.consecutiveFailures.delete(key);
     this.failureSnapshot.delete(agent.name);
+    this.healedAt.set(agent.name, Date.now());
     console.log(`[health] ${agent.name}: CLI detected alive in tmux — healing`);
+
+    // Clear tmux scrollback so stale error messages don't re-trigger detectCliExit().
+    if (agent.proxyId) {
+      this.proxyDispatch(agent.proxyId, {
+        action: 'clear_history',
+        sessionName: sessionName(agent),
+      }).catch(() => { /* best-effort — non-fatal if pane is gone */ });
+    }
+
     this.db.updateAgentState(agent.name, 'active', agent.version, {
       failedAt: null,
       failureReason: null,
@@ -751,6 +774,7 @@ export class HealthMonitor {
     this.consecutiveFailures.delete(`shell_${name}`);
     this.consecutiveFailures.delete(`heal_${name}`);
     this.lastActivityTs.delete(name);
+    this.healedAt.delete(name);
     this.activeIndicators.delete(name);
     this.compiledIndicators.delete(name);
     // Note: failureSnapshot intentionally NOT deleted here — it's needed

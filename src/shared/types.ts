@@ -338,7 +338,8 @@ export type ProxyCommand =
   | { action: 'write_codex_profile'; profileName: string; developerInstructions: string }
   | { action: 'remove_codex_profile'; profileName: string }
   | { action: 'exec'; command: string; cwd?: string; timeoutMs?: number }
-  | { action: 'resize_pane'; sessionName: string; width: number; height: number };
+  | { action: 'resize_pane'; sessionName: string; width: number; height: number }
+  | { action: 'clear_history'; sessionName: string };
 
 export type ProxyResponse = {
   ok: boolean;

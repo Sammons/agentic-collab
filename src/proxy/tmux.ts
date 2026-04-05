@@ -45,6 +45,15 @@ export function killSession(sessionName: string): void {
   }
 }
 
+export function clearHistory(sessionName: string): void {
+  validateSessionName(sessionName);
+  try {
+    exec(`tmux clear-history -t '${esc(sessionName)}'`);
+  } catch {
+    // Session may be gone — non-fatal
+  }
+}
+
 export function listSessions(): string[] {
   try {
     const output = exec("tmux list-sessions -F '#{session_name}'");
