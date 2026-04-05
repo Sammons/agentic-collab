@@ -275,10 +275,13 @@
 
   /* ── Voice Dictation ── */
   .voice-controls {
-    display: flex;
+    display: none;
     align-items: center;
     gap: 6px;
     order: 2;
+  }
+  .voice-controls.voice-enabled {
+    display: flex;
   }
   .voice-toggle {
     display: flex;
@@ -345,8 +348,6 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-
-  .voice-controls.voice-enabled { display: flex; }
 
   /* Mobile mic toggle — hidden on desktop, shown on mobile via responsive.css */
   .mobile-mic-btn {
