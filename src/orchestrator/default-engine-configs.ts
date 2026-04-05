@@ -111,6 +111,10 @@ export const DEFAULT_ENGINE_CONFIGS: DefaultEngineConfig[] = [
     hookStart: JSON.stringify([
       { type: 'shell', command: 'claude --dangerously-skip-permissions --model opus --effort max --append-system-prompt $PERSONA_PROMPT' },
       { type: 'wait', ms: 5000 },
+      { type: 'keystroke', key: 'Enter' },
+      { type: 'wait', ms: 500 },
+      { type: 'keystroke', key: 'Enter' },
+      { type: 'wait', ms: 1000 },
       { type: 'shell', command: '/status' },
       { type: 'capture', lines: 30, regex: 'uuid', var: 'SESSION_ID' },
       { type: 'keystroke', key: 'Escape' },
@@ -118,6 +122,10 @@ export const DEFAULT_ENGINE_CONFIGS: DefaultEngineConfig[] = [
     hookResume: JSON.stringify([
       { type: 'shell', command: 'claude --resume $SESSION_ID --append-system-prompt $PERSONA_PROMPT' },
       { type: 'wait', ms: 5000 },
+      { type: 'keystroke', key: 'Enter' },
+      { type: 'wait', ms: 500 },
+      { type: 'keystroke', key: 'Enter' },
+      { type: 'wait', ms: 1000 },
       { type: 'shell', command: '/status' },
       { type: 'capture', lines: 30, regex: 'uuid', var: 'SESSION_ID' },
       { type: 'keystroke', key: 'Escape' },
