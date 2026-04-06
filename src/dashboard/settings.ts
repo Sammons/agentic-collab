@@ -334,6 +334,7 @@ function yamlToConfig(yaml, name) {
 
 export class SettingsPanel extends HTMLElement {
   _editingConfig = null;
+  _addingDest = false;
 
   render() {
     const configs = state.engineConfigs || [];
@@ -444,21 +445,33 @@ export class SettingsPanel extends HTMLElement {
     html += '<h3>Destinations</h3>';
     const destinations = state.destinations || [];
     if (destinations.length === 0) {
-      html += '<p class="settings-hint">No destinations configured. Add a Telegram destination to send/receive messages.</p>';
-    } else {
-      for (const dest of destinations) {
-        const updated = dest.updatedAt ? new Date(dest.updatedAt).toLocaleDateString() : '';
-        html += '<div class="config-card">';
-        html += '<div class="config-header">';
-        html += `<span class="config-name">${esc(dest.name)} <span style="font-size:11px;color:var(--text-dim)">(${esc(dest.type)})</span></span>`;
-        html += '<span class="config-actions">';
-        html += `<span style="font-size:11px;color:var(--text-dim)">${dest.enabled ? 'enabled' : 'disabled'}${updated ? ' · ' + esc(updated) : ''}</span>`;
-        html += `<button class="config-action-btn" data-dest-test="${esc(dest.name)}">Test</button>`;
-        html += `<button class="config-action-btn config-delete-btn" data-dest-delete="${esc(dest.name)}">${icon.trash(12)} Delete</button>`;
-        html += '</span></div>';
-        html += '</div>';
-      }
+      html += '<p class="settings-hint">No destinations configured. Add a Telegram destination to send and receive messages from agents.</p>';
     }
+    for (const dest of destinations) {
+      const updated = dest.updatedAt ? new Date(dest.updatedAt).toLocaleDateString() : '';
+      html += '<div class="config-card">';
+      html += '<div class="config-header">';
+      html += `<span class="config-name">${esc(dest.name)} <span style="font-size:11px;color:var(--text-dim)">(${esc(dest.type)})</span></span>`;
+      html += '<span class="config-actions">';
+      html += `<span style="font-size:11px;color:var(--text-dim)">${dest.enabled ? 'enabled' : 'disabled'}${updated ? ' · ' + esc(updated) : ''}</span>`;
+      html += `<button class="config-action-btn" data-dest-test="${esc(dest.name)}">Test</button>`;
+      html += `<button class="config-action-btn config-delete-btn" data-dest-delete="${esc(dest.name)}">${icon.trash(12)} Delete</button>`;
+      html += '</span></div>';
+      html += '</div>';
+    }
+    if (this._addingDest) {
+      html += '<div class="config-card">';
+      html += '<div class="config-header"><span class="config-name">New Telegram Destination</span></div>';
+      html += '<div class="config-field"><label>Name</label><input type="text" id="destNameInput" class="config-name-input" placeholder="e.g. my-telegram" /></div>';
+      html += '<div class="config-field"><label>Bot Token</label><input type="text" id="destTokenInput" class="config-name-input" placeholder="123456:ABC-DEF..." style="flex:1" /></div>';
+      html += '<div class="config-field"><label>Chat ID</label><input type="text" id="destChatInput" class="config-name-input" placeholder="-1001234567890" /></div>';
+      html += '<p class="settings-hint" style="margin:4px 0 0">Get a bot token from <code>@BotFather</code> on Telegram. Send a message to the bot, then use the Telegram API to find your chat ID.</p>';
+      html += '<div class="config-edit-actions"><button class="settings-btn settings-btn-save" id="destSaveBtn">Add</button><button class="settings-btn settings-btn-cancel" id="destCancelBtn">Cancel</button></div>';
+      html += '</div>';
+    }
+    html += '<div class="config-btn-row">';
+    html += `<button class="settings-btn settings-btn-new" id="addDestBtn">${icon.plus(12)} Add Telegram</button>`;
+    html += '</div>';
     html += '</div>';
 
     html += '</div>';
@@ -543,6 +556,46 @@ export class SettingsPanel extends HTMLElement {
           } catch { showToast('Network error', 'error'); }
         }
       });
+    });
+
+    this.querySelector('#addDestBtn')?.addEventListener('click', () => {
+      this._addingDest = true;
+      this.render();
+    });
+
+    this.querySelector('#destCancelBtn')?.addEventListener('click', () => {
+      this._addingDest = false;
+      this.render();
+    });
+
+    this.querySelector('#destSaveBtn')?.addEventListener('click', async () => {
+      const nameEl = this.querySelector('#destNameInput');
+      const tokenEl = this.querySelector('#destTokenInput');
+      const chatEl = this.querySelector('#destChatInput');
+      const name = nameEl?.value?.trim();
+      const botToken = tokenEl?.value?.trim();
+      const chatId = chatEl?.value?.trim();
+      if (!name || !botToken || !chatId) {
+        showToast('All fields are required', 'error');
+        return;
+      }
+      try {
+        const res = await fetch('/api/destinations', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
+          body: JSON.stringify({ name, type: 'telegram', config: { botToken, chatId }, enabled: true }),
+        });
+        if (res.ok) {
+          const dest = await res.json();
+          state.destinations = [...(state.destinations || []), dest];
+          this._addingDest = false;
+          showToast('Telegram destination added', 'success');
+          this.render();
+        } else {
+          const b = await res.json().catch(() => null);
+          showToast(b?.error || 'Failed to add destination', 'error');
+        }
+      } catch { showToast('Network error', 'error'); }
     });
 
     this.querySelectorAll('[data-store-delete]').forEach((btn) => {
