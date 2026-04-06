@@ -2151,33 +2151,47 @@ export function startTelegramPolling(ctx: RouteContext, dest: DestinationRecord)
   ctx.telegramDispatcher.startPolling(botToken, (incomingChatId: string, text: string) => {
     console.log(`[telegram] Inbound from chat ${incomingChatId}: ${text.slice(0, 100)}`);
 
-    // Parse @agent-name prefix
-    const agentMatch = text.match(/^@([a-zA-Z0-9_-]+)\s+([\s\S]+)$/);
-    let targetAgent: string | null = null;
+    // Parse @agent-name prefixes — supports multiple: @agent1 @agent2 message
+    const tagPattern = /^((?:@[a-zA-Z0-9_-]+\s+)+)([\s\S]+)$/;
+    const tagMatch = text.match(tagPattern);
+    const targetAgents: string[] = [];
     let messageText = text;
 
-    if (agentMatch) {
-      targetAgent = agentMatch[1]!;
-      messageText = agentMatch[2]!.trim();
+    if (tagMatch) {
+      const tags = tagMatch[1]!.trim().split(/\s+/);
+      for (const tag of tags) {
+        if (tag.startsWith('@')) targetAgents.push(tag.slice(1));
+      }
+      messageText = tagMatch[2]!.trim();
     }
 
-    if (targetAgent) {
-      // Route to specific agent via message queue
-      const agent = ctx.db.getAgent(targetAgent);
-      if (!agent) {
-        ctx.telegramDispatcher.send(botToken, incomingChatId, `Agent "${targetAgent}" not found`).catch(() => {});
-        return;
+    if (targetAgents.length > 0) {
+      const notFound: string[] = [];
+      const delivered: string[] = [];
+
+      for (const name of targetAgents) {
+        const agent = ctx.db.getAgent(name);
+        if (!agent) {
+          notFound.push(name);
+          continue;
+        }
+
+        enqueueAndDeliver(ctx, {
+          agentName: name,
+          displayMessage: messageText,
+          envelope: messageText,
+          topic: 'telegram',
+          sourceAgent: `telegram:${dest.name}`,
+        });
+        delivered.push(name);
       }
 
-      enqueueAndDeliver(ctx, {
-        agentName: targetAgent,
-        displayMessage: messageText,
-        envelope: messageText,
-        topic: 'telegram',
-        sourceAgent: `telegram:${dest.name}`,
-      });
-
-      console.log(`[telegram] Routed message to agent: ${targetAgent}`);
+      if (delivered.length > 0) {
+        console.log(`[telegram] Routed message to: ${delivered.join(', ')}`);
+      }
+      if (notFound.length > 0) {
+        ctx.telegramDispatcher.send(botToken, incomingChatId, `Agent(s) not found: ${notFound.join(', ')}`).catch(() => {});
+      }
     } else {
       // No agent prefix — create a dashboard message visible under a virtual "telegram" thread
       const msg = ctx.db.addDashboardMessage('telegram', 'from_agent', messageText, {
