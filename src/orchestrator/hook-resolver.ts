@@ -38,7 +38,7 @@ export type HookResult =
 
 // ── Hook Fields ──
 
-export type HookField = 'start' | 'resume' | 'exit' | 'compact' | 'interrupt' | 'submit';
+export type HookField = 'start' | 'resume' | 'exit' | 'compact' | 'interrupt' | 'reload' | 'submit';
 
 // ── Template variables for shell hooks ──
 

@@ -14,6 +14,7 @@ export type DefaultEngineConfig = {
   hookCompact?: string | null;
   hookExit?: string | null;
   hookInterrupt?: string | null;
+  hookReload?: string | null;
   hookSubmit?: string | null;
   indicators?: string | null;
   detection?: string | null;
@@ -139,6 +140,19 @@ export const DEFAULT_ENGINE_CONFIGS: DefaultEngineConfig[] = [
     hookInterrupt: JSON.stringify([
       { type: 'keystroke', key: 'Escape' },
       { type: 'keystroke', key: 'Escape' },
+      { type: 'keystroke', key: 'Escape' },
+    ]),
+    hookReload: JSON.stringify([
+      { type: 'shell', command: '/exit' },
+      { type: 'wait', ms: 10000 },
+      { type: 'shell', command: 'claude --dangerously-skip-permissions --model opus --effort max --append-system-prompt $PERSONA_PROMPT' },
+      { type: 'wait', ms: 5000 },
+      { type: 'keystroke', key: 'Enter' },
+      { type: 'wait', ms: 500 },
+      { type: 'keystroke', key: 'Enter' },
+      { type: 'wait', ms: 1000 },
+      { type: 'shell', command: '/status' },
+      { type: 'capture', lines: 30, regex: 'uuid', var: 'SESSION_ID' },
       { type: 'keystroke', key: 'Escape' },
     ]),
     indicators: JSON.stringify([

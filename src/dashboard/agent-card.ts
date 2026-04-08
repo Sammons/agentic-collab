@@ -49,7 +49,7 @@ export function buildActionsHtml(agent) {
   let html = '';
   if (activeIdle) {
     if (hasHook(agent, 'hookCompact')) html += '<button data-action="compact">Compact</button>';
-    html += '<button data-action="reload">Reload</button>';
+    if (hasHook(agent, 'hookReload')) html += '<button data-action="reload">Reload</button>';
     if (hasHook(agent, 'hookExit')) html += '<button data-action="exit">Exit</button>';
     html += `<button class="danger" data-action="kill">Kill</button>`;
     if (agent.tmuxSession) html += `<button class="secondary" data-copy-tmux="tmux attach -t ${esc(agent.tmuxSession)}">Copy tmux</button>`;

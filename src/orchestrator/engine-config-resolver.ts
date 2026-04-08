@@ -22,6 +22,7 @@ export function resolveEffectiveConfig(
     hookCompact: agent.hookCompact ?? config.hookCompact,
     hookExit: agent.hookExit ?? config.hookExit,
     hookInterrupt: agent.hookInterrupt ?? config.hookInterrupt,
+    hookReload: agent.hookReload ?? config.hookReload,
     hookSubmit: agent.hookSubmit ?? config.hookSubmit,
     indicators: agent.indicators ?? config.indicators,
     customButtons: agent.customButtons ?? config.customButtons,

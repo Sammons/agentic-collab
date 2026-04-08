@@ -214,10 +214,13 @@ export class Database {
       this.db.exec('ALTER TABLE proxies ADD COLUMN version TEXT');
     }
 
-    // Add custom_buttons column to engine_configs if not present
+    // Add custom_buttons and hook_reload columns to engine_configs if not present
     const ecCols = this.db.prepare('PRAGMA table_info(engine_configs)').all() as Array<Record<string, unknown>>;
     if (!ecCols.some((c) => c['name'] === 'custom_buttons')) {
       this.db.exec('ALTER TABLE engine_configs ADD COLUMN custom_buttons TEXT');
+    }
+    if (!ecCols.some((c) => c['name'] === 'hook_reload')) {
+      this.db.exec('ALTER TABLE engine_configs ADD COLUMN hook_reload TEXT');
     }
 
     // Create reminders table
@@ -905,6 +908,7 @@ export class Database {
     hookCompact?: string | null;
     hookExit?: string | null;
     hookInterrupt?: string | null;
+    hookReload?: string | null;
     hookSubmit?: string | null;
     indicators?: string | null;
     detection?: string | null;
@@ -922,6 +926,7 @@ export class Database {
     if (opts.hookCompact !== undefined) { sets.push('hook_compact = ?'); params.push(opts.hookCompact); }
     if (opts.hookExit !== undefined) { sets.push('hook_exit = ?'); params.push(opts.hookExit); }
     if (opts.hookInterrupt !== undefined) { sets.push('hook_interrupt = ?'); params.push(opts.hookInterrupt); }
+    if (opts.hookReload !== undefined) { sets.push('hook_reload = ?'); params.push(opts.hookReload); }
     if (opts.hookSubmit !== undefined) { sets.push('hook_submit = ?'); params.push(opts.hookSubmit); }
     if (opts.indicators !== undefined) { sets.push('indicators = ?'); params.push(opts.indicators); }
     if (opts.detection !== undefined) { sets.push('detection = ?'); params.push(opts.detection); }
@@ -1170,6 +1175,7 @@ function mapEngineConfigRow(row: Record<string, unknown>): EngineConfigRecord {
     hookCompact: (row['hook_compact'] as string | null) ?? null,
     hookExit: (row['hook_exit'] as string | null) ?? null,
     hookInterrupt: (row['hook_interrupt'] as string | null) ?? null,
+    hookReload: (row['hook_reload'] as string | null) ?? null,
     hookSubmit: (row['hook_submit'] as string | null) ?? null,
     indicators: (row['indicators'] as string | null) ?? null,
     detection: (row['detection'] as string | null) ?? null,

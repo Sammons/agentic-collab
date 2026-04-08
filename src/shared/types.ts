@@ -139,6 +139,7 @@ export type EngineConfigRecord = {
   hookCompact: string | null;
   hookExit: string | null;
   hookInterrupt: string | null;
+  hookReload: string | null;
   hookSubmit: string | null;
   indicators: string | null;
   detection: string | null;
@@ -169,6 +170,8 @@ export type AgentRecord = {
   hookExit: string | null;
   /** Hook value for interrupting the agent. */
   hookInterrupt: string | null;
+  /** Hook value for reloading the agent (exit + fresh start). */
+  hookReload: string | null;
   /** Hook value for submitting messages to the agent. */
   hookSubmit: string | null;
   state: AgentState;

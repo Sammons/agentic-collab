@@ -26,7 +26,7 @@ function configToYaml(cfg) {
   if (cfg.thinking) lines.push(`thinking: ${cfg.thinking}`);
   if (cfg.permissions) lines.push(`permissions: ${cfg.permissions}`);
   // Hooks — stored as JSON strings, display as YAML pipeline
-  for (const hookKey of ['hookStart', 'hookResume', 'hookCompact', 'hookExit', 'hookInterrupt', 'hookSubmit']) {
+  for (const hookKey of ['hookStart', 'hookResume', 'hookCompact', 'hookExit', 'hookInterrupt', 'hookReload', 'hookSubmit']) {
     const yamlKey = hookKey.replace('hook', '').toLowerCase();
     const val = cfg[hookKey];
     if (!val) continue;
@@ -158,7 +158,7 @@ function yamlToConfig(yaml, name) {
   let inDetection = false;
   let detectionObj = null;
   let detectionListKey = null;
-  const hookMap = { start: 'hookStart', resume: 'hookResume', compact: 'hookCompact', exit: 'hookExit', interrupt: 'hookInterrupt', submit: 'hookSubmit' };
+  const hookMap = { start: 'hookStart', resume: 'hookResume', compact: 'hookCompact', exit: 'hookExit', interrupt: 'hookInterrupt', reload: 'hookReload', submit: 'hookSubmit' };
 
   function flushIndicatorAction() {
     if (currentActionName && currentActionSteps && currentIndicator) {
