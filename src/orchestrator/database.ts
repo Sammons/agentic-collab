@@ -215,8 +215,8 @@ export class Database {
     }
 
     // Add custom_buttons column to engine_configs if not present
-    const ecColumns = this.db.prepare('PRAGMA table_info(engine_configs)').all() as Array<Record<string, unknown>>;
-    if (!ecColumns.some((c) => c['name'] === 'custom_buttons')) {
+    const ecCols = this.db.prepare('PRAGMA table_info(engine_configs)').all() as Array<Record<string, unknown>>;
+    if (!ecCols.some((c) => c['name'] === 'custom_buttons')) {
       this.db.exec('ALTER TABLE engine_configs ADD COLUMN custom_buttons TEXT');
     }
 
