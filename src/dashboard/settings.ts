@@ -295,22 +295,21 @@ function yamlToConfig(yaml, name) {
         if (stepType === 'shell') {
           currentSteps.push({ type: 'shell', command: stepVal });
         } else if (stepType === 'wait') {
-          currentSteps.push({ type: 'wait', duration: parseInt(stepVal) || 5000 });
+          currentSteps.push({ type: 'wait', ms: parseInt(stepVal) || 5000 });
         } else if (stepType === 'keystroke') {
-          currentSteps.push({ type: 'keystroke', keystroke: stepVal });
+          currentSteps.push({ type: 'keystroke', key: stepVal });
         } else if (stepType === 'capture') {
-          currentSteps.push({ type: 'capture', capture: {} });
+          currentSteps.push({ type: 'capture', lines: 0, regex: '', var: '' });
         }
       }
     } else if (trimmed.match(/^\s{6}\w+:/) && currentSteps && currentSteps.length > 0) {
-      // Capture sub-field
+      // Capture sub-field (flat format: lines, regex, var directly on the step)
       const last = currentSteps[currentSteps.length - 1];
-      if (last.type === 'capture' || last.capture) {
+      if (last.type === 'capture') {
         const subKv = trimmed.trim().match(/^(\w+):\s*(.*)$/);
         if (subKv) {
-          if (!last.capture) last.capture = {};
           const v = subKv[2].trim();
-          last.capture[subKv[1]] = isNaN(Number(v)) ? v : Number(v);
+          last[subKv[1]] = isNaN(Number(v)) ? v : Number(v);
         }
       }
     } else if (trimmed.match(/^\s{2}\w+:/) && fields.launchEnv) {
