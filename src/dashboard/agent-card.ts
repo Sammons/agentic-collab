@@ -12,6 +12,7 @@
  */
 
 import { icon } from '/dashboard/assets/icons.ts';
+import { state } from '/dashboard/state.ts';
 
 // ── Utilities ──
 
@@ -29,6 +30,17 @@ function proxyWarning(proxyId, proxies) {
   return ` <span class="version-mismatch" title="Proxy version${ver} does not match orchestrator. Restart the proxy.">${icon.alertTriangle(12)} stale proxy</span>`;
 }
 
+function getEngineConfig(engine) {
+  return (state.engineConfigs || []).find(c => c.name === engine) || null;
+}
+
+function hasHook(agent, hookName) {
+  // Check agent-level override first, then engine config
+  if (agent[hookName]) return true;
+  const cfg = getEngineConfig(agent.engine);
+  return cfg && !!cfg[hookName];
+}
+
 export function buildActionsHtml(agent) {
   const activeIdle = agent.state === 'active' || agent.state === 'idle';
   const suspendedFailed = agent.state === 'suspended' || agent.state === 'failed';
@@ -36,7 +48,11 @@ export function buildActionsHtml(agent) {
   const isVoid = agent.state === 'void';
   let html = '';
   if (activeIdle) {
-    html = `${agent.engine !== 'codex' ? '<button data-action="compact">Compact</button>' : ''}<button data-action="reload">Reload</button><button data-action="exit">Exit</button><button class="danger" data-action="kill">Kill</button>${agent.tmuxSession ? `<button class="secondary" data-copy-tmux="tmux attach -t ${esc(agent.tmuxSession)}">Copy tmux</button>` : ''}`;
+    if (hasHook(agent, 'hookCompact')) html += '<button data-action="compact">Compact</button>';
+    html += '<button data-action="reload">Reload</button>';
+    if (hasHook(agent, 'hookExit')) html += '<button data-action="exit">Exit</button>';
+    html += `<button class="danger" data-action="kill">Kill</button>`;
+    if (agent.tmuxSession) html += `<button class="secondary" data-copy-tmux="tmux attach -t ${esc(agent.tmuxSession)}">Copy tmux</button>`;
   } else if (suspendedFailed) {
     html = '<button data-action="resume">Resume</button><button class="danger" data-action="destroy">Destroy</button>';
   } else if (transitioning) {
