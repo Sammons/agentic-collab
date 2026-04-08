@@ -185,44 +185,6 @@ if [ -f "$COLLAB_BIN/collab" ]; then
   export PATH="$COLLAB_BIN:$PATH"
 fi
 
-# ── Check SQLite DB Permissions ──
-# The orchestrator runs as the host user (UID:GID) inside Docker.
-# If the DB was previously created by root (e.g. before the user: directive),
-# the container can't write to it → SQLITE_READONLY errors.
-
-if command -v docker &>/dev/null; then
-  VOLUME_NAME="agentic-collab_orchestrator-data"
-  DB_MOUNT="/data/.agentic-collab"
-
-  # Check if the volume exists and has files with wrong ownership
-  if docker volume inspect "$VOLUME_NAME" &>/dev/null; then
-    CURRENT_UID=$(id -u)
-    CURRENT_GID=$(id -g)
-
-    # Run a throwaway container to inspect file ownership inside the volume
-    DB_OWNER=$(docker run --rm -v "${VOLUME_NAME}:${DB_MOUNT}" alpine:3.20 \
-      stat -c '%u:%g' "${DB_MOUNT}" 2>/dev/null || echo "")
-
-    if [ -n "$DB_OWNER" ] && [ "$DB_OWNER" != "${CURRENT_UID}:${CURRENT_GID}" ]; then
-      warn "SQLite data volume has wrong ownership: ${DB_OWNER} (expected ${CURRENT_UID}:${CURRENT_GID})"
-      warn "This will cause 'access denied' or 'SQLITE_READONLY' errors."
-      echo ""
-      echo -e "  ${BOLD}Fix with:${RESET}"
-      echo -e "    docker run --rm -v ${VOLUME_NAME}:${DB_MOUNT} alpine:3.20 chown -R ${CURRENT_UID}:${CURRENT_GID} ${DB_MOUNT}"
-      echo ""
-      read -rp "  Run this fix now? [Y/n] " REPLY
-      REPLY="${REPLY:-Y}"
-      if [[ "$REPLY" =~ ^[Yy]$ ]]; then
-        docker run --rm -v "${VOLUME_NAME}:${DB_MOUNT}" alpine:3.20 \
-          chown -R "${CURRENT_UID}:${CURRENT_GID}" "${DB_MOUNT}"
-        info "Fixed volume ownership to ${CURRENT_UID}:${CURRENT_GID}"
-      else
-        warn "Skipped. The orchestrator may fail to start."
-      fi
-    fi
-  fi
-fi
-
 # ── Start Orchestrator ──
 
 step "Starting orchestrator"
@@ -239,10 +201,53 @@ if command -v docker &>/dev/null; then
     # Resolves symlinks so Docker mounts the real directory (not the symlink).
     export PERSONAS_HOST_DIR
     PERSONAS_HOST_DIR="${PERSONAS_HOST_DIR:-$(realpath ./persistent-agents 2>/dev/null || echo '')}"
+
+    # Build the image first so we can reuse it for the permissions check
+    ORCH_IMAGE=$(docker compose config --images 2>/dev/null | head -1)
+    if ! docker compose ps --status running 2>/dev/null | grep -q orchestrator; then
+      docker compose build
+      info "Orchestrator image built"
+    fi
+
+    # ── Check SQLite DB Permissions ──
+    # The orchestrator runs as the host user (UID:GID) inside Docker.
+    # If the DB was previously created by root (e.g. before the user: directive),
+    # the container can't write to it → SQLITE_READONLY errors.
+    VOLUME_NAME="agentic-collab_orchestrator-data"
+    DB_MOUNT="/data/.agentic-collab"
+
+    if docker volume inspect "$VOLUME_NAME" &>/dev/null; then
+      CURRENT_UID=$(id -u)
+      CURRENT_GID=$(id -g)
+
+      # Reuse the orchestrator image (already built above) for the ownership check
+      DB_OWNER=$(docker run --rm -v "${VOLUME_NAME}:${DB_MOUNT}" "${ORCH_IMAGE}" \
+        stat -c '%u:%g' "${DB_MOUNT}" 2>/dev/null || echo "")
+
+      if [ -n "$DB_OWNER" ] && [ "$DB_OWNER" != "${CURRENT_UID}:${CURRENT_GID}" ]; then
+        warn "SQLite data volume has wrong ownership: ${DB_OWNER} (expected ${CURRENT_UID}:${CURRENT_GID})"
+        warn "This will cause 'access denied' or 'SQLITE_READONLY' errors."
+        echo ""
+        echo -e "  ${BOLD}Fix with:${RESET}"
+        echo -e "    docker run --rm -v ${VOLUME_NAME}:${DB_MOUNT} ${ORCH_IMAGE} chown -R ${CURRENT_UID}:${CURRENT_GID} ${DB_MOUNT}"
+        echo ""
+        read -rp "  Run this fix now? [Y/n] " REPLY
+        REPLY="${REPLY:-Y}"
+        if [[ "$REPLY" =~ ^[Yy]$ ]]; then
+          docker run --rm --user root -v "${VOLUME_NAME}:${DB_MOUNT}" "${ORCH_IMAGE}" \
+            chown -R "${CURRENT_UID}:${CURRENT_GID}" "${DB_MOUNT}"
+          info "Fixed volume ownership to ${CURRENT_UID}:${CURRENT_GID}"
+        else
+          warn "Skipped. The orchestrator may fail to start."
+        fi
+      fi
+    fi
+
+    # Start the container (image already built, skip rebuild)
     if docker compose ps --status running 2>/dev/null | grep -q orchestrator; then
       info "Orchestrator already running"
     else
-      docker compose up -d --build
+      docker compose up -d
       info "Orchestrator starting via Docker Compose"
     fi
   else
