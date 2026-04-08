@@ -639,7 +639,7 @@ export class SettingsPanel extends HTMLElement {
       });
     });
 
-    this.querySelectorAll('.config-edit-actions button').forEach((btn) => {
+    this.querySelectorAll('.config-actions button[data-action="save"], .config-actions button[data-action="cancel"], .config-edit-actions button').forEach((btn) => {
       btn.addEventListener('click', async () => {
         if (btn.dataset.action === 'cancel') {
           this._editingConfig = null;
