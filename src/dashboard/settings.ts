@@ -332,6 +332,10 @@ function yamlToConfig(yaml, name) {
   if (inDetection && detectionObj) {
     fields.detection = JSON.stringify(detectionObj);
   }
+  // Explicitly null out hooks that were removed from the YAML so the API clears them
+  for (const dbKey of Object.values(hookMap)) {
+    if (!(dbKey in fields)) fields[dbKey] = null;
+  }
   return fields;
 }
 
