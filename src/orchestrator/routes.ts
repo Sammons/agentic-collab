@@ -1251,6 +1251,7 @@ route('POST', '/api/agents/:name/spawn', async (req, res, match, ctx) => {
     });
 
     broadcastAgentUpdate(ctx, name);
+    broadcastLifecycleEvent(ctx, name, 'Spawned');
     json(res, 200, result);
   } catch (err) {
     json(res, 400, { error: (err as Error).message });
@@ -1278,6 +1279,7 @@ route('POST', '/api/agents/:name/resume', async (req, res, match, ctx) => {
       task: body.task as string | undefined,
     });
     broadcastAgentUpdate(ctx, name);
+    broadcastLifecycleEvent(ctx, name, 'Resumed');
     json(res, 200, result);
   } catch (err) {
     json(res, 400, { error: (err as Error).message });
@@ -1292,6 +1294,7 @@ const handleExit: RouteHandler = async (_req, res, match, ctx) => {
     const lifecycleCtx = makeLifecycleCtx(ctx);
     const result = await suspendAgent(lifecycleCtx, name);
     broadcastAgentUpdate(ctx, name);
+    broadcastLifecycleEvent(ctx, name, 'Exited');
     json(res, 200, result);
   } catch (err) {
     json(res, 400, { error: (err as Error).message });
@@ -1313,6 +1316,7 @@ route('POST', '/api/agents/:name/reload', async (req, res, match, ctx) => {
       task: body.task as string | undefined,
     });
     broadcastAgentUpdate(ctx, name);
+    broadcastLifecycleEvent(ctx, name, 'Reloaded');
     json(res, 200, result);
   } catch (err) {
     json(res, 400, { error: (err as Error).message });
@@ -1327,17 +1331,18 @@ route('POST', '/api/agents/:name/recover', async (_req, res, match, ctx) => {
     syncSinglePersona(ctx.db, name);
     const result = await recoverAgent(lifecycleCtx, name);
     broadcastAgentUpdate(ctx, name);
+    broadcastLifecycleEvent(ctx, name, 'Recovered');
     json(res, 200, result);
   } catch (err) {
     json(res, 400, { error: (err as Error).message });
   }
 });
 
-route('POST', '/api/agents/:name/interrupt', lifecycleRoute(interruptAgent));
+route('POST', '/api/agents/:name/interrupt', lifecycleRoute(interruptAgent, { eventLabel: 'Interrupted' }));
 
-route('POST', '/api/agents/:name/compact', lifecycleRoute(compactAgent));
+route('POST', '/api/agents/:name/compact', lifecycleRoute(compactAgent, { eventLabel: 'Compacted' }));
 
-route('POST', '/api/agents/:name/kill', lifecycleRoute(killAgent, { broadcast: true }));
+route('POST', '/api/agents/:name/kill', lifecycleRoute(killAgent, { broadcast: true, eventLabel: 'Killed' }));
 
 route('GET', '/api/agents/:name/peek', async (_req, res, match, ctx) => {
   const name = match.pathname.groups['name']!;
@@ -2015,6 +2020,15 @@ function broadcastAgentUpdate(ctx: RouteContext, agentName: string): void {
   }
 }
 
+/** Insert a lifecycle event as a system message in the agent's chat thread and broadcast it. */
+function broadcastLifecycleEvent(ctx: RouteContext, agentName: string, label: string): void {
+  const msg = ctx.db.addDashboardMessage(agentName, 'from_agent', `[system] ${label}`, {
+    topic: 'lifecycle',
+    sourceAgent: 'system',
+  });
+  ctx.wss.broadcast(JSON.stringify({ type: 'message', msg }));
+}
+
 function validateAgentName(name: string): string | null {
   if (typeof name !== 'string') return 'name must be a string';
   if (!NAME_RE.test(name)) return 'name must be 1-63 chars, start with alphanumeric, contain only [a-zA-Z0-9_-]';
@@ -2111,7 +2125,7 @@ function enrichProxiesWithVersionMatch(proxies: ProxyRegistration[]): ProxyRegis
  */
 function lifecycleRoute(
   lifecycleFn: (ctx: LifecycleContext, name: string) => Promise<unknown>,
-  opts?: { broadcast?: boolean | 'destroyed' },
+  opts?: { broadcast?: boolean | 'destroyed'; eventLabel?: string },
 ): RouteHandler {
   return async (_req, res, match, ctx) => {
     const name = match.pathname.groups['name']!;
@@ -2122,6 +2136,9 @@ function lifecycleRoute(
         ctx.wss.broadcast(JSON.stringify({ type: 'agent_destroyed', name }));
       } else if (opts?.broadcast) {
         broadcastAgentUpdate(ctx, name);
+      }
+      if (opts?.eventLabel) {
+        broadcastLifecycleEvent(ctx, name, opts.eventLabel);
       }
       json(res, 200, { ok: true });
     } catch (err) {

@@ -453,6 +453,7 @@ export class HealthMonitor {
           reason: captureResult.error,
           consecutiveFailures: failures,
         });
+        this.emitSystemMessage(agent.name, `Failed — health check failed ${failures}x`);
         this.onAgentUpdate(agent.name);
         this.consecutiveFailures.delete(agent.name);
       }
@@ -643,6 +644,7 @@ export class HealthMonitor {
       failureReason: reason,
     });
     this.db.logEvent(agent.name, 'cli_exit_detected', undefined, { reason, lastLine });
+    this.emitSystemMessage(agent.name, `Failed — ${reason}`);
     this.onAgentUpdate(agent.name);
     this.cleanupAgent(agent.name);
     return true;
@@ -762,6 +764,7 @@ export class HealthMonitor {
       reason: 'CLI detected alive in tmux pane',
       lastLine,
     });
+    this.emitSystemMessage(agent.name, 'Healed — CLI detected alive');
     this.onAgentUpdate(agent.name);
     return true;
   }
@@ -834,6 +837,7 @@ export class HealthMonitor {
 
     console.log(`[health] ${agent.name}: autoRecover enabled — scheduling recovery`);
     this.db.logEvent(agent.name, 'auto_recover_triggered');
+    this.emitSystemMessage(agent.name, 'Auto-recovering...');
 
     // Fire-and-forget — recovery is a full lifecycle operation
     const lifecycleCtx = this.makeLifecycleCtx();
@@ -844,6 +848,15 @@ export class HealthMonitor {
       console.error(`[health] ${agent.name}: auto-recovery failed:`, err);
       this.onAgentUpdate(agent.name);
     });
+  }
+
+  /** Emit a lifecycle event as a system message in the agent's chat thread. */
+  private emitSystemMessage(agentName: string, label: string): void {
+    const msg = this.db.addDashboardMessage(agentName, 'from_agent', `[system] ${label}`, {
+      topic: 'lifecycle',
+      sourceAgent: 'system',
+    });
+    this.onDashboardMessage(msg);
   }
 
   /** Get currently active indicators for an agent. */
