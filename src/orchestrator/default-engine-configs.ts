@@ -130,6 +130,17 @@ export const DEFAULT_ENGINE_CONFIGS: DefaultEngineConfig[] = [
       { type: 'capture', lines: 30, regex: 'uuid', var: 'SESSION_ID' },
       { type: 'keystroke', key: 'Escape' },
     ]),
+    hookCompact: JSON.stringify([
+      { type: 'shell', command: '/compact' },
+    ]),
+    hookExit: JSON.stringify([
+      { type: 'shell', command: '/exit' },
+    ]),
+    hookInterrupt: JSON.stringify([
+      { type: 'keystroke', key: 'Escape' },
+      { type: 'keystroke', key: 'Escape' },
+      { type: 'keystroke', key: 'Escape' },
+    ]),
     indicators: JSON.stringify([
       UNSAFE_INDICATOR,
       CLAUDE_APPROVAL_INDICATOR,

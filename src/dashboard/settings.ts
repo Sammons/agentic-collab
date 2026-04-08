@@ -38,7 +38,7 @@ function configToYaml(cfg) {
           if (step.type === 'shell' || step.command) {
             lines.push(`  - shell: ${step.command || step.shell}`);
           } else if (step.type === 'wait' || step.wait != null) {
-            lines.push(`  - wait: ${step.wait || step.duration || 5000}`);
+            lines.push(`  - wait: ${step.ms || step.wait || step.duration || 5000}`);
           } else if (step.type === 'capture' || step.capture) {
             lines.push(`  - capture:`);
             const c = step.capture || step;
@@ -112,6 +112,7 @@ function configToYaml(cfg) {
       if (det.idleThreshold != null) lines.push(`  idleThreshold: ${det.idleThreshold}`);
       if (det.activeGraceMs != null) lines.push(`  activeGraceMs: ${det.activeGraceMs}`);
       if (det.snapshotLines != null) lines.push(`  snapshotLines: ${det.snapshotLines}`);
+      if (det.autoRecover != null) lines.push(`  autoRecover: ${det.autoRecover}`);
     } catch { /* skip malformed detection */ }
   }
   if (cfg.launchEnv && typeof cfg.launchEnv === 'object' && Object.keys(cfg.launchEnv).length > 0) {
@@ -217,6 +218,8 @@ function yamlToConfig(yaml, name) {
           // Numeric fields
           if (['idleThreshold', 'activeGraceMs', 'snapshotLines'].includes(fieldKey)) {
             detectionObj[fieldKey] = parseInt(fieldVal) || 0;
+          } else if (fieldKey === 'autoRecover') {
+            detectionObj[fieldKey] = fieldVal === 'true';
           } else {
             detectionObj[fieldKey] = fieldVal;
           }
