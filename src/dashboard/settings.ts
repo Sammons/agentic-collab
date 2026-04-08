@@ -357,14 +357,16 @@ export class SettingsPanel extends HTMLElement {
       html += `<div class="config-card" data-config="${esc(cfg.name)}">`;
       html += `<div class="config-header"><span class="config-name">${esc(cfg.name)}</span>`;
       html += '<span class="config-actions">';
-      if (!isEditing) {
+      if (isEditing) {
+        html += '<button class="settings-btn settings-btn-save" data-action="save">Save</button>';
+        html += '<button class="settings-btn settings-btn-cancel" data-action="cancel">Cancel</button>';
+      } else {
         html += `<button class="config-action-btn" data-action="edit" data-name="${esc(cfg.name)}">${icon.edit(12)} Edit</button>`;
         html += `<button class="config-action-btn config-delete-btn" data-action="delete" data-name="${esc(cfg.name)}">${icon.trash(12)} Delete</button>`;
       }
       html += '</span></div>';
       if (isEditing) {
         html += `<textarea class="config-yaml-editor" data-config-name="${esc(cfg.name)}">${esc(configToYaml(cfg))}</textarea>`;
-        html += '<div class="config-edit-actions"><button class="settings-btn settings-btn-save" data-action="save">Save</button><button class="settings-btn settings-btn-cancel" data-action="cancel">Cancel</button></div>';
       } else {
         html += `<details class="config-details"><summary>Show YAML</summary><pre class="config-yaml-display">${esc(configToYaml(cfg))}</pre></details>`;
       }
