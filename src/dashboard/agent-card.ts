@@ -12,7 +12,7 @@
  */
 
 import { icon } from '/dashboard/assets/icons.ts';
-import { state } from '/dashboard/state.ts';
+import { state } from '/dashboard/assets/state.ts';
 
 // ── Utilities ──
 
