@@ -383,6 +383,7 @@ export class SettingsPanel extends HTMLElement {
     const closeKb = !!prefs.closeKeyboardOnSend;
 
     let html = '<div class="settings-panel">';
+    html += '<div class="settings-header"><h2>Settings</h2><button id="settingsCloseBtn" class="config-action-btn" title="Close">&times;</button></div>';
 
     // ── Engine Configs ──
     html += '<div class="settings-section">';
@@ -536,6 +537,10 @@ export class SettingsPanel extends HTMLElement {
   }
 
   _bindEvents() {
+    this.querySelector('#settingsCloseBtn')?.addEventListener('click', () => {
+      this.dispatchEvent(new CustomEvent('close-settings', { bubbles: true }));
+    });
+
     this.querySelector('#newConfigBtn')?.addEventListener('click', () => {
       this._editingConfig = '__new__';
       this.render();

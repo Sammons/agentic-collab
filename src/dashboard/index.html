@@ -244,6 +244,10 @@ import { pushUrlState, restorePendingAgent, setup as setupUrlState } from '/dash
       pushUrlState({ settings: true });
     }
   });
+  settingsPanel.addEventListener('close-settings', () => {
+    closeSettings();
+    pushUrlState({ settings: false });
+  });
   // Close settings when selecting an agent
   document.getElementById('agentList').addEventListener('click', () => {
     if (settingsPanel.style.display !== 'none') closeSettings();

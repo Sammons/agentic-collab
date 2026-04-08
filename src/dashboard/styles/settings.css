@@ -1,5 +1,8 @@
   /* ── Settings Panel ── */
   .settings-panel { padding: 20px; overflow-y: auto; }
+  .settings-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+  .settings-header h2 { margin: 0; font-size: 14px; font-weight: 600; color: var(--text); }
+  .settings-header button { font-size: 18px; line-height: 1; padding: 2px 8px; }
   .settings-section { margin-bottom: 24px; }
   .settings-section h3 {
     margin-bottom: 8px;
