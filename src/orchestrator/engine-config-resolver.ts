@@ -24,6 +24,7 @@ export function resolveEffectiveConfig(
     hookInterrupt: agent.hookInterrupt ?? config.hookInterrupt,
     hookSubmit: agent.hookSubmit ?? config.hookSubmit,
     indicators: agent.indicators ?? config.indicators,
+    customButtons: agent.customButtons ?? config.customButtons,
     launchEnv: agent.launchEnv ?? config.launchEnv,
   };
 }

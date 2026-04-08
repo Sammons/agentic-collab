@@ -142,6 +142,7 @@ export type EngineConfigRecord = {
   hookSubmit: string | null;
   indicators: string | null;
   detection: string | null;
+  customButtons: string | null;
   launchEnv: Record<string, string> | null;
   createdAt: string;
 };

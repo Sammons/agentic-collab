@@ -60,13 +60,22 @@ export function buildActionsHtml(agent) {
   } else if (isVoid) {
     html = '<button data-action="spawn">Spawn</button><button class="danger" data-action="destroy">Destroy</button>';
   }
-  if (activeIdle && agent.customButtons) {
-    try {
-      const btns = JSON.parse(agent.customButtons);
-      html += Object.keys(btns).map(b =>
+  if (activeIdle) {
+    // Merge custom buttons from agent record + engine config (agent takes priority)
+    const merged = {};
+    const cfg = getEngineConfig(agent.engine);
+    if (cfg?.customButtons) {
+      try { Object.assign(merged, JSON.parse(cfg.customButtons)); } catch {}
+    }
+    if (agent.customButtons) {
+      try { Object.assign(merged, JSON.parse(agent.customButtons)); } catch {}
+    }
+    const btnNames = Object.keys(merged);
+    if (btnNames.length > 0) {
+      html += btnNames.map(b =>
         `<button class="secondary" data-action="custom/${esc(b)}">${esc(b)}</button>`
       ).join('');
-    } catch {}
+    }
   }
   return html;
 }

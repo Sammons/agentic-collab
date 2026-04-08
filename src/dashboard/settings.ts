@@ -115,6 +115,26 @@ function configToYaml(cfg) {
       if (det.autoRecover != null) lines.push(`  autoRecover: ${det.autoRecover}`);
     } catch { /* skip malformed detection */ }
   }
+  // Custom buttons — render as top-level pipeline keys
+  if (cfg.customButtons) {
+    try {
+      const btns = typeof cfg.customButtons === 'string' ? JSON.parse(cfg.customButtons) : cfg.customButtons;
+      for (const [btnName, steps] of Object.entries(btns)) {
+        lines.push(`${btnName}:`);
+        for (const step of steps) {
+          if (step.type === 'shell' || step.command) {
+            lines.push(`  - shell: ${step.command || step.shell}`);
+          } else if (step.type === 'wait' || step.ms != null) {
+            lines.push(`  - wait: ${step.ms || step.wait || step.duration || 5000}`);
+          } else if (step.type === 'keystroke' || step.key || step.keystroke) {
+            lines.push(`  - keystroke: ${step.key || step.keystroke}`);
+          } else {
+            lines.push(`  - ${JSON.stringify(step)}`);
+          }
+        }
+      }
+    } catch { /* skip malformed customButtons */ }
+  }
   if (cfg.launchEnv && typeof cfg.launchEnv === 'object' && Object.keys(cfg.launchEnv).length > 0) {
     lines.push('env:');
     for (const [k, v] of Object.entries(cfg.launchEnv)) {
@@ -197,8 +217,12 @@ function yamlToConfig(yaml, name) {
         detectionObj = {};
       } else if (key === 'env') {
         fields.launchEnv = {};
+      } else if (!val) {
+        // Unrecognized key with no inline value — treat as custom button pipeline
+        currentKey = `__custom__${key}`;
+        currentSteps = [];
       } else {
-        fields[key] = val || null;
+        fields[key] = val;
       }
     } else if (inDetection) {
       // Detection parsing — 2 indent levels:
@@ -335,6 +359,16 @@ function yamlToConfig(yaml, name) {
   for (const dbKey of Object.values(hookMap)) {
     if (!(dbKey in fields)) fields[dbKey] = null;
   }
+  // Collect custom button pipelines (keys prefixed with __custom__)
+  const customButtons = {};
+  for (const key of Object.keys(fields)) {
+    if (key.startsWith('__custom__')) {
+      const buttonName = key.slice('__custom__'.length);
+      customButtons[buttonName] = JSON.parse(fields[key]);
+      delete fields[key];
+    }
+  }
+  fields.customButtons = Object.keys(customButtons).length > 0 ? JSON.stringify(customButtons) : null;
   return fields;
 }
 

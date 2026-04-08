@@ -214,6 +214,12 @@ export class Database {
       this.db.exec('ALTER TABLE proxies ADD COLUMN version TEXT');
     }
 
+    // Add custom_buttons column to engine_configs if not present
+    const ecColumns = this.db.prepare('PRAGMA table_info(engine_configs)').all() as Array<Record<string, unknown>>;
+    if (!ecColumns.some((c) => c['name'] === 'custom_buttons')) {
+      this.db.exec('ALTER TABLE engine_configs ADD COLUMN custom_buttons TEXT');
+    }
+
     // Create reminders table
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS reminders (
@@ -902,6 +908,7 @@ export class Database {
     hookSubmit?: string | null;
     indicators?: string | null;
     detection?: string | null;
+    customButtons?: string | null;
     launchEnv?: Record<string, string> | null;
   }): EngineConfigRecord | null {
     const sets: string[] = [];
@@ -918,6 +925,7 @@ export class Database {
     if (opts.hookSubmit !== undefined) { sets.push('hook_submit = ?'); params.push(opts.hookSubmit); }
     if (opts.indicators !== undefined) { sets.push('indicators = ?'); params.push(opts.indicators); }
     if (opts.detection !== undefined) { sets.push('detection = ?'); params.push(opts.detection); }
+    if (opts.customButtons !== undefined) { sets.push('custom_buttons = ?'); params.push(opts.customButtons); }
     if (opts.launchEnv !== undefined) { sets.push('launch_env = ?'); params.push(opts.launchEnv ? JSON.stringify(opts.launchEnv) : null); }
     if (sets.length === 0) return this.getEngineConfig(name);
     params.push(name);
@@ -1165,6 +1173,7 @@ function mapEngineConfigRow(row: Record<string, unknown>): EngineConfigRecord {
     hookSubmit: (row['hook_submit'] as string | null) ?? null,
     indicators: (row['indicators'] as string | null) ?? null,
     detection: (row['detection'] as string | null) ?? null,
+    customButtons: (row['custom_buttons'] as string | null) ?? null,
     launchEnv,
     createdAt: row['created_at'] as string,
   };

@@ -1258,14 +1258,17 @@ export async function executeCustomButton(
   await ctx.locks.withLock(name, async () => {
     const agent = ctx.db.getAgent(name);
     if (!agent) throw new Error(`Agent "${name}" not found`);
-    if (!agent.customButtons) throw new Error(`Agent "${name}" has no custom buttons`);
 
     const proxyId = requireProxy(agent);
-    let buttons: Record<string, unknown>;
-    try {
-      buttons = JSON.parse(agent.customButtons) as Record<string, unknown>;
-    } catch {
-      throw new Error(`Agent "${name}" has invalid custom_buttons JSON`);
+
+    // Merge custom buttons: engine config defaults + agent-level overrides
+    const buttons: Record<string, unknown> = {};
+    const engineConfig = ctx.db.getEngineConfig(agent.engine);
+    if (engineConfig?.customButtons) {
+      try { Object.assign(buttons, JSON.parse(engineConfig.customButtons)); } catch {}
+    }
+    if (agent.customButtons) {
+      try { Object.assign(buttons, JSON.parse(agent.customButtons)); } catch {}
     }
 
     const steps = buttons[buttonName];
