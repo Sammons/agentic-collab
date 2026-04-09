@@ -220,12 +220,16 @@ if command -v docker &>/dev/null; then
       CURRENT_UID=$(id -u)
       CURRENT_GID=$(id -g)
 
-      # Reuse the orchestrator image (already built above) for the ownership check
-      DB_OWNER=$(docker run --rm -v "${VOLUME_NAME}:${DB_MOUNT}" "${ORCH_IMAGE}" \
-        stat -c '%u:%g' "${DB_MOUNT}" 2>/dev/null || echo "")
+      # Check ownership of all files in the volume, not just the directory.
+      # The directory may have correct ownership while files inside (orchestrator.db,
+      # .db-wal, .db-shm) are still owned by root from a previous run.
+      BAD_FILES=$(docker run --rm -v "${VOLUME_NAME}:${DB_MOUNT}" "${ORCH_IMAGE}" \
+        find "${DB_MOUNT}" -not -uid "${CURRENT_UID}" -o -not -gid "${CURRENT_GID}" \
+        2>/dev/null | head -5 || echo "")
 
-      if [ -n "$DB_OWNER" ] && [ "$DB_OWNER" != "${CURRENT_UID}:${CURRENT_GID}" ]; then
-        warn "SQLite data volume has wrong ownership: ${DB_OWNER} (expected ${CURRENT_UID}:${CURRENT_GID})"
+      if [ -n "$BAD_FILES" ]; then
+        warn "SQLite data volume has files with wrong ownership (expected ${CURRENT_UID}:${CURRENT_GID}):"
+        echo "$BAD_FILES" | while read -r f; do echo -e "  ${DIM}$f${RESET}"; done
         warn "This will cause 'access denied' or 'SQLITE_READONLY' errors."
         echo ""
         echo -e "  ${BOLD}Fix with:${RESET}"

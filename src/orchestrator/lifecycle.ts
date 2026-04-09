@@ -163,12 +163,25 @@ async function dispatchHookResult(
         // a subsequent paste (e.g. "/exit" → "xit")
         await sleep(100);
       } else if (step.type === 'shell') {
+        // Split paste and Enter into separate dispatches so the terminal
+        // ingestion delay happens orchestrator-side, not inside the HTTP
+        // request to the proxy. Fixes timeout for large pastes (GH #2).
+        const shouldEnter = opts?.pressEnter ?? true;
         await ctx.proxyDispatch(proxyId, {
           action: 'paste',
           sessionName: tmuxSession,
           text: step.command,
-          pressEnter: opts?.pressEnter ?? true,
+          pressEnter: false,
         });
+        if (shouldEnter) {
+          const delay = Math.min(Math.max(100, step.command.length), 12000);
+          await sleep(delay);
+          await ctx.proxyDispatch(proxyId, {
+            action: 'send_keys',
+            sessionName: tmuxSession,
+            keys: 'Enter',
+          });
+        }
       } else if (step.type === 'capture') {
         const captureResult = await ctx.proxyDispatch(proxyId, {
           action: 'capture',
@@ -207,13 +220,26 @@ async function dispatchHookResult(
     return;
   }
 
-  // mode === 'paste'
+  // mode === 'paste' — split paste and Enter so the delay happens
+  // orchestrator-side, not inside the proxy HTTP request (GH #2).
+  const shouldEnter = opts?.pressEnter ?? true;
   await ctx.proxyDispatch(proxyId, {
     action: 'paste',
     sessionName: tmuxSession,
     text: result.text,
-    pressEnter: opts?.pressEnter ?? true,
+    pressEnter: false,
   });
+  if (shouldEnter) {
+    // Short texts (messages) need minimal delay; large texts (personas/prompts)
+    // need proportional delay for terminal ingestion.
+    const delay = Math.min(Math.max(100, result.text.length), 12000);
+    await sleep(delay);
+    await ctx.proxyDispatch(proxyId, {
+      action: 'send_keys',
+      sessionName: tmuxSession,
+      keys: 'Enter',
+    });
+  }
 }
 
 // ── Shared launch-sequence helpers ──
