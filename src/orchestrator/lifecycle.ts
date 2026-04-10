@@ -1264,6 +1264,7 @@ export async function killAgent(
 
     ctx.db.updateAgentState(name, 'suspended', agent.version, {
       tmuxSession: null,
+      currentSessionId: null,
       lastActivity: new Date().toISOString(),
     });
 
