@@ -15,6 +15,7 @@
  */
 
 import { state, authHeaders, getToken } from '/dashboard/assets/state.ts';
+import { fetchEngineUsage } from '/dashboard/assets/connection.ts';
 import { esc, renderMarkdown, timeAgo, showToast, promptInput } from '/dashboard/assets/utils.ts';
 import { agentAction, openCreateAgentModal } from '/dashboard/assets/agent-lifecycle.ts';
 import { icon } from '/dashboard/assets/icons.ts';
@@ -284,7 +285,7 @@ export function renderAgents() {
     else if (a.state === 'idle') engineCounts[a.engine].idle++;
     else if (a.state === 'failed') engineCounts[a.engine].failed++;
   }
-  let engineHtml = '<div style="font-weight:600;margin-bottom:6px;color:var(--text)">Engines</div>';
+  let engineHtml = '<div style="font-weight:600;margin-bottom:6px;color:var(--text);display:flex;align-items:center;justify-content:space-between">Engines <button id="refreshUsageBtn" style="background:none;border:1px solid var(--border);border-radius:var(--radius);cursor:pointer;padding:2px 6px;font-size:11px;color:var(--text-dim)" title="Refresh usage stats">↻</button></div>';
   for (const engine of ['claude', 'codex', 'opencode']) {
     const c = engineCounts[engine];
     if (!c) {
@@ -322,6 +323,13 @@ export function renderAgents() {
   }
   engineSummary.innerHTML = engineHtml;
   list.appendChild(engineSummary);
+
+  engineSummary.querySelector('#refreshUsageBtn')?.addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    btn.textContent = '...';
+    await fetchEngineUsage();
+    btn.textContent = '↻';
+  });
 
   // Re-apply search/quick filter after full rebuild
   if (state.searchFilter || state.quickFilter) applySearchFilter();
