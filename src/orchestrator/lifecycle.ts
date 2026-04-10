@@ -1130,8 +1130,9 @@ export async function recoverAgent(
       'Your previous session was lost. Reconstruct your context from durable state:',
       '1. Your persona and role are already loaded via system prompt',
       `2. Check recent git activity: \`git log --oneline -20\``,
-      '3. Check for any pending collab messages: \`collab list-agents\` to see peer status',
-      '4. Notify the operator you have recovered: \`collab send operator --topic recovery "Session recovered, reconstructing context"\`',
+      '3. Check peer status: \`collab agents\`',
+      '4. Review your recent messages: \`collab queue --agent ${name} --limit 20\`',
+      '5. Notify the operator you have recovered: \`collab send operator --topic recovery "Session recovered, reconstructing context"\`',
       'Resume your work from where you left off.',
     ].join('\n');
 
