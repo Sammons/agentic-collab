@@ -706,7 +706,7 @@ export class Database {
     return mapPendingMessageRow(row);
   }
 
-  listPendingMessages(agent?: string, status?: string): PendingMessage[] {
+  listPendingMessages(agent?: string, status?: string, limit?: number): PendingMessage[] {
     let sql = 'SELECT * FROM pending_messages WHERE 1=1';
     const params: unknown[] = [];
     if (agent) {
@@ -717,7 +717,8 @@ export class Database {
       sql += ' AND status = ?';
       params.push(status);
     }
-    sql += ' ORDER BY id DESC LIMIT 100';
+    const cap = Math.min(limit ?? 100, 500);
+    sql += ` ORDER BY id DESC LIMIT ${cap}`;
     const rows = this.db.prepare(sql).all(...params) as Array<Record<string, unknown>>;
     return rows.map(mapPendingMessageRow);
   }

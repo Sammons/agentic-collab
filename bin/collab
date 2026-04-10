@@ -371,14 +371,20 @@ cmd('destroy', 'destroy <name>', 'Permanently destroy an agent', async (args) =>
   console.log(`${name} destroyed`);
 });
 
-cmd('queue', 'queue [--agent <name>]', 'List pending messages', async (args) => {
-  let agent = '';
+cmd('queue', 'queue [--agent <name>] [--status pending|delivered|failed] [--limit N]', 'Message history (last N messages)', async (args) => {
+  let agent = '', status = '', limit = '';
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === '--agent' && args[i + 1]) agent = args[++i];
+    if (args[i] === '--agent' && args[i + 1]) { agent = args[++i]; }
+    else if (args[i] === '--status' && args[i + 1]) { status = args[++i]; }
+    else if (args[i] === '--limit' && args[i + 1]) { limit = args[++i]; }
   }
-  const params = agent ? `?agent=${encodeURIComponent(agent)}` : '';
-  const messages = await api('GET', `/api/queue${params}`);
-  if (messages.length === 0) { console.log('No pending messages'); return; }
+  const params = new URLSearchParams();
+  if (agent) params.set('agent', agent);
+  if (status) params.set('status', status);
+  if (limit) params.set('limit', limit);
+  const qs = params.toString() ? `?${params.toString()}` : '';
+  const messages = await api('GET', `/api/queue${qs}`);
+  if (messages.length === 0) { console.log('No messages'); return; }
   for (const m of messages) {
     console.log(`[${m.id}] ${m.sourceAgent || 'dashboard'} → ${m.targetAgent}  ${m.status}  ${m.envelope.slice(0, 80)}`);
   }

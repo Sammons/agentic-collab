@@ -651,7 +651,8 @@ route('GET', '/api/queue', async (req, res, _match, ctx) => {
   const url = new URL(req.url!, `http://${req.headers.host}`);
   const agent = url.searchParams.get('agent') ?? undefined;
   const status = url.searchParams.get('status') ?? undefined;
-  const messages = ctx.db.listPendingMessages(agent, status);
+  const limit = parseInt(url.searchParams.get('limit') ?? '', 10) || undefined;
+  const messages = ctx.db.listPendingMessages(agent, status, limit);
   json(res, 200, messages);
 });
 

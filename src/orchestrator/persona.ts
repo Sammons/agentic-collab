@@ -895,8 +895,8 @@ Send a message to another agent:
 List all agents:
   collab agents
 
-Check your message queue:
-  collab queue
+Message history (last 100, filterable):
+  collab queue [--agent <name>] [--status pending|delivered|failed] [--limit N]
 
 Peek at another agent's tmux output:
   collab peek <agent>
