@@ -36,6 +36,17 @@ const CLAUDE_APPROVAL_INDICATOR = {
     '$3': [{ type: 'keystroke', keystroke: '$3' }],
   },
 };
+const CLAUDE_FILE_PERMISSION_INDICATOR = {
+  id: 'file-permission',
+  regex: 'Do you want to (create|edit|delete|overwrite).*\\?',
+  badge: 'File Permission',
+  style: 'warning',
+  actions: {
+    'Yes': [{ type: 'keystroke', keystroke: '1' }],
+    'Allow All': [{ type: 'keystroke', keystroke: '2' }],
+    'No': [{ type: 'keystroke', keystroke: '3' }],
+  },
+};
 const CLAUDE_PLAN_INDICATOR = {
   id: 'plan-review',
   regex: '(approve)\\s*/\\s*(deny)\\s*/\\s*(edit)',
@@ -158,6 +169,7 @@ export const DEFAULT_ENGINE_CONFIGS: DefaultEngineConfig[] = [
     indicators: JSON.stringify([
       UNSAFE_INDICATOR,
       CLAUDE_APPROVAL_INDICATOR,
+      CLAUDE_FILE_PERMISSION_INDICATOR,
       CLAUDE_PLAN_INDICATOR,
       CLAUDE_RESUME_PROMPT_INDICATOR,
       LOW_CONTEXT_INDICATOR,

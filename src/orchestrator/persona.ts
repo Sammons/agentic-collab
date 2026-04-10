@@ -878,40 +878,29 @@ export function composeSystemPrompt(opts: {
   }
 
   // Messaging instructions — collab CLI (standalone binary, not a pnpm script)
-  parts.push(`Messages from other agents arrive as text in your tmux pane
-formatted as: [from: <sender>, reply with collab send operator --topic <topic>]: '<message>'
+  parts.push(`You have the \`collab\` CLI on your PATH (standalone binary, not a pnpm script).
+Your agent name: COLLAB_AGENT=${opts.agentName}
 
-You have the \`collab\` CLI on your PATH. It is a standalone binary — run it directly (e.g. \`collab send ...\`), NOT via pnpm or any repo skill.
-IMPORTANT: Do NOT use \`pnpm collaboration\` or any other wrapper. Always use the bare \`collab\` command.
-It auto-discovers auth and the orchestrator.
-Your agent name is set via COLLAB_AGENT=${opts.agentName}.
+Incoming messages appear as: [from: <sender>, reply with collab send <sender> --topic <topic>]: '<message>'
 
-Send a message to the operator (dashboard):
-  collab send operator --topic <topic> <message>
+Core commands:
+  collab send operator --topic <t> <msg>      # message the human operator
+  collab send <agent> --topic <t> <msg>       # message a peer agent
+  collab agents                               # list all agents + status
+  collab queue [--agent X] [--status S] [--limit N]  # message history
 
-Send a message to another agent:
-  collab send <agent> --topic <topic> <message>
+Tmux (routed through orchestrator to the correct proxy):
+  collab tmux <agent> -- capture-pane         # read agent's terminal output
+  collab tmux <agent> -- send-keys '/compact' Enter  # type /compact and press Enter
+  collab tmux <agent> -- send-keys Enter      # press Enter
+  collab tmux <agent> -- display-message -p '#{pane_pid}'  # query tmux variables
 
-List all agents:
-  collab agents
+Reminders:
+  collab reminder add <agent> "prompt" --cadence 30m
+  collab reminder list
+  collab reminder done <id>
 
-Message history (last 100, filterable):
-  collab queue [--agent <name>] [--status pending|delivered|failed] [--limit N]
-
-Peek at another agent's tmux output:
-  collab peek <agent>
-
-Send keystrokes to an agent's tmux pane:
-  collab keys <agent> <keys>
-
-Manage reminders (add, list, done, cancel, swap):
-  collab reminder add <agent> --in <duration> --prompt "..."
-  collab reminder list [agent]
-
-Constrained tmux passthrough:
-  collab tmux <agent> -- <tmux-subcommand> [args...]
-
-Run \`collab help\` for full usage.`);
+Run \`collab help\` for full command reference.`);
 
   if (opts.peers && opts.peers.length > 0) {
     parts.push(`\n\nKnown peers: ${opts.peers.join(', ')}`);
