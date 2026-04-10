@@ -327,8 +327,9 @@ export function renderAgents() {
   engineSummary.querySelector('#refreshUsageBtn')?.addEventListener('click', async (e) => {
     const btn = e.currentTarget;
     btn.textContent = '...';
+    state.engineUsage = {};
+    renderAgents();
     await fetchEngineUsage();
-    btn.textContent = '↻';
   });
 
   // Re-apply search/quick filter after full rebuild
