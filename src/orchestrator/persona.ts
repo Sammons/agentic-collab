@@ -893,10 +893,20 @@ Send a message to another agent:
   collab send <agent> --topic <topic> <message>
 
 List all agents:
-  collab list-agents
+  collab agents
 
-Create an agent from a persona file:
-  collab create-agent <persona-file>
+Check your message queue:
+  collab queue
+
+Peek at another agent's tmux output:
+  collab peek <agent>
+
+Send keystrokes to an agent's tmux pane:
+  collab keys <agent> <keys>
+
+Manage reminders (add, list, done, cancel, swap):
+  collab reminder add <agent> --in <duration> --prompt "..."
+  collab reminder list [agent]
 
 Constrained tmux passthrough:
   collab tmux <agent> -- <tmux-subcommand> [args...]

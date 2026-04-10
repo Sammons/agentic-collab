@@ -811,7 +811,6 @@ function showHelp() {
 }
 
 [
-  'agents',
   'status',
   'reply',
   'spawn',
@@ -823,12 +822,8 @@ function showHelp() {
   'compact',
   'kill',
   'destroy',
-  'queue',
   'events',
-  'peek',
-  'keys',
   'reload',
-  'reminder',
 ].forEach((name) => {
   if (COMMANDS[name]) COMMANDS[name].hidden = true;
 });
