@@ -26,9 +26,11 @@
     gap: 8px;
     padding: 12px 16px;
     border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
   }
   .create-modal-header input {
     flex: 1;
+    min-width: 120px;
     padding: 8px 10px;
     border-radius: 6px;
     border: 1px solid var(--border);
@@ -36,6 +38,11 @@
     color: var(--text);
     font-size: 16px;
     outline: none;
+    box-sizing: border-box;
+  }
+  .create-modal-header select {
+    min-width: 0;
+    max-width: 100%;
     box-sizing: border-box;
   }
   .create-modal-header input:focus { border-color: var(--accent); }
@@ -192,3 +199,24 @@
   .cmd-palette-empty { padding: 16px; text-align: center; color: var(--text-dim); font-size: 13px; }
   .cmd-palette-hint { padding: 6px 16px; border-top: 1px solid var(--border); font-size: 11px; color: var(--text-dim); display: flex; gap: 12px; }
   .cmd-palette-hint kbd { background: var(--bg); padding: 1px 5px; border-radius: 3px; border: 1px solid var(--border); font-size: 10px; }
+
+  /* ── Mobile responsive ── */
+  @media (max-width: 768px) {
+    .create-modal-header {
+      flex-direction: column;
+      align-items: stretch;
+    }
+    .create-modal-header select,
+    .create-modal-header input {
+      width: 100%;
+    }
+    .create-modal-body textarea {
+      min-height: 200px;
+    }
+    .create-modal-actions {
+      flex-wrap: wrap;
+    }
+    .create-modal {
+      max-height: 95vh;
+    }
+  }
