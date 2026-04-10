@@ -371,10 +371,11 @@ cmd('destroy', 'destroy <name>', 'Permanently destroy an agent', async (args) =>
   console.log(`${name} destroyed`);
 });
 
-cmd('queue', 'queue [--agent <name>] [--status pending|delivered|failed] [--limit N]', 'Message history (last N messages)', async (args) => {
-  let agent = '', status = '', limit = '';
+cmd('queue', 'queue [--agent <name>] [--all] [--status pending|delivered|failed] [--limit N]', 'Message history (defaults to current agent)', async (args) => {
+  let agent = agentName() || '', status = '', limit = '';
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--agent' && args[i + 1]) { agent = args[++i]; }
+    else if (args[i] === '--all') { agent = ''; }
     else if (args[i] === '--status' && args[i + 1]) { status = args[++i]; }
     else if (args[i] === '--limit' && args[i + 1]) { limit = args[++i]; }
   }
