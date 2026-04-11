@@ -591,6 +591,19 @@ route('POST', '/api/proxy/register', async (req, res, _match, ctx) => {
   }
 
   const proxyVersion = typeof body.version === 'string' ? body.version : undefined;
+
+  // Migrate agents from any stale proxy that served the same host.
+  // Handles proxy renames (e.g. hostname changed, -proxy suffix added/removed).
+  const staleProxies = ctx.db.listProxies().filter(
+    p => p.host === body.host && p.proxyId !== body.proxyId
+  );
+  for (const stale of staleProxies) {
+    const migrated = ctx.db.migrateAgentsToProxy(stale.proxyId, body.proxyId);
+    if (migrated > 0) {
+      console.log(`[proxy-register] Migrated ${migrated} agents from "${stale.proxyId}" to "${body.proxyId}"`);
+    }
+  }
+
   const proxy = ctx.db.registerProxy(body.proxyId, body.token, body.host, proxyVersion);
 
   // Compute version match and enrich the response

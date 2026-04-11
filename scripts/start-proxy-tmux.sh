@@ -52,7 +52,6 @@ replace_standalone_proxy() {
 
 start_proxy_session() {
   # Pin proxy ID to hostname so it's deterministic across restarts.
-  # Uses bare hostname (not hostname-proxy) to match existing agent proxy_id references.
   local proxy_id="${PROXY_ID:-$(hostname)}"
   # Agent sessions are named agent-<name>, so agentic-proxy stays in a separate namespace.
   tmux new-session -d -s "$SESSION_NAME" -c "$ROOT_DIR" "PROXY_ID='${proxy_id}' node src/proxy/main.ts"

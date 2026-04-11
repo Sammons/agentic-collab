@@ -546,6 +546,14 @@ export class Database {
     return rows.map(mapProxyRow);
   }
 
+  /** Migrate all agents from one proxy to another. Returns count migrated. */
+  migrateAgentsToProxy(fromProxyId: string, toProxyId: string): number {
+    const result = this.db.prepare(
+      'UPDATE agents SET proxy_id = ? WHERE proxy_id = ?'
+    ).run(toProxyId, fromProxyId);
+    return result.changes;
+  }
+
   updateProxyHeartbeat(proxyId: string): boolean {
     const result = this.db.prepare(`
       UPDATE proxies SET last_heartbeat = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE proxy_id = ?
