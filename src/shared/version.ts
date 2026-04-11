@@ -1,10 +1,9 @@
 /**
- * Build version for proxy/orchestrator version handshake.
- * Uses git short SHA when available, falls back to COMMIT_SHA env var,
- * then to package.json version.
+ * Semver-based version for proxy/orchestrator handshake.
+ * Reads from .build-version (written by start.sh) or falls back to package.json.
+ * Version mismatch ignores patch — only major.minor differences trigger a warning.
  */
 
-import { execSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -13,44 +12,41 @@ let cachedVersion: string | null = null;
 export function getVersion(): string {
   if (cachedVersion) return cachedVersion;
 
-  // 1. Env var (set by Docker build arg or docker-compose)
-  if (process.env['COMMIT_SHA']) {
-    cachedVersion = process.env['COMMIT_SHA'];
-    return cachedVersion;
-  }
+  const root = join(import.meta.dirname!, '..', '..');
 
-  // 2. Git short SHA (works on host where git is available)
+  // 1. .build-version (written by start.sh at launch time)
   try {
-    cachedVersion = execSync('git rev-parse --short HEAD', {
-      encoding: 'utf-8',
-      timeout: 2000,
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
-    if (cachedVersion) return cachedVersion;
-  } catch {
-    // Git not available (e.g. inside Docker without .git)
-  }
-
-  // 3. .build-version file (written by Dockerfile from .git/HEAD)
-  try {
-    const buildVersionPath = join(import.meta.dirname!, '..', '..', '.build-version');
-    const ver = readFileSync(buildVersionPath, 'utf-8').trim();
+    const ver = readFileSync(join(root, '.build-version'), 'utf-8').trim();
     if (ver) {
       cachedVersion = ver;
       return cachedVersion;
     }
   } catch {
-    // Not present (running outside Docker or git rev-parse worked)
+    // Not present yet — first run or manual launch
   }
 
-  // 4. Fallback: package.json version
+  // 2. package.json version (always available)
   try {
-    const pkgPath = join(import.meta.dirname!, '..', '..', 'package.json');
-    const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8'));
+    const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf-8'));
     cachedVersion = pkg.version ?? 'unknown';
   } catch {
     cachedVersion = 'unknown';
   }
 
   return cachedVersion!;
+}
+
+/**
+ * Compare two semver strings, ignoring patch version.
+ * Returns true if major.minor match. Non-semver strings use strict equality.
+ */
+export function versionsMatch(a: string, b: string): boolean {
+  const semverRe = /^(\d+)\.(\d+)\.\d+/;
+  const ma = semverRe.exec(a);
+  const mb = semverRe.exec(b);
+  if (ma && mb) {
+    return ma[1] === mb[1] && ma[2] === mb[2];
+  }
+  // Non-semver: strict equality
+  return a === b;
 }

@@ -118,6 +118,14 @@ else
   echo -e "${DIM}  tip: install mise for automatic Node version management: https://mise.jdx.dev${RESET}"
 fi
 
+# ── Write Build Version ──
+
+# Extract version from package.json so both proxy and orchestrator read the same value.
+# .build-version is gitignored — written at launch, not checked in.
+PKG_VERSION=$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('package.json','utf8')).version)")
+echo "$PKG_VERSION" > .build-version
+info "Version: $PKG_VERSION"
+
 # ── Prepare Config Directory ──
 
 # Pre-create config dir so Docker bind-mount inherits host user ownership.
@@ -194,9 +202,6 @@ if command -v docker &>/dev/null; then
     # Export UID/GID so docker-compose.yml user: "${UID}:${GID}" runs as the host user.
     # This ensures secret files created inside the container are owned by the host user.
     export UID GID="$(id -g)"
-    # Pass git commit SHA to Docker for version handshake with proxies
-    export COMMIT_SHA
-    COMMIT_SHA="$(git rev-parse --short HEAD 2>/dev/null || echo '')"
     # Pass host-side personas directory so the API can show real file paths.
     # Resolves symlinks so Docker mounts the real directory (not the symlink).
     export PERSONAS_HOST_DIR

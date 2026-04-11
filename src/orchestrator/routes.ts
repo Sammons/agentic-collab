@@ -17,7 +17,7 @@ import type { WebSocketServer } from '../shared/websocket-server.ts';
 import type { AgentState, DashboardMessage, DestinationRecord, EngineType, PendingMessage, ProxyCommand, ProxyResponse, ProxyRegistration } from '../shared/types.ts';
 import type { TelegramDispatcher } from './telegram.ts';
 import { sanitizeMessage, generateMessageId } from '../shared/sanitize.ts';
-import { getVersion } from '../shared/version.ts';
+import { getVersion, versionsMatch } from '../shared/version.ts';
 import type { LockManager } from '../shared/lock.ts';
 import { getPersonasDir, parseFrontmatter, createPersonaAndAgent, syncSinglePersona, syncPersonasWithDiff, updateFrontmatterField, resolvePersonaPath, toHostPath } from './persona.ts';
 import {
@@ -595,7 +595,7 @@ route('POST', '/api/proxy/register', async (req, res, _match, ctx) => {
 
   // Compute version match and enrich the response
   const orchestratorVersion = getVersion();
-  const versionMatch = !!proxyVersion && proxyVersion === orchestratorVersion;
+  const versionMatch = !!proxyVersion && versionsMatch(proxyVersion, orchestratorVersion);
   const enriched: ProxyRegistration = { ...proxy, versionMatch };
 
   if (proxyVersion && !versionMatch) {
@@ -2114,7 +2114,7 @@ function enrichProxiesWithVersionMatch(proxies: ProxyRegistration[]): ProxyRegis
   const orchestratorVersion = getVersion();
   return proxies.map(p => ({
     ...p,
-    versionMatch: !!p.version && p.version === orchestratorVersion,
+    versionMatch: !!p.version && versionsMatch(p.version, orchestratorVersion),
   }));
 }
 
