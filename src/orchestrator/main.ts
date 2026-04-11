@@ -449,14 +449,12 @@ server.listen(PORT, '0.0.0.0', async () => {
         if (changed.length > 0) {
           console.log(`[persona-watch] Hot-reloaded: ${changed.join(', ')}`);
           const agents = db.listAgents();
-          const initPayload = JSON.stringify({
-            type: 'init',
+          // Use agents_update instead of init to avoid wiping threads/indicators
+          wss.broadcast(JSON.stringify({
+            type: 'agents_update',
             agents,
-            threads: {},
             engineConfigs: db.listEngineConfigs(),
-            indicators: {},
-          });
-          wss.broadcast(initPayload);
+          }));
         }
       } catch (err) {
         console.error('[persona-watch] Re-sync failed:', err);

@@ -164,6 +164,11 @@ export function connect() {
         _updatePageTitle();
         _onInit();
         break;
+      case 'agents_update':
+        state.agents = data.agents;
+        if (data.engineConfigs) state.engineConfigs = data.engineConfigs;
+        _renderAgents();
+        break;
       case 'agent_update':
         _updateAgent(data.agent);
         break;
