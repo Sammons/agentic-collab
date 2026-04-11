@@ -175,6 +175,11 @@ const healthMonitor = new HealthMonitor({
   onIndicatorUpdate: (agentName, indicators) => {
     wss.broadcast(JSON.stringify({ type: 'indicator_update', agentName, indicators }));
   },
+  onIdleDetected: (agentName) => {
+    messageDispatcher.tryDeliver(agentName).catch((err) => {
+      console.error(`[dispatcher] Idle-triggered delivery failed for ${agentName}:`, (err as Error).message);
+    });
+  },
 });
 healthMonitorRef = healthMonitor;
 

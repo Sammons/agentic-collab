@@ -40,6 +40,7 @@ export type HealthMonitorOptions = {
   onQueueUpdate?: (message: PendingMessage) => void;
   onDashboardMessage?: (message: DashboardMessage) => void;
   onIndicatorUpdate?: (agentName: string, indicators: ActiveIndicator[]) => void;
+  onIdleDetected?: (agentName: string) => void;
   pollIntervalMs?: number;
   idleSuspendMs?: number;        // ms of idle before suspend (default 5 minutes)
 };
@@ -539,6 +540,7 @@ export class HealthMonitor {
         });
         this.db.logEvent(agent.name, 'idle_detected');
         this.onAgentUpdate(agent.name);
+        this.opts.onIdleDetected?.(agent.name);
       }
     } else if (agent.state === 'idle' && !isIdle) {
       const current = this.db.getAgent(agent.name);
