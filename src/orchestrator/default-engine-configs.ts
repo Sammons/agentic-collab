@@ -38,8 +38,8 @@ const CLAUDE_APPROVAL_INDICATOR = {
 };
 const CLAUDE_FILE_PERMISSION_INDICATOR = {
   id: 'file-permission',
-  regex: 'Do you want to (create|edit|delete|overwrite).*\\?',
-  badge: 'File Permission',
+  regex: 'Do you want to .+\\?',
+  badge: 'Needs Approval',
   style: 'warning',
   actions: {
     'Yes': [{ type: 'keystroke', keystroke: '1' }],
