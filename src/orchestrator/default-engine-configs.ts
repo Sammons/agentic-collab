@@ -70,6 +70,7 @@ const CLAUDE_RESUME_PROMPT_INDICATOR = {
 };
 const LOGGED_OUT_INDICATOR = { id: 'logged-out', regex: 'Not logged in', badge: 'Logged Out', style: 'danger' };
 const LOCAL_AGENTS_INDICATOR = { id: 'local-agents', regex: '\\u00b7\\s*(\\d+) local agents?', badge: '$1 Local Agents', style: 'info' };
+const BACKGROUND_SHELLS_INDICATOR = { id: 'bg-shells', regex: '\\u00b7\\s*(\\d+) shells?', badge: '$1 Shells', style: 'info' };
 
 // Detection configs per engine — regex patterns for idle/active state detection
 const CLAUDE_DETECTION = {
@@ -80,6 +81,7 @@ const CLAUDE_DETECTION = {
     '^\\s*(Read|Write|Edit|Bash|Glob|Grep|Agent|WebFetch|WebSearch)\\s',  // tool execution
     '^[\\u280b\\u2819\\u2839\\u2838\\u283c\\u2834\\u2826\\u2827\\u2807\\u280f]',  // braille spinner
     { pattern: '\\u00b7\\s*\\d+ local agents?', lines: 3 },  // sub-agents (status bar only)
+    { pattern: '\\u00b7\\s*\\d+ shells?', lines: 3 },        // background shells (status bar only)
   ],
   contextPattern: '(\\d+)\\s*tokens',
   idleThreshold: 2,
@@ -176,6 +178,7 @@ export const DEFAULT_ENGINE_CONFIGS: DefaultEngineConfig[] = [
       CONTEXT_LIMIT_INDICATOR,
       LOGGED_OUT_INDICATOR,
       LOCAL_AGENTS_INDICATOR,
+      BACKGROUND_SHELLS_INDICATOR,
     ]),
     detection: JSON.stringify(CLAUDE_DETECTION),
   },
