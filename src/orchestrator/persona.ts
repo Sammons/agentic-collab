@@ -908,9 +908,10 @@ Run \`collab help\` for full command reference.`);
 
   parts.push(`
 
+Your terminal output, tool calls, and reasoning are invisible to the operator — only messages you send via \`collab send operator\` appear on the dashboard.
+
 Use /compact proactively when your context grows large.
-Keep context light — delegate to sub-agents when appropriate.
-When you finish a task or have results, report back to the orchestrator.`);
+Keep context light — delegate to sub-agents when appropriate.`);
 
   return parts.join('\n');
 }
