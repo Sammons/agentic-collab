@@ -98,6 +98,7 @@ export class HealthMonitor {
   private readonly onQueueUpdate: (message: PendingMessage) => void;
   private readonly onDashboardMessage: (message: DashboardMessage) => void;
   private readonly onIndicatorUpdate: (agentName: string, indicators: ActiveIndicator[]) => void;
+  private readonly onIdleDetected: (agentName: string) => void;
   private readonly activeIndicators = new Map<string, ActiveIndicator[]>();
   private readonly compiledIndicators = new Map<string, { json: string; entries: Array<{ def: IndicatorDefinition; re: RegExp }> }>();
   private readonly compiledDetection = new Map<string, CompiledDetection>();
@@ -114,6 +115,7 @@ export class HealthMonitor {
     this.onQueueUpdate = opts.onQueueUpdate ?? (() => {});
     this.onDashboardMessage = opts.onDashboardMessage ?? (() => {});
     this.onIndicatorUpdate = opts.onIndicatorUpdate ?? (() => {});
+    this.onIdleDetected = opts.onIdleDetected ?? (() => {});
     this.pollIntervalMs = opts.pollIntervalMs ?? DEFAULT_POLL_MS;
     this.idleSuspendMs = opts.idleSuspendMs ?? DEFAULT_IDLE_SUSPEND_MS;
   }
@@ -540,7 +542,7 @@ export class HealthMonitor {
         });
         this.db.logEvent(agent.name, 'idle_detected');
         this.onAgentUpdate(agent.name);
-        this.opts.onIdleDetected?.(agent.name);
+        this.onIdleDetected(agent.name);
       }
     } else if (agent.state === 'idle' && !isIdle) {
       const current = this.db.getAgent(agent.name);
