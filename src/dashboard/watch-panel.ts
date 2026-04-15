@@ -141,9 +141,10 @@ export class WatchPanel extends HTMLElement {
     const expandBtn = this.querySelector('.watch-expand-btn');
     expandBtn.addEventListener('click', async () => {
       if (!this._agent) return;
-      // Cycle through: 50 (default) -> 200 -> 500 -> back to 50
+      // Cycle through: 50 (default) -> 200 -> 500 -> 1000 -> back to 50
       if (this._expandedLines === 0) this._expandedLines = 200;
       else if (this._expandedLines === 200) this._expandedLines = 500;
+      else if (this._expandedLines === 500) this._expandedLines = 1000;
       else this._expandedLines = 0;
 
       const lines = this._expandedLines || 50;
