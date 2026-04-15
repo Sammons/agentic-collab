@@ -33,9 +33,10 @@ const KEY_BUTTONS = [
   { label: 'q', key: 'q' },
 ];
 
-async function fetchPaneOutput(agentName) {
+async function fetchPaneOutput(agentName: string, lines?: number) {
   try {
-    const resp = await fetch(`/api/agents/${encodeURIComponent(agentName)}/peek`, {
+    const params = lines ? `?lines=${lines}` : '';
+    const resp = await fetch(`/api/agents/${encodeURIComponent(agentName)}/peek${params}`, {
       headers: getToken() ? { 'Authorization': `Bearer ${getToken()}` } : {},
     });
     if (!resp.ok) return null;
@@ -47,6 +48,8 @@ async function fetchPaneOutput(agentName) {
 export class WatchPanel extends HTMLElement {
   _timer = null;
   _agent = null;
+  _paused = false;
+  _expandedLines = 0; // 0 = normal (50 lines), >0 = expanded
 
   /** Start polling for the given agent. */
   start(agentName) {
@@ -60,7 +63,12 @@ export class WatchPanel extends HTMLElement {
 
     this.innerHTML = `
       <div class="watch-output"><div class="watch-status">Connecting...</div></div>
-      <div class="watch-keys">${keysHtml}<button class="watch-resize-btn" title="Resize tmux pane to match viewport">${icon.maximize(12)} Resize</button></div>
+      <div class="watch-controls">
+        <button class="watch-pause-btn" title="Pause/resume polling">${icon.pause(12)} Pause</button>
+        <button class="watch-expand-btn" title="Load more scrollback history">${icon.arrowUp(12)} Expand</button>
+        <button class="watch-resize-btn" title="Resize tmux pane to match viewport">${icon.maximize(12)} Resize</button>
+      </div>
+      <div class="watch-keys">${keysHtml}</div>
       <div class="watch-type">
         <input type="text" class="watch-type-input" placeholder="Type literal text..." />
         <button class="watch-type-send" title="Send text (no Enter)">Send</button>
@@ -119,6 +127,38 @@ export class WatchPanel extends HTMLElement {
       }
     });
 
+    // Pause/resume button
+    const pauseBtn = this.querySelector('.watch-pause-btn') as HTMLButtonElement;
+    pauseBtn.addEventListener('click', () => {
+      this._paused = !this._paused;
+      pauseBtn.innerHTML = this._paused
+        ? `${icon.play(12)} Resume`
+        : `${icon.pause(12)} Pause`;
+      pauseBtn.classList.toggle('paused', this._paused);
+    });
+
+    // Expand scrollback button
+    const expandBtn = this.querySelector('.watch-expand-btn') as HTMLButtonElement;
+    expandBtn.addEventListener('click', async () => {
+      if (!this._agent) return;
+      // Cycle through: 50 (default) -> 200 -> 500 -> back to 50
+      if (this._expandedLines === 0) this._expandedLines = 200;
+      else if (this._expandedLines === 200) this._expandedLines = 500;
+      else this._expandedLines = 0;
+
+      const lines = this._expandedLines || 50;
+      expandBtn.textContent = this._expandedLines ? `${lines} lines` : 'Expand';
+      expandBtn.classList.toggle('expanded', this._expandedLines > 0);
+
+      // Fetch expanded output immediately and scroll to top
+      const output = await fetchPaneOutput(this._agent, lines);
+      if (output !== null) {
+        const now = new Date().toLocaleTimeString();
+        outputEl.innerHTML = `<div class="watch-status">Last capture: ${now} (${lines} lines)</div>${esc(output)}`;
+        outputEl.scrollTop = 0;
+      }
+    });
+
     // Text input
     const typeInput = this.querySelector('.watch-type-input');
     const sendLiteral = async (pressEnter) => {
@@ -147,16 +187,19 @@ export class WatchPanel extends HTMLElement {
 
     // Polling
     const poll = async () => {
-      if (!this._agent) return;
-      const output = await fetchPaneOutput(this._agent);
+      if (!this._agent || this._paused) return;
+      const lines = this._expandedLines || undefined;
+      const output = await fetchPaneOutput(this._agent, lines);
       if (!this._agent) return;
       if (output === null) {
         outputEl.innerHTML = '<div class="watch-status">Agent has no active session</div>';
       } else {
         const now = new Date().toLocaleTimeString();
+        const linesLabel = lines ? ` (${lines} lines)` : '';
         const wasAtBottom = outputEl.scrollTop + outputEl.clientHeight >= outputEl.scrollHeight - 20;
-        outputEl.innerHTML = `<div class="watch-status">Last capture: ${now}</div>${esc(output)}`;
-        if (wasAtBottom) outputEl.scrollTop = outputEl.scrollHeight;
+        outputEl.innerHTML = `<div class="watch-status">Last capture: ${now}${linesLabel}</div>${esc(output)}`;
+        // Only auto-scroll if not expanded (user is reading history)
+        if (wasAtBottom && !this._expandedLines) outputEl.scrollTop = outputEl.scrollHeight;
       }
     };
 

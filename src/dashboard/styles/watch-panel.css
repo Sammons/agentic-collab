@@ -90,3 +90,30 @@
     white-space: nowrap;
   }
   .watch-type button:hover { border-color: var(--accent); color: var(--accent); }
+
+  /* Watch controls row */
+  .watch-controls {
+    display: flex;
+    gap: 6px;
+    padding: 6px 12px;
+    border-top: 1px solid var(--border);
+    background: var(--surface);
+  }
+  .watch-controls button {
+    height: 28px;
+    padding: 4px 10px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text);
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .watch-controls button:hover { border-color: var(--accent); color: var(--accent); }
+  .watch-controls button.paused { background: var(--orange); color: #fff; border-color: var(--orange); }
+  .watch-controls button.expanded { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .watch-controls .watch-resize-btn { margin-left: auto; }

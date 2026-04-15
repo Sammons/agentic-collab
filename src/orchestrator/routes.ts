@@ -1345,16 +1345,21 @@ route('POST', '/api/agents/:name/compact', lifecycleRoute(compactAgent, { eventL
 
 route('POST', '/api/agents/:name/kill', lifecycleRoute(killAgent, { broadcast: true, eventLabel: 'Killed' }));
 
-route('GET', '/api/agents/:name/peek', async (_req, res, match, ctx) => {
+route('GET', '/api/agents/:name/peek', async (req, res, match, ctx) => {
   const name = match.pathname.groups['name']!;
   const agent = ctx.db.getAgent(name);
   if (!agent) { json(res, 404, { error: `Agent "${name}" not found` }); return; }
   if (!agent.proxyId) { json(res, 400, { error: `Agent "${name}" has no proxy` }); return; }
 
+  // Support ?lines=N query param (default 50, max 500)
+  const url = new URL(req.url!, `http://${req.headers.host}`);
+  const linesParam = url.searchParams.get('lines');
+  const lines = linesParam ? Math.max(1, Math.min(parseInt(linesParam, 10) || 50, 500)) : 50;
+
   const result = await ctx.proxyDispatch(agent.proxyId, {
     action: 'capture',
     sessionName: agent.tmuxSession ?? `agent-${name}`,
-    lines: 50,
+    lines,
   });
 
   if (!result.ok) { json(res, 500, { error: result.error }); return; }
