@@ -15,7 +15,7 @@
  */
 
 import { state, authHeaders, getToken } from '/dashboard/assets/state.ts';
-import { pollEngineUsage } from '/dashboard/assets/connection.ts';
+import { fetchEngineUsage } from '/dashboard/assets/connection.ts';
 import { esc, renderMarkdown, timeAgo, showToast, promptInput } from '/dashboard/assets/utils.ts';
 import { agentAction, openCreateAgentModal } from '/dashboard/assets/agent-lifecycle.ts';
 import { icon } from '/dashboard/assets/icons.ts';
@@ -325,19 +325,11 @@ export function renderAgents() {
   list.appendChild(engineSummary);
 
   engineSummary.querySelector('#refreshUsageBtn')?.addEventListener('click', async (e) => {
-    const btn = e.currentTarget as HTMLElement;
-    const original = btn.textContent;
-    btn.textContent = 'polling...';
-    btn.style.opacity = '0.6';
-    btn.style.pointerEvents = 'none';
+    const btn = e.currentTarget;
+    btn.textContent = '...';
     state.engineUsage = {};
-    const gotData = await pollEngineUsage();
-    btn.textContent = gotData ? 'done' : 'no data';
-    btn.style.opacity = '1';
-    setTimeout(() => {
-      btn.textContent = original;
-      btn.style.pointerEvents = '';
-    }, 1500);
+    renderAgents();
+    await fetchEngineUsage();
   });
 
   // Re-apply search/quick filter after full rebuild

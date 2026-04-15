@@ -273,21 +273,3 @@ export async function fetchEngineUsage() {
     }
   } catch { /* ignore */ }
 }
-
-/** Force a fresh usage poll (re-parses tmux output). Returns true if data was fetched. */
-export async function pollEngineUsage(): Promise<boolean> {
-  try {
-    const resp = await fetch('/api/engines/poll', {
-      method: 'POST',
-      headers: getToken() ? { 'Authorization': `Bearer ${getToken()}` } : {},
-    });
-    if (!resp.ok) return false;
-    const data = await resp.json();
-    if (data.usage) {
-      state.engineUsage = data.usage;
-      _renderAgents();
-      return Object.keys(data.usage).length > 0;
-    }
-    return false;
-  } catch { return false; }
-}
