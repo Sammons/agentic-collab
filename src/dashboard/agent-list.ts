@@ -15,7 +15,7 @@
  */
 
 import { state, authHeaders, getToken } from '/dashboard/assets/state.ts';
-import { fetchEngineUsage } from '/dashboard/assets/connection.ts';
+import { pollEngineUsage } from '/dashboard/assets/connection.ts';
 import { esc, renderMarkdown, timeAgo, showToast, promptInput } from '/dashboard/assets/utils.ts';
 import { agentAction, openCreateAgentModal } from '/dashboard/assets/agent-lifecycle.ts';
 import { icon } from '/dashboard/assets/icons.ts';
@@ -329,7 +329,7 @@ export function renderAgents() {
     btn.textContent = '...';
     state.engineUsage = {};
     renderAgents();
-    await fetchEngineUsage();
+    await pollEngineUsage();
   });
 
   // Re-apply search/quick filter after full rebuild
