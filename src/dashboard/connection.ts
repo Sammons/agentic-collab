@@ -273,3 +273,19 @@ export async function fetchEngineUsage() {
     }
   } catch { /* ignore */ }
 }
+
+/** Force a fresh usage poll (re-parses tmux output). */
+export async function pollEngineUsage() {
+  try {
+    const resp = await fetch('/api/engines/poll', {
+      method: 'POST',
+      headers: getToken() ? { 'Authorization': `Bearer ${getToken()}` } : {},
+    });
+    if (!resp.ok) return;
+    const data = await resp.json();
+    if (data.usage) {
+      state.engineUsage = data.usage;
+      _renderAgents();
+    }
+  } catch { /* ignore */ }
+}
