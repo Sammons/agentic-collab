@@ -325,11 +325,19 @@ export function renderAgents() {
   list.appendChild(engineSummary);
 
   engineSummary.querySelector('#refreshUsageBtn')?.addEventListener('click', async (e) => {
-    const btn = e.currentTarget;
-    btn.textContent = '...';
+    const btn = e.currentTarget as HTMLElement;
+    const original = btn.textContent;
+    btn.textContent = 'polling...';
+    btn.style.opacity = '0.6';
+    btn.style.pointerEvents = 'none';
     state.engineUsage = {};
-    renderAgents();
-    await pollEngineUsage();
+    const gotData = await pollEngineUsage();
+    btn.textContent = gotData ? 'done' : 'no data';
+    btn.style.opacity = '1';
+    setTimeout(() => {
+      btn.textContent = original;
+      btn.style.pointerEvents = '';
+    }, 1500);
   });
 
   // Re-apply search/quick filter after full rebuild
