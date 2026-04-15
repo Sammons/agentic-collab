@@ -938,7 +938,8 @@ export class HealthMonitor {
 // ── Indicator capture group interpolation ──
 
 /** Replace $1, $2, etc. in a string with regex match capture groups. */
-function interpolateCaptureGroups(text: string, match: RegExpExecArray): string {
+function interpolateCaptureGroups(text: string | undefined, match: RegExpExecArray): string {
+  if (!text) return '';
   return text.replace(/\$(\d+)/g, (_m, idx) => {
     const i = parseInt(idx, 10);
     return match[i] ?? '';
