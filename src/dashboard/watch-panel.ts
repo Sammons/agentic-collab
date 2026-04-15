@@ -33,7 +33,7 @@ const KEY_BUTTONS = [
   { label: 'q', key: 'q' },
 ];
 
-async function fetchPaneOutput(agentName: string, lines?: number) {
+async function fetchPaneOutput(agentName, lines) {
   try {
     const params = lines ? `?lines=${lines}` : '';
     const resp = await fetch(`/api/agents/${encodeURIComponent(agentName)}/peek${params}`, {
@@ -128,7 +128,7 @@ export class WatchPanel extends HTMLElement {
     });
 
     // Pause/resume button
-    const pauseBtn = this.querySelector('.watch-pause-btn') as HTMLButtonElement;
+    const pauseBtn = this.querySelector('.watch-pause-btn');
     pauseBtn.addEventListener('click', () => {
       this._paused = !this._paused;
       pauseBtn.innerHTML = this._paused
@@ -138,7 +138,7 @@ export class WatchPanel extends HTMLElement {
     });
 
     // Expand scrollback button
-    const expandBtn = this.querySelector('.watch-expand-btn') as HTMLButtonElement;
+    const expandBtn = this.querySelector('.watch-expand-btn');
     expandBtn.addEventListener('click', async () => {
       if (!this._agent) return;
       // Cycle through: 50 (default) -> 200 -> 500 -> back to 50
