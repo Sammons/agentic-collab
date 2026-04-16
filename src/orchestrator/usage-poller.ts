@@ -217,6 +217,7 @@ export class UsagePoller {
     });
 
     // Poll capture until we see usage data or timeout
+    // Use 80 lines to capture full dialog (includes header, all buckets, extra usage)
     let buckets: UsageBucket[] = [];
     const deadline = Date.now() + CAPTURE_TIMEOUT_MS;
     while (Date.now() < deadline) {
@@ -225,13 +226,15 @@ export class UsagePoller {
       const result = await this.proxyDispatch(proxyId, {
         action: 'capture',
         sessionName: config.sessionName,
-        lines: 40,
+        lines: 80,
       });
       if (!result.ok) break;
       const output = (result.data as string) ?? '';
 
       buckets = config.parser(output);
-      if (buckets.length > 0) break;
+      // For Claude, wait for at least 2 buckets (weekly + extra) to ensure full dialog capture
+      if (config.engine === 'claude' && buckets.length >= 2) break;
+      if (config.engine !== 'claude' && buckets.length > 0) break;
 
       // Claude-specific: stop if dialog was dismissed without data
       if (config.engine === 'claude') {
