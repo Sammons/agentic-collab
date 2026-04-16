@@ -115,9 +115,20 @@ export class UsagePoller {
     return Object.fromEntries(this.usageData);
   }
 
+  /**
+   * Find the best proxy for usage polling.
+   * Prefers proxies with host.docker.internal (local to orchestrator container)
+   * or localhost, as those minimize latency for tmux operations.
+   */
   private findProxy(): string | null {
     const proxies = this.db.listProxies();
-    return proxies.length > 0 ? proxies[0]!.proxyId : null;
+    if (proxies.length === 0) return null;
+
+    // Prefer local proxy (host.docker.internal or localhost)
+    const local = proxies.find(p =>
+      p.host.includes('host.docker.internal') || p.host.startsWith('localhost')
+    );
+    return local?.proxyId ?? proxies[0]!.proxyId;
   }
 
   private getEngineConfigs(): EngineConfig[] {
@@ -456,7 +467,10 @@ export function parseClaudeUsage(output: string): UsageBucket[] {
   const isUIChrome = (s: string) =>
     /\d+[KMG]?\s+context\)?$/i.test(s) ||           // "Opus 4.6 (1M context)"
     /^using\s+(standard|extra)\s+usage/i.test(s) || // "using standard usage"
-    /^[A-Z][a-z]+\s+\d+(\.\d+)?$/i.test(s);         // "Opus 4.6", "Sonnet 3.5"
+    /^[A-Z][a-z]+\s+\d+(\.\d+)?$/i.test(s) ||       // "Opus 4.6", "Sonnet 3.5"
+    /Status.*Config.*Usage/i.test(s) ||             // Dialog tab bar "Status   Config   Usage   Stats"
+    /^─+$/.test(s) ||                               // Horizontal rules
+    /^[❯›>]\s*\//.test(s);                          // Prompt lines "❯ /usage", "> /usage"
 
   const isValidLabel = (s: string) =>
     s.length > 0 && !isUIChrome(s);
