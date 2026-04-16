@@ -400,15 +400,20 @@ export class UsagePoller {
 }
 
 /**
- * Parse Claude /usage output. Format:
+ * Parse Claude /usage output.
  *
+ * Old format (v2.0.x):
  *   Current session
  *   ████▌                                              9% used
  *   Resets 12pm (America/Chicago)
  *
+ * New format (v2.1.x):
  *   Current week (all models)
- *   ███████████                                        22% used
- *   Resets Mar 13, 12am (America/Chicago)
+ *   Resets Apr 21, 8pm (America/Chicago)               26% used
+ *
+ * Extra usage format:
+ *   Extra usage
+ *   $189.67 / $200.00 spent · Resets May 1 (America/Chicago)
  */
 const PROGRESS_BAR_RE = /[█▌▊▋▍▎▏░]/;
 
@@ -417,42 +422,65 @@ export function parseClaudeUsage(output: string): UsageBucket[] {
   const lines = output.split('\n');
 
   for (let i = 0; i < lines.length; i++) {
-    // Match lines where "NN% used" appears alongside a progress bar
     const line = lines[i]!;
+
+    // Match "NN% used" lines (both old and new format)
     const pctMatch = line.match(/(\d+)%\s+used/);
-    if (!pctMatch) continue;
+    if (pctMatch) {
+      const pctUsed = parseInt(pctMatch[1]!, 10);
 
-    // Require a progress bar on the same line or the line immediately above
-    const hasBarOnLine = PROGRESS_BAR_RE.test(line);
-    const hasBarAbove = i > 0 && PROGRESS_BAR_RE.test(lines[i - 1]!);
-    if (!hasBarOnLine && !hasBarAbove) continue;
-
-    const pctUsed = parseInt(pctMatch[1]!, 10);
-
-    // Look backwards for the label (skip bar lines and blank lines)
-    let label = '';
-    for (let j = i - 1; j >= 0; j--) {
-      const l = lines[j]!.trim();
-      if (!l) continue;
-      // Skip progress bar lines (contain block characters)
-      if (/^[█▌▊▋▍▎▏\s░]+$/.test(l)) continue;
-      // Skip lines that are just the percentage
-      if (/^\d+%/.test(l)) continue;
-      label = l;
-      break;
-    }
-
-    // Look forwards for reset info
-    let resetsAt = '';
-    for (let j = i + 1; j < Math.min(i + 3, lines.length); j++) {
-      const resetMatch = lines[j]!.match(/Resets\s+(.+)/);
-      if (resetMatch) {
-        resetsAt = resetMatch[1]!.trim();
-        break;
+      // New format: "Resets ... NN% used" on same line
+      const resetOnLine = line.match(/Resets\s+([^%]+?)\s+\d+%/);
+      if (resetOnLine) {
+        // Look backwards for label
+        let label = '';
+        for (let j = i - 1; j >= 0; j--) {
+          const l = lines[j]!.trim();
+          if (!l) continue;
+          if (/^Resets\s/.test(l)) continue;
+          if (/^[█▌▊▋▍▎▏\s░]+$/.test(l)) continue;
+          label = l;
+          break;
+        }
+        buckets.push({ label: label || 'Unknown', pctUsed, resetsAt: resetOnLine[1]!.trim() });
+        continue;
       }
+
+      // Old format: progress bar on same line or line above, reset info below
+      const hasBarOnLine = PROGRESS_BAR_RE.test(line);
+      const hasBarAbove = i > 0 && PROGRESS_BAR_RE.test(lines[i - 1]!);
+      if (hasBarOnLine || hasBarAbove) {
+        let label = '';
+        for (let j = i - 1; j >= 0; j--) {
+          const l = lines[j]!.trim();
+          if (!l) continue;
+          if (/^[█▌▊▋▍▎▏\s░]+$/.test(l)) continue;
+          if (/^\d+%/.test(l)) continue;
+          label = l;
+          break;
+        }
+        let resetsAt = '';
+        for (let j = i + 1; j < Math.min(i + 3, lines.length); j++) {
+          const resetMatch = lines[j]!.match(/Resets\s+(.+)/);
+          if (resetMatch) {
+            resetsAt = resetMatch[1]!.trim();
+            break;
+          }
+        }
+        buckets.push({ label: label || 'Unknown', pctUsed, resetsAt });
+      }
+      continue;
     }
 
-    buckets.push({ label: label || 'Unknown', pctUsed, resetsAt });
+    // Extra usage format: "$X / $Y spent · Resets ..."
+    const extraMatch = line.match(/\$[\d.]+\s*\/\s*\$([\d.]+)\s+spent.*Resets\s+(.+)/);
+    if (extraMatch) {
+      const limit = parseFloat(extraMatch[1]!);
+      const spentMatch = line.match(/\$([\d.]+)\s*\//);
+      const spent = spentMatch ? parseFloat(spentMatch[1]!) : 0;
+      const pctUsed = limit > 0 ? Math.round((spent / limit) * 100) : 0;
+      buckets.push({ label: 'Extra usage', pctUsed, resetsAt: extraMatch[2]!.trim() });
+    }
   }
 
   return buckets;
