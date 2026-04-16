@@ -219,6 +219,7 @@ export class UsagePoller {
     // Poll capture until we see usage data or timeout
     // Use 80 lines to capture full dialog (includes header, all buckets, extra usage)
     let buckets: UsageBucket[] = [];
+    let bestBuckets: UsageBucket[] = [];
     const deadline = Date.now() + CAPTURE_TIMEOUT_MS;
     while (Date.now() < deadline) {
       await sleep(CAPTURE_POLL_MS);
@@ -232,15 +233,21 @@ export class UsagePoller {
       const output = (result.data as string) ?? '';
 
       buckets = config.parser(output);
+      // Keep the best result (most buckets) seen so far
+      if (buckets.length > bestBuckets.length) bestBuckets = buckets;
+
       // For Claude, wait for at least 2 buckets (weekly + extra) to ensure full dialog capture
       if (config.engine === 'claude' && buckets.length >= 2) break;
       if (config.engine !== 'claude' && buckets.length > 0) break;
 
-      // Claude-specific: stop if dialog was dismissed without data
-      if (config.engine === 'claude') {
+      // Claude-specific: stop if dialog was dismissed AND we have at least some data
+      // Don't break on dismissed if we haven't found anything yet (scrollback noise)
+      if (config.engine === 'claude' && bestBuckets.length > 0) {
         if (/Status dialog dismissed|Error loading/i.test(output) && !/Loading usage/i.test(output)) break;
       }
     }
+    // Use the best result we captured
+    buckets = bestBuckets;
 
     // Dismiss dialog
     await this.proxyDispatch(proxyId, {
