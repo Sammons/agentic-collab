@@ -419,7 +419,16 @@ const PROGRESS_BAR_RE = /[█▌▊▋▍▎▏░]/;
 
 export function parseClaudeUsage(output: string): UsageBucket[] {
   const buckets: UsageBucket[] = [];
+  const seen = new Set<string>();
   const lines = output.split('\n');
+
+  // Skip UI chrome lines (dialog tab bar, headers, etc.)
+  const isUiChrome = (s: string) =>
+    /^(Status|Config|Usage|Stats)\s/.test(s) ||
+    /Status\s+Config\s+Usage/.test(s) ||
+    /Esc to cancel/.test(s) ||
+    /Approximate.*based on local/.test(s) ||
+    /Cannot compute breakdown/.test(s);
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
@@ -432,17 +441,21 @@ export function parseClaudeUsage(output: string): UsageBucket[] {
       // New format: "Resets ... NN% used" on same line
       const resetOnLine = line.match(/Resets\s+([^%]+?)\s+\d+%/);
       if (resetOnLine) {
-        // Look backwards for label
+        // Look backwards for label (skip UI chrome, blank, and Resets lines)
         let label = '';
         for (let j = i - 1; j >= 0; j--) {
           const l = lines[j]!.trim();
           if (!l) continue;
           if (/^Resets\s/.test(l)) continue;
           if (/^[█▌▊▋▍▎▏\s░]+$/.test(l)) continue;
+          if (isUiChrome(l)) continue;
           label = l;
           break;
         }
-        buckets.push({ label: label || 'Unknown', pctUsed, resetsAt: resetOnLine[1]!.trim() });
+        if (label && !seen.has(label)) {
+          seen.add(label);
+          buckets.push({ label, pctUsed, resetsAt: resetOnLine[1]!.trim() });
+        }
         continue;
       }
 
@@ -456,6 +469,7 @@ export function parseClaudeUsage(output: string): UsageBucket[] {
           if (!l) continue;
           if (/^[█▌▊▋▍▎▏\s░]+$/.test(l)) continue;
           if (/^\d+%/.test(l)) continue;
+          if (isUiChrome(l)) continue;
           label = l;
           break;
         }
@@ -467,14 +481,18 @@ export function parseClaudeUsage(output: string): UsageBucket[] {
             break;
           }
         }
-        buckets.push({ label: label || 'Unknown', pctUsed, resetsAt });
+        if (label && !seen.has(label)) {
+          seen.add(label);
+          buckets.push({ label, pctUsed, resetsAt });
+        }
       }
       continue;
     }
 
     // Extra usage format: "$X / $Y spent · Resets ..."
     const extraMatch = line.match(/\$[\d.]+\s*\/\s*\$([\d.]+)\s+spent.*Resets\s+(.+)/);
-    if (extraMatch) {
+    if (extraMatch && !seen.has('Extra usage')) {
+      seen.add('Extra usage');
       const limit = parseFloat(extraMatch[1]!);
       const spentMatch = line.match(/\$([\d.]+)\s*\//);
       const spent = spentMatch ? parseFloat(spentMatch[1]!) : 0;
