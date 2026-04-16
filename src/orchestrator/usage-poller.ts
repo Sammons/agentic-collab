@@ -422,15 +422,11 @@ export function parseClaudeUsage(output: string): UsageBucket[] {
   const seen = new Set<string>();
   const lines = output.split('\n');
 
-  // Skip UI chrome lines (dialog tab bar, headers, separators, prompts, etc.)
-  const isUiChrome = (s: string) =>
-    /^(Status|Config|Usage|Stats)\s/.test(s) ||
-    /Status\s+Config\s+Usage/.test(s) ||
-    /Esc to cancel/.test(s) ||
-    /Approximate.*based on local/.test(s) ||
-    /Cannot compute breakdown/.test(s) ||
-    /^[─━═┄┅┈┉]+$/.test(s) ||  // horizontal rules
-    /^[❯>]\s*\//.test(s);  // prompt lines like "❯ /usage"
+  // Valid usage category labels (whitelist approach - more robust than blacklisting UI chrome)
+  const isValidLabel = (s: string) =>
+    /^Current\s+(session|week|day)/i.test(s) ||
+    /\(all models\)/i.test(s) ||
+    /\(Sonnet|Opus|Haiku\s+only\)/i.test(s);
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
@@ -443,16 +439,15 @@ export function parseClaudeUsage(output: string): UsageBucket[] {
       // New format: "Resets ... NN% used" on same line
       const resetOnLine = line.match(/Resets\s+([^%]+?)\s+\d+%/);
       if (resetOnLine) {
-        // Look backwards for label (skip UI chrome, blank, and Resets lines)
+        // Look backwards for valid usage label
         let label = '';
         for (let j = i - 1; j >= 0; j--) {
           const l = lines[j]!.trim();
           if (!l) continue;
-          if (/^Resets\s/.test(l)) continue;
-          if (/^[█▌▊▋▍▎▏\s░]+$/.test(l)) continue;
-          if (isUiChrome(l)) continue;
-          label = l;
-          break;
+          if (isValidLabel(l)) {
+            label = l;
+            break;
+          }
         }
         if (label && !seen.has(label)) {
           seen.add(label);
@@ -471,9 +466,10 @@ export function parseClaudeUsage(output: string): UsageBucket[] {
           if (!l) continue;
           if (/^[█▌▊▋▍▎▏\s░]+$/.test(l)) continue;
           if (/^\d+%/.test(l)) continue;
-          if (isUiChrome(l)) continue;
-          label = l;
-          break;
+          if (isValidLabel(l)) {
+            label = l;
+            break;
+          }
         }
         let resetsAt = '';
         for (let j = i + 1; j < Math.min(i + 3, lines.length); j++) {
