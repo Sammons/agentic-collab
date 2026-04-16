@@ -62,8 +62,8 @@ export class UsagePoller {
   private readonly usageData = new Map<string, EngineUsage>();
   // Track which sessions are booted to avoid re-spawning every cycle
   private readonly activeSessions = new Set<string>();
-  // Track when each session was created for recycling
-  private readonly sessionCreatedAt = new Map<string, number>();
+  // Track session metadata: which proxy owns it and when it was created (for recycling)
+  private readonly sessionInfo = new Map<string, { proxyId: string; createdAt: number }>();
 
   constructor(opts: UsagePollerOptions) {
     this.db = opts.db;
@@ -99,16 +99,16 @@ export class UsagePoller {
 
   /** Tear down dedicated sessions on shutdown. */
   async cleanup(): Promise<void> {
-    const proxyId = this.findProxy();
-    if (!proxyId) return;
     for (const session of this.activeSessions) {
+      const info = this.sessionInfo.get(session);
+      if (!info) continue;
       try {
-        await this.proxyDispatch(proxyId, { action: 'kill_session', sessionName: session });
+        await this.proxyDispatch(info.proxyId, { action: 'kill_session', sessionName: session });
         console.log(`[usage] Killed session ${session}`);
       } catch { /* best effort */ }
     }
     this.activeSessions.clear();
-    this.sessionCreatedAt.clear();
+    this.sessionInfo.clear();
   }
 
   getUsageData(): Record<string, EngineUsage> {
@@ -194,12 +194,16 @@ export class UsagePoller {
   /**
    * Ensure the dedicated session exists and is responsive, then query usage.
    */
-  private async pollEngine(proxyId: string, config: EngineConfig): Promise<void> {
+  private async pollEngine(newProxyId: string, config: EngineConfig): Promise<void> {
     // Recycle session if older than 8 hours
-    await this.recycleIfStale(proxyId, config);
+    await this.recycleIfStale(config);
 
-    // Ensure session exists
-    await this.ensureSession(proxyId, config);
+    // Ensure session exists (may create on newProxyId or reuse existing)
+    await this.ensureSession(newProxyId, config);
+
+    // Use the stored proxy for this session (may differ from newProxyId if session already existed)
+    const info = this.sessionInfo.get(config.sessionName);
+    const proxyId = info?.proxyId ?? newProxyId;
 
     // Check if the CLI is at a prompt (idle)
     const ready = await this.waitForIdle(proxyId, config);
@@ -277,22 +281,42 @@ export class UsagePoller {
 
   /**
    * Ensure the dedicated tmux session exists with the CLI running.
-   * Creates and spawns if needed.
+   * Creates and spawns if needed. Stores the proxyId used so subsequent
+   * commands go to the same proxy.
    */
   private async ensureSession(proxyId: string, config: EngineConfig): Promise<void> {
-    // Check if session exists
+    // If we already track this session, it exists on its stored proxy
+    const existing = this.sessionInfo.get(config.sessionName);
+    if (existing) {
+      // Verify the session still exists on the stored proxy
+      const hasResult = await this.proxyDispatch(existing.proxyId, {
+        action: 'has_session',
+        sessionName: config.sessionName,
+      });
+      if (hasResult.ok && hasResult.data === true) {
+        return; // Session still running on the original proxy
+      }
+      // Session was killed externally — clear tracking and recreate
+      this.activeSessions.delete(config.sessionName);
+      this.sessionInfo.delete(config.sessionName);
+    }
+
+    // Check if session exists on the new proxy (may have been created before orchestrator restart)
     const hasResult = await this.proxyDispatch(proxyId, {
       action: 'has_session',
       sessionName: config.sessionName,
     });
 
     if (hasResult.ok && hasResult.data === true) {
-      return; // Session already running
+      // Session exists but we weren't tracking it — adopt it
+      this.activeSessions.add(config.sessionName);
+      this.sessionInfo.set(config.sessionName, { proxyId, createdAt: Date.now() });
+      return;
     }
 
     // Create session and spawn CLI
     const label = config.account ? `${config.engine}:${config.account}` : config.engine;
-    console.log(`[usage] Spawning dedicated ${label} session: ${config.sessionName}`);
+    console.log(`[usage] Spawning dedicated ${label} session: ${config.sessionName} on ${proxyId}`);
     await this.proxyDispatch(proxyId, {
       action: 'create_session',
       sessionName: config.sessionName,
@@ -312,7 +336,7 @@ export class UsagePoller {
     });
 
     this.activeSessions.add(config.sessionName);
-    this.sessionCreatedAt.set(config.sessionName, Date.now());
+    this.sessionInfo.set(config.sessionName, { proxyId, createdAt: Date.now() });
 
     // Wait for CLI to boot
     await sleep(SESSION_BOOT_MS);
@@ -322,38 +346,33 @@ export class UsagePoller {
    * Kill and forget a session if it was created more than RECYCLE_MS ago.
    * The next ensureSession() call will recreate it fresh.
    */
-  private async recycleIfStale(proxyId: string, config: EngineConfig): Promise<void> {
-    const createdAt = this.sessionCreatedAt.get(config.sessionName);
-    // If we have no timestamp but the session exists in tmux, it predates this
-    // process (e.g. survived an orchestrator restart). Kill it unconditionally.
-    const isOrphan = !createdAt && this.activeSessions.has(config.sessionName);
+  private async recycleIfStale(config: EngineConfig): Promise<void> {
+    const info = this.sessionInfo.get(config.sessionName);
+    const createdAt = info?.createdAt;
+    const storedProxyId = info?.proxyId;
+
+    // If we have no tracking but it's in activeSessions, it's orphaned
+    const isOrphan = !info && this.activeSessions.has(config.sessionName);
     const isStale = createdAt != null && (Date.now() - createdAt) >= RECYCLE_MS;
 
     if (!isOrphan && !isStale) {
-      // Also check for sessions that exist in tmux but aren't tracked by us
-      if (createdAt == null && !this.activeSessions.has(config.sessionName)) {
-        const hasResult = await this.proxyDispatch(proxyId, {
-          action: 'has_session',
-          sessionName: config.sessionName,
-        });
-        if (hasResult.ok && hasResult.data === true) {
-          // Untracked session from a previous process — kill it
-          console.log(`[usage] Recycling untracked session ${config.sessionName}`);
-          try {
-            await this.proxyDispatch(proxyId, { action: 'kill_session', sessionName: config.sessionName });
-          } catch { /* best effort */ }
-          return;
-        }
-      }
+      // Untracked sessions from a previous orchestrator process are handled in ensureSession
+      return;
+    }
+
+    if (!storedProxyId) {
+      // Can't kill without knowing which proxy owns it — just clear local state
+      this.activeSessions.delete(config.sessionName);
+      this.sessionInfo.delete(config.sessionName);
       return;
     }
 
     console.log(`[usage] Recycling ${isOrphan ? 'orphaned' : 'stale'} session ${config.sessionName} (age: ${createdAt ? Math.round((Date.now() - createdAt) / 3600000) + 'h' : 'unknown'})`);
     try {
-      await this.proxyDispatch(proxyId, { action: 'kill_session', sessionName: config.sessionName });
+      await this.proxyDispatch(storedProxyId, { action: 'kill_session', sessionName: config.sessionName });
     } catch { /* best effort */ }
     this.activeSessions.delete(config.sessionName);
-    this.sessionCreatedAt.delete(config.sessionName);
+    this.sessionInfo.delete(config.sessionName);
   }
 
   /**
@@ -432,10 +451,15 @@ export function parseClaudeUsage(output: string): UsageBucket[] {
   const seen = new Set<string>();
   const lines = output.split('\n');
 
-  // Valid usage category labels (whitelist approach - more robust than blacklisting UI chrome)
-  // Must start with "Current" to avoid matching logo lines like "Opus 4.6 (1M context)"
+  // Filter out UI chrome lines that look like labels but aren't usage categories
+  // Examples: "Opus 4.6 (1M context)", "using standard usage", model version strings
+  const isUIChrome = (s: string) =>
+    /\d+[KMG]?\s+context\)?$/i.test(s) ||           // "Opus 4.6 (1M context)"
+    /^using\s+(standard|extra)\s+usage/i.test(s) || // "using standard usage"
+    /^[A-Z][a-z]+\s+\d+(\.\d+)?$/i.test(s);         // "Opus 4.6", "Sonnet 3.5"
+
   const isValidLabel = (s: string) =>
-    /^Current\s+(session|week|day)/i.test(s);
+    s.length > 0 && !isUIChrome(s);
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
