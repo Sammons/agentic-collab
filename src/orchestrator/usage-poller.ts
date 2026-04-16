@@ -422,14 +422,15 @@ export function parseClaudeUsage(output: string): UsageBucket[] {
   const seen = new Set<string>();
   const lines = output.split('\n');
 
-  // Skip UI chrome lines (dialog tab bar, headers, separators, etc.)
+  // Skip UI chrome lines (dialog tab bar, headers, separators, prompts, etc.)
   const isUiChrome = (s: string) =>
     /^(Status|Config|Usage|Stats)\s/.test(s) ||
     /Status\s+Config\s+Usage/.test(s) ||
     /Esc to cancel/.test(s) ||
     /Approximate.*based on local/.test(s) ||
     /Cannot compute breakdown/.test(s) ||
-    /^[─━═┄┅┈┉]+$/.test(s);  // horizontal rules
+    /^[─━═┄┅┈┉]+$/.test(s) ||  // horizontal rules
+    /^[❯>]\s*\//.test(s);  // prompt lines like "❯ /usage"
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
