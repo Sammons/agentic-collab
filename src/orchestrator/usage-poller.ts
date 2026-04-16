@@ -423,10 +423,9 @@ export function parseClaudeUsage(output: string): UsageBucket[] {
   const lines = output.split('\n');
 
   // Valid usage category labels (whitelist approach - more robust than blacklisting UI chrome)
+  // Must start with "Current" to avoid matching logo lines like "Opus 4.6 (1M context)"
   const isValidLabel = (s: string) =>
-    /^Current\s+(session|week|day)/i.test(s) ||
-    /\(all models\)/i.test(s) ||
-    /\(Sonnet|Opus|Haiku\s+only\)/i.test(s);
+    /^Current\s+(session|week|day)/i.test(s);
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
