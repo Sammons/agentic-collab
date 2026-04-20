@@ -40,9 +40,17 @@ export class MessageDispatcher {
   private readonly drainTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /** Guards against concurrent drain loops for the same agent. */
   private readonly draining = new Set<string>();
+  /**
+   * Cool-down timestamps per agent (Race 2 fix).
+   * After compact/interrupt operations, delivery waits for the agent to
+   * process the command before sending messages to avoid interleaving.
+   */
+  private readonly coolDownUntil = new Map<string, number>();
   private static readonly DRAIN_INTERVAL_MS = 6000;
   private static readonly DRAIN_MAX_ATTEMPTS = 20;
   private static readonly STALE_ATTEMPT_TIMEOUT_S = 60;
+  /** Cool-down period after lifecycle operations (ms). */
+  static readonly LIFECYCLE_COOLDOWN_MS = 300;
 
   constructor(opts: MessageDispatcherOptions) {
     this.db = opts.db;
@@ -59,8 +67,8 @@ export class MessageDispatcher {
    * Called on enqueue from API routes (event-driven, sub-second).
    *
    * Returns true if a message was delivered, false otherwise.
-   * If a message was delivered and more are queued, schedules a drain
-   * loop to retry delivery every 6s until the queue is empty.
+   * Schedules a drain loop on both success (for remaining messages) and
+   * failure (to retry delivery) — preventing fire-and-forget loss.
    */
   async tryDeliver(agentName: string): Promise<boolean> {
     // Recover any stale delivery attempts before trying
@@ -69,11 +77,20 @@ export class MessageDispatcher {
     const agent = this.db.getAgent(agentName);
     if (!agent || !agent.proxyId || !canSuspend(agent)) {
       console.log(`[dispatcher] Cannot deliver to ${agentName}: ${!agent ? 'not found' : !agent.proxyId ? 'no proxy' : `state=${agent.state}`}`);
+      // Still schedule drain if there are pending messages — agent may become available
+      const pending = this.db.getDeliverableMessages(agentName);
+      if (pending.length > 0) {
+        this.scheduleDrain(agentName);
+      }
       return false;
     }
 
     const delivered = await this.deliverNextMessage(agentName);
-    if (delivered) {
+    // Schedule drain on both success (more messages) and failure (retry)
+    // This prevents fire-and-forget error swallowing (Race 1)
+    // Use hasPendingMessages instead of getDeliverableMessages to include
+    // messages with future next_attempt_at (in backoff state)
+    if (this.db.hasPendingMessages(agentName)) {
       this.scheduleDrain(agentName);
     }
     return delivered;
@@ -103,6 +120,37 @@ export class MessageDispatcher {
     }
     this.drainTimers.clear();
     this.draining.clear();
+    this.coolDownUntil.clear();
+  }
+
+  /**
+   * Signal that a lifecycle operation completed for an agent.
+   * Delivery will wait for LIFECYCLE_COOLDOWN_MS before sending messages
+   * to avoid command interleaving in the agent's tmux pane (Race 2 fix).
+   */
+  signalLifecycleOp(agentName: string): void {
+    const coolDownEnd = Date.now() + MessageDispatcher.LIFECYCLE_COOLDOWN_MS;
+    this.coolDownUntil.set(agentName, coolDownEnd);
+  }
+
+  /**
+   * Wait for any active cool-down period to expire.
+   * Returns immediately if no cool-down is active.
+   */
+  private async waitForCoolDown(agentName: string): Promise<void> {
+    const coolDownEnd = this.coolDownUntil.get(agentName);
+    if (!coolDownEnd) return;
+
+    const now = Date.now();
+    if (now >= coolDownEnd) {
+      this.coolDownUntil.delete(agentName);
+      return;
+    }
+
+    const waitMs = coolDownEnd - now;
+    console.log(`[dispatcher] ${agentName}: waiting ${waitMs}ms for lifecycle cool-down`);
+    await new Promise(resolve => setTimeout(resolve, waitMs));
+    this.coolDownUntil.delete(agentName);
   }
 
   /**
@@ -117,8 +165,9 @@ export class MessageDispatcher {
     if (this.draining.has(agentName)) return; // another drain loop is active
     if (attempt >= MessageDispatcher.DRAIN_MAX_ATTEMPTS) return;
 
-    const remaining = this.db.getDeliverableMessages(agentName);
-    if (remaining.length === 0) return;
+    // Check for any pending messages (including those with backoff)
+    // Don't bail out just because no messages are immediately deliverable
+    if (!this.db.hasPendingMessages(agentName)) return;
 
     // Claim exclusive drain rights
     this.draining.add(agentName);
@@ -136,9 +185,8 @@ export class MessageDispatcher {
         }
         await this.deliverNextMessage(agentName);
 
-        // Check if more messages remain
-        const still = this.db.getDeliverableMessages(agentName);
-        if (still.length > 0 && attempt + 1 < MessageDispatcher.DRAIN_MAX_ATTEMPTS) {
+        // Check if more messages remain (including those with backoff)
+        if (this.db.hasPendingMessages(agentName) && attempt + 1 < MessageDispatcher.DRAIN_MAX_ATTEMPTS) {
           // Release drain lock, then re-schedule
           this.draining.delete(agentName);
           this.scheduleDrain(agentName, attempt + 1);
@@ -158,6 +206,9 @@ export class MessageDispatcher {
    * One message per call to avoid flooding.
    */
   private async deliverNextMessage(agentName: string): Promise<boolean> {
+    // Wait for any lifecycle cool-down before delivery (Race 2 fix)
+    await this.waitForCoolDown(agentName);
+
     const messages = this.db.getDeliverableMessages(agentName);
     if (messages.length === 0) return false;
 

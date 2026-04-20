@@ -1249,7 +1249,7 @@ describe('Lifecycle', () => {
 
       await assert.rejects(
         () => executeCustomButton(ctx, 'custom-btn-none', 'anything'),
-        /no custom buttons/,
+        /not found/,
       );
     });
   });
@@ -1278,7 +1278,10 @@ describe('Lifecycle', () => {
       const paste = proxyCommands.find(c => c.action === 'paste') as Extract<ProxyCommand, { action: 'paste' }>;
       assert.ok(paste, 'should dispatch paste command');
       assert.equal(paste.text, '/compact', 'compact should dispatch bare command, no env wrapping');
-      assert.equal(paste.pressEnter, true, 'compact should press enter');
+      // Enter is now sent as a separate send_keys command (GH #2 fix)
+      assert.equal(paste.pressEnter, false, 'paste should not include Enter (split for delay)');
+      const enterKey = proxyCommands.find(c => c.action === 'send_keys' && 'keys' in c && (c as { keys: string }).keys === 'Enter');
+      assert.ok(enterKey, 'compact should send Enter via send_keys');
     });
 
     it('compact pipeline dispatches steps without env wrapping', async () => {
