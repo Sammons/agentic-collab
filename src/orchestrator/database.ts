@@ -608,6 +608,17 @@ export class Database {
     return rows.map(mapPendingMessageRow);
   }
 
+  /**
+   * Check if an agent has any pending messages (including those with future next_attempt_at).
+   * Used by the dispatcher to decide whether to schedule a drain loop.
+   */
+  hasPendingMessages(agentName: string): boolean {
+    const row = this.db.prepare(`
+      SELECT 1 FROM pending_messages WHERE target_agent = ? AND status = 'pending' LIMIT 1
+    `).get(agentName);
+    return row !== undefined;
+  }
+
   markAttemptStarted(id: number): void {
     this.db.prepare(`
       UPDATE pending_messages SET last_attempt_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?

@@ -37,6 +37,11 @@ export type LifecycleContext = {
   proxyDispatch: (proxyId: string, command: ProxyCommand) => Promise<ProxyResponse>;
   orchestratorHost: string;
   accountStore?: AccountStore;
+  /**
+   * Callback to signal that a lifecycle operation completed for an agent.
+   * Used to coordinate cool-down periods with the message dispatcher (Race 2 fix).
+   */
+  onLifecycleOp?: (agentName: string) => void;
 };
 
 // Timeouts and delays — configurable via env vars for tuning in different environments
@@ -1202,6 +1207,9 @@ export async function interruptAgent(
 
     ctx.db.logEvent(name, 'interrupted');
   });
+
+  // Signal lifecycle op completion for cool-down coordination (Race 2 fix)
+  ctx.onLifecycleOp?.(name);
 }
 
 /**
@@ -1243,6 +1251,9 @@ export async function compactAgent(
 
     ctx.db.logEvent(name, 'compact_requested');
   });
+
+  // Signal lifecycle op completion for cool-down coordination (Race 2 fix)
+  ctx.onLifecycleOp?.(name);
 }
 
 /**
@@ -1398,21 +1409,34 @@ export async function executeIndicatorAction(
  * Deliver a message to an agent via proxy paste, under lock.
  * Returns null on success, or an error string on failure.
  * Single-phase lock — fast operation.
+ *
+ * IMPORTANT: Re-reads the agent inside the lock to prevent stale record
+ * delivery (Race 3). The passed `agent` parameter is only used for the
+ * agent name — all other fields are read fresh inside the lock.
  */
 export async function deliverToAgent(
   ctx: LifecycleContext,
   agent: AgentRecord,
   text: string,
 ): Promise<string | null> {
-  const proxyId = requireProxy(agent);
   let error: string | null = null;
-
-  // Resolve engine config defaults for hook fields
-  const engineConfig = ctx.db.getEngineConfig(agent.engine);
-  const effectiveAgent = resolveEffectiveConfig(agent, engineConfig);
 
   await ctx.locks.withLock(agent.name, async () => {
     try {
+      // Re-read agent inside lock to prevent stale record issues (Race 3)
+      // The passed agent record may have a stale proxyId or tmuxSession
+      const currentAgent = ctx.db.getAgent(agent.name);
+      if (!currentAgent) {
+        error = `Agent "${agent.name}" no longer exists`;
+        return;
+      }
+
+      const proxyId = requireProxy(currentAgent);
+
+      // Resolve engine config defaults for hook fields
+      const engineConfig = ctx.db.getEngineConfig(currentAgent.engine);
+      const effectiveAgent = resolveEffectiveConfig(currentAgent, engineConfig);
+
       const hookResult = resolveHook('submit', effectiveAgent.hookSubmit, effectiveAgent, { task: text });
       // Wrap proxyDispatch to throw on failure so dispatchHookResult propagates errors
       const throwingCtx: LifecycleContext = {
@@ -1423,7 +1447,7 @@ export async function deliverToAgent(
           return result;
         },
       };
-      await dispatchHookResult(throwingCtx, proxyId, sessionName(agent), hookResult, { agentName: agent.name });
+      await dispatchHookResult(throwingCtx, proxyId, sessionName(currentAgent), hookResult, { agentName: currentAgent.name });
     } catch (err) {
       error = (err as Error).message ?? 'Unknown delivery error';
     }
