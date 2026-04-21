@@ -273,3 +273,20 @@ export async function fetchEngineUsage() {
     }
   } catch { /* ignore */ }
 }
+
+/**
+ * Trigger a fresh usage poll (may recycle tmux sessions).
+ * Shows loading state during the operation.
+ */
+export async function pollEngineUsage() {
+  const resp = await fetch('/api/engines/poll', {
+    method: 'POST',
+    headers: getToken() ? { 'Authorization': `Bearer ${getToken()}` } : {},
+  });
+  if (!resp.ok) throw new Error(`Poll failed: ${resp.status}`);
+  const data = await resp.json();
+  if (data.usage) {
+    state.engineUsage = data.usage;
+    _renderAgents();
+  }
+}
