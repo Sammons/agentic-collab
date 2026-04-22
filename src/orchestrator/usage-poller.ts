@@ -470,7 +470,9 @@ export function parseClaudeUsage(output: string): UsageBucket[] {
     /^[A-Z][a-z]+\s+\d+(\.\d+)?$/i.test(s) ||       // "Opus 4.6", "Sonnet 3.5"
     /Status.*Config.*Usage/i.test(s) ||             // Dialog tab bar "Status   Config   Usage   Stats"
     /^─+$/.test(s) ||                               // Horizontal rules
-    /^[❯›>]\s*\//.test(s);                          // Prompt lines "❯ /usage", "> /usage"
+    /^[❯›>]\s*\//.test(s) ||                        // Prompt lines "❯ /usage", "> /usage"
+    /^\/[a-z]/i.test(s) ||                          // Paths like "/tmp", "/home/..."
+    /^\([A-Za-z_]+\/[A-Za-z_]+\)$/.test(s);         // Bare timezone "(America/Chicago)"
 
   const isValidLabel = (s: string) =>
     s.length > 0 && !isUIChrome(s);

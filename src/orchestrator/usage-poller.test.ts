@@ -90,6 +90,24 @@ describe('parseClaudeUsage', () => {
     const buckets = parseClaudeUsage(output);
     assert.equal(buckets.length, 0);
   });
+
+  it('filters out paths and bare timezones as labels', () => {
+    const output = [
+      '  /tmp',
+      '  ████▌                                              5% used',
+      '  Resets 12pm',
+      '  (America/Chicago)',
+      '',
+      '  Current week (all models)',
+      '  ██████████████████████████                         102% used',
+      '  Resets May 1 (America/Chicago)',
+    ].join('\n');
+    const buckets = parseClaudeUsage(output);
+    // Should only capture "Current week (all models)", not "/tmp" or "(America/Chicago)"
+    assert.equal(buckets.length, 1);
+    assert.equal(buckets[0]!.label, 'Current week (all models)');
+    assert.equal(buckets[0]!.pctUsed, 102);
+  });
 });
 
 describe('parseCodexStatus', () => {
