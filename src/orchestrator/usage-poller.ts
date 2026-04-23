@@ -442,17 +442,20 @@ export class UsagePoller {
 /**
  * Parse Claude /usage output.
  *
+ * v2.1.118+ format (no labels, just reset times with progress bars):
+ *   Resets 2pm (America/Chicago)████████████████████   96% used
+ *   Resets 5pm (America/Chicago)                       0% used
+ *
+ * Labeled format (earlier v2.1.x):
+ *   Current week (all models)
+ *   Resets Apr 21, 8pm (America/Chicago)               26% used
+ *
  * Old format (v2.0.x):
  *   Current session
  *   ████▌                                              9% used
  *   Resets 12pm (America/Chicago)
  *
- * New format (v2.1.x):
- *   Current week (all models)
- *   Resets Apr 21, 8pm (America/Chicago)               26% used
- *
  * Extra usage format:
- *   Extra usage
  *   $189.67 / $200.00 spent · Resets May 1 (America/Chicago)
  */
 const PROGRESS_BAR_RE = /[█▌▊▋▍▎▏░]/;
@@ -463,7 +466,6 @@ export function parseClaudeUsage(output: string): UsageBucket[] {
   const lines = output.split('\n');
 
   // Filter out UI chrome lines that look like labels but aren't usage categories
-  // Examples: "Opus 4.6 (1M context)", "using standard usage", model version strings
   const isUIChrome = (s: string) =>
     /\d+[KMG]?\s+context\)?$/i.test(s) ||           // "Opus 4.6 (1M context)"
     /^using\s+(standard|extra)\s+usage/i.test(s) || // "using standard usage"
@@ -472,7 +474,10 @@ export function parseClaudeUsage(output: string): UsageBucket[] {
     /^─+$/.test(s) ||                               // Horizontal rules
     /^[❯›>]\s*\//.test(s) ||                        // Prompt lines "❯ /usage", "> /usage"
     /^\/[a-z]/i.test(s) ||                          // Paths like "/tmp", "/home/..."
-    /^\([A-Za-z_]+\/[A-Za-z_]+\)$/.test(s);         // Bare timezone "(America/Chicago)"
+    /^\([A-Za-z_]+\/[A-Za-z_]+\)$/.test(s) ||       // Bare timezone "(America/Chicago)"
+    /^Resets\s/.test(s) ||                          // Lines starting with "Resets" (v2.1.118+ uses these as inline)
+    /^Usage:\s/.test(s) ||                          // "Usage: 0 input, 0 output..."
+    /^Total\s+(cost|duration)/i.test(s);            // "Total cost:", "Total duration:"
 
   const isValidLabel = (s: string) =>
     s.length > 0 && !isUIChrome(s);
@@ -480,13 +485,31 @@ export function parseClaudeUsage(output: string): UsageBucket[] {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
 
-    // Match "NN% used" lines (both old and new format)
+    // v2.1.118+ format: "Resets <time>██████...   NN% used" (no separate label)
+    // Extract reset time by stripping progress bar chars and "NN% used"
+    const inlineMatch = line.match(/Resets\s+(\d+[ap]m)\s+\([^)]+\).*?(\d+)%\s+used/);
+    if (inlineMatch) {
+      const resetTime = inlineMatch[1]!;
+      const pctUsed = parseInt(inlineMatch[2]!, 10);
+      // Use reset time as label since there's no semantic label
+      const label = `Resets ${resetTime}`;
+      if (!seen.has(label)) {
+        seen.add(label);
+        // Extract full reset info (time + timezone)
+        const fullResetMatch = line.match(/Resets\s+([\d]+[ap]m\s+\([^)]+\))/);
+        const resetsAt = fullResetMatch ? fullResetMatch[1]! : resetTime;
+        buckets.push({ label, pctUsed, resetsAt });
+      }
+      continue;
+    }
+
+    // Match "NN% used" lines (labeled formats)
     const pctMatch = line.match(/(\d+)%\s+used/);
     if (pctMatch) {
       const pctUsed = parseInt(pctMatch[1]!, 10);
 
-      // New format: "Resets ... NN% used" on same line
-      const resetOnLine = line.match(/Resets\s+([^%]+?)\s+\d+%/);
+      // Labeled format: "Resets Apr 21, 8pm ... NN% used" with label above
+      const resetOnLine = line.match(/Resets\s+([^█]+?)\s+\d+%/);
       if (resetOnLine) {
         // Look backwards for valid usage label
         let label = '';
