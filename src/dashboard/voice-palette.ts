@@ -22,8 +22,10 @@ export const voiceState = {
   stream: null,    // MediaStream (active recording, acquired per press)
   audioCtx: null,  // AudioContext
   processor: null,  // ScriptProcessorNode
+  source: null,    // MediaStreamAudioSourceNode
   sid: null,       // session ID
   usedSinceSend: false, // true if voice committed text since last send
+  commitTimeout: null, // timeout ID for commit-and-stop delay
 };
 
 // ── Dependencies injected via setup() ──
@@ -163,7 +165,7 @@ export function commitAndStopPtt() {
     voiceState.ws.send(JSON.stringify({ type: 'commit' }));
   }
   // Wait briefly for committed transcript then stop
-  setTimeout(() => stopVoice(), 1500);
+  voiceState.commitTimeout = setTimeout(() => stopVoice(), 1500);
 }
 
 export async function startVoice() {
@@ -189,7 +191,7 @@ export async function startVoice() {
   const btn = document.getElementById('voiceBtn');
   btn.classList.add('recording');
 
-  // Reuse pre-created AudioContext (from PTT mode activation) or create new one
+  // Reuse pre-created AudioContext (from PTT mode activation or previous press) — only create if null or closed
   if (!voiceState.audioCtx || voiceState.audioCtx.state === 'closed') {
     voiceState.audioCtx = new AudioContext({ sampleRate: 16000 });
   }
@@ -268,7 +270,7 @@ export async function startVoice() {
   };
 
   // Audio capture pipeline
-  const source = voiceState.audioCtx.createMediaStreamSource(voiceState.stream);
+  voiceState.source = voiceState.audioCtx.createMediaStreamSource(voiceState.stream);
   // ScriptProcessor is deprecated but widely supported and simple for PCM capture
   voiceState.processor = voiceState.audioCtx.createScriptProcessor(4096, 1, 1);
   let audioChunkCount = 0;
@@ -286,11 +288,11 @@ export async function startVoice() {
     // Send as binary
     ws.send(int16.buffer);
   };
-  source.connect(voiceState.processor);
+  voiceState.source.connect(voiceState.processor);
   voiceState.processor.connect(voiceState.audioCtx.destination);
 }
 
-function stopVoice() {
+export function stopVoice() {
   if (voiceState.ws && voiceState.ws.readyState === WebSocket.OPEN) {
     voiceState.ws.close();
   }
@@ -298,12 +300,23 @@ function stopVoice() {
 }
 
 function stopVoiceLocal() {
+  // Clear pending commit timeout to prevent double cleanup
+  if (voiceState.commitTimeout) {
+    clearTimeout(voiceState.commitTimeout);
+    voiceState.commitTimeout = null;
+  }
+
   voiceState.recording = false;
   voiceState.sid = null;
 
   document.getElementById('voiceBtn').classList.remove('recording');
   document.getElementById('voicePartial').textContent = '';
 
+  // Disconnect source before processor to prevent leaks
+  if (voiceState.source) {
+    voiceState.source.disconnect();
+    voiceState.source = null;
+  }
   if (voiceState.processor) {
     voiceState.processor.disconnect();
     voiceState.processor = null;

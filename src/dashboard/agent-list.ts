@@ -20,6 +20,7 @@ import { esc, renderMarkdown, timeAgo, showToast, promptInput } from '/dashboard
 import { agentAction, openCreateAgentModal } from '/dashboard/assets/agent-lifecycle.ts';
 import { icon } from '/dashboard/assets/icons.ts';
 import { pushUrlState } from '/dashboard/assets/url-state.ts';
+import { voiceState, stopVoice } from '/dashboard/voice-palette.ts';
 
 // ── Dependencies injected via setup() ──
 let _renderThread = () => {};
@@ -353,6 +354,10 @@ export function renderAgents() {
 // ── Select Agent ──
 
 export function selectAgent(name) {
+  // Stop voice recording if active to prevent state corruption
+  if (voiceState.recording) {
+    stopVoice();
+  }
   state.editingPersona = false;
   // Save draft for previous agent via component
   const prevInput = document.getElementById('threadInput');
