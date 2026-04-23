@@ -20,7 +20,7 @@ import { esc, renderMarkdown, timeAgo, showToast, promptInput } from '/dashboard
 import { agentAction, openCreateAgentModal } from '/dashboard/assets/agent-lifecycle.ts';
 import { icon } from '/dashboard/assets/icons.ts';
 import { pushUrlState } from '/dashboard/assets/url-state.ts';
-import { voiceState, stopVoice } from '/dashboard/voice-palette.ts';
+import { voiceState, stopVoice } from '/dashboard/assets/voice-palette.ts';
 
 // ── Dependencies injected via setup() ──
 let _renderThread = () => {};
