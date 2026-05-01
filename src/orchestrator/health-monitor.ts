@@ -886,39 +886,59 @@ export class HealthMonitor {
    * Fires a sev3 dashboard alert and sends a collab message to DrRobby
    * on topic 'agent-stall-alert' for Telegram escalation.
    */
+  private static readonly KNOWN_TOOLS = new Set([
+    'Read', 'Edit', 'Write', 'Bash', 'Agent', 'WebFetch', 'WebSearch',
+    'Glob', 'Grep', 'NotebookEdit', 'TodoRead', 'TodoWrite',
+    'mcp', 'MCP', 'ListMcpResourcesTool', 'ReadMcpResourceTool',
+  ]);
+
+  private static readonly TOOL_PROMPT_RE =
+    /^\s*(?:Allow|Do you want to allow)\s+(\S+?)(?:\s+tool)?\s*\?/i;
+
+  private static readonly SELECTOR_RE =
+    /^\s*[❯›●▸►>]\s*(Yes|No|Always allow|Allow once|Deny)/i;
+
   private detectPermissionPrompt(agent: AgentRecord, paneOutput: string): void {
     const stripped = HealthMonitor.stripAnsi(paneOutput);
     const lines = stripped.split('\n');
 
-    // Scan bottom-up for permission prompt patterns.
-    // Claude Code shows: "Allow <tool>? (y/n)" or "Allow tool_name" with Yes/No options
-    for (let i = lines.length - 1; i >= Math.max(0, lines.length - 20); i--) {
+    // Only check the last 10 lines — real prompts are at the pane bottom
+    const startIdx = Math.max(0, lines.length - 10);
+    let promptLine: string | null = null;
+
+    for (let i = startIdx; i < lines.length; i++) {
       const line = lines[i]!;
+      const toolMatch = HealthMonitor.TOOL_PROMPT_RE.exec(line);
+      if (!toolMatch) continue;
 
-      // Pattern: "Allow <something>" line followed by yes/no options nearby
-      if (/Allow\s+.+\?/i.test(line) || /\bAllow\b.*\b(Yes|No)\b/i.test(line)) {
-        const key = line.trim();
-        if (this.lastPermissionAlert.get(agent.name) === key) return;
-        this.lastPermissionAlert.set(agent.name, key);
-        this.firePermissionAlert(agent.name, key);
-        return;
-      }
+      const toolName = toolMatch[1]!;
+      const isKnown = HealthMonitor.KNOWN_TOOLS.has(toolName) ||
+        toolName.startsWith('mcp__') ||
+        toolName.startsWith('mcp_');
+      if (!isKnown) continue;
 
-      // Pattern: standalone "Yes" / "No" choice block (tool approval UI)
-      if (/^\s*(Yes|No|Allow|Deny|always allow|allow once)/i.test(line)) {
-        const context = lines.slice(Math.max(0, i - 5), i + 1).join('\n');
-        if (/Allow/i.test(context) && /(Yes|No|Deny)/i.test(context)) {
-          const key = context.trim().slice(-120);
-          if (this.lastPermissionAlert.get(agent.name) === key) return;
-          this.lastPermissionAlert.set(agent.name, key);
-          this.firePermissionAlert(agent.name, key);
-          return;
+      // Verify an interactive selector exists within 4 lines below
+      const searchEnd = Math.min(lines.length, i + 5);
+      let hasSelector = false;
+      for (let j = i + 1; j < searchEnd; j++) {
+        if (HealthMonitor.SELECTOR_RE.test(lines[j]!)) {
+          hasSelector = true;
+          break;
         }
       }
+      if (!hasSelector) continue;
+
+      promptLine = line.trim();
+      break;
     }
 
-    // No prompt detected — clear the dedup key so a new prompt will fire
-    this.lastPermissionAlert.delete(agent.name);
+    if (promptLine) {
+      if (this.lastPermissionAlert.get(agent.name) === promptLine) return;
+      this.lastPermissionAlert.set(agent.name, promptLine);
+      this.firePermissionAlert(agent.name, promptLine);
+    } else {
+      this.lastPermissionAlert.delete(agent.name);
+    }
   }
 
   private firePermissionAlert(agentName: string, promptText: string): void {

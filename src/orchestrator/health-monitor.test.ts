@@ -957,3 +957,47 @@ describe('HealthMonitor indicators', () => {
     assert.equal((update!.indicators[0] as { badge: string }).badge, 'Hello');
   });
 });
+
+describe('Permission prompt detection patterns', () => {
+  const TOOL_PROMPT_RE = /^\s*(?:Allow|Do you want to allow)\s+(\S+?)(?:\s+tool)?\s*\?/i;
+  const SELECTOR_RE = /^\s*[❯›●▸►>]\s*(Yes|No|Always allow|Allow once|Deny)/i;
+
+  it('matches real Claude Code permission prompts', () => {
+    assert.ok(TOOL_PROMPT_RE.test('  Allow Bash tool?  echo "hello"'));
+    assert.ok(TOOL_PROMPT_RE.test('  Allow Read tool?  /path/to/file'));
+    assert.ok(TOOL_PROMPT_RE.test('  Allow Edit tool?  /src/main.ts'));
+    assert.ok(TOOL_PROMPT_RE.test('  Allow Write?'));
+    assert.ok(TOOL_PROMPT_RE.test('  Allow mcp__supabase__execute_sql?'));
+  });
+
+  it('extracts tool name correctly', () => {
+    const m = TOOL_PROMPT_RE.exec('  Allow Bash tool?  echo "hello"');
+    assert.ok(m);
+    assert.equal(m![1], 'Bash');
+  });
+
+  it('rejects agent output text containing "Allow" loosely', () => {
+    assert.ok(!TOOL_PROMPT_RE.test('The system allowed access to the file'));
+    assert.ok(!TOOL_PROMPT_RE.test('Allow me to explain this'));
+    assert.ok(!TOOL_PROMPT_RE.test('granted / not granted'));
+    assert.ok(!TOOL_PROMPT_RE.test('is blocked on a permission prompt: "Allow Bash tool?"'));
+  });
+
+  it('matches interactive selector lines', () => {
+    assert.ok(SELECTOR_RE.test('❯ Yes'));
+    assert.ok(SELECTOR_RE.test('  ❯ No'));
+    assert.ok(SELECTOR_RE.test('  › Always allow'));
+    assert.ok(SELECTOR_RE.test('  > Deny'));
+  });
+
+  it('rejects normal text with Yes/No', () => {
+    assert.ok(!SELECTOR_RE.test('Yes, I can do that'));
+    assert.ok(!SELECTOR_RE.test('No problem'));
+    assert.ok(!SELECTOR_RE.test('  Yes'));
+  });
+
+  it('does not match alert text about permission prompts (recursive loop)', () => {
+    const alertText = '⚠️ DrRobby is blocked on a permission prompt: "Allow Bash tool?"';
+    assert.ok(!TOOL_PROMPT_RE.test(alertText));
+  });
+});
