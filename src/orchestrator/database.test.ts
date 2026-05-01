@@ -919,4 +919,138 @@ describe('Database', () => {
       assert.notEqual(after, '2020-01-01T00:00:00Z');
     });
   });
+
+  describe('projects (kanban)', () => {
+    let pDb: Database;
+    let pDir: string;
+
+    before(() => {
+      pDir = mkdtempSync(join(tmpdir(), 'agentic-projects-test-'));
+      pDb = new Database(join(pDir, 'test.db'));
+    });
+
+    after(() => {
+      pDb.close();
+      rmSync(pDir, { recursive: true, force: true });
+    });
+
+    it('createProject with defaults', () => {
+      const p = pDb.createProject('Ship kanban v1');
+      assert.equal(p.title, 'Ship kanban v1');
+      assert.equal(p.status, 'queued');
+      assert.equal(p.assigned_agent, null);
+      assert.equal(p.description, null);
+      assert.equal(p.response_needed, null);
+      assert.ok(p.id > 0);
+      assert.ok(p.created_at);
+      assert.ok(p.updated_at);
+    });
+
+    it('createProject with all options', () => {
+      const p = pDb.createProject('Fix auth bug', {
+        status: 'in_progress',
+        assigned_agent: 'Gilfoyle',
+        description: 'OAuth flow broken on mobile',
+        response_needed: 'Should we drop Safari support?',
+      });
+      assert.equal(p.title, 'Fix auth bug');
+      assert.equal(p.status, 'in_progress');
+      assert.equal(p.assigned_agent, 'Gilfoyle');
+      assert.equal(p.description, 'OAuth flow broken on mobile');
+      assert.equal(p.response_needed, 'Should we drop Safari support?');
+    });
+
+    it('getProject returns null for missing id', () => {
+      const p = pDb.getProject(999999);
+      assert.equal(p, undefined);
+    });
+
+    it('getProject retrieves by id', () => {
+      const created = pDb.createProject('Retrieve me');
+      const fetched = pDb.getProject(created.id);
+      assert.equal(fetched.title, 'Retrieve me');
+      assert.equal(fetched.id, created.id);
+    });
+
+    it('listProjects excludes archived by default', () => {
+      pDb.createProject('Visible project');
+      const archived = pDb.createProject('Archived project');
+      pDb.updateProject(archived.id, { status: 'archived' });
+
+      const list = pDb.listProjects();
+      const titles = list.map((p: any) => p.title);
+      assert.ok(titles.includes('Visible project'));
+      assert.ok(!titles.includes('Archived project'));
+    });
+
+    it('listProjects includes archived when flag set', () => {
+      const list = pDb.listProjects(true);
+      const titles = list.map((p: any) => p.title);
+      assert.ok(titles.includes('Archived project'));
+    });
+
+    it('listProjects sorts awaiting_ben first', () => {
+      const a = pDb.createProject('Awaiting item', { status: 'awaiting_ben' });
+      const b = pDb.createProject('In progress item', { status: 'in_progress' });
+      const list = pDb.listProjects();
+      const awaitingIdx = list.findIndex((p: any) => p.id === a.id);
+      const progressIdx = list.findIndex((p: any) => p.id === b.id);
+      assert.ok(awaitingIdx < progressIdx, 'awaiting_ben should sort before in_progress');
+    });
+
+    it('updateProject changes title and status', () => {
+      const p = pDb.createProject('Original title');
+      pDb.rawDb.prepare("UPDATE projects SET updated_at = '2020-01-01T00:00:00Z' WHERE id = ?").run(p.id);
+      const updated = pDb.updateProject(p.id, { title: 'New title', status: 'in_progress' });
+      assert.equal(updated.title, 'New title');
+      assert.equal(updated.status, 'in_progress');
+      assert.notEqual(updated.updated_at, '2020-01-01T00:00:00Z');
+    });
+
+    it('updateProject sets completed_at when status becomes completed', () => {
+      const p = pDb.createProject('Will complete', { status: 'in_progress' });
+      assert.equal(p.completed_at, null);
+      const done = pDb.updateProject(p.id, { status: 'completed' });
+      assert.equal(done.status, 'completed');
+      assert.ok(done.completed_at, 'completed_at should be set');
+    });
+
+    it('updateProject sets archived_at when status becomes archived', () => {
+      const p = pDb.createProject('Will archive', { status: 'in_progress' });
+      const arch = pDb.updateProject(p.id, { status: 'archived' });
+      assert.equal(arch.status, 'archived');
+      assert.ok(arch.archived_at, 'archived_at should be set');
+    });
+
+    it('updateProject ignores disallowed fields', () => {
+      const p = pDb.createProject('Safe project');
+      const updated = pDb.updateProject(p.id, { id: 999, created_at: '1999-01-01', title: 'Allowed change' });
+      assert.equal(updated.id, p.id);
+      assert.equal(updated.title, 'Allowed change');
+    });
+
+    it('archiveOldCompleted archives projects older than retention', () => {
+      const p = pDb.createProject('Old completed', { status: 'in_progress' });
+      pDb.updateProject(p.id, { status: 'completed' });
+      pDb.rawDb.prepare("UPDATE projects SET completed_at = '2020-01-01T00:00:00Z' WHERE id = ?").run(p.id);
+
+      const count = pDb.archiveOldCompleted(7);
+      assert.ok(count >= 1);
+      const after = pDb.getProject(p.id);
+      assert.equal(after.status, 'archived');
+      assert.ok(after.archived_at);
+    });
+
+    it('archiveOldCompleted does not archive recent completions', () => {
+      const p = pDb.createProject('Fresh completed', { status: 'in_progress' });
+      pDb.updateProject(p.id, { status: 'completed' });
+
+      const before = pDb.getProject(p.id);
+      assert.equal(before.status, 'completed');
+
+      pDb.archiveOldCompleted(7);
+      const after = pDb.getProject(p.id);
+      assert.equal(after.status, 'completed');
+    });
+  });
 });

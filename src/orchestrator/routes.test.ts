@@ -58,6 +58,9 @@ describe('API Routes', () => {
       usagePoller: { getUsageData: () => ({}), pollNow: async () => {} } as any,
       voiceEnabled: false,
       accountStore: new AccountStore({ accountsDir: join(tmpDir, 'accounts'), agentHomesDir: join(tmpDir, 'agent-homes'), skipAutoRegister: true }),
+      pagesDir: join(tmpDir, 'pages'),
+      storesDir: join(tmpDir, 'stores'),
+      telegramDispatcher: { send: async () => {} } as any,
     };
 
     const router = createRouter(ctx);
@@ -523,6 +526,9 @@ describe('API Routes — Auth', () => {
       usagePoller: { getUsageData: () => ({}), pollNow: async () => {} } as any,
       voiceEnabled: false,
       accountStore: new AccountStore({ accountsDir: join(tmpDir, 'accounts'), agentHomesDir: join(tmpDir, 'agent-homes'), skipAutoRegister: true }),
+      pagesDir: join(tmpDir, 'pages'),
+      storesDir: join(tmpDir, 'stores'),
+      telegramDispatcher: { send: async () => {} } as any,
     };
 
     const router = createRouter(ctx);
@@ -629,6 +635,9 @@ describe('API Routes — Rate Limiting', () => {
       usagePoller: { getUsageData: () => ({}), pollNow: async () => {} } as any,
       voiceEnabled: false,
       accountStore: new AccountStore({ accountsDir: join(tmpDir, 'accounts'), agentHomesDir: join(tmpDir, 'agent-homes'), skipAutoRegister: true }),
+      pagesDir: join(tmpDir, 'pages'),
+      storesDir: join(tmpDir, 'stores'),
+      telegramDispatcher: { send: async () => {} } as any,
     };
 
     const router = createRouter(ctx);
@@ -710,6 +719,9 @@ describe('API Routes — Personas', () => {
       usagePoller: { getUsageData: () => ({}), pollNow: async () => {} } as any,
       voiceEnabled: false,
       accountStore: new AccountStore({ accountsDir: join(tmpDir, 'accounts'), agentHomesDir: join(tmpDir, 'agent-homes'), skipAutoRegister: true }),
+      pagesDir: join(tmpDir, 'pages'),
+      storesDir: join(tmpDir, 'stores'),
+      telegramDispatcher: { send: async () => {} } as any,
     };
 
     const router = createRouter(ctx);
@@ -898,5 +910,124 @@ describe('API Routes — Personas', () => {
     // Verify engine was updated in DB regardless of reload outcome
     const { data: after } = await api('GET', '/api/agents/sync-test-agent');
     assert.equal((after as Record<string, unknown>).engine, 'codex');
+  });
+
+  // ── Projects (Kanban Board) ──
+
+  it('GET /api/projects returns empty array initially', async () => {
+    const { status, data } = await api('GET', '/api/projects');
+    assert.equal(status, 200);
+    assert.ok(Array.isArray(data));
+  });
+
+  it('POST /api/projects creates a project with defaults', async () => {
+    const { status, data } = await api('POST', '/api/projects', { title: 'Route test project' });
+    assert.equal(status, 201);
+    const d = data as Record<string, unknown>;
+    assert.equal(d.title, 'Route test project');
+    assert.equal(d.status, 'queued');
+    assert.equal(d.assigned_agent, null);
+    assert.ok(d.id);
+  });
+
+  it('POST /api/projects creates with all fields', async () => {
+    const { status, data } = await api('POST', '/api/projects', {
+      title: 'Full project',
+      status: 'in_progress',
+      assigned_agent: 'Gilfoyle',
+      description: 'Building kanban tests',
+      response_needed: 'Approve the PR?',
+    });
+    assert.equal(status, 201);
+    const d = data as Record<string, unknown>;
+    assert.equal(d.status, 'in_progress');
+    assert.equal(d.assigned_agent, 'Gilfoyle');
+    assert.equal(d.description, 'Building kanban tests');
+    assert.equal(d.response_needed, 'Approve the PR?');
+  });
+
+  it('POST /api/projects rejects missing title', async () => {
+    const { status, data } = await api('POST', '/api/projects', { description: 'no title' });
+    assert.equal(status, 400);
+    assert.equal((data as Record<string, unknown>).error, 'title required');
+  });
+
+  it('GET /api/projects lists created projects', async () => {
+    const { data } = await api('GET', '/api/projects');
+    const list = data as any[];
+    assert.ok(list.length >= 2);
+    const titles = list.map(p => p.title);
+    assert.ok(titles.includes('Route test project'));
+    assert.ok(titles.includes('Full project'));
+  });
+
+  it('PATCH /api/projects/:id updates status', async () => {
+    const { data: created } = await api('POST', '/api/projects', { title: 'Patch target' });
+    const id = (created as Record<string, unknown>).id;
+    const { status, data } = await api('PATCH', `/api/projects/${id}`, { status: 'awaiting_ben' });
+    assert.equal(status, 200);
+    assert.equal((data as Record<string, unknown>).status, 'awaiting_ben');
+  });
+
+  it('PATCH /api/projects/:id rejects invalid status', async () => {
+    const { data: created } = await api('POST', '/api/projects', { title: 'Bad status target' });
+    const id = (created as Record<string, unknown>).id;
+    const { status, data } = await api('PATCH', `/api/projects/${id}`, { status: 'invalid_status' });
+    assert.equal(status, 400);
+    assert.ok((data as Record<string, unknown>).error);
+  });
+
+  it('PATCH /api/projects/:id returns 404 for missing project', async () => {
+    const { status } = await api('PATCH', '/api/projects/999999', { status: 'queued' });
+    assert.equal(status, 404);
+  });
+
+  it('PATCH /api/projects/:id to completed sets completed_at', async () => {
+    const { data: created } = await api('POST', '/api/projects', { title: 'Will complete via route', status: 'in_progress' });
+    const id = (created as Record<string, unknown>).id;
+    const { data } = await api('PATCH', `/api/projects/${id}`, { status: 'completed' });
+    const d = data as Record<string, unknown>;
+    assert.equal(d.status, 'completed');
+    assert.ok(d.completed_at);
+  });
+
+  it('POST /api/projects/:id/respond returns 404 for missing project', async () => {
+    const { status } = await api('POST', '/api/projects/999999/respond', { message: 'hello' });
+    assert.equal(status, 404);
+  });
+
+  it('POST /api/projects/:id/respond rejects missing message', async () => {
+    const { data: created } = await api('POST', '/api/projects', { title: 'Respond target', status: 'awaiting_ben' });
+    const id = (created as Record<string, unknown>).id;
+    const { status } = await api('POST', `/api/projects/${id}/respond`, {});
+    assert.equal(status, 400);
+  });
+
+  it('POST /api/projects/:id/respond moves awaiting_ben to in_progress', async () => {
+    const { data: created } = await api('POST', '/api/projects', {
+      title: 'Awaiting response',
+      status: 'awaiting_ben',
+      assigned_agent: 'api-agent-1',
+    });
+    const id = (created as Record<string, unknown>).id;
+    const { status, data } = await api('POST', `/api/projects/${id}/respond`, { message: 'Approved — go ahead.' });
+    assert.equal(status, 200);
+    assert.equal((data as Record<string, unknown>).ok, true);
+
+    const { data: after } = await api('GET', '/api/projects');
+    const project = (after as any[]).find(p => p.id === id);
+    assert.equal(project.status, 'in_progress');
+  });
+
+  it('GET /api/projects auto-archives old completed projects', async () => {
+    const { data: created } = await api('POST', '/api/projects', { title: 'Old done project', status: 'in_progress' });
+    const id = (created as Record<string, unknown>).id;
+    await api('PATCH', `/api/projects/${id}`, { status: 'completed' });
+    db.rawDb.prepare("UPDATE projects SET completed_at = '2020-01-01T00:00:00Z' WHERE id = ?").run(id);
+
+    const { data } = await api('GET', '/api/projects');
+    const list = data as any[];
+    const found = list.find(p => p.id === id);
+    assert.equal(found, undefined, 'Old completed project should be auto-archived and hidden');
   });
 });
