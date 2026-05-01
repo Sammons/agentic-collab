@@ -1853,6 +1853,20 @@ route('DELETE', '/api/accounts/:name', async (_req, res, match, ctx) => {
 
 // ── Notify ──
 
+// Telegram dedup: hash → timestamp of last send. 4-hour cooldown window.
+const NOTIFY_COOLDOWN_MS = 4 * 60 * 60 * 1000;
+const notifySentHashes = new Map<string, number>();
+
+function notifyHash(agent: string | undefined, message: string): string {
+  let h = 0x811c9dc5;
+  const s = `${agent ?? ''}:${message}`;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(36);
+}
+
 route('POST', '/api/notify', async (req, res, _match, ctx) => {
   const body = await readJson(req);
   const agent = body.agent as string | undefined;
@@ -1860,22 +1874,38 @@ route('POST', '/api/notify', async (req, res, _match, ctx) => {
   const priority = (body.priority as string) ?? 'normal';
   if (!message) return json(res, 400, { error: 'message required' });
 
+  // Dedup: skip Telegram if the same message hash was sent within the cooldown window
+  const hash = notifyHash(agent, message);
+  const lastSent = notifySentHashes.get(hash);
+  const now = Date.now();
+  const dedupSkip = lastSent !== undefined && (now - lastSent) < NOTIFY_COOLDOWN_MS;
+
+  // Prune stale entries periodically (keep map from growing unbounded)
+  if (notifySentHashes.size > 500) {
+    for (const [k, ts] of notifySentHashes) {
+      if (now - ts > NOTIFY_COOLDOWN_MS) notifySentHashes.delete(k);
+    }
+  }
+
   const destinations = ctx.db.listDestinations().filter(d => d.enabled);
   let sent = 0;
 
-  for (const dest of destinations) {
-    const text = agent ? `[${agent}] ${message}` : message;
-    try {
-      if (dest.type === 'telegram') {
-        const botToken = dest.config.botToken as string;
-        const chatId = dest.config.chatId as string;
-        const ok = await ctx.telegramDispatcher.send(botToken, chatId, text);
-        if (ok) sent++;
-      }
-    } catch { /* best-effort per destination */ }
+  if (!dedupSkip) {
+    for (const dest of destinations) {
+      const text = agent ? `[${agent}] ${message}` : message;
+      try {
+        if (dest.type === 'telegram') {
+          const botToken = dest.config.botToken as string;
+          const chatId = dest.config.chatId as string;
+          const ok = await ctx.telegramDispatcher.send(botToken, chatId, text);
+          if (ok) sent++;
+        }
+      } catch { /* best-effort per destination */ }
+    }
+    if (sent > 0) notifySentHashes.set(hash, now);
   }
 
-  // Broadcast to dashboard for browser notifications
+  // Dashboard notification always fires (dedup only applies to Telegram)
   ctx.wss.broadcast(JSON.stringify({
     type: 'notification',
     agent: agent ?? null,
@@ -1883,7 +1913,7 @@ route('POST', '/api/notify', async (req, res, _match, ctx) => {
     priority,
   }));
 
-  json(res, 200, { ok: true, sent });
+  json(res, 200, { ok: true, sent, dedupSkip });
 });
 
 // ── Projects (Kanban Board) ──
