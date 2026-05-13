@@ -44,6 +44,25 @@ src/
 - **Message dispatch**: event-driven queue with cool-down coordination (300ms after lifecycle ops)
 - **Personas**: `persistent-agents/*.md` with YAML frontmatter (engine, cwd, model, hooks)
 
+## Capacity Scaling
+
+Spin up parallel instances of an existing persona on isolated git worktrees:
+
+```bash
+# Create a new agent from an existing persona
+./scripts/scale-up.sh <base-persona> <new-name> <branch> [<base-branch>]
+./scripts/scale-up.sh dev dev-a feature/issue-101
+./scripts/scale-up.sh reviewer reviewer-a hotfix/critical
+
+# Tear it down when done
+./scripts/scale-down.sh dev-a                  # removes worktree + branch
+./scripts/scale-down.sh dev-a --keep-branch    # keep the git branch
+./scripts/scale-down.sh dev-a --force          # discard uncommitted changes
+```
+
+- `scale-up.sh` creates a worktree at `<repo>-worktrees/<new-name>`, copies the base persona with `cwd` updated, and the filesystem watcher auto-registers it (`void` state); spawn via dashboard or `curl -X POST .../api/agents/<name>/spawn`
+- `scale-down.sh` calls `/api/agents/<name>/destroy`, removes the worktree, and optionally deletes the local branch; refuses if uncommitted changes exist (use `--force` to override)
+
 ## Testing
 
 ```bash

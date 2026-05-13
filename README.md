@@ -135,6 +135,43 @@ The team lead will:
 
 Or skip the team lead and use the dashboard at `http://localhost:3000/dashboard` to create agents manually.
 
+## Scaling capacity
+
+Each persona file is a singleton — one persona = one agent = one tmux session. When you need parallel work on the same domain (e.g. three independent tickets handled by three frontend specialists at once), use the `scripts/scale-up.sh` and `scripts/scale-down.sh` helpers. They clone an existing persona onto an isolated git worktree so the parallel agents don't collide on branch state, dependencies, or in-flight files.
+
+Two modes are supported:
+
+**Ticket-first** — you know the branch up front:
+
+```bash
+./scripts/scale-up.sh dev dev-101 feature/issue-101
+./scripts/scale-up.sh dev dev-102 feature/issue-102 develop  # optional base-branch
+```
+
+**Pool-first** — provision idle agents now, assign tickets later. Omit the branch arg and the script creates a worktree on a placeholder branch `pool/<new-name>` off `develop`. When the operator (or team lead) later assigns the pool agent a ticket, the agent runs `git checkout -b feature/<ticket-id>` inside its own worktree and begins work:
+
+```bash
+./scripts/scale-up.sh dev dev-a
+./scripts/scale-up.sh dev dev-b
+./scripts/scale-up.sh dev dev-c
+```
+
+In either mode the script:
+1. Reads the base persona's `cwd:` to find the source repo.
+2. Creates a git worktree at `<repo>-worktrees/<new-name>` on the requested (or placeholder) branch.
+3. Copies the base persona file to `<new-name>.md` with `cwd:` swapped to the worktree.
+4. The orchestrator's filesystem watcher picks up the new persona; the agent appears in `void` state, ready to spawn.
+
+Tear down with:
+
+```bash
+./scripts/scale-down.sh dev-101                  # default: refuse if uncommitted changes
+./scripts/scale-down.sh dev-101 --keep-branch    # remove worktree + persona, keep the git branch
+./scripts/scale-down.sh dev-101 --force          # discard uncommitted changes
+```
+
+Scale-down destroys the agent via the orchestrator API (kills tmux, removes the DB row, deletes the persona file), removes the worktree, and deletes the local branch (unless `--keep-branch`). Remote branches and pushed commits are never touched.
+
 ## File Upload
 
 Upload files to an agent's working directory from the dashboard or API. Files are streamed end-to-end — no buffering, no size limit in practice (LAN-speed transfers of 500MB+ work fine).
