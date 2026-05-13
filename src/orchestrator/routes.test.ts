@@ -1,16 +1,29 @@
-import { describe, it, before, after } from 'node:test';
+import { describe, it, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:http';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { Database } from './database.ts';
-import { createRouter, type RouteContext } from './routes.ts';
+import { createRouter, routeTelegramMessage, type RouteContext } from './routes.ts';
+import type { TelegramDispatcher } from './telegram.ts';
 import { WebSocketServer } from '../shared/websocket-server.ts';
+
+/**
+ * Stub TelegramDispatcher — no-ops everything so tests don't hit api.telegram.org
+ * or spawn the long-polling loop (which would prevent the process from exiting).
+ */
+function makeStubTelegramDispatcher(): TelegramDispatcher {
+  return {
+    startPolling: () => {},
+    stopPolling: () => {},
+    send: async () => true,
+  } as unknown as TelegramDispatcher;
+}
 import { LockManager } from '../shared/lock.ts';
 import { MessageDispatcher } from './message-dispatcher.ts';
 import { AccountStore } from './accounts.ts';
-import type { ProxyCommand, ProxyResponse } from '../shared/types.ts';
+import type { DestinationRecord, ProxyCommand, ProxyResponse } from '../shared/types.ts';
 
 /** Helper to build a MessageDispatcher for tests */
 function makeTestDispatcher(db: Database, locks: LockManager, proxyDispatch: (id: string, cmd: ProxyCommand) => Promise<ProxyResponse>): MessageDispatcher {
@@ -898,5 +911,237 @@ describe('API Routes — Personas', () => {
     // Verify engine was updated in DB regardless of reload outcome
     const { data: after } = await api('GET', '/api/agents/sync-test-agent');
     assert.equal((after as Record<string, unknown>).engine, 'codex');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Destinations + Telegram routing
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('API Routes — Destinations', () => {
+  let server: Server;
+  let db: Database;
+  let wss: WebSocketServer;
+  let port: number;
+  let tmpDir: string;
+
+  before(async () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'agentic-dest-test-'));
+    db = new Database(join(tmpDir, 'test.db'));
+    wss = new WebSocketServer();
+
+    const mockProxyDispatch = async (_proxyId: string, _command: ProxyCommand): Promise<ProxyResponse> => ({ ok: true });
+    const locks = new LockManager(db.rawDb);
+
+    const ctx: RouteContext = {
+      db,
+      wss,
+      locks,
+      proxyDispatch: mockProxyDispatch,
+      getDashboardHtml: () => '<html></html>',
+      orchestratorHost: 'http://localhost:3000',
+      orchestratorSecret: null,
+      messageDispatcher: makeTestDispatcher(db, locks, mockProxyDispatch),
+      usagePoller: { getUsageData: () => ({}), pollNow: async () => {} } as any,
+      voiceEnabled: false,
+      accountStore: new AccountStore({ accountsDir: join(tmpDir, 'accounts'), agentHomesDir: join(tmpDir, 'agent-homes'), skipAutoRegister: true }),
+      telegramDispatcher: makeStubTelegramDispatcher(),
+      pagesDir: join(tmpDir, 'pages'),
+      storesDir: join(tmpDir, 'stores'),
+    };
+
+    const router = createRouter(ctx);
+    server = createServer(async (req, res) => { await router(req, res); });
+    await new Promise<void>((resolve) => {
+      server.listen(0, () => {
+        const addr = server.address();
+        port = typeof addr === 'object' && addr ? addr.port : 0;
+        resolve();
+      });
+    });
+  });
+
+  after(() => {
+    wss.close();
+    server.close();
+    db.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  async function api(method: string, path: string, body?: unknown): Promise<{ status: number; data: unknown }> {
+    const resp = await fetch(`http://localhost:${port}${path}`, {
+      method,
+      headers: body ? { 'content-type': 'application/json' } : {},
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const data = await resp.json();
+    return { status: resp.status, data };
+  }
+
+  it('POST /api/destinations accepts a telegram destination with defaultAgent in config', async () => {
+    const { status, data } = await api('POST', '/api/destinations', {
+      name: 'tg-with-default',
+      type: 'telegram',
+      config: { botToken: 'fake:token', chatId: '12345', defaultAgent: 'team-lead' },
+    });
+    assert.equal(status, 201);
+    const config = (data as { config: Record<string, unknown> }).config;
+    assert.equal(config['defaultAgent'], 'team-lead');
+    assert.equal(config['botToken'], 'fake:token');
+  });
+
+  it('PATCH /api/destinations/:name updates the config in place', async () => {
+    await api('POST', '/api/destinations', {
+      name: 'tg-patch-test',
+      type: 'telegram',
+      config: { botToken: 'fake:token', chatId: '12345' },
+    });
+
+    const { status, data } = await api('PATCH', '/api/destinations/tg-patch-test', {
+      config: { botToken: 'fake:token', chatId: '12345', defaultAgent: 'team-lead' },
+    });
+    assert.equal(status, 200);
+    assert.equal((data as { config: Record<string, unknown> }).config['defaultAgent'], 'team-lead');
+  });
+
+  it('PATCH /api/destinations/:name updates the enabled flag in place', async () => {
+    await api('POST', '/api/destinations', {
+      name: 'tg-enable-test',
+      type: 'telegram',
+      config: { botToken: 'fake:token', chatId: '12345' },
+    });
+
+    const { status, data } = await api('PATCH', '/api/destinations/tg-enable-test', {
+      enabled: false,
+    });
+    assert.equal(status, 200);
+    assert.equal((data as { enabled: boolean }).enabled, false);
+  });
+
+  it('PATCH /api/destinations/:name rejects empty body', async () => {
+    await api('POST', '/api/destinations', {
+      name: 'tg-empty-patch',
+      type: 'telegram',
+      config: { botToken: 'fake:token', chatId: '12345' },
+    });
+
+    const { status, data } = await api('PATCH', '/api/destinations/tg-empty-patch', {});
+    assert.equal(status, 400);
+    assert.match((data as { error: string }).error, /At least one of/);
+  });
+
+  it('PATCH /api/destinations/:name returns 404 for missing destination', async () => {
+    const { status } = await api('PATCH', '/api/destinations/no-such-destination', {
+      config: { botToken: 'x', chatId: '1' },
+    });
+    assert.equal(status, 404);
+  });
+
+  it('PATCH /api/destinations/:name enforces telegram-required fields when updating config', async () => {
+    await api('POST', '/api/destinations', {
+      name: 'tg-invalid-patch',
+      type: 'telegram',
+      config: { botToken: 'fake:token', chatId: '12345' },
+    });
+
+    const { status, data } = await api('PATCH', '/api/destinations/tg-invalid-patch', {
+      config: { botToken: 'fake:token' /* chatId missing */ },
+    });
+    assert.equal(status, 400);
+    assert.match((data as { error: string }).error, /botToken and chatId/);
+  });
+});
+
+describe('routeTelegramMessage — inbound routing', () => {
+  let db: Database;
+  let wss: WebSocketServer;
+  let tmpDir: string;
+  let ctx: RouteContext;
+
+  function makeDest(overrides: Partial<{ defaultAgent: string }> = {}): DestinationRecord {
+    return {
+      name: 'tg',
+      type: 'telegram',
+      config: { botToken: 'fake:token', chatId: '12345', ...overrides },
+      enabled: true,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'agentic-route-tg-test-'));
+    db = new Database(join(tmpDir, 'test.db'));
+    wss = new WebSocketServer();
+    const mockProxyDispatch = async (): Promise<ProxyResponse> => ({ ok: true });
+    const locks = new LockManager(db.rawDb);
+    ctx = {
+      db,
+      wss,
+      locks,
+      proxyDispatch: mockProxyDispatch,
+      getDashboardHtml: () => '<html></html>',
+      orchestratorHost: 'http://localhost:3000',
+      orchestratorSecret: null,
+      messageDispatcher: makeTestDispatcher(db, locks, mockProxyDispatch),
+      usagePoller: { getUsageData: () => ({}), pollNow: async () => {} } as any,
+      voiceEnabled: false,
+      accountStore: new AccountStore({ accountsDir: join(tmpDir, 'accounts'), agentHomesDir: join(tmpDir, 'agent-homes'), skipAutoRegister: true }),
+      telegramDispatcher: makeStubTelegramDispatcher(),
+      pagesDir: join(tmpDir, 'pages'),
+      storesDir: join(tmpDir, 'stores'),
+    };
+  });
+
+  it('routes an @-prefixed message to the named agent', () => {
+    db.createAgent({ name: 'dev', engine: 'claude', cwd: '/tmp', proxyId: 'p1' });
+    db.registerProxy('p1', 'tok', 'localhost:3100');
+
+    routeTelegramMessage(ctx, makeDest(), '12345', '@dev hello');
+
+    const pending = db.listPendingMessages('dev');
+    assert.equal(pending.length, 1);
+    assert.equal(pending[0]!.envelope, 'hello');
+  });
+
+  it('routes an unprefixed message to defaultAgent when configured and agent exists', () => {
+    db.createAgent({ name: 'team-lead', engine: 'claude', cwd: '/tmp', proxyId: 'p1' });
+    db.registerProxy('p1', 'tok', 'localhost:3100');
+
+    routeTelegramMessage(ctx, makeDest({ defaultAgent: 'team-lead' }), '12345', 'unprefixed message');
+
+    const pending = db.listPendingMessages('team-lead');
+    assert.equal(pending.length, 1);
+    assert.equal(pending[0]!.envelope, 'unprefixed message');
+  });
+
+  it('falls back to dashboard thread when defaultAgent is not configured', () => {
+    routeTelegramMessage(ctx, makeDest(), '12345', 'unprefixed message');
+
+    // No agent received it — the fallback creates a dashboard message keyed by agent='telegram'
+    const dashThread = db.getDashboardThreads('telegram')['telegram'] ?? [];
+    assert.equal(dashThread.length, 1);
+    assert.equal(dashThread[0]!.message, 'unprefixed message');
+  });
+
+  it('falls back to dashboard thread when defaultAgent is configured but agent does not exist', () => {
+    routeTelegramMessage(ctx, makeDest({ defaultAgent: 'ghost-agent' }), '12345', 'unprefixed message');
+
+    const dashThread = db.getDashboardThreads('telegram')['telegram'] ?? [];
+    assert.equal(dashThread.length, 1);
+    assert.equal(dashThread[0]!.message, 'unprefixed message');
+  });
+
+  it('explicit @-prefix overrides the configured defaultAgent', () => {
+    db.createAgent({ name: 'team-lead', engine: 'claude', cwd: '/tmp', proxyId: 'p1' });
+    db.createAgent({ name: 'dev', engine: 'claude', cwd: '/tmp', proxyId: 'p1' });
+    db.registerProxy('p1', 'tok', 'localhost:3100');
+
+    routeTelegramMessage(ctx, makeDest({ defaultAgent: 'team-lead' }), '12345', '@dev explicit override');
+
+    const devPending = db.listPendingMessages('dev');
+    const leadPending = db.listPendingMessages('team-lead');
+    assert.equal(devPending.length, 1, 'explicitly-tagged agent should receive the message');
+    assert.equal(leadPending.length, 0, 'defaultAgent should NOT receive the message when override is present');
   });
 });

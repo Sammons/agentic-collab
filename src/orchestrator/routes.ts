@@ -1094,6 +1094,48 @@ route('GET', '/api/destinations', async (_req, res, _match, ctx) => {
   json(res, 200, ctx.db.listDestinations());
 });
 
+route('PATCH', '/api/destinations/:name', async (req, res, match, ctx) => {
+  const name = match.pathname.groups['name']!;
+  const existing = ctx.db.getDestination(name);
+  if (!existing) return json(res, 404, { error: 'Destination not found' });
+
+  const body = await readJson(req);
+  const config = body.config as Record<string, unknown> | undefined;
+  const enabled = typeof body.enabled === 'boolean' ? (body.enabled as boolean) : undefined;
+
+  if (config === undefined && enabled === undefined) {
+    return json(res, 400, { error: 'At least one of "config" or "enabled" must be provided' });
+  }
+  if (config !== undefined && (typeof config !== 'object' || config === null || Array.isArray(config))) {
+    return json(res, 400, { error: 'config must be an object' });
+  }
+  // Re-run telegram-specific config validation if updating config on a telegram dest.
+  if (config !== undefined && existing.type === 'telegram') {
+    if (!config['botToken'] || !config['chatId']) {
+      return json(res, 400, { error: 'telegram config requires botToken and chatId' });
+    }
+  }
+
+  const updates: { config?: Record<string, unknown>; enabled?: boolean } = {};
+  if (config !== undefined) updates.config = config;
+  if (enabled !== undefined) updates.enabled = enabled;
+
+  const updated = ctx.db.updateDestination(name, updates);
+  if (!updated) return json(res, 404, { error: 'Destination not found' });
+
+  // If telegram polling state may have changed (config affects bot token / default agent;
+  // enabled flag flips polling on/off), restart polling cleanly.
+  if (updated.type === 'telegram') {
+    ctx.telegramDispatcher.stopPolling();
+    if (updated.enabled) {
+      startTelegramPolling(ctx, updated);
+    }
+  }
+
+  ctx.wss.broadcast(JSON.stringify({ type: 'destinations_update', destinations: ctx.db.listDestinations() }));
+  json(res, 200, updated);
+});
+
 route('DELETE', '/api/destinations/:name', async (_req, res, match, ctx) => {
   const name = match.pathname.groups['name']!;
   const existing = ctx.db.getDestination(name);
@@ -2172,56 +2214,96 @@ export function startTelegramPolling(ctx: RouteContext, dest: DestinationRecord)
   const botToken = dest.config.botToken as string;
 
   ctx.telegramDispatcher.startPolling(botToken, (incomingChatId: string, text: string) => {
-    console.log(`[telegram] Inbound from chat ${incomingChatId}: ${text.slice(0, 100)}`);
+    routeTelegramMessage(ctx, dest, incomingChatId, text);
+  });
+}
 
-    // Parse @agent-name prefixes — supports multiple: @agent1 @agent2 message
-    const tagPattern = /^((?:@[a-zA-Z0-9_-]+\s+)+)([\s\S]+)$/;
-    const tagMatch = text.match(tagPattern);
-    const targetAgents: string[] = [];
-    let messageText = text;
+/**
+ * Route a single inbound Telegram message to the appropriate destination:
+ * - One or more `@agent` prefixes → fan out to those agents
+ * - No prefix, `defaultAgent` configured + valid → route to default agent
+ * - No prefix, no default agent → virtual "telegram" dashboard thread (existing fallback)
+ *
+ * Exported separately from startTelegramPolling so unit tests can exercise the
+ * routing logic without spinning up the long-polling loop.
+ */
+export function routeTelegramMessage(
+  ctx: RouteContext,
+  dest: DestinationRecord,
+  incomingChatId: string,
+  text: string,
+): void {
+  const botToken = dest.config.botToken as string;
+  console.log(`[telegram] Inbound from chat ${incomingChatId}: ${text.slice(0, 100)}`);
 
-    if (tagMatch) {
-      const tags = tagMatch[1]!.trim().split(/\s+/);
-      for (const tag of tags) {
-        if (tag.startsWith('@')) targetAgents.push(tag.slice(1));
+  // Parse @agent-name prefixes — supports multiple: @agent1 @agent2 message
+  const tagPattern = /^((?:@[a-zA-Z0-9_-]+\s+)+)([\s\S]+)$/;
+  const tagMatch = text.match(tagPattern);
+  const targetAgents: string[] = [];
+  let messageText = text;
+
+  if (tagMatch) {
+    const tags = tagMatch[1]!.trim().split(/\s+/);
+    for (const tag of tags) {
+      if (tag.startsWith('@')) targetAgents.push(tag.slice(1));
+    }
+    messageText = tagMatch[2]!.trim();
+  }
+
+  if (targetAgents.length > 0) {
+    const notFound: string[] = [];
+    const delivered: string[] = [];
+
+    for (const name of targetAgents) {
+      const agent = ctx.db.getAgent(name);
+      if (!agent) {
+        notFound.push(name);
+        continue;
       }
-      messageText = tagMatch[2]!.trim();
+
+      enqueueAndDeliver(ctx, {
+        agentName: name,
+        displayMessage: messageText,
+        envelope: messageText,
+        topic: 'telegram',
+        sourceAgent: `telegram:${dest.name}`,
+      });
+      delivered.push(name);
     }
 
-    if (targetAgents.length > 0) {
-      const notFound: string[] = [];
-      const delivered: string[] = [];
+    if (delivered.length > 0) {
+      console.log(`[telegram] Routed message to: ${delivered.join(', ')}`);
+    }
+    if (notFound.length > 0) {
+      ctx.telegramDispatcher.send(botToken, incomingChatId, `Agent(s) not found: ${notFound.join(', ')}`).catch(() => {});
+    }
+  } else {
+    // No agent prefix — fall back to the destination's `defaultAgent` config field
+    // if present (e.g. a team-lead agent that is the implicit recipient for this
+    // chat). Otherwise create a dashboard message visible under a virtual
+    // "telegram" thread.
+    const defaultAgent = typeof dest.config['defaultAgent'] === 'string'
+      ? (dest.config['defaultAgent'] as string)
+      : null;
 
-      for (const name of targetAgents) {
-        const agent = ctx.db.getAgent(name);
-        if (!agent) {
-          notFound.push(name);
-          continue;
-        }
-
-        enqueueAndDeliver(ctx, {
-          agentName: name,
-          displayMessage: messageText,
-          envelope: messageText,
-          topic: 'telegram',
-          sourceAgent: `telegram:${dest.name}`,
-        });
-        delivered.push(name);
-      }
-
-      if (delivered.length > 0) {
-        console.log(`[telegram] Routed message to: ${delivered.join(', ')}`);
-      }
-      if (notFound.length > 0) {
-        ctx.telegramDispatcher.send(botToken, incomingChatId, `Agent(s) not found: ${notFound.join(', ')}`).catch(() => {});
-      }
+    if (defaultAgent && ctx.db.getAgent(defaultAgent)) {
+      enqueueAndDeliver(ctx, {
+        agentName: defaultAgent,
+        displayMessage: messageText,
+        envelope: messageText,
+        topic: 'telegram',
+        sourceAgent: `telegram:${dest.name}`,
+      });
+      console.log(`[telegram] Routed unprefixed message to default agent: ${defaultAgent}`);
     } else {
-      // No agent prefix — create a dashboard message visible under a virtual "telegram" thread
+      if (defaultAgent) {
+        console.warn(`[telegram] defaultAgent "${defaultAgent}" not found — falling back to dashboard thread`);
+      }
       const msg = ctx.db.addDashboardMessage('telegram', 'from_agent', messageText, {
         sourceAgent: `telegram:${dest.name}`,
       });
       ctx.wss.broadcast(JSON.stringify({ type: 'message', msg }));
       console.log('[telegram] Routed message to dashboard');
     }
-  });
+  }
 }
