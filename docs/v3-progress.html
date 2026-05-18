@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>agentic-collab 3.0 — upgrade progress</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --bg-elev: #161b22;
+    --bg-card: #1c2128;
+    --border: #30363d;
+    --border-dim: #21262d;
+    --fg: #e6edf3;
+    --fg-dim: #8b949e;
+    --accent: #58a6ff;
+    --accent2: #7ee787;
+    --orange: #ffa657;
+    --red: #ff7b72;
+    --purple: #d2a8ff;
+    --yellow: #e3b341;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--mono);
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 48px 32px 96px;
+    line-height: 1.55;
+    font-size: 13.5px;
+  }
+  h1 { font-size: 32px; font-weight: 600; margin: 0 0 6px; letter-spacing: -0.02em; }
+  h2 { font-size: 18px; margin: 48px 0 16px; color: var(--accent); border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+  .subtitle { color: var(--fg-dim); margin-bottom: 8px; }
+  .meta { color: var(--fg-dim); font-size: 12px; margin-bottom: 24px; }
+  .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 6px; padding: 16px 20px; margin: 12px 0; }
+  .card.tight { padding: 12px 16px; }
+  code { background: var(--bg-elev); padding: 1px 6px; border-radius: 3px; color: var(--orange); font-size: 12.5px; }
+
+  .gate-row { display: flex; gap: 16px; flex-wrap: wrap; margin: 12px 0; }
+  .gate { background: var(--bg-card); border: 1px solid var(--border); border-radius: 6px; padding: 10px 16px; min-width: 160px; }
+  .gate .label { color: var(--fg-dim); font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.05em; }
+  .gate .value { font-size: 16px; margin-top: 4px; }
+  .gate.pass .value { color: var(--accent2); }
+  .gate.fail .value { color: var(--red); }
+  .gate.pending .value { color: var(--fg-dim); }
+
+  .quantum-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 16px 0; }
+  .q-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 6px; padding: 14px 16px; position: relative; }
+  .q-card .q-id { color: var(--fg-dim); font-size: 11.5px; letter-spacing: 0.04em; text-transform: uppercase; }
+  .q-card .q-name { font-weight: 600; margin: 4px 0 8px; }
+  .q-card .q-meta { color: var(--fg-dim); font-size: 11.5px; line-height: 1.5; }
+  .q-card.queued      { border-color: var(--border-dim); }
+  .q-card.planning    { border-color: var(--accent); }
+  .q-card.building    { border-color: var(--purple); }
+  .q-card.reviewing   { border-color: var(--yellow); }
+  .q-card.integrating { border-color: var(--orange); }
+  .q-card.done        { border-color: var(--accent2); }
+  .q-card.blocked     { border-color: var(--red); }
+  .q-card.deferred    { border-color: var(--border-dim); opacity: 0.55; }
+  .q-card .q-state {
+    display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px;
+    background: var(--bg-elev); margin-bottom: 8px; letter-spacing: 0.04em;
+  }
+  .q-card.queued      .q-state { color: var(--fg-dim); }
+  .q-card.planning    .q-state { color: var(--accent); }
+  .q-card.building    .q-state { color: var(--purple); }
+  .q-card.reviewing   .q-state { color: var(--yellow); }
+  .q-card.integrating .q-state { color: var(--orange); }
+  .q-card.done        .q-state { color: var(--accent2); }
+  .q-card.blocked     .q-state { color: var(--red); }
+  .q-card.deferred    .q-state { color: var(--fg-dim); }
+
+  .timeline { list-style: none; padding: 0; margin: 0; border-left: 2px solid var(--border); }
+  .timeline li { position: relative; padding: 10px 0 10px 18px; margin-left: 8px; font-size: 12.5px; }
+  .timeline li::before {
+    content: ""; position: absolute; left: -7px; top: 16px; width: 10px; height: 10px;
+    border-radius: 50%; background: var(--accent2); border: 2px solid var(--bg);
+  }
+  .timeline .ts { color: var(--fg-dim); margin-right: 8px; }
+  .timeline .sha { color: var(--orange); margin-right: 8px; }
+  .timeline-empty { color: var(--fg-dim); padding: 12px 0; font-style: italic; }
+
+  .blocker {
+    background: rgba(255,123,114,0.08);
+    border: 1px solid var(--red);
+    border-radius: 6px;
+    padding: 16px 20px;
+    margin: 16px 0;
+  }
+  .blocker .label { color: var(--red); font-weight: 600; margin-bottom: 6px; letter-spacing: 0.04em; }
+  .blocker-hidden { display: none; }
+</style>
+</head>
+<body>
+
+<h1>agentic-collab 3.0 — upgrade progress</h1>
+<div class="subtitle">live status of the one-shot v3 upgrade run · orchestrator + proxy scope</div>
+<div class="meta">root prompt: <code>docs/v3-claude-code-prompt.md</code> · spec: <code>docs/v3-vision.md</code> · plan: <code>docs/v3-upgrade-prompt.md</code> · scope: <span style="color:var(--accent2)">Q0–Q8</span> · deferred: <span style="color:var(--fg-dim)">Q9 dashboard UI</span></div>
+
+<!-- ─────────────────────────────────────────────────────────── -->
+<h2>Run state</h2>
+<div class="gate-row">
+  <div class="gate pending"><div class="label">branch</div><div class="value">v3-integration</div></div>
+  <div class="gate pending"><div class="label">type check</div><div class="value">— pending —</div></div>
+  <div class="gate pending"><div class="label">tests</div><div class="value">— pending —</div></div>
+  <div class="gate pending"><div class="label">smoke</div><div class="value">— pending —</div></div>
+  <div class="gate pending"><div class="label">started</div><div class="value">—</div></div>
+</div>
+
+<!-- Blocker panel: root regenerates this section, swapping `blocker-hidden` for visible class when a blocker exists. -->
+<div class="blocker blocker-hidden">
+  <div class="label">⚠ blocker</div>
+  <div>— none —</div>
+</div>
+
+<!-- ─────────────────────────────────────────────────────────── -->
+<h2>Quanta</h2>
+<div class="quantum-grid">
+  <div class="q-card queued">
+    <div class="q-id">Q0</div>
+    <div class="q-state">queued</div>
+    <div class="q-name">audit + plan</div>
+    <div class="q-meta">read docs · explore code · materialise DAG</div>
+  </div>
+  <div class="q-card queued">
+    <div class="q-id">Q1</div>
+    <div class="q-state">queued</div>
+    <div class="q-name">address router</div>
+    <div class="q-meta">agent: / topic: / approval: parsing · bin/collab validation widening</div>
+  </div>
+  <div class="q-card queued">
+    <div class="q-id">Q2</div>
+    <div class="q-state">queued</div>
+    <div class="q-name">template loader</div>
+    <div class="q-meta">persistent · cwd_base · prepare · cleanup · topics · agent_templates table</div>
+  </div>
+  <div class="q-card queued">
+    <div class="q-id">Q3</div>
+    <div class="q-state">queued</div>
+    <div class="q-name">ephemeral lifecycle kernel</div>
+    <div class="q-meta">queue · delivery · worktree · instances · reaper · collab complete · smoke</div>
+  </div>
+  <div class="q-card queued">
+    <div class="q-id">Q4</div>
+    <div class="q-state">queued</div>
+    <div class="q-name">WS event contract</div>
+    <div class="q-meta">template-updated · topic-queue-changed · instance-* · approval-changed</div>
+  </div>
+  <div class="q-card queued">
+    <div class="q-id">Q5</div>
+    <div class="q-state">queued</div>
+    <div class="q-name">approvals CRUD</div>
+    <div class="q-meta">channel-categorised · auto-notify · await polling</div>
+  </div>
+  <div class="q-card queued">
+    <div class="q-id">Q6</div>
+    <div class="q-state">queued</div>
+    <div class="q-name">monitor sidecar</div>
+    <div class="q-meta">paired with worker · $TARGET_TMUX_SESSION · cleanup on worker exit</div>
+  </div>
+  <div class="q-card queued">
+    <div class="q-id">Q7</div>
+    <div class="q-state">queued</div>
+    <div class="q-name">CLI mode-awareness</div>
+    <div class="q-meta">env-detected · help banner + system-prompt addendum branches</div>
+  </div>
+  <div class="q-card queued">
+    <div class="q-id">Q8</div>
+    <div class="q-state">queued</div>
+    <div class="q-name">crash recovery</div>
+    <div class="q-meta">boot reconciliation · proxy reconnect · orphaned worktree sweep</div>
+  </div>
+  <div class="q-card deferred">
+    <div class="q-id">Q9</div>
+    <div class="q-state">deferred</div>
+    <div class="q-name">dashboard (human follow-up)</div>
+    <div class="q-meta">templates &amp; topics tree · approval inbox · UI panels deferred — needs manual browser verification</div>
+  </div>
+</div>
+
+<!-- ─────────────────────────────────────────────────────────── -->
+<h2>Timeline</h2>
+<ul class="timeline">
+  <li class="timeline-empty">— no events yet —</li>
+</ul>
+
+</body>
+</html>
