@@ -271,6 +271,50 @@ export type ProxyRegistration = {
   registeredAt: string;
 };
 
+// ── Agent Templates / Topics (v3 ephemeral-agent surface) ──
+
+/**
+ * Row in the `agent_templates` table. Populated by template-sync from
+ * persona frontmatter. Persistent personas produce a minimal row (engine,
+ * model, hook_start, hook_exit); ephemeral templates additionally carry
+ * cwd_base, cwd_template, repo_root and the host-shell prepare/cleanup
+ * hooks. These fields never flow through the `agents` table or the scalar
+ * field-registry — `agents` schema is untouched.
+ */
+export type AgentTemplateRow = {
+  id: string;
+  personaPath: string | null;
+  engine: string;
+  model: string | null;
+  persistent: boolean;
+  cwdBase: string | null;
+  cwdTemplate: string | null;
+  repoRoot: string | null;
+  hookStart: string | null;
+  hookExit: string | null;
+  hookPrepare: string | null;
+  hookCleanup: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+/**
+ * Row in the `topics` table. Each row is a (template, name) tuple owned by
+ * an `agent_templates` row. Ephemeral templates declare topics that publishers
+ * address via `topic:<template>/<name>`.
+ */
+export type TopicRow = {
+  agentTemplate: string;
+  name: string;
+  hookPrepareOverride: string | null;
+  hookStartOverride: string | null;
+  hookCleanupOverride: string | null;
+  monitorTemplate: string | null;
+  concurrency: number;
+  schemaPath: string | null;
+  replySchemaPath: string | null;
+};
+
 // ── WebSocket Events (Orchestrator → Dashboard) ──
 
 export type WsInitEvent = {
