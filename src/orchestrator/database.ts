@@ -7,6 +7,7 @@ import { DatabaseSync } from 'node:sqlite';
 import type {
   AgentRecord,
   AgentState,
+  AgentTemplateRow,
   DashboardMessage,
   EngineConfigRecord,
   EngineType,
@@ -21,6 +22,7 @@ import type {
   PageRecord,
   DataStoreRecord,
   DestinationRecord,
+  TopicRow,
 } from '../shared/types.ts';
 import {
   configColumnMap,
@@ -141,6 +143,40 @@ const SCHEMA = `
     total_bytes    INTEGER NOT NULL DEFAULT 0,
     created_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
     updated_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+  );
+
+  -- v3: agent templates. Populated by template-sync from persona frontmatter.
+  -- This table is the home of the new template-only fields; the agents
+  -- table is intentionally untouched (no new columns, no ALTER TABLE).
+  CREATE TABLE IF NOT EXISTS agent_templates (
+    id              TEXT PRIMARY KEY,
+    persona_path    TEXT,
+    engine          TEXT NOT NULL,
+    model           TEXT,
+    persistent      INTEGER NOT NULL DEFAULT 1,
+    cwd_base        TEXT,
+    cwd_template    TEXT,
+    repo_root       TEXT,
+    hook_start      TEXT,
+    hook_exit       TEXT,
+    hook_prepare    TEXT,
+    hook_cleanup    TEXT,
+    created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+  );
+
+  -- v3: topic declarations belong to one agent_templates row each.
+  CREATE TABLE IF NOT EXISTS topics (
+    agent_template          TEXT NOT NULL REFERENCES agent_templates(id) ON DELETE CASCADE,
+    name                    TEXT NOT NULL,
+    hook_prepare_override   TEXT,
+    hook_start_override     TEXT,
+    hook_cleanup_override   TEXT,
+    monitor_template        TEXT,
+    concurrency             INTEGER NOT NULL DEFAULT 1,
+    schema_path             TEXT,
+    reply_schema_path       TEXT,
+    PRIMARY KEY (agent_template, name)
   );
 `;
 
@@ -440,6 +476,106 @@ export class Database {
   deleteAgent(name: string): boolean {
     const result = this.db.prepare('DELETE FROM agents WHERE name = ?').run(name);
     return result.changes > 0;
+  }
+
+  // ── Agent Templates / Topics (v3 ephemeral surface) ──
+  // Populated by template-sync; the `agents` table is intentionally untouched.
+
+  /** Insert or replace an `agent_templates` row. `createdAt`/`updatedAt` are
+   *  managed by SQL defaults — values on the input row are ignored. */
+  upsertAgentTemplate(row: AgentTemplateRow): void {
+    this.db.prepare(`
+      INSERT INTO agent_templates (
+        id, persona_path, engine, model, persistent,
+        cwd_base, cwd_template, repo_root,
+        hook_start, hook_exit, hook_prepare, hook_cleanup,
+        updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+      ON CONFLICT(id) DO UPDATE SET
+        persona_path   = excluded.persona_path,
+        engine         = excluded.engine,
+        model          = excluded.model,
+        persistent     = excluded.persistent,
+        cwd_base       = excluded.cwd_base,
+        cwd_template   = excluded.cwd_template,
+        repo_root      = excluded.repo_root,
+        hook_start     = excluded.hook_start,
+        hook_exit      = excluded.hook_exit,
+        hook_prepare   = excluded.hook_prepare,
+        hook_cleanup   = excluded.hook_cleanup,
+        updated_at     = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+    `).run(
+      row.id,
+      row.personaPath,
+      row.engine,
+      row.model,
+      row.persistent ? 1 : 0,
+      row.cwdBase,
+      row.cwdTemplate,
+      row.repoRoot,
+      row.hookStart,
+      row.hookExit,
+      row.hookPrepare,
+      row.hookCleanup,
+    );
+  }
+
+  /** Replace the topics rows for a template in a single transaction. */
+  replaceTopicsForTemplate(templateId: string, topics: TopicRow[]): void {
+    const tx = this.db.prepare('BEGIN');
+    const commit = this.db.prepare('COMMIT');
+    const rollback = this.db.prepare('ROLLBACK');
+    const del = this.db.prepare('DELETE FROM topics WHERE agent_template = ?');
+    const ins = this.db.prepare(`
+      INSERT INTO topics (
+        agent_template, name,
+        hook_prepare_override, hook_start_override, hook_cleanup_override,
+        monitor_template, concurrency, schema_path, reply_schema_path
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    tx.run();
+    try {
+      del.run(templateId);
+      for (const t of topics) {
+        ins.run(
+          t.agentTemplate,
+          t.name,
+          t.hookPrepareOverride,
+          t.hookStartOverride,
+          t.hookCleanupOverride,
+          t.monitorTemplate,
+          t.concurrency,
+          t.schemaPath,
+          t.replySchemaPath,
+        );
+      }
+      commit.run();
+    } catch (err) {
+      rollback.run();
+      throw err;
+    }
+  }
+
+  getAgentTemplate(id: string): AgentTemplateRow | null {
+    const row = this.db.prepare(
+      'SELECT * FROM agent_templates WHERE id = ?',
+    ).get(id) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    return mapAgentTemplateRow(row);
+  }
+
+  listAgentTemplates(): AgentTemplateRow[] {
+    const rows = this.db.prepare(
+      'SELECT * FROM agent_templates ORDER BY id ASC',
+    ).all() as Array<Record<string, unknown>>;
+    return rows.map(mapAgentTemplateRow);
+  }
+
+  getTopicsForTemplate(templateId: string): TopicRow[] {
+    const rows = this.db.prepare(
+      'SELECT * FROM topics WHERE agent_template = ? ORDER BY name ASC',
+    ).all(templateId) as Array<Record<string, unknown>>;
+    return rows.map(mapTopicRow);
   }
 
   // ── Events ──
@@ -1236,6 +1372,39 @@ function mapDestinationRow(row: Record<string, unknown>): DestinationRecord {
     enabled: (row['enabled'] as number) === 1,
     createdAt: row['created_at'] as string,
     updatedAt: row['updated_at'] as string,
+  };
+}
+
+function mapAgentTemplateRow(row: Record<string, unknown>): AgentTemplateRow {
+  return {
+    id: row['id'] as string,
+    personaPath: (row['persona_path'] as string | null) ?? null,
+    engine: row['engine'] as string,
+    model: (row['model'] as string | null) ?? null,
+    persistent: ((row['persistent'] as number) ?? 1) === 1,
+    cwdBase: (row['cwd_base'] as string | null) ?? null,
+    cwdTemplate: (row['cwd_template'] as string | null) ?? null,
+    repoRoot: (row['repo_root'] as string | null) ?? null,
+    hookStart: (row['hook_start'] as string | null) ?? null,
+    hookExit: (row['hook_exit'] as string | null) ?? null,
+    hookPrepare: (row['hook_prepare'] as string | null) ?? null,
+    hookCleanup: (row['hook_cleanup'] as string | null) ?? null,
+    createdAt: row['created_at'] as string,
+    updatedAt: row['updated_at'] as string,
+  };
+}
+
+function mapTopicRow(row: Record<string, unknown>): TopicRow {
+  return {
+    agentTemplate: row['agent_template'] as string,
+    name: row['name'] as string,
+    hookPrepareOverride: (row['hook_prepare_override'] as string | null) ?? null,
+    hookStartOverride: (row['hook_start_override'] as string | null) ?? null,
+    hookCleanupOverride: (row['hook_cleanup_override'] as string | null) ?? null,
+    monitorTemplate: (row['monitor_template'] as string | null) ?? null,
+    concurrency: (row['concurrency'] as number) ?? 1,
+    schemaPath: (row['schema_path'] as string | null) ?? null,
+    replySchemaPath: (row['reply_schema_path'] as string | null) ?? null,
   };
 }
 

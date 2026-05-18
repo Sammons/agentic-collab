@@ -1158,4 +1158,76 @@ Body
       assert.deepEqual(steps[1], { type: 'shell', command: '/exit' });
     });
   });
+
+  describe('v3 topics frontmatter', () => {
+    it('parses a topics array of two entries with name/concurrency/schema', () => {
+      const raw = `---
+engine: claude
+persistent: false
+cwd_base: /tmp/ephemeral
+topics:
+  - name: provision
+    schema: ./schemas/provision.json
+    concurrency: 1
+  - name: teardown
+    schema: ./schemas/teardown.json
+    concurrency: 2
+---
+Body
+`;
+      const { frontmatter } = parseFrontmatter(raw);
+      const topics = frontmatter['topics'] as Array<Record<string, unknown>>;
+      assert.ok(Array.isArray(topics), 'topics should be an array');
+      assert.equal(topics.length, 2);
+      assert.equal(topics[0]!['name'], 'provision');
+      assert.equal(topics[0]!['schema'], './schemas/provision.json');
+      assert.equal(topics[0]!['concurrency'], 1);
+      assert.equal(topics[1]!['name'], 'teardown');
+      assert.equal(topics[1]!['concurrency'], 2);
+      // The flat-scalar parser keeps booleans as raw strings; template-sync
+      // accepts both forms when deciding whether the template is ephemeral.
+      assert.equal(frontmatter['persistent'], 'false');
+      assert.equal(frontmatter['cwd_base'], '/tmp/ephemeral');
+    });
+
+    it('parses prepare: | block scalar as a flat string (not a nested object)', () => {
+      const raw = `---
+engine: claude
+persistent: false
+cwd_base: /tmp/wt
+prepare: |
+  git -C "$REPO_ROOT" worktree add "$WORKTREE_PATH" main
+cleanup: |
+  git -C "$REPO_ROOT" worktree remove --force "$WORKTREE_PATH"
+---
+Body
+`;
+      const { frontmatter } = parseFrontmatter(raw);
+      assert.equal(typeof frontmatter['prepare'], 'string');
+      assert.match(frontmatter['prepare'] as string, /git -C "\$REPO_ROOT" worktree add/);
+      assert.equal(typeof frontmatter['cleanup'], 'string');
+      assert.match(frontmatter['cleanup'] as string, /worktree remove --force/);
+    });
+
+    it('parses topics with per-topic prepare/start block-scalar overrides', () => {
+      const raw = `---
+engine: claude
+persistent: false
+cwd_base: /tmp/ov
+topics:
+  - name: a
+    concurrency: 1
+    monitor_template: a-monitor
+  - name: b
+    concurrency: 1
+---
+Body
+`;
+      const { frontmatter } = parseFrontmatter(raw);
+      const topics = frontmatter['topics'] as Array<Record<string, unknown>>;
+      assert.equal(topics.length, 2);
+      assert.equal(topics[0]!['monitor_template'], 'a-monitor');
+      assert.equal(topics[1]!['name'], 'b');
+    });
+  });
 });
