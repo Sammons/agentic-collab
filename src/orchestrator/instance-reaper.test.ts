@@ -96,61 +96,76 @@ describe('InstanceReaper — Q3 invariants', () => {
     };
     const locks = new LockManager(db.rawDb);
     const messageDispatcher = new MessageDispatcher({ db, locks, proxyDispatch: dispatch, orchestratorHost: 'http://localhost:3000' });
-    const driver = new TopicDelivery({ db, proxyDispatch: dispatch, orchestratorHost: 'x', ipcRoot });
+    const driver = new TopicDelivery({ db, proxyDispatch: dispatch, orchestratorHost: 'x', ipcRoot, locks });
     const reaper = new InstanceReaper({ db, proxyDispatch: dispatch, messageDispatcher, topicDelivery: driver, sweepIntervalMs: 50 });
     return { db, dispatch, commands, driver, reaper, messageDispatcher };
   }
 
   it('invariant #5: reaper reads $STATUS_PATH + $REPLY_PATH BEFORE kill_session', async () => {
-    const { db, commands, driver, reaper } = makeEnv();
+    const { db, driver } = makeEnv();
     seedTemplate(db, 'tH');
     seedTopic(db, 'tH');
     const id = await spawnAndWaitRunning(driver, db, 'tH', '{"echo":"hi"}');
     const inst = db.getAgentInstance(id)!;
 
-    // Pre-finalize snapshot of fs-read order via a wrapper that records when reads occur.
-    let killSessionRecorded = false;
-    let readsAfterKill = 0;
-    const dispatchProxy = async (_pid: string, cmd: ProxyCommand): Promise<ProxyResponse> => {
-      if (cmd.action === 'kill_session') killSessionRecorded = true;
-      commands.push(cmd);
-      return { ok: true, data: '' };
-    };
-    // Swap the reaper's dispatch by re-instantiating against the new dispatch.
-    const reaper2 = new InstanceReaper({
-      db,
-      proxyDispatch: dispatchProxy,
-      messageDispatcher: new MessageDispatcher({ db, locks: new LockManager(db.rawDb), proxyDispatch: dispatchProxy, orchestratorHost: 'x' }),
-      topicDelivery: driver,
-      sweepIntervalMs: 50,
-    });
-
-    // Agent signals completion.
+    // Agent signals completion BEFORE we wire up the observable reaper.
     writeFileSync(inst.replyPath, JSON.stringify({ echoed: { echo: 'hi' } }));
     writeFileSync(inst.statusPath, 'ok\n');
 
-    await reaper2.wake(inst.id);
+    // Shared timeline records every fs read and every proxyDispatch call in
+    // the exact order they occur. Invariant #5 says: every read against the
+    // instance's STATUS_PATH or REPLY_PATH must appear in the timeline
+    // BEFORE any `kill_session` dispatch for that instance.
+    type Event =
+      | { kind: 'read'; path: string }
+      | { kind: 'stat'; path: string }
+      | { kind: 'dispatch'; action: string; sessionName?: string };
+    const timeline: Event[] = [];
 
-    // We can't directly observe fs read order vs proxy dispatch ordering in
-    // pure JS without monkey-patching readFileSync. Instead assert structural
-    // contract: by the time kill_session ran, the reply has been enqueued
-    // (which is downstream of read). If kill_session preceded the read, the
-    // reply wouldn't be enqueued because read would fail with a closed fd.
-    // We assert kill_session was dispatched AND a pending_messages row exists
-    // for the reply target — proving the read happened in-order.
-    assert.ok(killSessionRecorded || commands.some(c => c.action === 'kill_session'), 'kill_session dispatched');
-    // And in the recorded command sequence, no read can possibly have run
-    // before any of the dispatch calls because the reaper code reads
-    // statusPath and replyPath before invoking proxyDispatch(kill_session)
-    // — a structural assertion verified by reading instance-reaper.ts.
-    // Direct evidence: the reply file content was read and enqueued.
-    const reaper2Reply = db.rawDb.prepare(
-      `SELECT * FROM pending_messages ORDER BY id DESC LIMIT 1`,
-    ).get() as Record<string, unknown> | undefined;
-    if (reaper2Reply) {
-      assert.match(String(reaper2Reply['envelope']), /reply for/);
-    }
-    void reaper; // reference to satisfy linter
+    const realFs = await import('node:fs');
+    const fsAdapter = {
+      statSync: (p: string) => {
+        timeline.push({ kind: 'stat', path: p });
+        return realFs.statSync(p);
+      },
+      readFileSync: (p: string, e: BufferEncoding) => {
+        timeline.push({ kind: 'read', path: p });
+        return realFs.readFileSync(p, e) as string;
+      },
+    };
+
+    const observableDispatch = async (_pid: string, cmd: ProxyCommand): Promise<ProxyResponse> => {
+      const ev: { kind: 'dispatch'; action: string; sessionName?: string } = { kind: 'dispatch', action: cmd.action };
+      if ('sessionName' in cmd && typeof cmd.sessionName === 'string') ev.sessionName = cmd.sessionName;
+      timeline.push(ev);
+      return { ok: true, data: '' };
+    };
+
+    const reaperLocks = new LockManager(db.rawDb);
+    const reaperUnderTest = new InstanceReaper({
+      db,
+      proxyDispatch: observableDispatch,
+      messageDispatcher: new MessageDispatcher({ db, locks: reaperLocks, proxyDispatch: observableDispatch, orchestratorHost: 'x' }),
+      topicDelivery: driver,
+      sweepIntervalMs: 50,
+      fsAdapter,
+    });
+
+    // Trip tryFinalize once.
+    await reaperUnderTest.wake(inst.id);
+
+    // Find the read indexes for STATUS_PATH and REPLY_PATH.
+    const statusReadIdx = timeline.findIndex((e) => e.kind === 'read' && e.path === inst.statusPath);
+    const replyReadIdx = timeline.findIndex((e) => e.kind === 'read' && e.path === inst.replyPath);
+    const killIdx = timeline.findIndex(
+      (e) => e.kind === 'dispatch' && e.action === 'kill_session' && (!('sessionName' in e) || e.sessionName === inst.tmuxSession),
+    );
+
+    assert.ok(statusReadIdx >= 0, `STATUS_PATH read observed in timeline (${JSON.stringify(timeline.map(e => e.kind === 'dispatch' ? e.action : e.kind))})`);
+    assert.ok(replyReadIdx >= 0, 'REPLY_PATH read observed in timeline');
+    assert.ok(killIdx >= 0, 'kill_session dispatched');
+    assert.ok(statusReadIdx < killIdx, `STATUS_PATH read(${statusReadIdx}) BEFORE kill_session(${killIdx})`);
+    assert.ok(replyReadIdx < killIdx, `REPLY_PATH read(${replyReadIdx}) BEFORE kill_session(${killIdx})`);
   });
 
   it('invariant #6: kill_session precedes cleanup', async () => {

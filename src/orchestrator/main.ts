@@ -255,6 +255,7 @@ const topicDelivery = new TopicDelivery({
   proxyDispatch,
   orchestratorHost: ORCHESTRATOR_HOST,
   ipcRoot: INSTANCES_DIR,
+  locks,
   onEvent: (event) => {
     wss.broadcast(JSON.stringify({ type: event.type, ...event }));
   },
@@ -293,7 +294,7 @@ const routeCtx: RouteContext = {
       synced: diff.created.length + diff.updated.length,
       created: diff.created,
       updated: diff.updated,
-      removed: diff.skipped,
+      skipped: diff.skipped,
     };
   },
 };

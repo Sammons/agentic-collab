@@ -20,7 +20,7 @@
  * double-processing the same instance.
  */
 
-import { readFileSync, statSync } from 'node:fs';
+import * as fs from 'node:fs';
 import type { Database } from './database.ts';
 import type {
   AgentInstanceRow,
@@ -33,6 +33,21 @@ import type { TopicDelivery, TopicDeliveryEvent } from './topic-delivery.ts';
 import { shellQuote } from '../shared/utils.ts';
 import { buildInstanceEnv } from './instance-env.ts';
 
+/**
+ * Narrow fs surface the reaper uses. Tests can inject a wrapper that records
+ * the order of `statSync` / `readFileSync` calls to verify invariant #5
+ * (status + reply read BEFORE `kill_session` dispatch).
+ */
+export type ReaperFsAdapter = {
+  readFileSync: (path: string, encoding: BufferEncoding) => string;
+  statSync: (path: string) => { size: number };
+};
+
+const defaultFsAdapter: ReaperFsAdapter = {
+  readFileSync: (p, e) => fs.readFileSync(p, e),
+  statSync: (p) => fs.statSync(p),
+};
+
 export type InstanceReaperOptions = {
   db: Database;
   proxyDispatch: (proxyId: string, command: ProxyCommand) => Promise<ProxyResponse>;
@@ -41,6 +56,12 @@ export type InstanceReaperOptions = {
   topicDelivery: TopicDelivery;
   /** Sweep interval (default 1500ms). */
   sweepIntervalMs?: number;
+  /**
+   * Test-only seam: inject an fs adapter to observe read ordering vs the
+   * proxy command timeline (invariant #5). Production always uses
+   * `defaultFsAdapter` which forwards to `node:fs`.
+   */
+  fsAdapter?: ReaperFsAdapter;
   onEvent?: (event: TopicDeliveryEvent | { type: 'instance-completed'; instance: AgentInstanceRow }) => void;
 };
 
@@ -52,6 +73,7 @@ export class InstanceReaper {
   private readonly messageDispatcher: MessageDispatcher;
   private readonly topicDelivery: TopicDelivery;
   private readonly sweepIntervalMs: number;
+  private readonly fs: ReaperFsAdapter;
   private readonly onEvent: NonNullable<InstanceReaperOptions['onEvent']>;
   private timer: ReturnType<typeof setInterval> | null = null;
   /** Single-flight set. wake() and sweep() add/remove ids here. */
@@ -63,6 +85,7 @@ export class InstanceReaper {
     this.messageDispatcher = opts.messageDispatcher;
     this.topicDelivery = opts.topicDelivery;
     this.sweepIntervalMs = opts.sweepIntervalMs ?? DEFAULT_SWEEP_MS;
+    this.fs = opts.fsAdapter ?? defaultFsAdapter;
     this.onEvent = opts.onEvent ?? (() => {});
   }
 
@@ -125,7 +148,7 @@ export class InstanceReaper {
     // Step 1: status file present + non-empty?
     let size: number;
     try {
-      size = statSync(row.statusPath).size;
+      size = this.fs.statSync(row.statusPath).size;
     } catch {
       return false; // not yet written
     }
@@ -140,8 +163,8 @@ export class InstanceReaper {
     let statusRaw: string;
     let replyRaw: string;
     try {
-      statusRaw = readFileSync(row.statusPath, 'utf8');
-      replyRaw = readFileSync(row.replyPath, 'utf8');
+      statusRaw = this.fs.readFileSync(row.statusPath, 'utf8');
+      replyRaw = this.fs.readFileSync(row.replyPath, 'utf8');
     } catch (err) {
       console.error(`[instance-reaper] read failed for ${row.id}: ${(err as Error).message}`);
       return false;

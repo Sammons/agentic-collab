@@ -63,11 +63,16 @@ export type BuildEnvOpts = {
 };
 
 /**
- * Build the env contract record (flat string-to-string) injected into the
- * tmux session via `tmux set-environment` AND passed to the host-shell
- * prepare/cleanup hooks as their child-process env.
+ * Build the env contract record (flat string-to-string) used for host-shell
+ * `exec` wrappers (prepare/cleanup). Includes MESSAGE_CONTENT — the raw
+ * publish payload — because `/bin/sh -c "KEY=$(printf %s "$VAL"); ..."` style
+ * `export` wrapping handles newlines and control chars.
+ *
+ * DO NOT pass this map directly to `tmux set-environment` — tmux env entries
+ * cannot carry newlines safely. Derive the tmux subset via
+ * `buildTmuxSessionEnv(buildHostShellEnv(opts))`.
  */
-export function buildInstanceEnv(opts: BuildEnvOpts): Record<string, string> {
+export function buildHostShellEnv(opts: BuildEnvOpts): Record<string, string> {
   return {
     MESSAGE_ID: opts.messageId,
     MESSAGE_PATH: opts.messagePath,
@@ -83,4 +88,50 @@ export function buildInstanceEnv(opts: BuildEnvOpts): Record<string, string> {
     REPLY_TO_ADDR: opts.replyToAddr ?? '',
     INSTANCE_ID: opts.instanceId,
   };
+}
+
+/**
+ * Keys that are safe to push into a tmux session via `tmux set-environment`.
+ * Excludes `MESSAGE_CONTENT` (the raw publish payload — may contain newlines,
+ * control characters, or be large enough to corrupt tmux env state).
+ *
+ * Agents access the payload through `$MESSAGE_PATH` instead.
+ */
+export const TMUX_SAFE_ENV_KEYS = [
+  'MESSAGE_ID',
+  'MESSAGE_PATH',
+  'REPLY_PATH',
+  'STATUS_PATH',
+  'WORKTREE_PATH',
+  'CWD_BASE',
+  'REPO_ROOT',
+  'AGENT_TEMPLATE',
+  'TOPIC_NAME',
+  'INSTANCE_ADDR',
+  'REPLY_TO_ADDR',
+  'INSTANCE_ID',
+] as const;
+
+/**
+ * Derive the tmux-safe subset of a host-shell env record. Strips
+ * MESSAGE_CONTENT (and any other key not in `TMUX_SAFE_ENV_KEYS`).
+ */
+export function buildTmuxSessionEnv(hostEnv: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const key of TMUX_SAFE_ENV_KEYS) {
+    if (key in hostEnv) {
+      out[key] = hostEnv[key]!;
+    }
+  }
+  return out;
+}
+
+/**
+ * @deprecated Use `buildHostShellEnv` (full env) or
+ * `buildTmuxSessionEnv(buildHostShellEnv(opts))` (tmux-safe subset). Retained
+ * so the reaper's cleanup wrapper, which only needs the host-shell view, can
+ * keep its existing call shape.
+ */
+export function buildInstanceEnv(opts: BuildEnvOpts): Record<string, string> {
+  return buildHostShellEnv(opts);
 }

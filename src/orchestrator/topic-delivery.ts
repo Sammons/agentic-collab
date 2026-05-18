@@ -40,7 +40,8 @@ import type {
 import { shellQuote } from '../shared/utils.ts';
 import { resolveHook } from './hook-resolver.ts';
 import { dispatchHookResult, type LifecycleContext } from './lifecycle.ts';
-import { allocateIpcPaths, buildInstanceEnv } from './instance-env.ts';
+import { allocateIpcPaths, buildHostShellEnv, buildTmuxSessionEnv } from './instance-env.ts';
+import type { LockManager } from '../shared/lock.ts';
 
 export type TopicDeliveryOptions = {
   db: Database;
@@ -50,6 +51,12 @@ export type TopicDeliveryOptions = {
   orchestratorHost: string;
   /** Root directory under which per-instance IPC files live. */
   ipcRoot: string;
+  /**
+   * Real LockManager so `dispatchHookResult` can lock the instance pane if
+   * captures or pipeline steps demand it. Required — pass the orchestrator's
+   * shared LockManager. Tests construct their own with `new LockManager(db.rawDb)`.
+   */
+  locks: LockManager;
   /** Resolver returning a proxy id to spawn on. Defaults to first registered. */
   resolveProxyId?: () => string | null;
   /** Optional WS broadcast for `instance-spawned` / `instance-failed` events. */
@@ -97,9 +104,7 @@ export class TopicDelivery {
     this.onEvent = opts.onEvent ?? (() => {});
     this.lifecycleCtx = {
       db: this.db,
-      // Lifecycle uses its own LockManager etc. — we only use dispatchHookResult
-      // which reads from ctx.proxyDispatch only. Pass minimal shim.
-      locks: undefined as unknown as LifecycleContext['locks'],
+      locks: opts.locks,
       proxyDispatch: this.proxyDispatch,
       orchestratorHost: opts.orchestratorHost,
     };
@@ -156,9 +161,6 @@ export class TopicDelivery {
    */
   async tryDispatch(template: AgentTemplateRow, topic: TopicRow): Promise<void> {
     while (true) {
-      const live = this.db.countLiveInstancesForTopic(template.id, topic.name);
-      if (live >= topic.concurrency) return;
-
       const proxyId = this.resolveProxyId();
       if (!proxyId) {
         console.warn(`[topic-delivery] No proxy registered — deferring dispatch for ${template.id}/${topic.name}`);
@@ -174,6 +176,9 @@ export class TopicDelivery {
       const repoRoot = template.repoRoot ?? cwdBase;
       const worktreePath = renderCwdTemplate(template.cwdTemplate, { messageId: instanceId, cwdBase });
 
+      // Invariant #1: the live-count check lives INSIDE this transaction.
+      // claimAndCreateInstance returns null both when the queue is empty AND
+      // when the concurrency cap is hit — either way we stop draining.
       const claim = this.db.claimAndCreateInstance({
         agentTemplate: template.id,
         topicName: topic.name,
@@ -186,8 +191,9 @@ export class TopicDelivery {
         replyPath: ipc.replyPath,
         statusPath: ipc.statusPath,
         worktreePath,
+        concurrency: topic.concurrency,
       });
-      if (!claim) return; // queue is empty — done draining
+      if (!claim) return; // queue empty OR concurrency cap hit — done draining
 
       const { queue, instance } = claim;
       this.broadcastDepth(template.id, topic.name);
@@ -200,9 +206,12 @@ export class TopicDelivery {
         continue;
       }
 
-      // Build the env contract used for prepare/start interpolation AND for
-      // tmux set-environment between create_session and paste(start).
-      const env = buildInstanceEnv({
+      // Build two env views. `hostShellEnv` includes MESSAGE_CONTENT for
+      // prepare/cleanup `exec` host-shell wrappers (newlines and control
+      // chars survive shell quoting). `tmuxSessionEnv` excludes
+      // MESSAGE_CONTENT — payloads with newlines or large size would corrupt
+      // `tmux set-environment`. Agents read payload from $MESSAGE_PATH.
+      const hostShellEnv = buildHostShellEnv({
         messageId: instance.messageId,
         messagePath: instance.messagePath,
         replyPath: instance.replyPath,
@@ -217,12 +226,13 @@ export class TopicDelivery {
         instanceId,
         messageContent: queue.payload,
       });
+      const tmuxSessionEnv = buildTmuxSessionEnv(hostShellEnv);
 
       // ──────────────────────────────────────────────────────────────
       // Fire-and-forget the per-instance spawn so the loop can drain other
       // topics in parallel even when one spawn is in its slow prepare step.
       // ──────────────────────────────────────────────────────────────
-      this.claimAndSpawn({ template, topic, instance, env, queueId: queue.id, proxyId }).catch((err) => {
+      this.claimAndSpawn({ template, topic, instance, hostShellEnv, tmuxSessionEnv, queueId: queue.id, proxyId }).catch((err) => {
         console.error(`[topic-delivery] claimAndSpawn failed for ${instance.id}:`, (err as Error).message);
       });
     }
@@ -237,21 +247,25 @@ export class TopicDelivery {
     template: AgentTemplateRow;
     topic: TopicRow;
     instance: AgentInstanceRow;
-    env: Record<string, string>;
+    /** Full env including MESSAGE_CONTENT — used in `exec` host-shell wrappers. */
+    hostShellEnv: Record<string, string>;
+    /** Subset excluding MESSAGE_CONTENT — used for `tmux set-environment`. */
+    tmuxSessionEnv: Record<string, string>;
     queueId: number;
     proxyId: string;
   }): Promise<void> {
-    const { template, topic, instance, env, queueId, proxyId } = opts;
+    const { template, topic, instance, hostShellEnv, tmuxSessionEnv, queueId, proxyId } = opts;
     const cwdBase = template.cwdBase ?? '';
     const tmuxSession = instance.tmuxSession;
 
     // Step 3 — prepare via host shell exec (no tmux). Apply env via the
     // proxy `exec` env contract: prepend `KEY=value` assignments so the
-    // child process and any forked shells see the contract values.
+    // child process and any forked shells see the contract values. The
+    // host shell handles newlines/quoting in MESSAGE_CONTENT correctly.
     const prepareSrc = topic.hookPrepareOverride ?? template.hookPrepare;
     let prepareRan = false;
     if (prepareSrc) {
-      const prepareWrapped = wrapWithEnv(prepareSrc, env);
+      const prepareWrapped = wrapWithEnv(prepareSrc, hostShellEnv);
       try {
         const r = await this.proxyDispatch(proxyId, {
           action: 'exec',
@@ -278,33 +292,38 @@ export class TopicDelivery {
         cwd: cwdBase,
       });
       if (!r.ok) {
-        this.failInstance(instance, queueId, `create_session failed: ${r.error ?? 'unknown'}`, prepareRan, { template, env, proxyId, cwdBase });
+        this.failInstance(instance, queueId, `create_session failed: ${r.error ?? 'unknown'}`, prepareRan, { template, env: hostShellEnv, proxyId, cwdBase });
         return;
       }
     } catch (err) {
-      this.failInstance(instance, queueId, `create_session threw: ${(err as Error).message}`, prepareRan, { template, env, proxyId, cwdBase });
+      this.failInstance(instance, queueId, `create_session threw: ${(err as Error).message}`, prepareRan, { template, env: hostShellEnv, proxyId, cwdBase });
       return;
     }
 
     // Step 5 — push the env contract into the tmux session via
     // `tmux set-environment`. Each call dispatched as `exec` per Q3 plan §B1.
     // All set-environment calls must precede the first `paste` — invariant #4.
+    // MESSAGE_CONTENT is intentionally EXCLUDED from this loop (payloads with
+    // newlines or control chars corrupt tmux env); agents read it from
+    // `$MESSAGE_PATH` instead.
     try {
-      await this.dispatchTmuxSetEnv(proxyId, tmuxSession, env);
+      await this.dispatchTmuxSetEnv(proxyId, tmuxSession, tmuxSessionEnv);
     } catch (err) {
-      this.failInstance(instance, queueId, `tmux set-environment failed: ${(err as Error).message}`, prepareRan, { template, env, proxyId, cwdBase, killSession: tmuxSession });
+      this.failInstance(instance, queueId, `tmux set-environment failed: ${(err as Error).message}`, prepareRan, { template, env: hostShellEnv, proxyId, cwdBase, killSession: tmuxSession });
       return;
     }
 
     // Step 6 — resolve and paste the `start` hook. Uses the unified resolver
-    // so structured / file: / preset: forms all work.
+    // so structured / file: / preset: forms all work. We pass the full host
+    // env as templateVars so {{MESSAGE_CONTENT}} interpolation still works
+    // when start hooks need the payload literally.
     const startSrc = topic.hookStartOverride ?? template.hookStart;
     const syntheticAgent = buildSyntheticAgent(template);
     try {
-      const result = resolveHook('start', startSrc ?? null, syntheticAgent, { templateVars: env });
+      const result = resolveHook('start', startSrc ?? null, syntheticAgent, { templateVars: hostShellEnv });
       await dispatchHookResult(this.lifecycleCtx, proxyId, tmuxSession, result, { pressEnter: true });
     } catch (err) {
-      this.failInstance(instance, queueId, `start hook failed: ${(err as Error).message}`, prepareRan, { template, env, proxyId, cwdBase, killSession: tmuxSession });
+      this.failInstance(instance, queueId, `start hook failed: ${(err as Error).message}`, prepareRan, { template, env: hostShellEnv, proxyId, cwdBase, killSession: tmuxSession });
       return;
     }
 

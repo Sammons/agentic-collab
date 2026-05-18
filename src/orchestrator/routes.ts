@@ -74,7 +74,7 @@ export type RouteContext = {
   topicDelivery?: TopicDelivery;
   instanceReaper?: InstanceReaper;
   /** Reload personas from disk; populated alongside `topicDelivery`. */
-  reloadPersonas?: () => { synced: number; created: string[]; updated: string[]; removed: string[] };
+  reloadPersonas?: () => { synced: number; created: string[]; updated: string[]; skipped: string[] };
 };
 
 /**
@@ -530,6 +530,13 @@ route('POST', '/api/instances/:id/complete', async (_req, res, match, ctx) => {
   }
   const id = match.pathname.groups['id'];
   if (!id) return json(res, 400, { error: 'instance id required' });
+  const instance = ctx.db.getAgentInstance(id);
+  if (!instance) {
+    return json(res, 404, { error: 'unknown instance' });
+  }
+  if (instance.state === 'completed' || instance.state === 'failed') {
+    return json(res, 409, { error: 'already terminal', state: instance.state });
+  }
   // Wake — does not block on result.
   ctx.instanceReaper.wake(id).catch((err) => {
     console.error(`[routes] reaper.wake(${id}) failed:`, (err as Error).message);

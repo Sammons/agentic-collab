@@ -687,12 +687,35 @@ export class Database {
     statusPath: string;
     worktreePath: string | null;
     monitorOfInstance?: string | null;
+    /**
+     * Per-topic concurrency cap. The claim only commits when the count of
+     * live `agent_instances` rows for (template, topic) is strictly less than
+     * this value. If omitted, no concurrency gate is applied (legacy callers).
+     */
+    concurrency?: number;
   }): { queue: TopicQueueRow; instance: AgentInstanceRow } | null {
     const begin = this.db.prepare('BEGIN IMMEDIATE');
     const commit = this.db.prepare('COMMIT');
     const rollback = this.db.prepare('ROLLBACK');
     begin.run();
     try {
+      // Invariant #1: check the live count INSIDE the transaction. Two
+      // concurrent ticks cannot both observe `live < cap` because
+      // BEGIN IMMEDIATE serializes writes — the second tick blocks until the
+      // first commits, then re-reads the count.
+      if (typeof opts.concurrency === 'number') {
+        const liveRow = this.db.prepare(`
+          SELECT COUNT(*) AS n FROM agent_instances
+           WHERE agent_template = ? AND spawned_from_topic = ?
+             AND state IN ('spawning', 'running', 'completing')
+        `).get(opts.agentTemplate, opts.topicName) as Record<string, unknown> | undefined;
+        const live = Number(liveRow?.['n'] ?? 0);
+        if (live >= opts.concurrency) {
+          rollback.run();
+          return null;
+        }
+      }
+
       // SQLite's node:sqlite supports RETURNING. Update the oldest queued row.
       const claimStmt = this.db.prepare(`
         UPDATE topic_queue

@@ -1053,7 +1053,7 @@ describe('API Routes — v3 Q3 endpoints', () => {
     // Build the real driver + reaper.
     const { TopicDelivery } = await import('./topic-delivery.ts');
     const { InstanceReaper } = await import('./instance-reaper.ts');
-    const driver = new TopicDelivery({ db, proxyDispatch: q3Dispatch, orchestratorHost: 'x', ipcRoot });
+    const driver = new TopicDelivery({ db, proxyDispatch: q3Dispatch, orchestratorHost: 'x', ipcRoot, locks: q3Locks });
     const reaper = new InstanceReaper({ db, proxyDispatch: q3Dispatch, messageDispatcher: q3MsgDispatcher, topicDelivery: driver, sweepIntervalMs: 50 });
     const reloadCalls = { n: 0 };
     const ctx: RouteContext = {
@@ -1072,7 +1072,7 @@ describe('API Routes — v3 Q3 endpoints', () => {
       instanceReaper: reaper,
       reloadPersonas: () => {
         reloadCalls.n++;
-        return { synced: 0, created: [], updated: [], removed: [] };
+        return { synced: 0, created: [], updated: [], skipped: [] };
       },
     };
 
@@ -1130,11 +1130,53 @@ describe('API Routes — v3 Q3 endpoints', () => {
     assert.match(String((data as { error: string }).error), /template/);
   });
 
-  it('POST /api/instances/:id/complete wakes the reaper (202)', async () => {
-    // No instance exists in this fixture for this id — reaper.wake is a no-op.
-    const { status, data } = await api('POST', '/api/instances/unknown-id/complete');
+  it('POST /api/instances/:id/complete wakes the reaper (202) when instance is live', async () => {
+    // Seed a live (running) instance via the claim path so the reaper can wake it.
+    db.enqueueTopicMessage({ agentTemplate: 'q3-tmpl', topicName: 'echo', payload: '{}' });
+    const claim = db.claimAndCreateInstance({
+      agentTemplate: 'q3-tmpl', topicName: 'echo',
+      instanceId: 'live-1', instanceAddr: 'agent:q3-tmpl/live-1',
+      tmuxSession: 'inst-q3-tmpl-live-1', proxyId: 'p1',
+      messageId: 'live-1', messagePath: '/tmp/m', replyPath: '/tmp/r', statusPath: '/tmp/s',
+      worktreePath: null,
+    });
+    assert.ok(claim);
+    db.updateInstanceState('live-1', 'running');
+    const { status, data } = await api('POST', '/api/instances/live-1/complete');
     assert.equal(status, 202);
     assert.equal((data as Record<string, unknown>)['ok'], true);
+  });
+
+  it('POST /api/instances/:id/complete returns 404 for unknown instance', async () => {
+    const { status, data } = await api('POST', '/api/instances/never-existed/complete');
+    assert.equal(status, 404);
+    assert.equal((data as Record<string, unknown>)['error'], 'unknown instance');
+  });
+
+  // BLOCKER 1: second `complete` POST on a terminal instance must 409.
+  it('POST /api/instances/:id/complete returns 409 on second call (already terminal)', async () => {
+    // Seed a directly-terminal instance via the claim path.
+    db.enqueueTopicMessage({ agentTemplate: 'q3-tmpl', topicName: 'echo', payload: '{}' });
+    const claim = db.claimAndCreateInstance({
+      agentTemplate: 'q3-tmpl', topicName: 'echo',
+      instanceId: 'terminal-1', instanceAddr: 'agent:q3-tmpl/terminal-1',
+      tmuxSession: 'inst-q3-tmpl-terminal-1', proxyId: 'p1',
+      messageId: 'terminal-1', messagePath: '/tmp/m', replyPath: '/tmp/r', statusPath: '/tmp/s',
+      worktreePath: null,
+    });
+    assert.ok(claim);
+    // Force terminal state.
+    db.updateInstanceState('terminal-1', 'completed', { completedAt: new Date().toISOString() });
+
+    const first = await api('POST', '/api/instances/terminal-1/complete');
+    assert.equal(first.status, 409, 'already terminal → 409');
+    const body = first.data as Record<string, unknown>;
+    assert.equal(body['error'], 'already terminal');
+    assert.equal(body['state'], 'completed');
+
+    // Second call still 409 (idempotent terminal).
+    const second = await api('POST', '/api/instances/terminal-1/complete');
+    assert.equal(second.status, 409);
   });
 
   it('POST /api/personas/reload returns 200 with diff', async () => {
@@ -1144,6 +1186,10 @@ describe('API Routes — v3 Q3 endpoints', () => {
     assert.equal(body['ok'], true);
     assert.equal(typeof body['synced'], 'number');
     assert.ok(Array.isArray(body['created']));
+    // BLOCKER 2 fix: the parse-failure list is named `skipped`, not `removed`.
+    // `skipped` ≠ deletion; reaper2 review caught the mislabel.
+    assert.ok(Array.isArray(body['skipped']), 'response carries `skipped`');
+    assert.equal(body['removed'], undefined, 'response does NOT carry `removed` (renamed to `skipped`)');
   });
 
   it('POST /api/agents/send with topic: forwards through TopicDelivery (202)', async () => {

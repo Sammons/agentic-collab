@@ -960,8 +960,7 @@ describe('HealthMonitor indicators', () => {
   // ── v3 Q3 invariant #8: health-monitor excludes agent_instances rows ──
 
   it('invariant #8: pollAll never operates on agent_instances rows', async () => {
-    // Seed an ephemeral instance row directly. The health monitor must not
-    // see it via db.listAgents().
+    // Seed an ephemeral instance row directly via the claim path.
     db.upsertAgentTemplate({
       id: 'inv8-tmpl',
       personaPath: null,
@@ -993,19 +992,48 @@ describe('HealthMonitor indicators', () => {
       worktreePath: null,
     });
     assert.ok(claim);
+    // Promote to running so it would be a candidate IF the health monitor
+    // accidentally unioned the two tables — making the test discriminating.
+    db.updateInstanceState('i8', 'running');
 
-    // Direct DB observation: listAgents only returns rows from `agents`.
+    // Step 1: db.listAgents() returns only `agents` table rows.
+    // No row matches the instance addr, the instance id, OR the tmux session.
     const agents = db.listAgents();
     for (const a of agents) {
-      assert.notEqual(a.name, 'i8', 'agent_instances row must not surface via listAgents');
+      assert.notEqual(a.name, 'i8', 'instance id does not surface as agent name');
+      assert.notEqual(a.name, 'agent:inv8-tmpl/i8', 'instance addr does not surface as agent name');
+      assert.notEqual(a.tmuxSession, 'inst-inv8-tmpl-i8', 'instance tmux session not in agents table');
     }
-    // Running the health monitor should never throw and never touch the
-    // ephemeral row (which has no `agents` row counterpart).
-    const monitor = makeMonitorWithIndicators();
-    await monitor.pollAll();
+
+    // Step 2: capture every tmux session the monitor operates on by routing
+    // its dispatch through a recorder. Assert the instance's session is
+    // never touched.
+    const touchedSessions: string[] = [];
+    const recordingDispatch = async (_proxyId: string, command: ProxyCommand): Promise<ProxyResponse> => {
+      if ('sessionName' in command && typeof command.sessionName === 'string') {
+        touchedSessions.push(command.sessionName);
+      }
+      if (command.action === 'capture') return { ok: true, data: captureOutput };
+      if (command.action === 'has_session') return { ok: true, data: true };
+      return { ok: true };
+    };
+    const recordingMonitor = new HealthMonitor({
+      db,
+      locks: new LockManager(db.rawDb),
+      proxyDispatch: recordingDispatch,
+      orchestratorHost: 'http://localhost:3000',
+      pollIntervalMs: 100,
+    });
+    await recordingMonitor.pollAll();
+
+    assert.ok(
+      !touchedSessions.includes('inst-inv8-tmpl-i8'),
+      `pollAll never targets the instance's tmux session (saw: ${JSON.stringify(touchedSessions)})`,
+    );
+
     // The instance row is still untouched.
     const fresh = db.getAgentInstance('i8');
     assert.ok(fresh);
-    assert.equal(fresh!.state, 'spawning');
+    assert.equal(fresh!.state, 'running');
   });
 });

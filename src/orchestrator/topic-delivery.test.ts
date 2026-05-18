@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { Database } from './database.ts';
 import { TopicDelivery } from './topic-delivery.ts';
+import { LockManager } from '../shared/lock.ts';
 import type { ProxyCommand, ProxyResponse, AgentTemplateRow, TopicRow } from '../shared/types.ts';
 
 function seedTemplate(db: Database, id: string, opts?: Partial<AgentTemplateRow>): void {
@@ -80,35 +81,83 @@ describe('TopicDelivery — Q3 invariants', () => {
     };
   });
 
-  it('invariant #1: concurrent publishes on concurrency:1 → exactly one claim', async () => {
+  it('invariant #1: concurrent claim attempts on concurrency:1 → exactly one row in agent_instances', async () => {
     seedTemplate(db, 'tA');
     seedTopic(db, 'tA', { concurrency: 1 });
-    const driver = new TopicDelivery({
-      db, proxyDispatch: dispatch, orchestratorHost: 'x', ipcRoot,
+
+    // Directly enqueue TWO topic_queue rows (publish would also work, but we
+    // want to race claimAndCreateInstance specifically — that's where the
+    // BLOCKER 3 fix lives). Then race two claim attempts in `Promise.all`.
+    db.enqueueTopicMessage({ agentTemplate: 'tA', topicName: 'echo', payload: '{"n":1}' });
+    db.enqueueTopicMessage({ agentTemplate: 'tA', topicName: 'echo', payload: '{"n":2}' });
+
+    // Build claim option templates so the two calls race over the same cap.
+    const claimOpts = (suffix: string) => ({
+      agentTemplate: 'tA',
+      topicName: 'echo',
+      instanceId: `race-${suffix}`,
+      instanceAddr: `agent:tA/race-${suffix}`,
+      tmuxSession: `inst-tA-race-${suffix}`,
+      proxyId: 'p1',
+      messageId: `race-${suffix}`,
+      messagePath: `/tmp/m-${suffix}`,
+      replyPath: `/tmp/r-${suffix}`,
+      statusPath: `/tmp/s-${suffix}`,
+      worktreePath: null,
+      concurrency: 1,
     });
 
-    // Two simultaneous publishes.
+    // BEGIN IMMEDIATE serializes; the second TX blocks on the first, then
+    // re-reads the live count. With the fix, exactly one claim survives.
     const [r1, r2] = await Promise.all([
-      driver.publish({ agentTemplate: 'tA', topicName: 'echo', payload: '{"n":1}' }),
-      driver.publish({ agentTemplate: 'tA', topicName: 'echo', payload: '{"n":2}' }),
+      Promise.resolve().then(() => db.claimAndCreateInstance(claimOpts('A'))),
+      Promise.resolve().then(() => db.claimAndCreateInstance(claimOpts('B'))),
     ]);
 
+    const survivors = [r1, r2].filter((r) => r != null);
+    assert.equal(survivors.length, 1, 'exactly one claim survives concurrency:1 cap');
+
+    // Direct DB observation: only one agent_instances row for the topic.
+    const liveRow = db.rawDb.prepare(
+      `SELECT COUNT(*) AS n FROM agent_instances WHERE agent_template = 'tA' AND spawned_from_topic = 'echo'`,
+    ).get() as { n: number };
+    assert.equal(liveRow.n, 1, 'exactly one agent_instances row for (tA, echo)');
+
+    // And the queue: one row was claimed, the other still queued.
+    const queuedRows = db.rawDb.prepare(
+      `SELECT status FROM topic_queue WHERE agent_template = 'tA' AND topic_name = 'echo'`,
+    ).all() as Array<{ status: string }>;
+    const claimed = queuedRows.filter((r) => r.status === 'claimed').length;
+    const queued = queuedRows.filter((r) => r.status === 'queued').length;
+    assert.equal(claimed, 1, 'one queue row claimed');
+    assert.equal(queued, 1, 'one queue row still queued (waiting for first to finish)');
+  });
+
+  it('invariant #1 (driver-level): two concurrent publishes still yield exactly one live instance', async () => {
+    seedTemplate(db, 'tA2');
+    seedTopic(db, 'tA2', { concurrency: 1 });
+    const driver = new TopicDelivery({
+      db, proxyDispatch: dispatch, orchestratorHost: 'x', ipcRoot, locks: new LockManager(db.rawDb),
+    });
+
+    const [r1, r2] = await Promise.all([
+      driver.publish({ agentTemplate: 'tA2', topicName: 'echo', payload: '{"n":1}' }),
+      driver.publish({ agentTemplate: 'tA2', topicName: 'echo', payload: '{"n":2}' }),
+    ]);
     assert.equal(r1.ok, true);
     assert.equal(r2.ok, true);
-
-    // Wait briefly for the dispatch loop.
     await new Promise(r => setTimeout(r, 100));
 
-    // Both rows enqueued, exactly one should be claimed (concurrency: 1).
     const live = db.listLiveAgentInstances();
-    assert.equal(live.length, 1, 'exactly one instance live for concurrency:1 topic');
+    const forTopic = live.filter((r) => r.agentTemplate === 'tA2' && r.spawnedFromTopic === 'echo');
+    assert.equal(forTopic.length, 1, 'exactly one instance live for concurrency:1 topic');
   });
 
   it('invariant #2: agent_instances INSERT in same TX as claim → address resolvable immediately', async () => {
     seedTemplate(db, 'tB');
     seedTopic(db, 'tB');
     const driver = new TopicDelivery({
-      db, proxyDispatch: dispatch, orchestratorHost: 'x', ipcRoot,
+      db, proxyDispatch: dispatch, orchestratorHost: 'x', ipcRoot, locks: new LockManager(db.rawDb),
     });
 
     const r = await driver.publish({ agentTemplate: 'tB', topicName: 'echo', payload: '{}' });
@@ -130,7 +179,7 @@ describe('TopicDelivery — Q3 invariants', () => {
     seedTemplate(db, 'tC', { hookPrepare: 'echo prep', hookStart: 'echo start' });
     seedTopic(db, 'tC');
     const driver = new TopicDelivery({
-      db, proxyDispatch: dispatch, orchestratorHost: 'x', ipcRoot,
+      db, proxyDispatch: dispatch, orchestratorHost: 'x', ipcRoot, locks: new LockManager(db.rawDb),
     });
 
     await driver.publish({ agentTemplate: 'tC', topicName: 'echo', payload: '{}' });
@@ -153,27 +202,53 @@ describe('TopicDelivery — Q3 invariants', () => {
     assert.equal(prepareCmd.timeoutMs, 60_000);
   });
 
-  it('invariant #4: every tmux set-environment exec runs before the first paste', async () => {
+  it('invariant #4: every tmux set-environment exec runs before the first paste AND uses the tmux-safe env subset', async () => {
     seedTemplate(db, 'tD');
     seedTopic(db, 'tD');
     const driver = new TopicDelivery({
-      db, proxyDispatch: dispatch, orchestratorHost: 'x', ipcRoot,
+      db, proxyDispatch: dispatch, orchestratorHost: 'x', ipcRoot, locks: new LockManager(db.rawDb),
     });
 
-    await driver.publish({ agentTemplate: 'tD', topicName: 'echo', payload: '{}' });
+    // Payload contains a newline so we can prove MESSAGE_CONTENT never
+    // reaches `tmux set-environment` (BLOCKER 7 — payloads with newlines
+    // would corrupt tmux env state).
+    const payload = 'line1\nline2\nline3';
+    await driver.publish({ agentTemplate: 'tD', topicName: 'echo', payload });
     await new Promise(r => setTimeout(r, 250));
 
     const firstPasteIdx = commands.findIndex(c => c.action === 'paste');
     assert.ok(firstPasteIdx >= 0, 'paste exists');
     // Collect all set-env exec indexes.
-    const setEnvIdxs = commands
+    const setEnvCommands = commands
       .map((c, i) => ({ c, i }))
-      .filter(({ c }) => c.action === 'exec' && (c as Extract<ProxyCommand, { action: 'exec' }>).command.startsWith('tmux set-environment'))
-      .map(({ i }) => i);
+      .filter(({ c }) => c.action === 'exec' && (c as Extract<ProxyCommand, { action: 'exec' }>).command.startsWith('tmux set-environment'));
 
-    assert.ok(setEnvIdxs.length > 0, 'at least one set-env dispatched');
-    for (const idx of setEnvIdxs) {
+    assert.ok(setEnvCommands.length > 0, 'at least one set-env dispatched');
+    for (const { i: idx } of setEnvCommands) {
       assert.ok(idx < firstPasteIdx, `set-env at ${idx} precedes first paste at ${firstPasteIdx}`);
+    }
+
+    // BLOCKER 7: assert the set-environment loop runs exactly
+    // `len(tmuxSessionEnv)` times — i.e. once per tmux-safe key, NOT once
+    // per host-shell key.
+    const { TMUX_SAFE_ENV_KEYS } = await import('./instance-env.ts');
+    assert.equal(
+      setEnvCommands.length,
+      TMUX_SAFE_ENV_KEYS.length,
+      `set-env dispatched exactly ${TMUX_SAFE_ENV_KEYS.length} times (one per tmux-safe key)`,
+    );
+
+    // BLOCKER 7: MESSAGE_CONTENT must NEVER appear in any tmux set-environment.
+    for (const { c } of setEnvCommands) {
+      const cmd = (c as Extract<ProxyCommand, { action: 'exec' }>).command;
+      assert.ok(!cmd.includes('MESSAGE_CONTENT'), `tmux set-environment must not carry MESSAGE_CONTENT (cmd: ${cmd})`);
+      // And the keys must be from the safe list.
+      const m = cmd.match(/tmux set-environment -t \S+ (?:'([^']+)'|"([^"]+)"|(\S+))/);
+      const key = m ? (m[1] ?? m[2] ?? m[3]) : '';
+      assert.ok(
+        (TMUX_SAFE_ENV_KEYS as readonly string[]).includes(key!),
+        `tmux set-env key "${key}" is in TMUX_SAFE_ENV_KEYS`,
+      );
     }
   });
 
@@ -181,7 +256,7 @@ describe('TopicDelivery — Q3 invariants', () => {
     seedTemplate(db, 'tE');
     seedTopic(db, 'tE');
     const driver = new TopicDelivery({
-      db, proxyDispatch: dispatch, orchestratorHost: 'x', ipcRoot,
+      db, proxyDispatch: dispatch, orchestratorHost: 'x', ipcRoot, locks: new LockManager(db.rawDb),
     });
 
     await driver.publish({ agentTemplate: 'tE', topicName: 'echo', payload: '{"hello":"world"}' });
@@ -195,24 +270,10 @@ describe('TopicDelivery — Q3 invariants', () => {
     assert.ok(existsSync(live[0]!.statusPath));
   });
 
-  it('invariant #8: health-monitor + cool-down exclude agent_instances (db.listAgents excludes them)', () => {
+  it('invariant #8: db.listAgents() excludes agent_instances rows (tables are disjoint)', () => {
     seedTemplate(db, 'tF');
     seedTopic(db, 'tF');
-    // Force-create an agent_instances row directly via the claim path.
-    const inst = db.claimAndCreateInstance({
-      agentTemplate: 'tF',
-      topicName: 'echo',
-      instanceId: 'forced-id',
-      instanceAddr: 'agent:tF/forced-id',
-      tmuxSession: 'inst-tF-forced-id',
-      proxyId: 'p1',
-      messageId: 'forced-id',
-      messagePath: '/tmp/msg',
-      replyPath: '/tmp/reply',
-      statusPath: '/tmp/status',
-      worktreePath: null,
-    });
-    // We need a queued row first; enqueue then claim.
+    // Enqueue + claim → ephemeral `agent_instances` row exists.
     db.enqueueTopicMessage({ agentTemplate: 'tF', topicName: 'echo', payload: '{}' });
     const claim = db.claimAndCreateInstance({
       agentTemplate: 'tF',
@@ -227,14 +288,26 @@ describe('TopicDelivery — Q3 invariants', () => {
       statusPath: '/tmp/status',
       worktreePath: null,
     });
-    assert.equal(inst, null, 'no queued row → no claim');
-    assert.ok(claim, 'second claim succeeds');
+    assert.ok(claim, 'claim succeeds');
 
-    // db.listAgents() returns only `agents` table rows.
+    // Direct evidence the ephemeral row exists in `agent_instances` …
+    const instanceRow = db.getAgentInstance('forced-id-2');
+    assert.ok(instanceRow, 'agent_instances row written');
+    assert.equal(instanceRow!.instanceAddr, 'agent:tF/forced-id-2');
+
+    // … but db.listAgents() (which reads the `agents` table) returns nothing
+    // matching the instance addr OR the instance id. listAgents must not
+    // union the two tables.
     const agents = db.listAgents();
     for (const a of agents) {
-      assert.notEqual(a.name, 'forced-id-2', 'agent_instances row must NOT appear in db.listAgents()');
+      assert.notEqual(a.name, 'forced-id-2', 'agent_instances id does not surface as agent name');
+      assert.notEqual(a.name, 'agent:tF/forced-id-2', 'instance addr does not surface as agent name');
+      assert.notEqual(a.tmuxSession, 'inst-tF-forced-id-2', 'instance tmux session not in agents table');
     }
+    // And the listAgents result is genuinely empty because no row was ever
+    // inserted into `agents` for this test — proves listAgents excludes
+    // agent_instances by querying the right table, not by lucky filter order.
+    assert.equal(agents.length, 0, 'no agents table rows — only agent_instances rows exist');
   });
 
   it('invariant #11: proxy/main.ts injects bin/collab onto PATH for spawned tmux sessions', () => {
@@ -252,7 +325,7 @@ describe('TopicDelivery — Q3 invariants', () => {
     seedTemplate(db, 'tG');
     seedTopic(db, 'tG');
     const driver = new TopicDelivery({
-      db, proxyDispatch: dispatch, orchestratorHost: 'x', ipcRoot,
+      db, proxyDispatch: dispatch, orchestratorHost: 'x', ipcRoot, locks: new LockManager(db.rawDb),
     });
 
     await driver.publish({
