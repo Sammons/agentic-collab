@@ -4,6 +4,8 @@
 
 // ── Agent ──
 
+export type { Address } from './address.ts';
+
 export type AgentState = 'void' | 'spawning' | 'resuming' | 'suspending' | 'active' | 'idle' | 'suspended' | 'failed';
 
 export type EngineType = 'claude' | 'codex' | 'opencode';

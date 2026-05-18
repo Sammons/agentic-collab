@@ -17,6 +17,7 @@ import type { WebSocketServer } from '../shared/websocket-server.ts';
 import type { AgentState, DashboardMessage, DestinationRecord, EngineType, PendingMessage, ProxyCommand, ProxyResponse, ProxyRegistration } from '../shared/types.ts';
 import type { TelegramDispatcher } from './telegram.ts';
 import { sanitizeMessage, generateMessageId } from '../shared/sanitize.ts';
+import { parseAddress } from '../shared/address.ts';
 import { getVersion, versionsMatch } from '../shared/version.ts';
 import type { LockManager } from '../shared/lock.ts';
 import { getPersonasDir, parseFrontmatter, createPersonaAndAgent, syncSinglePersona, syncPersonasWithDiff, updateFrontmatterField, resolvePersonaPath, toHostPath } from './persona.ts';
@@ -313,6 +314,29 @@ route('POST', '/api/agents/send', async (req, res, _match, ctx) => {
     return json(res, 400, { error: 'from, to, message, topic required' });
   }
 
+  // Q1: address-prefix routing. `topic:` and `approval:` parse but resolution
+  // is wired by later quanta; bare names and `agent:<name>` resolve here.
+  // Storage continues to use bare agent names — we rewrite `body.to` to the
+  // bare form before falling through to the existing agent path.
+  const addr = parseAddress(body.to);
+  if (addr.class === 'malformed') {
+    return json(res, 400, { error: 'malformed address', reason: addr.reason });
+  }
+  if (addr.class === 'topic') {
+    console.log(`[routes] /api/agents/send: topic address not yet wired (template=${addr.template}, topic=${addr.topic})`);
+    return json(res, 503, { error: 'address class not yet wired', class: 'topic' });
+  }
+  if (addr.class === 'approval') {
+    console.log(`[routes] /api/agents/send: approval address not yet wired (channel=${addr.channel})`);
+    return json(res, 503, { error: 'address class not yet wired', class: 'approval' });
+  }
+  if (addr.class === 'agent-instance') {
+    console.log(`[routes] /api/agents/send: agent-instance address not yet wired (template=${addr.template}, instanceId=${addr.instanceId})`);
+    return json(res, 503, { error: 'address class not yet wired', class: 'agent-instance' });
+  }
+  // addr.class === 'agent' — use bare name for storage / lookup.
+  body.to = addr.name;
+
   const target = ctx.db.getAgent(body.to);
   if (!target) return json(res, 404, { error: `Target agent "${body.to}" not found` });
   if (target.state === 'void') {
@@ -382,6 +406,26 @@ route('POST', '/api/dashboard/send', async (req, res, _match, ctx) => {
   if (!body.agent || !body.message || !body.topic) {
     return json(res, 400, { error: 'agent, message, topic required' });
   }
+
+  // Q1: address-prefix routing on body.agent. Same staging as /api/agents/send:
+  // bare and `agent:<name>` resolve here; other classes 503 until later quanta.
+  const dashAddr = parseAddress(body.agent);
+  if (dashAddr.class === 'malformed') {
+    return json(res, 400, { error: 'malformed address', reason: dashAddr.reason });
+  }
+  if (dashAddr.class === 'topic') {
+    console.log(`[routes] /api/dashboard/send: topic address not yet wired (template=${dashAddr.template}, topic=${dashAddr.topic})`);
+    return json(res, 503, { error: 'address class not yet wired', class: 'topic' });
+  }
+  if (dashAddr.class === 'approval') {
+    console.log(`[routes] /api/dashboard/send: approval address not yet wired (channel=${dashAddr.channel})`);
+    return json(res, 503, { error: 'address class not yet wired', class: 'approval' });
+  }
+  if (dashAddr.class === 'agent-instance') {
+    console.log(`[routes] /api/dashboard/send: agent-instance address not yet wired (template=${dashAddr.template}, instanceId=${dashAddr.instanceId})`);
+    return json(res, 503, { error: 'address class not yet wired', class: 'agent-instance' });
+  }
+  body.agent = dashAddr.name;
 
   const agent = ctx.db.getAgent(body.agent);
   if (!agent) return json(res, 404, { error: `Agent "${body.agent}" not found` });

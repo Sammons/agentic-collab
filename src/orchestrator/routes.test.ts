@@ -391,6 +391,100 @@ describe('API Routes', () => {
     assert.equal(status, 404);
   });
 
+  // ── Q1: address-prefix routing ──
+
+  it('POST /api/agents/send accepts agent:<name> and stores bare name', async () => {
+    const before = db.listPendingMessages('api-agent-1').length;
+    const { status, data } = await api('POST', '/api/agents/send', {
+      from: 'dashboard',
+      to: 'agent:api-agent-1',
+      message: 'addressed send',
+      topic: 'test-topic',
+    });
+    assert.equal(status, 202);
+    const body = data as Record<string, unknown>;
+    assert.ok(body['queueId']);
+
+    const after = db.listPendingMessages('api-agent-1');
+    assert.equal(after.length, before + 1, 'one new pending message should be queued');
+    const newest = after.at(-1)!;
+    // Storage continues to use the bare name — no prefix leakage.
+    assert.equal(newest.targetAgent, 'api-agent-1');
+    assert.ok(!newest.targetAgent.includes(':'), 'target_agent must not contain prefix colon');
+  });
+
+  it('POST /api/agents/send returns 503 for topic: addresses (not yet wired)', async () => {
+    const { status, data } = await api('POST', '/api/agents/send', {
+      from: 'dashboard',
+      to: 'topic:foo/bar',
+      message: 'hello',
+      topic: 'test-topic',
+    });
+    assert.equal(status, 503);
+    const body = data as Record<string, unknown>;
+    assert.equal(body['error'], 'address class not yet wired');
+    assert.equal(body['class'], 'topic');
+  });
+
+  it('POST /api/agents/send returns 503 for approval: addresses (not yet wired)', async () => {
+    const { status, data } = await api('POST', '/api/agents/send', {
+      from: 'dashboard',
+      to: 'approval:chan',
+      message: 'hello',
+      topic: 'test-topic',
+    });
+    assert.equal(status, 503);
+    const body = data as Record<string, unknown>;
+    assert.equal(body['error'], 'address class not yet wired');
+    assert.equal(body['class'], 'approval');
+  });
+
+  it('POST /api/agents/send returns 503 for agent:<tmpl>/<inst> addresses (not yet wired)', async () => {
+    const { status, data } = await api('POST', '/api/agents/send', {
+      from: 'dashboard',
+      to: 'agent:tmpl/inst-1',
+      message: 'hello',
+      topic: 'test-topic',
+    });
+    assert.equal(status, 503);
+    const body = data as Record<string, unknown>;
+    assert.equal(body['error'], 'address class not yet wired');
+    assert.equal(body['class'], 'agent-instance');
+  });
+
+  it('POST /api/agents/send returns 400 for malformed addresses', async () => {
+    const { status, data } = await api('POST', '/api/agents/send', {
+      from: 'dashboard',
+      to: 'weird:foo',
+      message: 'hello',
+      topic: 'test-topic',
+    });
+    assert.equal(status, 400);
+    const body = data as Record<string, unknown>;
+    assert.equal(body['error'], 'malformed address');
+    assert.equal(typeof body['reason'], 'string');
+  });
+
+  it('POST /api/dashboard/send returns 503 for topic: addresses (not yet wired)', async () => {
+    const { status, data } = await api('POST', '/api/dashboard/send', {
+      agent: 'topic:foo/bar',
+      message: 'hello',
+      topic: 'test-topic',
+    });
+    assert.equal(status, 503);
+    const body = data as Record<string, unknown>;
+    assert.equal(body['class'], 'topic');
+  });
+
+  it('POST /api/dashboard/send returns 400 for malformed addresses', async () => {
+    const { status } = await api('POST', '/api/dashboard/send', {
+      agent: 'weird:foo',
+      message: 'hello',
+      topic: 'test-topic',
+    });
+    assert.equal(status, 400);
+  });
+
   it('GET /api/queue returns queued messages', async () => {
     const { status, data } = await api('GET', '/api/queue?agent=api-agent-1');
     assert.equal(status, 200);
