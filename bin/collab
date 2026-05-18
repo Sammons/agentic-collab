@@ -13,8 +13,8 @@
  *   COLLAB_AGENT            — Default agent name for send/reply (set by orchestrator)
  */
 
-import { readFileSync, existsSync, mkdtempSync, writeFileSync, readdirSync } from 'node:fs';
-import { basename, join, resolve } from 'node:path';
+import { readFileSync, existsSync, mkdtempSync, writeFileSync, readdirSync, renameSync, mkdirSync } from 'node:fs';
+import { basename, dirname, join, resolve } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { execSync } from 'node:child_process';
 
@@ -290,6 +290,104 @@ cmd('send', 'send <target> --topic <topic> [--in-reply-to <text>] [--notify [pri
 
 cmd('reply', 'reply --topic <topic> [--in-reply-to <text>] <message>', 'Compatibility alias for send operator', async (args) => {
   await dispatchSend(parseSendArgs(args, 'operator'));
+});
+
+// ── v3 Q3: ephemeral instance signaling ──────────────────────────────────
+//
+// Used inside an ephemeral agent's tmux session. The orchestrator injects
+// the env contract (MESSAGE_ID, REPLY_PATH, STATUS_PATH, INSTANCE_ID, ...)
+// via `tmux set-environment` before pasting the `start` hook. Both
+// subcommands:
+//   1. Validate the env trio is present (otherwise the agent is in persistent
+//      mode and shouldn't be calling these).
+//   2. Atomically write $REPLY_PATH and $STATUS_PATH (tmp + rename) so the
+//      reaper's `statSync(...).size === 0` in-progress check is reliable.
+//   3. POST /api/instances/$INSTANCE_ID/complete to wake the reaper. If the
+//      POST fails, the reaper picks the instance up on its next sweep.
+// Both are idempotent — a second call is a no-op (409 from the orchestrator).
+
+function requireEphemeralEnv() {
+  const messageId = process.env['MESSAGE_ID'];
+  const replyPath = process.env['REPLY_PATH'];
+  const statusPath = process.env['STATUS_PATH'];
+  const instanceId = process.env['INSTANCE_ID'];
+  if (!messageId || !replyPath || !statusPath || !instanceId) {
+    console.error('error: `collab complete`/`fail` require ephemeral env vars');
+    console.error('  MESSAGE_ID, REPLY_PATH, STATUS_PATH, INSTANCE_ID must all be set');
+    console.error('  these are injected by the orchestrator on ephemeral spawn');
+    process.exit(1);
+  }
+  return { messageId, replyPath, statusPath, instanceId };
+}
+
+function atomicWrite(path, content) {
+  mkdirSync(dirname(path), { recursive: true });
+  const tmp = `${path}.tmp-${process.pid}-${Date.now()}`;
+  writeFileSync(tmp, content);
+  renameSync(tmp, path);
+}
+
+cmd('complete', 'complete --reply <json>', 'Ephemeral: signal success and reply', async (args) => {
+  let reply = null;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--reply' && args[i + 1]) { reply = args[++i]; }
+  }
+  if (reply === null) {
+    console.error('usage: collab complete --reply <json>');
+    process.exit(1);
+  }
+  const { instanceId, replyPath, statusPath } = requireEphemeralEnv();
+  atomicWrite(replyPath, reply);
+  atomicWrite(statusPath, 'ok\n');
+  // Best-effort wake — if the orchestrator is unreachable, the reaper will
+  // pick this up on its next sweep anyway.
+  try {
+    await init();
+    const resp = await fetch(`${_host}/api/instances/${encodeURIComponent(instanceId)}/complete`, {
+      method: 'POST',
+      headers: headers(),
+    });
+    if (resp.status === 409) {
+      console.log('already completed');
+      return;
+    }
+    if (!resp.ok) {
+      console.warn(`warning: completion POST returned ${resp.status} — reaper will retry`);
+    }
+    console.log('completed');
+  } catch (err) {
+    console.warn(`warning: completion POST failed (${err.message}) — reaper will retry`);
+  }
+});
+
+cmd('fail', 'fail --reason <text>', 'Ephemeral: signal failure', async (args) => {
+  let reason = null;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--reason' && args[i + 1]) { reason = args[++i]; }
+  }
+  if (reason === null) {
+    console.error('usage: collab fail --reason <text>');
+    process.exit(1);
+  }
+  const { instanceId, statusPath } = requireEphemeralEnv();
+  atomicWrite(statusPath, `error\n${reason}\n`);
+  try {
+    await init();
+    const resp = await fetch(`${_host}/api/instances/${encodeURIComponent(instanceId)}/complete`, {
+      method: 'POST',
+      headers: headers(),
+    });
+    if (resp.status === 409) {
+      console.log('already failed');
+      return;
+    }
+    if (!resp.ok) {
+      console.warn(`warning: failure POST returned ${resp.status} — reaper will retry`);
+    }
+    console.log('failed');
+  } catch (err) {
+    console.warn(`warning: failure POST failed (${err.message}) — reaper will retry`);
+  }
 });
 
 cmd('spawn', 'spawn <name> [task...]', 'Spawn an agent', async (args) => {

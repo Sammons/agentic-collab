@@ -956,4 +956,56 @@ describe('HealthMonitor indicators', () => {
     assert.equal(update!.indicators.length, 1);
     assert.equal((update!.indicators[0] as { badge: string }).badge, 'Hello');
   });
+
+  // ── v3 Q3 invariant #8: health-monitor excludes agent_instances rows ──
+
+  it('invariant #8: pollAll never operates on agent_instances rows', async () => {
+    // Seed an ephemeral instance row directly. The health monitor must not
+    // see it via db.listAgents().
+    db.upsertAgentTemplate({
+      id: 'inv8-tmpl',
+      personaPath: null,
+      engine: 'claude',
+      model: null,
+      persistent: false,
+      cwdBase: '/tmp',
+      cwdTemplate: null,
+      repoRoot: '/tmp',
+      hookStart: null,
+      hookExit: null,
+      hookPrepare: null,
+      hookCleanup: null,
+      createdAt: '',
+      updatedAt: '',
+    });
+    db.enqueueTopicMessage({ agentTemplate: 'inv8-tmpl', topicName: 't', payload: '{}' });
+    const claim = db.claimAndCreateInstance({
+      agentTemplate: 'inv8-tmpl',
+      topicName: 't',
+      instanceId: 'i8',
+      instanceAddr: 'agent:inv8-tmpl/i8',
+      tmuxSession: 'inst-inv8-tmpl-i8',
+      proxyId: 'p1',
+      messageId: 'i8',
+      messagePath: '/tmp/m',
+      replyPath: '/tmp/r',
+      statusPath: '/tmp/s',
+      worktreePath: null,
+    });
+    assert.ok(claim);
+
+    // Direct DB observation: listAgents only returns rows from `agents`.
+    const agents = db.listAgents();
+    for (const a of agents) {
+      assert.notEqual(a.name, 'i8', 'agent_instances row must not surface via listAgents');
+    }
+    // Running the health monitor should never throw and never touch the
+    // ephemeral row (which has no `agents` row counterpart).
+    const monitor = makeMonitorWithIndicators();
+    await monitor.pollAll();
+    // The instance row is still untouched.
+    const fresh = db.getAgentInstance('i8');
+    assert.ok(fresh);
+    assert.equal(fresh!.state, 'spawning');
+  });
 });

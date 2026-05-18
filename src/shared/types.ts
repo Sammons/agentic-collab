@@ -317,6 +317,62 @@ export type TopicRow = {
   replySchemaPath: string | null;
 };
 
+/** Lifecycle states for `agent_instances` rows. */
+export type AgentInstanceState =
+  | 'spawning'
+  | 'running'
+  | 'completing'
+  | 'completed'
+  | 'failed';
+
+/**
+ * Row in the `agent_instances` table — one per ephemeral spawn driven by the
+ * TopicDelivery kernel. Separate from `agents` so the persistent-agent state
+ * machine, health monitor, and cool-down logic stay untouched.
+ */
+export type AgentInstanceRow = {
+  id: string;
+  agentTemplate: string;
+  spawnedFromTopic: string | null;
+  instanceAddr: string;
+  tmuxSession: string;
+  worktreePath: string | null;
+  proxyId: string;
+  state: AgentInstanceState;
+  failureReason: string | null;
+  replyToAddr: string | null;
+  messageId: string;
+  messagePath: string;
+  replyPath: string;
+  statusPath: string;
+  queueId: number | null;
+  monitorOfInstance: string | null;
+  startedAt: string;
+  completedAt: string | null;
+};
+
+/** Status values used in the `topic_queue.status` column. */
+export type TopicQueueStatus = 'queued' | 'claimed' | 'completed' | 'failed';
+
+/**
+ * Row in the `topic_queue` table. Each `topic:<tmpl>/<name>` publish lands as
+ * one row; the TopicDelivery driver claims rows atomically and pairs each
+ * claim with an `agent_instances` row.
+ */
+export type TopicQueueRow = {
+  id: number;
+  agentTemplate: string;
+  topicName: string;
+  payload: string;
+  replyToAddr: string | null;
+  inReplyTo: string | null;
+  status: TopicQueueStatus;
+  claimedByInstance: string | null;
+  worktreePath: string | null;
+  createdAt: string;
+  completedAt: string | null;
+};
+
 // ── WebSocket Events (Orchestrator → Dashboard) ──
 
 export type WsInitEvent = {

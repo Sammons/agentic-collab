@@ -104,7 +104,7 @@ function wrapLaunchResult(result: HookResult, agent: AgentRecord, personaFile: s
  * When agentName is provided and the pipeline contains capture steps,
  * captured variables are stored in the agent's captured_vars column.
  */
-async function dispatchHookResult(
+export async function dispatchHookResult(
   ctx: LifecycleContext,
   proxyId: string,
   tmuxSession: string,

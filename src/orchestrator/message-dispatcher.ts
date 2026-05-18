@@ -253,6 +253,47 @@ export class MessageDispatcher {
   }
 
   /**
+   * Sync-or-drop delivery for ephemeral instance addresses
+   * (`agent:<template>/<instance-id>`).
+   *
+   * Per the v3 spec, instance-targeted messages never persist into
+   * `pending_messages` — the table is bare-name only. This method reads
+   * `agent_instances` to find the live tmux session, dispatches a `paste`,
+   * and returns a result. Callers (typically routes) handle the result:
+   *  - `{ ok: true }` → 200 to client.
+   *  - `{ ok: false, reason: 'instance-not-live' }` → 503 (or 410).
+   *  - `{ ok: false, reason: 'paste-failed', error }` → 503 + log.
+   *
+   * Never throws; never persists.
+   */
+  async deliverToInstance(instanceId: string, envelope: string): Promise<
+    | { ok: true }
+    | { ok: false; reason: 'instance-not-found' | 'instance-not-live' | 'paste-failed'; error?: string }
+  > {
+    const instance = this.db.getAgentInstance(instanceId);
+    if (!instance) {
+      return { ok: false, reason: 'instance-not-found' };
+    }
+    if (instance.state !== 'running') {
+      return { ok: false, reason: 'instance-not-live' };
+    }
+    try {
+      const resp = await this.proxyDispatch(instance.proxyId, {
+        action: 'paste',
+        sessionName: instance.tmuxSession,
+        text: envelope,
+        pressEnter: true,
+      });
+      if (!resp.ok) {
+        return { ok: false, reason: 'paste-failed', error: resp.error ?? 'unknown' };
+      }
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, reason: 'paste-failed', error: (err as Error).message };
+    }
+  }
+
+  /**
    * Auto-reply to sender when delivery permanently fails.
    */
   private autoReplyToSender(message: PendingMessage): void {

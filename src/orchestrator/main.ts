@@ -19,6 +19,8 @@ import { ReminderDispatcher } from './reminder-dispatcher.ts';
 import { shutdownAgents, restoreAllAgents } from './network.ts';
 import type { LifecycleContext } from './lifecycle.ts';
 import { syncPersonasToDb, syncPersonasWithDiff, getPersonasDir } from './persona.ts';
+import { TopicDelivery } from './topic-delivery.ts';
+import { InstanceReaper } from './instance-reaper.ts';
 import { AccountStore } from './accounts.ts';
 import { isRunning } from '../shared/agent-entity.ts';
 import { resolveSecret, getSecretPath } from '../shared/config.ts';
@@ -78,6 +80,14 @@ async function proxyDispatch(proxyId: string, command: ProxyCommand): Promise<Pr
     }
 
     try {
+      // `exec` commands may carry an explicit timeoutMs that is larger than
+      // the default 15s fetch ceiling (e.g. `git worktree add` at 60s).
+      // Bump the orchestrator-side abort to outlive the proxy-side timeout
+      // by a 5s buffer for HTTP + proxy-startup overhead. Non-exec commands
+      // keep the 15s ceiling.
+      const fetchTimeout = command.action === 'exec'
+        ? Math.max(15_000, (command.timeoutMs ?? 5_000) + 5_000)
+        : 15_000;
       const resp = await fetch(`http://${proxy.host}/command`, {
         method: 'POST',
         headers: {
@@ -85,7 +95,7 @@ async function proxyDispatch(proxyId: string, command: ProxyCommand): Promise<Pr
           'x-proxy-token': proxy.token,
         },
         body: JSON.stringify(command),
-        signal: AbortSignal.timeout(15_000),
+        signal: AbortSignal.timeout(fetchTimeout),
       });
 
       if (!resp.ok) {
@@ -235,6 +245,31 @@ if (voiceOpts) {
 
 const telegramDispatcher = new TelegramDispatcher();
 
+// ── v3 Q3: Topic delivery + instance reaper ──
+
+const INSTANCES_DIR = join(dirname(DB_PATH), 'instances');
+mkdirSync(INSTANCES_DIR, { recursive: true });
+
+const topicDelivery = new TopicDelivery({
+  db,
+  proxyDispatch,
+  orchestratorHost: ORCHESTRATOR_HOST,
+  ipcRoot: INSTANCES_DIR,
+  onEvent: (event) => {
+    wss.broadcast(JSON.stringify({ type: event.type, ...event }));
+  },
+});
+
+const instanceReaper = new InstanceReaper({
+  db,
+  proxyDispatch,
+  messageDispatcher,
+  topicDelivery,
+  onEvent: (event) => {
+    wss.broadcast(JSON.stringify({ type: event.type, ...event }));
+  },
+});
+
 const routeCtx: RouteContext = {
   db,
   wss,
@@ -250,6 +285,17 @@ const routeCtx: RouteContext = {
   pagesDir: PAGES_DIR,
   storesDir: STORES_DIR,
   telegramDispatcher,
+  topicDelivery,
+  instanceReaper,
+  reloadPersonas: () => {
+    const diff = syncPersonasWithDiff(db);
+    return {
+      synced: diff.created.length + diff.updated.length,
+      created: diff.created,
+      updated: diff.updated,
+      removed: diff.skipped,
+    };
+  },
 };
 
 const router = createRouter(routeCtx);
@@ -395,6 +441,7 @@ async function shutdown(): Promise<void> {
   messageDispatcher.stop();
   usagePoller.stop();
   reminderDispatcher.stop();
+  instanceReaper.stop();
   await usagePoller.cleanup().catch(err =>
     console.error('[orchestrator] Usage session cleanup error:', err));
 
@@ -472,6 +519,7 @@ server.listen(PORT, '0.0.0.0', async () => {
   healthMonitor.start();
   usagePoller.start();
   reminderDispatcher.start();
+  instanceReaper.start();
 
   // Start Telegram polling for enabled destinations
   const telegramDests = db.listDestinations().filter(d => d.type === 'telegram' && d.enabled);

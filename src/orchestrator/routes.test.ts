@@ -413,7 +413,8 @@ describe('API Routes', () => {
     assert.ok(!newest.targetAgent.includes(':'), 'target_agent must not contain prefix colon');
   });
 
-  it('POST /api/agents/send returns 503 for topic: addresses (not yet wired)', async () => {
+  it('POST /api/agents/send returns 503 for topic: addresses when topicDelivery not configured', async () => {
+    // Q3: when ctx.topicDelivery is absent (this fixture omits it), topic: routes 503.
     const { status, data } = await api('POST', '/api/agents/send', {
       from: 'dashboard',
       to: 'topic:foo/bar',
@@ -422,8 +423,7 @@ describe('API Routes', () => {
     });
     assert.equal(status, 503);
     const body = data as Record<string, unknown>;
-    assert.equal(body['error'], 'address class not yet wired');
-    assert.equal(body['class'], 'topic');
+    assert.equal(body['error'], 'topic delivery not configured');
   });
 
   it('POST /api/agents/send returns 503 for approval: addresses (not yet wired)', async () => {
@@ -439,7 +439,8 @@ describe('API Routes', () => {
     assert.equal(body['class'], 'approval');
   });
 
-  it('POST /api/agents/send returns 503 for agent:<tmpl>/<inst> addresses (not yet wired)', async () => {
+  it('POST /api/agents/send returns 503 for agent:<tmpl>/<inst> addresses with unknown instance', async () => {
+    // Q3: instance addresses are delivered synchronously; an unknown instance returns 503.
     const { status, data } = await api('POST', '/api/agents/send', {
       from: 'dashboard',
       to: 'agent:tmpl/inst-1',
@@ -448,8 +449,8 @@ describe('API Routes', () => {
     });
     assert.equal(status, 503);
     const body = data as Record<string, unknown>;
-    assert.equal(body['error'], 'address class not yet wired');
-    assert.equal(body['class'], 'agent-instance');
+    assert.equal(body['error'], 'instance not deliverable');
+    assert.equal(body['reason'], 'instance-not-found');
   });
 
   it('POST /api/agents/send returns 400 for malformed addresses', async () => {
@@ -465,7 +466,8 @@ describe('API Routes', () => {
     assert.equal(typeof body['reason'], 'string');
   });
 
-  it('POST /api/dashboard/send returns 503 for topic: addresses (not yet wired)', async () => {
+  it('POST /api/dashboard/send returns 503 for topic: addresses when topicDelivery not configured', async () => {
+    // Q3: when ctx.topicDelivery is absent (this fixture omits it), topic: routes 503.
     const { status, data } = await api('POST', '/api/dashboard/send', {
       agent: 'topic:foo/bar',
       message: 'hello',
@@ -473,7 +475,7 @@ describe('API Routes', () => {
     });
     assert.equal(status, 503);
     const body = data as Record<string, unknown>;
-    assert.equal(body['class'], 'topic');
+    assert.equal(body['error'], 'topic delivery not configured');
   });
 
   it('POST /api/dashboard/send returns 400 for malformed addresses', async () => {
@@ -992,5 +994,167 @@ describe('API Routes — Personas', () => {
     // Verify engine was updated in DB regardless of reload outcome
     const { data: after } = await api('GET', '/api/agents/sync-test-agent');
     assert.equal((after as Record<string, unknown>).engine, 'codex');
+  });
+});
+
+// ── v3 Q3: /api/topics/publish + /api/instances/:id/complete + /api/personas/reload ──
+
+describe('API Routes — v3 Q3 endpoints', () => {
+  let server: Server;
+  let db: Database;
+  let wss: WebSocketServer;
+  let port: number;
+  let tmpDir: string;
+  let ipcRoot: string;
+  const commandsLog: Array<{ action: string }> = [];
+
+  before(async () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'agentic-q3-test-'));
+    ipcRoot = join(tmpDir, 'instances');
+    db = new Database(join(tmpDir, 'test.db'));
+    wss = new WebSocketServer();
+
+    // Seed one ephemeral template + topic so publish has a target.
+    db.upsertAgentTemplate({
+      id: 'q3-tmpl',
+      personaPath: null,
+      engine: 'claude',
+      model: null,
+      persistent: false,
+      cwdBase: '/tmp',
+      cwdTemplate: null,
+      repoRoot: '/tmp',
+      hookStart: 'echo start',
+      hookExit: null,
+      hookPrepare: null,
+      hookCleanup: null,
+      createdAt: '',
+      updatedAt: '',
+    });
+    db.replaceTopicsForTemplate('q3-tmpl', [{
+      agentTemplate: 'q3-tmpl',
+      name: 'echo',
+      hookPrepareOverride: null,
+      hookStartOverride: null,
+      hookCleanupOverride: null,
+      monitorTemplate: null,
+      concurrency: 1,
+      schemaPath: null,
+      replySchemaPath: null,
+    }]);
+    db.registerProxy('p1', 'tok', 'localhost:3100');
+
+    const q3Locks = new LockManager(db.rawDb);
+    const q3Dispatch = async (_pid: string, command: ProxyCommand): Promise<ProxyResponse> => {
+      commandsLog.push(command);
+      return { ok: true, data: '' };
+    };
+    const q3MsgDispatcher = makeTestDispatcher(db, q3Locks, q3Dispatch);
+    // Build the real driver + reaper.
+    const { TopicDelivery } = await import('./topic-delivery.ts');
+    const { InstanceReaper } = await import('./instance-reaper.ts');
+    const driver = new TopicDelivery({ db, proxyDispatch: q3Dispatch, orchestratorHost: 'x', ipcRoot });
+    const reaper = new InstanceReaper({ db, proxyDispatch: q3Dispatch, messageDispatcher: q3MsgDispatcher, topicDelivery: driver, sweepIntervalMs: 50 });
+    const reloadCalls = { n: 0 };
+    const ctx: RouteContext = {
+      db,
+      wss,
+      locks: q3Locks,
+      proxyDispatch: q3Dispatch,
+      getDashboardHtml: () => '<html>Dashboard</html>',
+      orchestratorHost: 'http://localhost:3000',
+      orchestratorSecret: null,
+      messageDispatcher: q3MsgDispatcher,
+      usagePoller: { getUsageData: () => ({}), pollNow: async () => {} } as any,
+      voiceEnabled: false,
+      accountStore: new AccountStore({ accountsDir: join(tmpDir, 'accounts'), agentHomesDir: join(tmpDir, 'agent-homes'), skipAutoRegister: true }),
+      topicDelivery: driver,
+      instanceReaper: reaper,
+      reloadPersonas: () => {
+        reloadCalls.n++;
+        return { synced: 0, created: [], updated: [], removed: [] };
+      },
+    };
+
+    const router = createRouter(ctx);
+    server = createServer(async (req, res) => {
+      await router(req, res);
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, () => {
+        const addr = server.address();
+        port = typeof addr === 'object' && addr ? addr.port : 0;
+        resolve();
+      });
+    });
+  });
+
+  after(() => {
+    wss.close();
+    server.close();
+    db.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  async function api(method: string, path: string, body?: unknown): Promise<{ status: number; data: unknown }> {
+    const resp = await fetch(`http://localhost:${port}${path}`, {
+      method,
+      headers: body ? { 'content-type': 'application/json' } : {},
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const data = await resp.json();
+    return { status: resp.status, data };
+  }
+
+  it('POST /api/topics/publish enqueues a topic message and 202s', async () => {
+    const { status, data } = await api('POST', '/api/topics/publish', {
+      agentTemplate: 'q3-tmpl',
+      topicName: 'echo',
+      payload: '{"hello":"world"}',
+    });
+    assert.equal(status, 202);
+    const body = data as Record<string, unknown>;
+    assert.equal(body['ok'], true);
+    assert.equal(body['templateId'], 'q3-tmpl');
+    assert.equal(body['topicName'], 'echo');
+    assert.equal(typeof body['queueId'], 'number');
+  });
+
+  it('POST /api/topics/publish 400s for unknown template', async () => {
+    const { status, data } = await api('POST', '/api/topics/publish', {
+      agentTemplate: 'nope',
+      topicName: 'x',
+      payload: '{}',
+    });
+    assert.equal(status, 400);
+    assert.match(String((data as { error: string }).error), /template/);
+  });
+
+  it('POST /api/instances/:id/complete wakes the reaper (202)', async () => {
+    // No instance exists in this fixture for this id — reaper.wake is a no-op.
+    const { status, data } = await api('POST', '/api/instances/unknown-id/complete');
+    assert.equal(status, 202);
+    assert.equal((data as Record<string, unknown>)['ok'], true);
+  });
+
+  it('POST /api/personas/reload returns 200 with diff', async () => {
+    const { status, data } = await api('POST', '/api/personas/reload');
+    assert.equal(status, 200);
+    const body = data as Record<string, unknown>;
+    assert.equal(body['ok'], true);
+    assert.equal(typeof body['synced'], 'number');
+    assert.ok(Array.isArray(body['created']));
+  });
+
+  it('POST /api/agents/send with topic: forwards through TopicDelivery (202)', async () => {
+    const { status, data } = await api('POST', '/api/agents/send', {
+      from: 'dashboard',
+      to: 'topic:q3-tmpl/echo',
+      message: '{"k":"v"}',
+      topic: 'system',
+    });
+    assert.equal(status, 202);
+    const body = data as Record<string, unknown>;
+    assert.equal(body['status'], 'queued');
   });
 });

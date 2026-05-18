@@ -5,6 +5,8 @@
 
 import { DatabaseSync } from 'node:sqlite';
 import type {
+  AgentInstanceRow,
+  AgentInstanceState,
   AgentRecord,
   AgentState,
   AgentTemplateRow,
@@ -22,6 +24,8 @@ import type {
   PageRecord,
   DataStoreRecord,
   DestinationRecord,
+  TopicQueueRow,
+  TopicQueueStatus,
   TopicRow,
 } from '../shared/types.ts';
 import {
@@ -178,6 +182,59 @@ const SCHEMA = `
     reply_schema_path       TEXT,
     PRIMARY KEY (agent_template, name)
   );
+
+  -- v3 Q3: per-topic message queue. Each topic address publish lands as
+  -- one row here. The orchestrator's TopicDelivery driver claims rows
+  -- atomically and spawns an agent_instances row for each claim. The
+  -- status column progresses queued -> claimed -> completed | failed.
+  CREATE TABLE IF NOT EXISTS topic_queue (
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent_template        TEXT NOT NULL,
+    topic_name            TEXT NOT NULL,
+    payload               TEXT NOT NULL,
+    reply_to_addr         TEXT,
+    in_reply_to           TEXT,
+    status                TEXT NOT NULL DEFAULT 'queued',
+    claimed_by_instance   TEXT,
+    worktree_path         TEXT,
+    created_at            TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    completed_at          TEXT
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_topic_queue_lookup
+    ON topic_queue(agent_template, topic_name, status);
+
+  -- v3 Q3: ephemeral agent instances. A separate table from agents so the
+  -- persistent-agent state machine, health monitor, and cool-down logic stay
+  -- untouched. Health-monitor + message-dispatcher cool-down queries hit only
+  -- the agents table, which means rows here are implicitly excluded.
+  CREATE TABLE IF NOT EXISTS agent_instances (
+    id                      TEXT PRIMARY KEY,
+    agent_template          TEXT NOT NULL,
+    spawned_from_topic      TEXT,
+    instance_addr           TEXT NOT NULL,
+    tmux_session            TEXT NOT NULL,
+    worktree_path           TEXT,
+    proxy_id                TEXT NOT NULL,
+    state                   TEXT NOT NULL DEFAULT 'spawning',
+    failure_reason          TEXT,
+    reply_to_addr           TEXT,
+    message_id              TEXT NOT NULL,
+    message_path            TEXT NOT NULL,
+    reply_path              TEXT NOT NULL,
+    status_path             TEXT NOT NULL,
+    queue_id                INTEGER,
+    monitor_of_instance     TEXT,
+    started_at              TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    completed_at            TEXT
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_agent_instances_state
+    ON agent_instances(state);
+  CREATE INDEX IF NOT EXISTS idx_agent_instances_template
+    ON agent_instances(agent_template, state);
+  CREATE INDEX IF NOT EXISTS idx_agent_instances_topic
+    ON agent_instances(agent_template, spawned_from_topic, state);
 `;
 
 export class Database {
@@ -576,6 +633,194 @@ export class Database {
       'SELECT * FROM topics WHERE agent_template = ? ORDER BY name ASC',
     ).all(templateId) as Array<Record<string, unknown>>;
     return rows.map(mapTopicRow);
+  }
+
+  // ── Topic Queue + Agent Instances (v3 Q3 ephemeral lifecycle) ──
+  // The agents table is intentionally untouched. Health-monitor and the
+  // message-dispatcher cool-down read only `agents`, so rows in
+  // `agent_instances` are implicitly excluded from both.
+
+  /** Enqueue one message on a topic. Status starts as 'queued'. */
+  enqueueTopicMessage(opts: {
+    agentTemplate: string;
+    topicName: string;
+    payload: string;
+    replyToAddr?: string | null;
+    inReplyTo?: string | null;
+  }): TopicQueueRow {
+    this.db.prepare(`
+      INSERT INTO topic_queue (
+        agent_template, topic_name, payload, reply_to_addr, in_reply_to, status
+      ) VALUES (?, ?, ?, ?, ?, 'queued')
+    `).run(
+      opts.agentTemplate,
+      opts.topicName,
+      opts.payload,
+      opts.replyToAddr ?? null,
+      opts.inReplyTo ?? null,
+    );
+    const row = this.db.prepare(
+      'SELECT * FROM topic_queue WHERE id = last_insert_rowid()',
+    ).get() as Record<string, unknown>;
+    return mapTopicQueueRow(row);
+  }
+
+  /**
+   * Atomic claim: BEGIN IMMEDIATE → UPDATE the next queued row to 'claimed'
+   * (returning the row) → INSERT a paired `agent_instances` row in the same
+   * transaction → COMMIT. Returns null when no queued row is available.
+   *
+   * The combined transaction guarantees that as soon as a claim commits the
+   * instance is addressable (`agent:<tmpl>/<id>` resolves) — the address
+   * resolver cannot observe a "claimed but not inserted" window.
+   */
+  claimAndCreateInstance(opts: {
+    agentTemplate: string;
+    topicName: string;
+    instanceId: string;
+    instanceAddr: string;
+    tmuxSession: string;
+    proxyId: string;
+    messageId: string;
+    messagePath: string;
+    replyPath: string;
+    statusPath: string;
+    worktreePath: string | null;
+    monitorOfInstance?: string | null;
+  }): { queue: TopicQueueRow; instance: AgentInstanceRow } | null {
+    const begin = this.db.prepare('BEGIN IMMEDIATE');
+    const commit = this.db.prepare('COMMIT');
+    const rollback = this.db.prepare('ROLLBACK');
+    begin.run();
+    try {
+      // SQLite's node:sqlite supports RETURNING. Update the oldest queued row.
+      const claimStmt = this.db.prepare(`
+        UPDATE topic_queue
+           SET status = 'claimed', claimed_by_instance = ?, worktree_path = ?
+         WHERE id = (
+           SELECT id FROM topic_queue
+            WHERE agent_template = ? AND topic_name = ? AND status = 'queued'
+            ORDER BY id ASC
+            LIMIT 1
+         )
+        RETURNING *
+      `);
+      const claimed = claimStmt.get(
+        opts.instanceId,
+        opts.worktreePath,
+        opts.agentTemplate,
+        opts.topicName,
+      ) as Record<string, unknown> | undefined;
+      if (!claimed) {
+        rollback.run();
+        return null;
+      }
+      const queueRow = mapTopicQueueRow(claimed);
+
+      this.db.prepare(`
+        INSERT INTO agent_instances (
+          id, agent_template, spawned_from_topic, instance_addr,
+          tmux_session, worktree_path, proxy_id, state,
+          reply_to_addr, message_id, message_path, reply_path, status_path,
+          queue_id, monitor_of_instance
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'spawning', ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        opts.instanceId,
+        opts.agentTemplate,
+        opts.topicName,
+        opts.instanceAddr,
+        opts.tmuxSession,
+        opts.worktreePath,
+        opts.proxyId,
+        queueRow.replyToAddr,
+        opts.messageId,
+        opts.messagePath,
+        opts.replyPath,
+        opts.statusPath,
+        queueRow.id,
+        opts.monitorOfInstance ?? null,
+      );
+      const insRow = this.db.prepare(
+        'SELECT * FROM agent_instances WHERE id = ?',
+      ).get(opts.instanceId) as Record<string, unknown>;
+      commit.run();
+      return { queue: queueRow, instance: mapAgentInstanceRow(insRow) };
+    } catch (err) {
+      try { rollback.run(); } catch { /* already rolled back */ }
+      throw err;
+    }
+  }
+
+  /**
+   * Count live (non-terminal) `agent_instances` rows for the given topic.
+   * Used by TopicDelivery to enforce per-topic concurrency caps.
+   */
+  countLiveInstancesForTopic(agentTemplate: string, topicName: string): number {
+    const row = this.db.prepare(`
+      SELECT COUNT(*) AS n FROM agent_instances
+       WHERE agent_template = ? AND spawned_from_topic = ?
+         AND state IN ('spawning', 'running', 'completing')
+    `).get(agentTemplate, topicName) as Record<string, unknown> | undefined;
+    return Number(row?.['n'] ?? 0);
+  }
+
+  getAgentInstance(id: string): AgentInstanceRow | null {
+    const row = this.db.prepare(
+      'SELECT * FROM agent_instances WHERE id = ?',
+    ).get(id) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    return mapAgentInstanceRow(row);
+  }
+
+  getAgentInstanceByAddr(addr: string): AgentInstanceRow | null {
+    const row = this.db.prepare(
+      'SELECT * FROM agent_instances WHERE instance_addr = ?',
+    ).get(addr) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    return mapAgentInstanceRow(row);
+  }
+
+  listLiveAgentInstances(): AgentInstanceRow[] {
+    const rows = this.db.prepare(`
+      SELECT * FROM agent_instances
+       WHERE state IN ('spawning', 'running', 'completing')
+       ORDER BY id ASC
+    `).all() as Array<Record<string, unknown>>;
+    return rows.map(mapAgentInstanceRow);
+  }
+
+  updateInstanceState(
+    id: string,
+    state: AgentInstanceState,
+    extra?: {
+      completedAt?: string | null;
+      failureReason?: string | null;
+    },
+  ): void {
+    const sets: string[] = ['state = ?'];
+    const params: unknown[] = [state];
+    if (extra && Object.prototype.hasOwnProperty.call(extra, 'completedAt')) {
+      sets.push('completed_at = ?');
+      params.push(extra.completedAt ?? null);
+    }
+    if (extra && Object.prototype.hasOwnProperty.call(extra, 'failureReason')) {
+      sets.push('failure_reason = ?');
+      params.push(extra.failureReason ?? null);
+    }
+    params.push(id);
+    this.db.prepare(
+      `UPDATE agent_instances SET ${sets.join(', ')} WHERE id = ?`,
+    ).run(...params);
+  }
+
+  /** Mark a topic_queue row as finished (completed or failed). */
+  markTopicQueueCompleted(id: number, status: 'completed' | 'failed'): void {
+    this.db.prepare(`
+      UPDATE topic_queue
+         SET status = ?,
+             completed_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+       WHERE id = ?
+    `).run(status, id);
   }
 
   // ── Events ──
@@ -1405,6 +1650,45 @@ function mapTopicRow(row: Record<string, unknown>): TopicRow {
     concurrency: (row['concurrency'] as number) ?? 1,
     schemaPath: (row['schema_path'] as string | null) ?? null,
     replySchemaPath: (row['reply_schema_path'] as string | null) ?? null,
+  };
+}
+
+function mapAgentInstanceRow(row: Record<string, unknown>): AgentInstanceRow {
+  return {
+    id: row['id'] as string,
+    agentTemplate: row['agent_template'] as string,
+    spawnedFromTopic: (row['spawned_from_topic'] as string | null) ?? null,
+    instanceAddr: row['instance_addr'] as string,
+    tmuxSession: row['tmux_session'] as string,
+    worktreePath: (row['worktree_path'] as string | null) ?? null,
+    proxyId: row['proxy_id'] as string,
+    state: row['state'] as AgentInstanceState,
+    failureReason: (row['failure_reason'] as string | null) ?? null,
+    replyToAddr: (row['reply_to_addr'] as string | null) ?? null,
+    messageId: row['message_id'] as string,
+    messagePath: row['message_path'] as string,
+    replyPath: row['reply_path'] as string,
+    statusPath: row['status_path'] as string,
+    queueId: (row['queue_id'] as number | null) ?? null,
+    monitorOfInstance: (row['monitor_of_instance'] as string | null) ?? null,
+    startedAt: row['started_at'] as string,
+    completedAt: (row['completed_at'] as string | null) ?? null,
+  };
+}
+
+function mapTopicQueueRow(row: Record<string, unknown>): TopicQueueRow {
+  return {
+    id: row['id'] as number,
+    agentTemplate: row['agent_template'] as string,
+    topicName: row['topic_name'] as string,
+    payload: row['payload'] as string,
+    replyToAddr: (row['reply_to_addr'] as string | null) ?? null,
+    inReplyTo: (row['in_reply_to'] as string | null) ?? null,
+    status: row['status'] as TopicQueueStatus,
+    claimedByInstance: (row['claimed_by_instance'] as string | null) ?? null,
+    worktreePath: (row['worktree_path'] as string | null) ?? null,
+    createdAt: row['created_at'] as string,
+    completedAt: (row['completed_at'] as string | null) ?? null,
   };
 }
 

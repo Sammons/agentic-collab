@@ -32,6 +32,8 @@ import { shutdownAgents, restoreAllAgents } from './network.ts';
 import { sessionName } from '../shared/agent-entity.ts';
 import type { MessageDispatcher } from './message-dispatcher.ts';
 import type { UsagePoller } from './usage-poller.ts';
+import type { TopicDelivery } from './topic-delivery.ts';
+import type { InstanceReaper } from './instance-reaper.ts';
 
 /** Validates agent and persona names: 1-63 chars, alphanumeric start, [a-zA-Z0-9_-]. */
 const NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$/;
@@ -64,6 +66,15 @@ export type RouteContext = {
   pagesDir: string;
   storesDir: string;
   telegramDispatcher: TelegramDispatcher;
+  /**
+   * v3 Q3 ephemeral surface — optional so test fixtures that don't exercise
+   * topic delivery don't need to construct one. Production `main.ts` always
+   * populates both. Endpoints that depend on these return 503 when absent.
+   */
+  topicDelivery?: TopicDelivery;
+  instanceReaper?: InstanceReaper;
+  /** Reload personas from disk; populated alongside `topicDelivery`. */
+  reloadPersonas?: () => { synced: number; created: string[]; updated: string[]; removed: string[] };
 };
 
 /**
@@ -314,25 +325,43 @@ route('POST', '/api/agents/send', async (req, res, _match, ctx) => {
     return json(res, 400, { error: 'from, to, message, topic required' });
   }
 
-  // Q1: address-prefix routing. `topic:` and `approval:` parse but resolution
-  // is wired by later quanta; bare names and `agent:<name>` resolve here.
-  // Storage continues to use bare agent names — we rewrite `body.to` to the
-  // bare form before falling through to the existing agent path.
+  // Q1: address-prefix routing. `topic:` is wired through ctx.topicDelivery
+  // (Q3); `agent-instance:` dispatches synchronously through the message
+  // dispatcher's `deliverToInstance` (Q3 — never persists to pending_messages).
+  // `approval:` is wired by Q5.
   const addr = parseAddress(body.to);
   if (addr.class === 'malformed') {
     return json(res, 400, { error: 'malformed address', reason: addr.reason });
   }
   if (addr.class === 'topic') {
-    console.log(`[routes] /api/agents/send: topic address not yet wired (template=${addr.template}, topic=${addr.topic})`);
-    return json(res, 503, { error: 'address class not yet wired', class: 'topic' });
+    if (!ctx.topicDelivery) {
+      return json(res, 503, { error: 'topic delivery not configured' });
+    }
+    const payload = typeof body.message === 'string' ? body.message : JSON.stringify(body.message ?? {});
+    const result = await ctx.topicDelivery.publish({
+      agentTemplate: addr.template,
+      topicName: addr.topic,
+      payload,
+      replyToAddr: typeof body.from === 'string' ? body.from : null,
+      inReplyTo: typeof body.inReplyTo === 'string' ? body.inReplyTo : null,
+    });
+    if (!result.ok) {
+      return json(res, 400, { error: result.reason });
+    }
+    return json(res, 202, { ok: true, queueId: result.queueId, status: 'queued' });
   }
   if (addr.class === 'approval') {
     console.log(`[routes] /api/agents/send: approval address not yet wired (channel=${addr.channel})`);
     return json(res, 503, { error: 'address class not yet wired', class: 'approval' });
   }
   if (addr.class === 'agent-instance') {
-    console.log(`[routes] /api/agents/send: agent-instance address not yet wired (template=${addr.template}, instanceId=${addr.instanceId})`);
-    return json(res, 503, { error: 'address class not yet wired', class: 'agent-instance' });
+    // Sync deliver via paste. Never persists into pending_messages.
+    const text = typeof body.message === 'string' ? body.message : JSON.stringify(body.message ?? {});
+    const deliveryResult = await ctx.messageDispatcher.deliverToInstance(addr.instanceId, text);
+    if (!deliveryResult.ok) {
+      return json(res, 503, { error: 'instance not deliverable', reason: deliveryResult.reason, ...(deliveryResult.error ? { details: deliveryResult.error } : {}) });
+    }
+    return json(res, 200, { ok: true });
   }
   // addr.class === 'agent' — use bare name for storage / lookup.
   body.to = addr.name;
@@ -407,23 +436,40 @@ route('POST', '/api/dashboard/send', async (req, res, _match, ctx) => {
     return json(res, 400, { error: 'agent, message, topic required' });
   }
 
-  // Q1: address-prefix routing on body.agent. Same staging as /api/agents/send:
-  // bare and `agent:<name>` resolve here; other classes 503 until later quanta.
+  // Q1: address-prefix routing on body.agent. Q3 wires `topic:` (through
+  // ctx.topicDelivery) and `agent-instance:` (through deliverToInstance).
   const dashAddr = parseAddress(body.agent);
   if (dashAddr.class === 'malformed') {
     return json(res, 400, { error: 'malformed address', reason: dashAddr.reason });
   }
   if (dashAddr.class === 'topic') {
-    console.log(`[routes] /api/dashboard/send: topic address not yet wired (template=${dashAddr.template}, topic=${dashAddr.topic})`);
-    return json(res, 503, { error: 'address class not yet wired', class: 'topic' });
+    if (!ctx.topicDelivery) {
+      return json(res, 503, { error: 'topic delivery not configured' });
+    }
+    const payload = typeof body.message === 'string' ? body.message : JSON.stringify(body.message ?? {});
+    const result = await ctx.topicDelivery.publish({
+      agentTemplate: dashAddr.template,
+      topicName: dashAddr.topic,
+      payload,
+      replyToAddr: 'dashboard',
+      inReplyTo: typeof body.inReplyTo === 'string' ? body.inReplyTo : null,
+    });
+    if (!result.ok) {
+      return json(res, 400, { error: result.reason });
+    }
+    return json(res, 202, { ok: true, queueId: result.queueId, status: 'queued' });
   }
   if (dashAddr.class === 'approval') {
     console.log(`[routes] /api/dashboard/send: approval address not yet wired (channel=${dashAddr.channel})`);
     return json(res, 503, { error: 'address class not yet wired', class: 'approval' });
   }
   if (dashAddr.class === 'agent-instance') {
-    console.log(`[routes] /api/dashboard/send: agent-instance address not yet wired (template=${dashAddr.template}, instanceId=${dashAddr.instanceId})`);
-    return json(res, 503, { error: 'address class not yet wired', class: 'agent-instance' });
+    const text = typeof body.message === 'string' ? body.message : JSON.stringify(body.message ?? {});
+    const deliveryResult = await ctx.messageDispatcher.deliverToInstance(dashAddr.instanceId, text);
+    if (!deliveryResult.ok) {
+      return json(res, 503, { error: 'instance not deliverable', reason: deliveryResult.reason, ...(deliveryResult.error ? { details: deliveryResult.error } : {}) });
+    }
+    return json(res, 200, { ok: true });
   }
   body.agent = dashAddr.name;
 
@@ -452,6 +498,55 @@ route('POST', '/api/dashboard/send', async (req, res, _match, ctx) => {
   }
 
   json(res, 202, { ok: true, msg, queueId: pending.id, status: 'pending' });
+});
+
+// ── v3 Q3: topic publish + instance complete + persona reload ──
+
+route('POST', '/api/topics/publish', async (req, res, _match, ctx) => {
+  if (!ctx.topicDelivery) {
+    return json(res, 503, { error: 'topic delivery not configured' });
+  }
+  const body = await readJson(req);
+  if (typeof body.agentTemplate !== 'string' || typeof body.topicName !== 'string') {
+    return json(res, 400, { error: 'agentTemplate and topicName required' });
+  }
+  const payload = typeof body.payload === 'string' ? body.payload : JSON.stringify(body.payload ?? {});
+  const result = await ctx.topicDelivery.publish({
+    agentTemplate: body.agentTemplate,
+    topicName: body.topicName,
+    payload,
+    replyToAddr: typeof body.replyToAddr === 'string' ? body.replyToAddr : null,
+    inReplyTo: typeof body.inReplyTo === 'string' ? body.inReplyTo : null,
+  });
+  if (!result.ok) {
+    return json(res, 400, { error: result.reason });
+  }
+  json(res, 202, { ok: true, queueId: result.queueId, templateId: result.templateId, topicName: result.topicName });
+});
+
+route('POST', '/api/instances/:id/complete', async (_req, res, match, ctx) => {
+  if (!ctx.instanceReaper) {
+    return json(res, 503, { error: 'instance reaper not configured' });
+  }
+  const id = match.pathname.groups['id'];
+  if (!id) return json(res, 400, { error: 'instance id required' });
+  // Wake — does not block on result.
+  ctx.instanceReaper.wake(id).catch((err) => {
+    console.error(`[routes] reaper.wake(${id}) failed:`, (err as Error).message);
+  });
+  json(res, 202, { ok: true });
+});
+
+route('POST', '/api/personas/reload', async (_req, res, _match, ctx) => {
+  if (!ctx.reloadPersonas) {
+    return json(res, 503, { error: 'persona reload not configured' });
+  }
+  try {
+    const diff = ctx.reloadPersonas();
+    json(res, 200, { ok: true, ...diff });
+  } catch (err) {
+    json(res, 500, { error: (err as Error).message });
+  }
 });
 
 route('POST', '/api/dashboard/upload', async (req, res, _match, ctx) => {
