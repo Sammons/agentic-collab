@@ -426,17 +426,21 @@ describe('API Routes', () => {
     assert.equal(body['error'], 'topic delivery not configured');
   });
 
-  it('POST /api/agents/send returns 503 for approval: addresses (not yet wired)', async () => {
+  it('POST /api/agents/send returns 400 for approval: addresses (not sendable; use POST /api/approvals)', async () => {
+    // Q5 changed the 503 placeholder to 400 — approvals are CRUD, not a
+    // sendable address class. The error message points the caller at the
+    // correct endpoint.
     const { status, data } = await api('POST', '/api/agents/send', {
       from: 'dashboard',
       to: 'approval:chan',
       message: 'hello',
       topic: 'test-topic',
     });
-    assert.equal(status, 503);
+    assert.equal(status, 400);
     const body = data as Record<string, unknown>;
-    assert.equal(body['error'], 'address class not yet wired');
+    assert.match(String(body['error']), /POST \/api\/approvals/);
     assert.equal(body['class'], 'approval');
+    assert.equal(body['channel'], 'chan');
   });
 
   it('POST /api/agents/send returns 503 for agent:<tmpl>/<inst> addresses with unknown instance', async () => {
@@ -1202,5 +1206,169 @@ describe('API Routes — v3 Q3 endpoints', () => {
     assert.equal(status, 202);
     const body = data as Record<string, unknown>;
     assert.equal(body['status'], 'queued');
+  });
+});
+
+// ── v3 Q5: approval CRUD endpoints ───────────────────────────────────────
+describe('API Routes — v3 Q5 approval endpoints', () => {
+  let server: Server;
+  let db: Database;
+  let wss: WebSocketServer;
+  let port: number;
+  let tmpDir: string;
+
+  before(async () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'agentic-q5-test-'));
+    db = new Database(join(tmpDir, 'test.db'));
+    wss = new WebSocketServer();
+
+    const q5Locks = new LockManager(db.rawDb);
+    const q5Dispatch = async (_pid: string, _command: ProxyCommand): Promise<ProxyResponse> =>
+      ({ ok: true, data: '' });
+    const q5MsgDispatcher = makeTestDispatcher(db, q5Locks, q5Dispatch);
+    const { ApprovalService } = await import('./approvals.ts');
+    const approvals = new ApprovalService({ db, messageDispatcher: q5MsgDispatcher });
+
+    const ctx: RouteContext = {
+      db,
+      wss,
+      locks: q5Locks,
+      proxyDispatch: q5Dispatch,
+      getDashboardHtml: () => '<html>Dashboard</html>',
+      orchestratorHost: 'http://localhost:3000',
+      orchestratorSecret: null,
+      messageDispatcher: q5MsgDispatcher,
+      usagePoller: { getUsageData: () => ({}), pollNow: async () => {} } as any,
+      voiceEnabled: false,
+      accountStore: new AccountStore({ accountsDir: join(tmpDir, 'accounts'), agentHomesDir: join(tmpDir, 'agent-homes'), skipAutoRegister: true }),
+      approvals,
+    };
+
+    const router = createRouter(ctx);
+    server = createServer(async (req, res) => {
+      await router(req, res);
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, () => {
+        const addr = server.address();
+        port = typeof addr === 'object' && addr ? addr.port : 0;
+        resolve();
+      });
+    });
+  });
+
+  after(() => {
+    wss.close();
+    server.close();
+    db.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  async function api(method: string, path: string, body?: unknown): Promise<{ status: number; data: unknown }> {
+    const resp = await fetch(`http://localhost:${port}${path}`, {
+      method,
+      headers: body ? { 'content-type': 'application/json' } : {},
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const data = await resp.json().catch(() => null);
+    return { status: resp.status, data };
+  }
+
+  it('POST /api/approvals returns 201 with the row', async () => {
+    const { status, data } = await api('POST', '/api/approvals', {
+      requesterAddr: 'agent:foo',
+      channel: 'reviews',
+      payload: '{"diff":"..."}',
+    });
+    assert.equal(status, 201);
+    const body = data as Record<string, unknown>;
+    assert.equal(typeof body['id'], 'string');
+    assert.equal(body['state'], 'pending');
+    assert.equal(body['channel'], 'reviews');
+    assert.equal(body['requesterAddr'], 'agent:foo');
+  });
+
+  it('GET /api/approvals/:id returns 404 for unknown id', async () => {
+    const { status } = await api('GET', '/api/approvals/no-such-id');
+    assert.equal(status, 404);
+  });
+
+  it('POST /api/approvals/:id/set returns 200 and 409 on second call', async () => {
+    const created = await api('POST', '/api/approvals', {
+      requesterAddr: 'agent:foo',
+      channel: 'terminal-test',
+      payload: '{}',
+    });
+    assert.equal(created.status, 201);
+    const id = (created.data as Record<string, unknown>)['id'] as string;
+
+    const first = await api('POST', `/api/approvals/${id}/set`, { state: 'approved' });
+    assert.equal(first.status, 200);
+    assert.equal((first.data as Record<string, unknown>)['state'], 'approved');
+
+    // Second call on a terminal row → 409.
+    const second = await api('POST', `/api/approvals/${id}/set`, { state: 'rejected' });
+    assert.equal(second.status, 409);
+  });
+
+  it('POST /api/approvals/:id/withdraw returns 200 for creator, 403 for non-creator, 409 for terminal', async () => {
+    const created = await api('POST', '/api/approvals', {
+      requesterAddr: 'agent:owner',
+      channel: 'withdraw-test',
+      payload: '{}',
+    });
+    const id = (created.data as Record<string, unknown>)['id'] as string;
+
+    // Non-creator
+    const denied = await api('POST', `/api/approvals/${id}/withdraw`, {
+      requesterAddr: 'agent:imposter',
+    });
+    assert.equal(denied.status, 403);
+
+    // Creator
+    const ok = await api('POST', `/api/approvals/${id}/withdraw`, {
+      requesterAddr: 'agent:owner',
+    });
+    assert.equal(ok.status, 200);
+
+    // Now-terminal — 409.
+    const term = await api('POST', `/api/approvals/${id}/withdraw`, {
+      requesterAddr: 'agent:owner',
+    });
+    assert.equal(term.status, 409);
+  });
+
+  it('POST /api/agents/send with approval: returns 400 (not a sendable address)', async () => {
+    const { status, data } = await api('POST', '/api/agents/send', {
+      from: 'dashboard',
+      to: 'approval:something',
+      message: '{}',
+      topic: 'system',
+    });
+    assert.equal(status, 400);
+    const body = data as Record<string, unknown>;
+    assert.match(String(body['error']), /POST \/api\/approvals/);
+  });
+
+  it('GET /api/approvals filters by channel and state', async () => {
+    // Seed two approvals on different channels.
+    await api('POST', '/api/approvals', {
+      requesterAddr: 'agent:foo', channel: 'list-test', payload: '{"a":1}',
+    });
+    const b = await api('POST', '/api/approvals', {
+      requesterAddr: 'agent:foo', channel: 'list-test', payload: '{"b":2}',
+    });
+    const bId = (b.data as Record<string, unknown>)['id'] as string;
+    await api('POST', `/api/approvals/${bId}/set`, { state: 'approved' });
+
+    const allRes = await api('GET', '/api/approvals?channel=list-test');
+    assert.equal(allRes.status, 200);
+    const all = allRes.data as Array<Record<string, unknown>>;
+    assert.equal(all.length, 2);
+
+    const pendingRes = await api('GET', '/api/approvals?channel=list-test&state=pending');
+    const pending = pendingRes.data as Array<Record<string, unknown>>;
+    assert.equal(pending.length, 1);
+    assert.equal(pending[0]!['state'], 'pending');
   });
 });

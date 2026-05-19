@@ -21,6 +21,7 @@ import type { LifecycleContext } from './lifecycle.ts';
 import { syncPersonasToDb, syncPersonasWithDiff, getPersonasDir } from './persona.ts';
 import { TopicDelivery } from './topic-delivery.ts';
 import { InstanceReaper } from './instance-reaper.ts';
+import { ApprovalService } from './approvals.ts';
 import { AccountStore } from './accounts.ts';
 import { isRunning } from '../shared/agent-entity.ts';
 import { resolveSecret, getSecretPath } from '../shared/config.ts';
@@ -268,6 +269,17 @@ const instanceReaper = new InstanceReaper({
   onEvent: (event) => wss.broadcastEvent(event),
 });
 
+// ── v3 Q5: Approvals service ──
+//
+// Auto-notifies requesters on state change via the existing message
+// dispatcher (paste for live ephemeral instances, persistent enqueue for
+// agent: addresses). Emits `approval_changed` WS events.
+const approvals = new ApprovalService({
+  db,
+  messageDispatcher,
+  onEvent: (event) => wss.broadcastEvent(event),
+});
+
 const routeCtx: RouteContext = {
   db,
   wss,
@@ -285,6 +297,7 @@ const routeCtx: RouteContext = {
   telegramDispatcher,
   topicDelivery,
   instanceReaper,
+  approvals,
   reloadPersonas: () => {
     // Q4: forward `template_updated` events to WS subscribers so the Q9
     // dashboard can refresh the templates tree without a full reload.

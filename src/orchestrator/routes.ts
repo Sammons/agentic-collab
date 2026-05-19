@@ -34,6 +34,7 @@ import type { MessageDispatcher } from './message-dispatcher.ts';
 import type { UsagePoller } from './usage-poller.ts';
 import type { TopicDelivery } from './topic-delivery.ts';
 import type { InstanceReaper } from './instance-reaper.ts';
+import type { ApprovalService } from './approvals.ts';
 
 /** Validates agent and persona names: 1-63 chars, alphanumeric start, [a-zA-Z0-9_-]. */
 const NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$/;
@@ -73,6 +74,12 @@ export type RouteContext = {
    */
   topicDelivery?: TopicDelivery;
   instanceReaper?: InstanceReaper;
+  /**
+   * v3 Q5 approvals — optional so test fixtures that don't exercise the
+   * approval surface don't need to construct one. Production `main.ts`
+   * always populates it. Endpoints return 503 when absent.
+   */
+  approvals?: ApprovalService;
   /** Reload personas from disk; populated alongside `topicDelivery`. */
   reloadPersonas?: () => { synced: number; created: string[]; updated: string[]; skipped: string[] };
 };
@@ -351,8 +358,14 @@ route('POST', '/api/agents/send', async (req, res, _match, ctx) => {
     return json(res, 202, { ok: true, queueId: result.queueId, status: 'queued' });
   }
   if (addr.class === 'approval') {
-    console.log(`[routes] /api/agents/send: approval address not yet wired (channel=${addr.channel})`);
-    return json(res, 503, { error: 'address class not yet wired', class: 'approval' });
+    // approval:<channel> is a categorisation, not a sendable address. The
+    // v3 spec is explicit: approvals are CRUD, not enqueue — `send` cannot
+    // auto-create approvals (Q5).
+    return json(res, 400, {
+      error: 'approval channel is not a sendable address; use POST /api/approvals to create an approval',
+      class: 'approval',
+      channel: addr.channel,
+    });
   }
   if (addr.class === 'agent-instance') {
     // Sync deliver via paste. Never persists into pending_messages.
@@ -460,8 +473,13 @@ route('POST', '/api/dashboard/send', async (req, res, _match, ctx) => {
     return json(res, 202, { ok: true, queueId: result.queueId, status: 'queued' });
   }
   if (dashAddr.class === 'approval') {
-    console.log(`[routes] /api/dashboard/send: approval address not yet wired (channel=${dashAddr.channel})`);
-    return json(res, 503, { error: 'address class not yet wired', class: 'approval' });
+    // approval:<channel> is a categorisation, not a sendable address.
+    // (See `/api/agents/send` above for the rationale.)
+    return json(res, 400, {
+      error: 'approval channel is not a sendable address; use POST /api/approvals to create an approval',
+      class: 'approval',
+      channel: dashAddr.channel,
+    });
   }
   if (dashAddr.class === 'agent-instance') {
     const text = typeof body.message === 'string' ? body.message : JSON.stringify(body.message ?? {});
@@ -554,6 +572,116 @@ route('POST', '/api/personas/reload', async (_req, res, _match, ctx) => {
   } catch (err) {
     json(res, 500, { error: (err as Error).message });
   }
+});
+
+// ── v3 Q5: approvals CRUD ──
+//
+// Approvals are first-class records categorised by `channel` (the
+// `approval:<channel>` address class). They are *not* a sendable address —
+// `/api/agents/send` and `/api/dashboard/send` return 400 for `approval:`
+// addresses with a pointer back to POST /api/approvals.
+
+route('POST', '/api/approvals', async (req, res, _match, ctx) => {
+  if (!ctx.approvals) return json(res, 503, { error: 'approvals not configured' });
+  const body = await readJson(req);
+  if (typeof body.requesterAddr !== 'string' || typeof body.channel !== 'string') {
+    return json(res, 400, { error: 'requesterAddr and channel required' });
+  }
+  const payload = typeof body.payload === 'string'
+    ? body.payload
+    : JSON.stringify(body.payload ?? {});
+  const result = ctx.approvals.create({
+    requesterAddr: body.requesterAddr,
+    channel: body.channel,
+    payload,
+  });
+  if (!result.ok) return json(res, 400, { error: result.reason });
+  return json(res, 201, result.approval);
+});
+
+route('GET', '/api/approvals/:id', async (_req, res, match, ctx) => {
+  if (!ctx.approvals) return json(res, 503, { error: 'approvals not configured' });
+  const id = match.pathname.groups['id'];
+  if (!id) return json(res, 400, { error: 'approval id required' });
+  const row = ctx.db.getApproval(id);
+  if (!row) return json(res, 404, { error: 'approval not found' });
+  return json(res, 200, row);
+});
+
+route('GET', '/api/approvals', async (req, res, _match, ctx) => {
+  if (!ctx.approvals) return json(res, 503, { error: 'approvals not configured' });
+  const url = new URL(req.url!, `http://${req.headers.host}`);
+  const channel = url.searchParams.get('channel');
+  if (!channel) return json(res, 400, { error: 'channel query param required' });
+  const stateRaw = url.searchParams.get('state') ?? undefined;
+  const allowed = ['pending', 'approved', 'rejected', 'amended', 'withdrawn'];
+  if (stateRaw && !allowed.includes(stateRaw)) {
+    return json(res, 400, { error: `state must be one of ${allowed.join('|')}` });
+  }
+  const rows = ctx.db.listApprovalsByChannel(
+    channel,
+    stateRaw as 'pending' | 'approved' | 'rejected' | 'amended' | 'withdrawn' | undefined,
+  );
+  return json(res, 200, rows);
+});
+
+route('POST', '/api/approvals/:id/set', async (req, res, match, ctx) => {
+  if (!ctx.approvals) return json(res, 503, { error: 'approvals not configured' });
+  const id = match.pathname.groups['id'];
+  if (!id) return json(res, 400, { error: 'approval id required' });
+  const body = await readJson(req);
+  if (typeof body.state !== 'string') return json(res, 400, { error: 'state required' });
+  if (body.state !== 'approved' && body.state !== 'rejected' && body.state !== 'amended') {
+    return json(res, 400, { error: 'state must be approved|rejected|amended' });
+  }
+  const payload = typeof body.payload === 'string'
+    ? body.payload
+    : body.payload != null ? JSON.stringify(body.payload) : null;
+  const result = await ctx.approvals.setState(id, body.state, {
+    decidedBy: typeof body.decidedBy === 'string' ? body.decidedBy : null,
+    payload,
+  });
+  if (!result.ok) {
+    if (result.reason === 'not-found') return json(res, 404, { error: 'approval not found' });
+    if (result.reason === 'already-terminal') return json(res, 409, { error: 'approval is already terminal' });
+    return json(res, 400, { error: result.reason });
+  }
+  return json(res, 200, result.approval);
+});
+
+route('POST', '/api/approvals/:id/withdraw', async (req, res, match, ctx) => {
+  if (!ctx.approvals) return json(res, 503, { error: 'approvals not configured' });
+  const id = match.pathname.groups['id'];
+  if (!id) return json(res, 400, { error: 'approval id required' });
+  const body = await readJson(req);
+  if (typeof body.requesterAddr !== 'string') {
+    return json(res, 400, { error: 'requesterAddr required' });
+  }
+  const result = await ctx.approvals.withdraw(id, body.requesterAddr);
+  if (!result.ok) {
+    if (result.reason === 'not-found') return json(res, 404, { error: 'approval not found' });
+    if (result.reason === 'not-creator') return json(res, 403, { error: 'only the creator may withdraw' });
+    if (result.reason === 'not-pending') return json(res, 409, { error: 'approval is not pending' });
+    return json(res, 400, { error: result.reason });
+  }
+  return json(res, 200, result.approval);
+});
+
+// Long-polling await — server-side polls at 500ms intervals up to
+// `timeoutMs` (default 30000). Returns the current row (pending or
+// terminal) once the wait resolves; callers re-poll on pending.
+route('GET', '/api/approvals/:id/await', async (req, res, match, ctx) => {
+  if (!ctx.approvals) return json(res, 503, { error: 'approvals not configured' });
+  const id = match.pathname.groups['id'];
+  if (!id) return json(res, 400, { error: 'approval id required' });
+  const url = new URL(req.url!, `http://${req.headers.host}`);
+  const timeoutRaw = url.searchParams.get('timeoutMs');
+  const timeoutMs = timeoutRaw && /^\d+$/.test(timeoutRaw)
+    ? Math.min(Math.max(parseInt(timeoutRaw, 10), 0), 60_000)
+    : 30_000;
+  const row = await ctx.approvals.await(id, { pollIntervalMs: 500, timeoutMs });
+  if (!row) return json(res, 404, { error: 'approval not found' });
+  return json(res, 200, row);
 });
 
 route('POST', '/api/dashboard/upload', async (req, res, _match, ctx) => {
