@@ -16,7 +16,7 @@
  */
 
 /** Validates agent/template/topic/channel segments: 1-63 chars, alnum start, [a-zA-Z0-9_-]. */
-const NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$/;
+export const NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$/;
 
 /** Validates instance-id segments: 1-128 chars, alnum start, [a-zA-Z0-9_-]. */
 const INSTANCE_ID_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/;

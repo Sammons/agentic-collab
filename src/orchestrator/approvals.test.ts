@@ -123,7 +123,30 @@ describe('ApprovalService (Q5)', () => {
   });
 
   it('State change emits `approval_changed` WS event AND auto-notifies the requester (persistent agent)', async () => {
-    const { svc } = makeService();
+    // We need to spy on tryDeliver to assert it was called with the BARE
+    // agent name ('foo'), NOT the prefixed form ('agent:foo'). Build the
+    // dispatcher manually so we can wrap the method.
+    const dispatcher = new MessageDispatcher({
+      db,
+      locks: new LockManager(db.rawDb),
+      proxyDispatch: async (_id, command) => {
+        proxyCommands.push(command);
+        return { ok: true, data: '' } as ProxyResponse;
+      },
+      orchestratorHost: 'http://localhost:3000',
+    });
+    const tryDeliverCalls: string[] = [];
+    const originalTryDeliver = dispatcher.tryDeliver.bind(dispatcher);
+    dispatcher.tryDeliver = async (agentName: string) => {
+      tryDeliverCalls.push(agentName);
+      return originalTryDeliver(agentName);
+    };
+    const svc = new ApprovalService({
+      db,
+      messageDispatcher: dispatcher,
+      onEvent: (e) => events.push(e),
+    });
+
     // Persistent agent target so notify takes the enqueueMessage path.
     db.createAgent({ name: 'foo', engine: 'claude', cwd: '/tmp', proxyId: 'p1' });
     setAgentState('foo', 'active');
@@ -141,29 +164,92 @@ describe('ApprovalService (Q5)', () => {
     assert.equal(events[0]!.approvalId, id);
     assert.equal(events[0]!.state, 'pending');
 
+    // Snapshot the pending_messages queue BEFORE the dispatcher drains it,
+    // so we can assert the row landed there with the bare target_agent
+    // ('foo') and not the prefixed form ('agent:foo'). The notify path
+    // enqueues synchronously inside setState; the paste itself fires async.
     const updated = await svc.setState(id, 'rejected', { decidedBy: 'human' });
     assert.equal(updated.ok, true);
-    // Event #2 — state change.
     assert.equal(events.length, 2);
     assert.equal(events[1]!.state, 'rejected');
 
-    // Notify went through enqueueMessage (asynchronously dispatched).
-    // We assert the row exists in pending_messages — proves the auto-notify
-    // path enqueued (not paste-only). The actual paste fires via tryDeliver
-    // which is fire-and-forget.
-    await new Promise((r) => setTimeout(r, 50));
+    // The dispatcher may have started draining; wait for it to finish so we
+    // observe both invariants stably.
+    await new Promise((r) => setTimeout(r, 100));
+
+    // Invariant 1 — tryDeliver was called with the BARE name. This is the
+    // contract pending_messages.target_agent is stored against.
+    assert.ok(
+      tryDeliverCalls.includes('foo'),
+      `expected tryDeliver('foo'); calls=${JSON.stringify(tryDeliverCalls)}`,
+    );
+    assert.ok(
+      !tryDeliverCalls.includes('agent:foo'),
+      `tryDeliver must receive bare names; calls=${JSON.stringify(tryDeliverCalls)}`,
+    );
+
+    // Invariant 2 — at least one paste reached the right tmux session,
+    // proving the dispatcher resolved the bare name and pasted the body.
+    const pastes = proxyCommands.filter(c => c.action === 'paste') as Array<{ action: 'paste'; sessionName: string; text: string }>;
+    const matching = pastes.find(p => p.text.includes(`Approval ${id} updated: rejected`));
+    assert.ok(matching, `expected a paste containing the notice for ${id}; pastes=${JSON.stringify(pastes)}`);
+    assert.equal(matching!.sessionName, 'agent-foo');
+  });
+
+  it('Auto-notify enqueues into pending_messages with the BARE target_agent (no `agent:` prefix)', () => {
+    // Direct DB-level invariant — separate from the delivery test so a
+    // dispatcher-side regression can't mask a storage-side regression.
+    const svc = new ApprovalService({
+      db,
+      messageDispatcher: new MessageDispatcher({
+        db,
+        locks: new LockManager(db.rawDb),
+        // Drop pastes so the row stays in pending_messages for inspection.
+        proxyDispatch: async () => ({ ok: false, error: 'paste-disabled' } as ProxyResponse),
+        orchestratorHost: 'http://localhost:3000',
+      }),
+      onEvent: (e) => events.push(e),
+    });
+    const created = svc.create({
+      requesterAddr: 'agent:foo',
+      channel: 'queue-target',
+      payload: '{}',
+    });
+    if (!created.ok) throw new Error('create failed');
+    // Setting state enqueues the notice synchronously (the paste is async).
+    void svc.setState(created.approval.id, 'approved');
     const queue = db.getDeliverableMessages('foo');
-    // The message may have already been delivered by tryDeliver; check both.
-    const allMessages = db.getDashboardThreads('foo')['foo'] ?? [];
-    const noticeFound = queue.some(m => m.envelope.includes(`Approval ${id} updated: rejected`))
-      || proxyCommands.some(c => c.action === 'paste' && (c as { text: string }).text.includes(`Approval ${id} updated`));
-    assert.ok(noticeFound, `expected an enqueued/pasted notice for approval ${id}; queue=${JSON.stringify(queue)}, pastes=${proxyCommands.filter(c => c.action === 'paste').length}`);
-    // Discard unused for lint:
-    void allMessages;
+    assert.ok(queue.length >= 1, `expected an enqueued row for 'foo'; queue=${JSON.stringify(queue)}`);
+    assert.equal(queue[0]!.targetAgent, 'foo');
+    assert.notEqual(queue[0]!.targetAgent, 'agent:foo');
+    // No bleed-through into the prefixed bucket.
+    assert.equal(db.getDeliverableMessages('agent:foo').length, 0);
   });
 
   it('Auto-notify routes via deliverToInstance for agent-instance addresses', async () => {
-    const { svc } = makeService();
+    // Spy on deliverToInstance to assert it received the PARSED instanceId
+    // ('inst-1'), not the raw `agent:tmpl-a/inst-1` requester string.
+    const dispatcher = new MessageDispatcher({
+      db,
+      locks: new LockManager(db.rawDb),
+      proxyDispatch: async (_id, command) => {
+        proxyCommands.push(command);
+        return { ok: true, data: '' } as ProxyResponse;
+      },
+      orchestratorHost: 'http://localhost:3000',
+    });
+    const deliverCalls: Array<{ instanceId: string; envelope: string }> = [];
+    const originalDeliverToInstance = dispatcher.deliverToInstance.bind(dispatcher);
+    dispatcher.deliverToInstance = async (instanceId: string, envelope: string) => {
+      deliverCalls.push({ instanceId, envelope });
+      return originalDeliverToInstance(instanceId, envelope);
+    };
+    const svc = new ApprovalService({
+      db,
+      messageDispatcher: dispatcher,
+      onEvent: (e) => events.push(e),
+    });
+
     // Seed an ephemeral instance row in `running` state so deliverToInstance
     // resolves to a paste.
     db.upsertAgentTemplate({
@@ -217,6 +303,15 @@ describe('ApprovalService (Q5)', () => {
 
     // setState fires notifyRequester asynchronously — wait briefly.
     await new Promise((r) => setTimeout(r, 50));
+
+    // Invariant: deliverToInstance was called exactly once with the PARSED
+    // instanceId. A regression that forwarded `agent:tmpl-a/inst-1` would
+    // be caught here — the resolver expects the trailing segment only.
+    assert.equal(deliverCalls.length, 1, `expected one deliverToInstance call; got ${deliverCalls.length}`);
+    assert.equal(deliverCalls[0]!.instanceId, 'inst-1');
+    assert.notEqual(deliverCalls[0]!.instanceId, 'agent:tmpl-a/inst-1');
+    assert.match(deliverCalls[0]!.envelope, new RegExp(`Approval ${id} updated: approved`));
+
     const pastes = proxyCommands.filter(c => c.action === 'paste');
     assert.ok(pastes.length >= 1, 'expected at least one paste from deliverToInstance');
     const text = (pastes[0]! as { text: string }).text;
@@ -275,12 +370,16 @@ describe('ApprovalService (Q5)', () => {
     assert.equal(ok.ok, true);
   });
 
-  it('Requester address must parse — malformed rejected at create', () => {
+  it('Requester address must parse — malformed rejected at create with reason `invalid-requester`', () => {
     const { svc } = makeService();
     const cases = ['has space', 'unknown:foo', 'agent:'];
     for (const addr of cases) {
       const out = svc.create({ requesterAddr: addr, channel: 'c', payload: '{}' });
       assert.equal(out.ok, false, `expected requesterAddr ${JSON.stringify(addr)} to be rejected`);
+      if (out.ok) throw new Error('unreachable');
+      // Strong: pin the reason so a resolver regression that returned
+      // `invalid-channel` here would be caught immediately.
+      assert.strictEqual(out.reason, 'invalid-requester', `addr=${JSON.stringify(addr)} reason=${out.reason}`);
     }
   });
 

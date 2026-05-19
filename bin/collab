@@ -447,7 +447,8 @@ function parseApprovalFlags(args, schema) {
 async function approvalCreate(args) {
   const { flags } = parseApprovalFlags(args, { channel: true, payload: true, requester: true });
   if (!flags.channel) {
-    console.error('usage: collab approval create --channel <c> --payload <json> [--requester <addr>]');
+    console.error('usage: collab approval create --channel <c> [--payload <json>] [--requester <addr>]');
+    console.error('  --payload defaults to "{}" when omitted');
     process.exit(1);
   }
   const payload = flags.payload ?? '{}';
@@ -500,13 +501,18 @@ async function approvalWithdraw(args) {
 async function approvalAwait(args) {
   const id = args[0];
   if (!id) {
-    console.error('usage: collab approval await <id> [--timeout <ms>]');
+    console.error('usage: collab approval await <id> [--timeout <ms>] [--interval <ms>]');
+    console.error('  --timeout   max wait in ms; default 600000 (10 minutes); exits non-zero on timeout');
+    console.error('  --interval  poll interval in ms; default 500');
     process.exit(1);
   }
-  const { flags } = parseApprovalFlags(args.slice(1), { timeout: true });
+  const { flags } = parseApprovalFlags(args.slice(1), { timeout: true, interval: true });
+  // Defaults: 10 minute timeout, 500ms poll interval. Plain client-side
+  // polling per the v3 spec — the server's /await endpoint is a single
+  // non-blocking read, so the CLI is the source of truth for cadence.
   const totalTimeoutMs = flags.timeout ? parseInt(flags.timeout, 10) : 600_000;
+  const intervalMs = flags.interval ? parseInt(flags.interval, 10) : 500;
   const deadline = Date.now() + totalTimeoutMs;
-  // Plain polling per the spec — every 500ms.
   for (;;) {
     const row = await api('GET', `/api/approvals/${encodeURIComponent(id)}`);
     if (row.state && row.state !== 'pending') {
@@ -517,20 +523,19 @@ async function approvalAwait(args) {
       console.error(`timeout: approval ${id} still pending after ${totalTimeoutMs}ms`);
       process.exit(2);
     }
-    await new Promise((r) => setTimeout(r, 500));
+    await new Promise((r) => setTimeout(r, intervalMs));
   }
 }
 
 async function approvalList(args) {
+  // Both --channel and --state are optional; the server AND's them when
+  // present and returns the cross-channel feed when both are omitted.
   const { flags } = parseApprovalFlags(args, { channel: true, state: true });
-  if (!flags.channel) {
-    console.error('usage: collab approval list --channel <c> [--state <s>]');
-    process.exit(1);
-  }
   const qs = new URLSearchParams();
-  qs.set('channel', flags.channel);
+  if (flags.channel) qs.set('channel', flags.channel);
   if (flags.state) qs.set('state', flags.state);
-  const data = await api('GET', `/api/approvals?${qs.toString()}`);
+  const path = qs.toString() ? `/api/approvals?${qs.toString()}` : '/api/approvals';
+  const data = await api('GET', path);
   console.log(JSON.stringify(data, null, 2));
 }
 
@@ -546,12 +551,12 @@ cmd('approval', 'approval <create|get|set|withdraw|await|list> [args...]', 'Mana
     case 'list':     return approvalList(rest);
     default:
       console.error('usage: collab approval <create|get|set|withdraw|await|list> [args...]');
-      console.error('  create --channel <c> --payload <json>');
+      console.error('  create --channel <c> [--payload <json>]      (payload defaults to "{}")');
       console.error('  get <id>');
       console.error('  set <id> --state <approved|rejected|amended> [--payload <json>]');
       console.error('  withdraw <id>');
-      console.error('  await <id> [--timeout <ms>]');
-      console.error('  list --channel <c> [--state <s>]');
+      console.error('  await <id> [--timeout <ms>] [--interval <ms>] (timeout defaults to 600000 ms)');
+      console.error('  list [--channel <c>] [--state <s>]');
       process.exit(1);
   }
 });

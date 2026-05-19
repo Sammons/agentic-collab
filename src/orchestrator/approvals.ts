@@ -24,10 +24,7 @@ import { randomUUID } from 'node:crypto';
 import type { Database } from './database.ts';
 import type { MessageDispatcher } from './message-dispatcher.ts';
 import type { ApprovalRow, ApprovalState, WsApprovalChangedEvent } from '../shared/types.ts';
-import { parseAddress } from '../shared/address.ts';
-
-/** Validates approval channel names (mirrors NAME_RE from `shared/address.ts`). */
-const CHANNEL_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$/;
+import { parseAddress, NAME_RE } from '../shared/address.ts';
 
 export type ApprovalServiceOptions = {
   db: Database;
@@ -75,7 +72,7 @@ export class ApprovalService {
     channel: string;
     payload: string;
   }): CreateOutcome {
-    if (typeof opts.channel !== 'string' || !CHANNEL_NAME_RE.test(opts.channel)) {
+    if (typeof opts.channel !== 'string' || !NAME_RE.test(opts.channel)) {
       return { ok: false, reason: 'invalid-channel' };
     }
     if (typeof opts.requesterAddr !== 'string' || opts.requesterAddr.length === 0) {
@@ -117,20 +114,24 @@ export class ApprovalService {
     if (!existing) return { ok: false, reason: 'not-found' };
     if (existing.state !== 'pending') return { ok: false, reason: 'already-terminal' };
 
+    // The audit event is written INSIDE the same DB transaction as the row
+    // update — see `setApprovalState` in database.ts. This guarantees state
+    // and audit-trail stay consistent even if the event insert throws.
+    // We must encode the event payload ahead of time because the txn does
+    // not have access to the updated row yet.
+    const eventPayload = JSON.stringify({
+      state,
+      decidedBy: opts.decidedBy ?? null,
+    });
     const updated = this.db.setApprovalState(id, state, {
       decidedBy: opts.decidedBy ?? null,
       payload: opts.payload ?? null,
+      event: { eventType: 'state-changed', payload: eventPayload },
     });
     if (!updated) {
       // The atomic DB layer races against a concurrent setState; treat as terminal.
       return { ok: false, reason: 'already-terminal' };
     }
-
-    this.db.recordApprovalEvent(id, 'state-changed', JSON.stringify({
-      state: updated.state,
-      decidedBy: updated.decidedBy,
-      decidedAt: updated.decidedAt,
-    }));
     this.emit(updated);
     // Fire-and-forget — auto-notify must not block the HTTP response.
     void this.notifyRequester(updated);

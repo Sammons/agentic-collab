@@ -621,20 +621,22 @@ route('GET', '/api/approvals/:id', async (_req, res, match, ctx) => {
   return json(res, 200, row);
 });
 
+// Both `channel` and `state` are optional and AND'd together when present.
+// Omitting `channel` returns the cross-channel feed used by the dashboard
+// inbox (Q9). `state` is validated against the canonical enum either way.
 route('GET', '/api/approvals', async (req, res, _match, ctx) => {
   if (!ctx.approvals) return json(res, 503, { error: 'approvals not configured' });
   const url = new URL(req.url!, `http://${req.headers.host}`);
   const channel = url.searchParams.get('channel');
-  if (!channel) return json(res, 400, { error: 'channel query param required' });
   const stateRaw = url.searchParams.get('state') ?? undefined;
   const allowed = ['pending', 'approved', 'rejected', 'amended', 'withdrawn'];
   if (stateRaw && !allowed.includes(stateRaw)) {
     return json(res, 400, { error: `state must be one of ${allowed.join('|')}` });
   }
-  const rows = ctx.db.listApprovalsByChannel(
-    channel,
-    stateRaw as 'pending' | 'approved' | 'rejected' | 'amended' | 'withdrawn' | undefined,
-  );
+  const state = stateRaw as 'pending' | 'approved' | 'rejected' | 'amended' | 'withdrawn' | undefined;
+  const rows = channel
+    ? ctx.db.listApprovalsByChannel(channel, state)
+    : ctx.db.listApprovals(state ? { state } : {});
   return json(res, 200, rows);
 });
 
@@ -650,6 +652,12 @@ route('POST', '/api/approvals/:id/set', async (req, res, match, ctx) => {
   const payload = typeof body.payload === 'string'
     ? body.payload
     : body.payload != null ? JSON.stringify(body.payload) : null;
+  // `amended` rewrites the active payload; rejecting the call here keeps
+  // the audit trail honest. Otherwise the route silently leaves the prior
+  // payload in place while the row's state column claims "amended".
+  if (body.state === 'amended' && (payload === null || payload === '')) {
+    return json(res, 400, { error: 'amended state requires --payload' });
+  }
   const result = await ctx.approvals.setState(id, body.state, {
     decidedBy: typeof body.decidedBy === 'string' ? body.decidedBy : null,
     payload,
@@ -680,19 +688,16 @@ route('POST', '/api/approvals/:id/withdraw', async (req, res, match, ctx) => {
   return json(res, 200, result.approval);
 });
 
-// Long-polling await — server-side polls at 500ms intervals up to
-// `timeoutMs` (default 30000). Returns the current row (pending or
-// terminal) once the wait resolves; callers re-poll on pending.
-route('GET', '/api/approvals/:id/await', async (req, res, match, ctx) => {
+// Non-blocking single read — per spec ("plain polling, not long-poll").
+// Returns the current row immediately (200) regardless of state. Callers
+// (`collab approval await`, dashboard inbox) poll client-side at whatever
+// interval suits them. The endpoint is retained for path-compatibility
+// with earlier drafts; functionally identical to GET /api/approvals/:id.
+route('GET', '/api/approvals/:id/await', async (_req, res, match, ctx) => {
   if (!ctx.approvals) return json(res, 503, { error: 'approvals not configured' });
   const id = match.pathname.groups['id'];
   if (!id) return json(res, 400, { error: 'approval id required' });
-  const url = new URL(req.url!, `http://${req.headers.host}`);
-  const timeoutRaw = url.searchParams.get('timeoutMs');
-  const timeoutMs = timeoutRaw && /^\d+$/.test(timeoutRaw)
-    ? Math.min(Math.max(parseInt(timeoutRaw, 10), 0), 60_000)
-    : 30_000;
-  const row = await ctx.approvals.await(id, { pollIntervalMs: 500, timeoutMs });
+  const row = ctx.db.getApproval(id);
   if (!row) return json(res, 404, { error: 'approval not found' });
   return json(res, 200, row);
 });
