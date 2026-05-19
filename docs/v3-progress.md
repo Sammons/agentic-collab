@@ -115,3 +115,47 @@ git diff 95d87f6 -- src/orchestrator/database.ts | grep -E '^[+-].*ALTER TABLE a
 - `PERSONAS_DIR` default is `$HOME/persistent-agents` (persona.ts:12) — the smoke harness must set `PERSONAS_DIR` to an isolated dir before writing `agents/test-echo.md` so it doesn't leak into a real user's directory.
 
 <!-- Per-quantum sections appended below as quanta complete. -->
+
+---
+
+## Q1 · address router · completed
+- Plan SHA: inline (executed from `docs/v3-upgrade-prompt.md` §Q1 + per-file plan in builder brief)
+- Builder: worktree=`.claude/worktrees/agent-a90d74d8a0a673dce` branch=`worktree-agent-a90d74d8a0a673dce` (final `b8d4233`)
+- Tests added: 56 (49 `address.test.ts` + 7 `routes.test.ts`)
+- Type check: pass (no new error classes vs baseline)
+- Smoke: n/a (runs from Q3)
+- Final commit: `0d86f7c` (merge into `v3-integration`)
+- BC gates: `field-registry.ts` diff empty · agents schema unchanged · `pending_messages.target_agent` confirmed bare
+- Notes: hostile reviewer cleared zero blockers. See `docs/quanta/Q1-address-router.md` for full dossier.
+
+---
+
+## Stop-and-ask deviation — Q3 LOC budget
+
+The Q3 planner returned a budget of ~840 LOC net new (kernel ~460 + tests ~420), which exceeds the spec's 400-LOC stop-and-ask threshold by ~2x. **Proceeding without pausing because** the v3-upgrade-prompt §Q3 explicitly rejects splitting: "splitting queue/delivery/instances/completion across separate quanta means none of them have anything coherent to test against until they're all done." The threshold was a guardrail against unanticipated growth; Q3 is the one quantum the design anticipates as a large vertical slice. Risk noted for the final report.
+
+---
+
+## Q2 · template loader · completed
+- Plan SHA: inline (executed from `docs/v3-upgrade-prompt.md` §Q2 + per-file plan in builder brief)
+- Builder: worktree=`.claude/worktrees/agent-a5512a6a946589fe0` branch=`worktree-agent-a5512a6a946589fe0` (final `61580ef`)
+- Tests added: 19 (11 `template-sync.test.ts` + 3 `persona.test.ts` + 5 `database.test.ts`)
+- Type check: pass (no new error classes vs baseline)
+- Smoke: n/a
+- Final commit: `92d4171` (merge into `v3-integration`)
+- BC gates: `field-registry.ts` diff empty · agents schema literal unchanged · `agent_templates`/`topics` tables present
+- Notes: hostile reviewer cleared zero blockers. See `docs/quanta/Q2-template-loader.md` for full dossier.
+
+---
+
+## Q3 · ephemeral lifecycle kernel · completed
+- Plan: `docs/quanta/Q3-plan-revised.md` (rev'd after Codex outside-review surfaced 6 blockers against the original plan)
+- Builder: direct on `v3-integration` (Q3 touches files Q4-Q8 also touch; worktree would create merge churn)
+- Initial commit: `bdf1456` · iteration commit: `e01484c` (final)
+- Tests added: ~22 (across `topic-delivery.test.ts`, `instance-reaper.test.ts`, plus appended tests in `routes.test.ts`/`health-monitor.test.ts`/`message-dispatcher.test.ts`)
+- Type check: pass (no new error classes vs baseline)
+- Smoke: kernel in place — shell-only `tests/v3-smoke.sh` not exercised here (requires live orchestrator + proxy); operator runs after `./start.sh`
+- Final commit: `e01484c` on `v3-integration`
+- BC gates: `field-registry.ts` diff empty · agents schema BYTE-IDENTICAL · `lifecycle.ts` diff is one word (`export`) · no new proxy commands · `pending_messages.target_agent` stays bare
+- Notes: hostile reviewer flagged 7 blockers post-build (race in invariant #1, two no-op invariant tests, unsafe `MESSAGE_CONTENT` in tmux env, fragile `locks` cast, missing 409 contract, misleading `removed` field). All fixed in iteration `e01484c`. See `docs/quanta/Q3-ephemeral-lifecycle-kernel.md`.
+- LOC deviation: ~875 net new code (over 400-LOC stop-and-ask threshold; spec rejects splitting Q3 — deviation logged).
