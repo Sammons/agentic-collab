@@ -132,6 +132,26 @@ export function syncTemplate(
     replySchemaPath: t.reply_schema ?? null,
   }));
   db.replaceTopicsForTemplate(name, topicRows);
+
+  // Q6 cycle-detection warning. A monitor sidecar that itself declares a
+  // `monitor_template` would loop, so the topic-delivery kernel ignores the
+  // inner monitor at spawn time. Surface that as a warning at sync time so
+  // operators notice the misconfiguration before it matters.
+  for (const t of topicRows) {
+    if (t.monitorTemplate) {
+      const monitor = db.getAgentTemplate(t.monitorTemplate);
+      if (monitor) {
+        const monitorTopics = db.getTopicsForTemplate(t.monitorTemplate);
+        for (const mt of monitorTopics) {
+          if (mt.monitorTemplate) {
+            console.warn(
+              `[template-sync] "${name}" topic "${t.name}" -> monitor "${t.monitorTemplate}" -> topic "${mt.name}" -> monitor "${mt.monitorTemplate}": monitor-of-monitor chains are ignored at spawn time to prevent cycles.`,
+            );
+          }
+        }
+      }
+    }
+  }
   if (onEvent) onEvent({ type: 'template_updated', templateId: name, action });
 }
 

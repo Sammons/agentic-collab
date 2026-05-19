@@ -349,6 +349,213 @@ export class TopicDelivery {
     if (refreshed) {
       this.onEvent({ type: 'instance_spawned', instance: refreshed });
     }
+
+    // Step 8 — Q6 monitor sidecar pairing. If the topic declares a
+    // `monitor_template`, spawn the monitor alongside the worker using the
+    // same kernel (prepare → create_session → set-env × N → start hook), but
+    // with `$TARGET_TMUX_SESSION` set to the worker's tmux session.
+    //
+    // Cycle protection: only the original worker spawn pairs a monitor.
+    // A monitor (`monitorOfInstance` non-null) NEVER spawns its own monitor,
+    // even if its template happens to declare one. This guards against
+    // infinite recursion if someone wires up monitor-of-monitor by mistake.
+    if (topic.monitorTemplate && instance.monitorOfInstance === null) {
+      try {
+        await this.spawnMonitor({
+          workerInstance: refreshed ?? instance,
+          monitorTemplateId: topic.monitorTemplate,
+          proxyId,
+        });
+      } catch (err) {
+        // Monitor is best-effort — worker continues regardless.
+        console.warn(`[topic-delivery] monitor spawn failed for worker ${instance.id}: ${(err as Error).message}`);
+      }
+    }
+  }
+
+  /**
+   * Spawn a monitor sidecar paired with a worker. Runs the same lifecycle as
+   * a regular topic spawn (prepare → create_session → set-env × N → start),
+   * but inserts a plain `agent_instances` row (no topic_queue claim) and
+   * passes `TARGET_TMUX_SESSION` in the tmux env so the monitor's start hook
+   * can attach to the worker's pane (capture-pane / send-keys).
+   *
+   * Failures here log a warning and mark the monitor row failed; the worker
+   * is untouched.
+   */
+  private async spawnMonitor(opts: {
+    workerInstance: AgentInstanceRow;
+    monitorTemplateId: string;
+    proxyId: string;
+  }): Promise<void> {
+    const { workerInstance, monitorTemplateId, proxyId } = opts;
+    const monitorTemplate = this.db.getAgentTemplate(monitorTemplateId);
+    if (!monitorTemplate) {
+      console.warn(`[topic-delivery] monitor template "${monitorTemplateId}" not found — skipping monitor for worker ${workerInstance.id}`);
+      return;
+    }
+    if (monitorTemplate.persistent) {
+      console.warn(`[topic-delivery] monitor template "${monitorTemplateId}" is persistent — only ephemeral templates can be monitors; skipping for worker ${workerInstance.id}`);
+      return;
+    }
+
+    const monitorId = generateInstanceId();
+    const monitorAddr = `agent:${monitorTemplate.id}/${monitorId}`;
+    const monitorTmuxSession = `inst-${monitorTemplate.id}-${monitorId}`;
+    const monitorIpc = allocateIpcPaths(monitorId, this.ipcRoot);
+    const cwdBase = monitorTemplate.cwdBase ?? '';
+    const repoRoot = monitorTemplate.repoRoot ?? cwdBase;
+    const worktreePath = renderCwdTemplate(monitorTemplate.cwdTemplate, {
+      messageId: monitorId,
+      cwdBase,
+    });
+
+    // Insert the monitor row BEFORE any proxy command so address resolution
+    // and `findMonitorForWorker` work as soon as the row commits.
+    let monitorRow: AgentInstanceRow;
+    try {
+      monitorRow = this.db.createMonitorInstance({
+        id: monitorId,
+        agentTemplate: monitorTemplate.id,
+        monitorOfInstance: workerInstance.id,
+        instanceAddr: monitorAddr,
+        tmuxSession: monitorTmuxSession,
+        worktreePath,
+        messagePath: monitorIpc.messagePath,
+        replyPath: monitorIpc.replyPath,
+        statusPath: monitorIpc.statusPath,
+        proxyId,
+      });
+    } catch (err) {
+      console.warn(`[topic-delivery] failed to insert monitor row for worker ${workerInstance.id}: ${(err as Error).message}`);
+      return;
+    }
+
+    // Build envs. Monitors have no publish payload, so MESSAGE_CONTENT is
+    // intentionally empty. `TARGET_TMUX_SESSION` is added to the tmux env via
+    // buildTmuxSessionEnv(...) — the host-shell env doesn't include it because
+    // prepare/cleanup run on the host filesystem and have no concept of the
+    // worker session.
+    const hostShellEnv = buildHostShellEnv({
+      messageId: monitorId,
+      messagePath: monitorRow.messagePath,
+      replyPath: monitorRow.replyPath,
+      statusPath: monitorRow.statusPath,
+      worktreePath: worktreePath ?? '',
+      cwdBase,
+      repoRoot,
+      agentTemplate: monitorTemplate.id,
+      topicName: '',
+      instanceAddr: monitorAddr,
+      replyToAddr: null,
+      instanceId: monitorId,
+      messageContent: '',
+    });
+    const tmuxSessionEnv = buildTmuxSessionEnv(hostShellEnv, {
+      targetTmuxSession: workerInstance.tmuxSession,
+    });
+
+    // Step 3 — prepare via host shell exec.
+    const prepareSrc = monitorTemplate.hookPrepare;
+    let prepareRan = false;
+    if (prepareSrc) {
+      const prepareWrapped = wrapWithEnv(prepareSrc, hostShellEnv);
+      try {
+        const r = await this.proxyDispatch(proxyId, {
+          action: 'exec',
+          command: prepareWrapped,
+          cwd: cwdBase,
+          timeoutMs: 60_000,
+        });
+        if (!r.ok) {
+          this.failMonitor(monitorRow, `prepare failed: ${r.error ?? 'unknown'}`, false);
+          return;
+        }
+        prepareRan = true;
+      } catch (err) {
+        this.failMonitor(monitorRow, `prepare threw: ${(err as Error).message}`, false);
+        return;
+      }
+    }
+
+    // Step 4 — create_session against cwd_base.
+    try {
+      const r = await this.proxyDispatch(proxyId, {
+        action: 'create_session',
+        sessionName: monitorTmuxSession,
+        cwd: cwdBase,
+      });
+      if (!r.ok) {
+        this.failMonitor(monitorRow, `create_session failed: ${r.error ?? 'unknown'}`, prepareRan, { template: monitorTemplate, env: hostShellEnv, proxyId, cwdBase });
+        return;
+      }
+    } catch (err) {
+      this.failMonitor(monitorRow, `create_session threw: ${(err as Error).message}`, prepareRan, { template: monitorTemplate, env: hostShellEnv, proxyId, cwdBase });
+      return;
+    }
+
+    // Step 5 — set-env × N (includes TARGET_TMUX_SESSION).
+    try {
+      await this.dispatchTmuxSetEnv(proxyId, monitorTmuxSession, tmuxSessionEnv);
+    } catch (err) {
+      this.failMonitor(monitorRow, `tmux set-environment failed: ${(err as Error).message}`, prepareRan, { template: monitorTemplate, env: hostShellEnv, proxyId, cwdBase, killSession: monitorTmuxSession });
+      return;
+    }
+
+    // Step 6 — start hook paste.
+    const syntheticAgent = buildSyntheticAgent(monitorTemplate);
+    try {
+      const result = resolveHook('start', monitorTemplate.hookStart ?? null, syntheticAgent, { templateVars: hostShellEnv });
+      await dispatchHookResult(this.lifecycleCtx, proxyId, monitorTmuxSession, result, { pressEnter: true });
+    } catch (err) {
+      this.failMonitor(monitorRow, `start hook failed: ${(err as Error).message}`, prepareRan, { template: monitorTemplate, env: hostShellEnv, proxyId, cwdBase, killSession: monitorTmuxSession });
+      return;
+    }
+
+    // Mark running.
+    this.db.updateInstanceState(monitorRow.id, 'running');
+    const refreshed = this.db.getAgentInstance(monitorRow.id);
+    if (refreshed) {
+      this.onEvent({ type: 'instance_spawned', instance: refreshed });
+    }
+  }
+
+  /**
+   * Failure path specific to monitor spawn. Mirrors `failInstance` but
+   * doesn't touch any topic_queue row (monitors have none) and emits the
+   * `instance_failed` event with a synthetic monitor reason.
+   */
+  private failMonitor(
+    monitorRow: AgentInstanceRow,
+    reason: string,
+    runCleanup: boolean,
+    cleanupOpts?: { template: AgentTemplateRow; env: Record<string, string>; proxyId: string; cwdBase: string; killSession?: string },
+  ): void {
+    console.warn(`[topic-delivery] monitor ${monitorRow.id} failed: ${reason}`);
+    this.db.updateInstanceState(monitorRow.id, 'failed', {
+      completedAt: new Date().toISOString(),
+      failureReason: reason,
+    });
+    const refreshed = this.db.getAgentInstance(monitorRow.id) ?? monitorRow;
+    this.onEvent({ type: 'instance_failed', instance: refreshed, reason });
+
+    if (runCleanup && cleanupOpts && cleanupOpts.template.hookCleanup) {
+      const cleanupWrapped = wrapWithEnv(cleanupOpts.template.hookCleanup, cleanupOpts.env);
+      this.proxyDispatch(cleanupOpts.proxyId, {
+        action: 'exec',
+        command: cleanupWrapped,
+        cwd: cleanupOpts.cwdBase,
+        timeoutMs: 60_000,
+      }).catch((err) => {
+        console.warn(`[topic-delivery] best-effort monitor cleanup failed for ${monitorRow.id}: ${(err as Error).message}`);
+      });
+    }
+    if (cleanupOpts?.killSession) {
+      this.proxyDispatch(cleanupOpts.proxyId, {
+        action: 'kill_session',
+        sessionName: cleanupOpts.killSession,
+      }).catch(() => { /* ignore */ });
+    }
   }
 
   /**

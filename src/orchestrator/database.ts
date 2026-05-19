@@ -825,6 +825,69 @@ export class Database {
     return rows.map(mapAgentInstanceRow);
   }
 
+  /**
+   * Insert a paired monitor instance for a worker. Unlike
+   * `claimAndCreateInstance`, this is a plain INSERT — monitors are not
+   * driven by a `topic_queue` claim and have no queue row. Used by Q6's
+   * monitor sidecar pairing.
+   *
+   * Caller guarantees `monitorOfInstance` references a live worker; no FK
+   * enforcement is configured on `agent_instances` for SQLite WAL friendliness.
+   */
+  createMonitorInstance(opts: {
+    id: string;
+    agentTemplate: string;
+    monitorOfInstance: string;
+    instanceAddr: string;
+    tmuxSession: string;
+    worktreePath: string | null;
+    messagePath: string;
+    replyPath: string;
+    statusPath: string;
+    proxyId: string;
+  }): AgentInstanceRow {
+    this.db.prepare(`
+      INSERT INTO agent_instances (
+        id, agent_template, spawned_from_topic, instance_addr,
+        tmux_session, worktree_path, proxy_id, state,
+        reply_to_addr, message_id, message_path, reply_path, status_path,
+        queue_id, monitor_of_instance
+      ) VALUES (?, ?, NULL, ?, ?, ?, ?, 'spawning', NULL, ?, ?, ?, ?, NULL, ?)
+    `).run(
+      opts.id,
+      opts.agentTemplate,
+      opts.instanceAddr,
+      opts.tmuxSession,
+      opts.worktreePath,
+      opts.proxyId,
+      opts.id,
+      opts.messagePath,
+      opts.replyPath,
+      opts.statusPath,
+      opts.monitorOfInstance,
+    );
+    const row = this.db.prepare(
+      'SELECT * FROM agent_instances WHERE id = ?',
+    ).get(opts.id) as Record<string, unknown>;
+    return mapAgentInstanceRow(row);
+  }
+
+  /**
+   * Find the live monitor instance paired with `workerInstanceId`, if any.
+   * Returns the first non-terminal monitor row (there should only ever be
+   * one — the pairing is 1:1 per Q6 spec).
+   */
+  findMonitorForWorker(workerInstanceId: string): AgentInstanceRow | null {
+    const row = this.db.prepare(`
+      SELECT * FROM agent_instances
+       WHERE monitor_of_instance = ?
+         AND state NOT IN ('completed', 'failed')
+       LIMIT 1
+    `).get(workerInstanceId) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    return mapAgentInstanceRow(row);
+  }
+
   updateInstanceState(
     id: string,
     state: AgentInstanceState,

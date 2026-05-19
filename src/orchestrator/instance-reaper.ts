@@ -271,6 +271,20 @@ export class InstanceReaper {
       this.db.markTopicQueueCompleted(row.queueId, finalState);
     }
 
+    // Q6: tear down a paired monitor sidecar, if any. Only workers (rows
+    // with `monitor_of_instance === null`) trigger monitor teardown — the
+    // monitor itself reaching terminal state goes through the normal flow
+    // and doesn't recurse. The teardown runs `kill_session` and `cleanup`
+    // for the monitor and marks its row `completed` (or `failed` on cleanup
+    // error). This happens AFTER the worker's own teardown above so the
+    // worker's user-facing reply lands first.
+    if (row.monitorOfInstance === null) {
+      const monitor = this.db.findMonitorForWorker(row.id);
+      if (monitor) {
+        await this.tearDownMonitor(monitor);
+      }
+    }
+
     // Q4: emit typed lifecycle events. `instance_completed` carries the
     // post-finalize row so subscribers can render terminal state without a
     // round-trip; `instance_failed` additionally exposes `reason` so
@@ -305,6 +319,97 @@ export class InstanceReaper {
       }
     }
     return true;
+  }
+
+  /**
+   * Q6: tear down a monitor sidecar paired with a completed worker.
+   *
+   * Order: `kill_session` first (matches invariant #6 — engine processes
+   * may have files open), then `cleanup` exec, then mark the monitor row
+   * `completed` (or `failed` if cleanup errored). Emits the corresponding
+   * lifecycle event. Monitors NEVER produce a reply message — they have no
+   * `reply_to_addr` and no queue row, so no reply routing happens here.
+   *
+   * If the monitor was already finalized (e.g. it called `collab complete`
+   * before the worker), this is a no-op via the `findMonitorForWorker`
+   * filter on `state NOT IN ('completed','failed')`.
+   */
+  private async tearDownMonitor(monitor: AgentInstanceRow): Promise<void> {
+    // Single-flight: protect against a `collab complete` racing this path.
+    if (this.inFlight.has(monitor.id)) return;
+    this.inFlight.add(monitor.id);
+    try {
+      // Re-read in case another path already finalized.
+      const fresh = this.db.getAgentInstance(monitor.id);
+      if (!fresh) return;
+      if (fresh.state === 'completed' || fresh.state === 'failed') return;
+
+      // ─── kill_session first ───
+      try {
+        const r = await this.proxyDispatch(monitor.proxyId, {
+          action: 'kill_session',
+          sessionName: monitor.tmuxSession,
+        });
+        if (!r.ok) {
+          console.warn(`[instance-reaper] monitor kill_session warning for ${monitor.id}: ${r.error ?? 'unknown'}`);
+        }
+      } catch (err) {
+        console.warn(`[instance-reaper] monitor kill_session threw for ${monitor.id}: ${(err as Error).message}`);
+      }
+
+      // ─── cleanup hook (best-effort) ───
+      const monitorTemplate = this.db.getAgentTemplate(monitor.agentTemplate);
+      let cleanupError: string | null = null;
+      if (monitorTemplate?.hookCleanup) {
+        const env = buildInstanceEnv({
+          messageId: monitor.messageId,
+          messagePath: monitor.messagePath,
+          replyPath: monitor.replyPath,
+          statusPath: monitor.statusPath,
+          worktreePath: monitor.worktreePath ?? '',
+          cwdBase: monitorTemplate.cwdBase ?? '',
+          repoRoot: monitorTemplate.repoRoot ?? monitorTemplate.cwdBase ?? '',
+          agentTemplate: monitor.agentTemplate,
+          topicName: '',
+          instanceAddr: monitor.instanceAddr,
+          replyToAddr: null,
+          instanceId: monitor.id,
+          messageContent: '',
+        });
+        try {
+          const cleanupWrapped = wrapWithEnv(monitorTemplate.hookCleanup, env);
+          const cleanupCmd: ProxyCommand = monitorTemplate.cwdBase
+            ? { action: 'exec', command: cleanupWrapped, cwd: monitorTemplate.cwdBase, timeoutMs: 60_000 }
+            : { action: 'exec', command: cleanupWrapped, timeoutMs: 60_000 };
+          const r = await this.proxyDispatch(monitor.proxyId, cleanupCmd);
+          if (!r.ok) {
+            cleanupError = r.error ?? 'cleanup returned non-ok';
+            console.warn(`[instance-reaper] monitor cleanup failed for ${monitor.id}: ${cleanupError}`);
+          }
+        } catch (err) {
+          cleanupError = (err as Error).message;
+          console.warn(`[instance-reaper] monitor cleanup threw for ${monitor.id}: ${cleanupError}`);
+        }
+      }
+
+      // Mark monitor terminal. `ok` on clean cleanup or no cleanup hook;
+      // `failed` if the cleanup itself errored.
+      const monitorFinal: 'completed' | 'failed' = cleanupError ? 'failed' : 'completed';
+      this.db.updateInstanceState(monitor.id, monitorFinal, {
+        completedAt: new Date().toISOString(),
+        failureReason: cleanupError,
+      });
+      const monitorFinalRow = this.db.getAgentInstance(monitor.id);
+      if (monitorFinalRow) {
+        if (monitorFinal === 'completed') {
+          this.onEvent({ type: 'instance_completed', instance: monitorFinalRow });
+        } else {
+          this.onEvent({ type: 'instance_failed', instance: monitorFinalRow, reason: cleanupError });
+        }
+      }
+    } finally {
+      this.inFlight.delete(monitor.id);
+    }
   }
 }
 
