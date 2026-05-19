@@ -397,4 +397,115 @@ describe('TopicDelivery — Q3 invariants', () => {
     ).get() as { n: number };
     assert.equal(offending.n, 0);
   });
+
+  // ── Q6: monitor sidecar pairing ──────────────────────────────────────
+
+  it('Q6: spawning a worker with topic.monitor_template also spawns the monitor with $TARGET_TMUX_SESSION set', async () => {
+    seedTemplate(db, 'worker-q6');
+    seedTemplate(db, 'mon-q6', { hookStart: 'echo monitor-started', hookPrepare: null, hookCleanup: 'echo monitor-cleanup' });
+    seedTopic(db, 'worker-q6', { monitorTemplate: 'mon-q6' });
+    const driver = new TopicDelivery({
+      db, proxyDispatch: dispatch, orchestratorHost: 'x', ipcRoot, locks: new LockManager(db.rawDb),
+    });
+
+    await driver.publish({ agentTemplate: 'worker-q6', topicName: 'echo', payload: '{}' });
+    await new Promise((r) => setTimeout(r, 300));
+
+    // Two create_session calls: one for the worker, one for the monitor.
+    const createSessions = commands.filter((c) => c.action === 'create_session') as Array<Extract<ProxyCommand, { action: 'create_session' }>>;
+    assert.equal(createSessions.length, 2, 'two create_session dispatches (worker + monitor)');
+    const sessionNames = createSessions.map((c) => c.sessionName);
+    const workerSession = sessionNames.find((n) => n.startsWith('inst-worker-q6-'));
+    const monitorSession = sessionNames.find((n) => n.startsWith('inst-mon-q6-'));
+    assert.ok(workerSession, 'worker create_session dispatched');
+    assert.ok(monitorSession, 'monitor create_session dispatched');
+
+    // The worker's create_session must come BEFORE the monitor's.
+    const workerCreateIdx = commands.findIndex(
+      (c) => c.action === 'create_session' && (c as Extract<ProxyCommand, { action: 'create_session' }>).sessionName === workerSession,
+    );
+    const monitorCreateIdx = commands.findIndex(
+      (c) => c.action === 'create_session' && (c as Extract<ProxyCommand, { action: 'create_session' }>).sessionName === monitorSession,
+    );
+    assert.ok(workerCreateIdx < monitorCreateIdx, 'monitor create_session follows worker create_session');
+
+    // Among the set-env execs dispatched AFTER the monitor's create_session,
+    // one must set TARGET_TMUX_SESSION to the worker's tmux session.
+    const targetEnvCmd = commands
+      .slice(monitorCreateIdx)
+      .find((c) => c.action === 'exec' && (c as Extract<ProxyCommand, { action: 'exec' }>).command.includes('TARGET_TMUX_SESSION')) as
+      | Extract<ProxyCommand, { action: 'exec' }>
+      | undefined;
+    assert.ok(targetEnvCmd, 'a tmux set-environment exec for TARGET_TMUX_SESSION exists after monitor create_session');
+    assert.ok(targetEnvCmd!.command.includes(`'${workerSession}'`) || targetEnvCmd!.command.includes(`"${workerSession}"`),
+      `TARGET_TMUX_SESSION value is the worker tmux session (cmd: ${targetEnvCmd!.command})`);
+  });
+
+  it('Q6: monitor instance has monitor_of_instance set to the worker id', async () => {
+    seedTemplate(db, 'worker-q6b');
+    seedTemplate(db, 'mon-q6b', { hookStart: 'echo m', hookPrepare: null, hookCleanup: null });
+    seedTopic(db, 'worker-q6b', { monitorTemplate: 'mon-q6b' });
+    const driver = new TopicDelivery({
+      db, proxyDispatch: dispatch, orchestratorHost: 'x', ipcRoot, locks: new LockManager(db.rawDb),
+    });
+
+    await driver.publish({ agentTemplate: 'worker-q6b', topicName: 'echo', payload: '{}' });
+    await new Promise((r) => setTimeout(r, 300));
+
+    const live = db.listLiveAgentInstances();
+    const worker = live.find((r) => r.agentTemplate === 'worker-q6b');
+    const monitor = live.find((r) => r.agentTemplate === 'mon-q6b');
+    assert.ok(worker, 'worker row exists');
+    assert.ok(monitor, 'monitor row exists');
+    assert.equal(monitor!.monitorOfInstance, worker!.id, 'monitor.monitor_of_instance = worker.id');
+    assert.equal(monitor!.spawnedFromTopic, null, 'monitor not spawned from a topic_queue');
+    assert.equal(monitor!.queueId, null, 'monitor has no queue row');
+
+    // findMonitorForWorker returns the monitor row.
+    const found = db.findMonitorForWorker(worker!.id);
+    assert.ok(found, 'findMonitorForWorker returns a row');
+    assert.equal(found!.id, monitor!.id);
+  });
+
+  it('Q6: monitor template that itself declares monitor_template does NOT recurse', async () => {
+    // Chain: worker.monitor_template = 'mon' AND mon.monitor_template = 'mon2'.
+    // Cycle protection in claimAndSpawn must short-circuit the monitor's own
+    // monitor declaration so we end up with EXACTLY ONE monitor row.
+    seedTemplate(db, 'worker-q6c');
+    seedTemplate(db, 'mon-q6c', { hookStart: 'echo m', hookPrepare: null, hookCleanup: null });
+    seedTemplate(db, 'mon2-q6c', { hookStart: 'echo m2', hookPrepare: null, hookCleanup: null });
+    seedTopic(db, 'worker-q6c', { monitorTemplate: 'mon-q6c' });
+    // Give `mon-q6c` its own topics with a monitor_template pointing to mon2.
+    // Topics on the monitor template are necessary so the spawn check can see
+    // them — but since cycle protection happens at the WORKER spawn step
+    // (only `monitorOfInstance === null` workers spawn monitors), this should
+    // simply never read those topics during the monitor's own spawn.
+    db.replaceTopicsForTemplate('mon-q6c', [{
+      agentTemplate: 'mon-q6c',
+      name: 'inner',
+      hookPrepareOverride: null,
+      hookStartOverride: null,
+      hookCleanupOverride: null,
+      monitorTemplate: 'mon2-q6c',
+      concurrency: 1,
+      schemaPath: null,
+      replySchemaPath: null,
+    }]);
+
+    const driver = new TopicDelivery({
+      db, proxyDispatch: dispatch, orchestratorHost: 'x', ipcRoot, locks: new LockManager(db.rawDb),
+    });
+
+    await driver.publish({ agentTemplate: 'worker-q6c', topicName: 'echo', payload: '{}' });
+    await new Promise((r) => setTimeout(r, 300));
+
+    // Exactly ONE monitor row — mon-q6c. NO mon2-q6c rows. Cycle protection
+    // means a monitor never gets its own monitor sidecar spawned.
+    const live = db.listLiveAgentInstances();
+    const monitors = live.filter((r) => r.monitorOfInstance !== null);
+    assert.equal(monitors.length, 1, `exactly one monitor row (got ${monitors.length}: ${monitors.map((m) => m.agentTemplate).join(',')})`);
+    assert.equal(monitors[0]!.agentTemplate, 'mon-q6c');
+    const mon2Rows = live.filter((r) => r.agentTemplate === 'mon2-q6c');
+    assert.equal(mon2Rows.length, 0, 'no mon2-q6c rows created (cycle protection holds)');
+  });
 });

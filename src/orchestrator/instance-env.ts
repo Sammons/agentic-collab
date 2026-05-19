@@ -96,6 +96,10 @@ export function buildHostShellEnv(opts: BuildEnvOpts): Record<string, string> {
  * control characters, or be large enough to corrupt tmux env state).
  *
  * Agents access the payload through `$MESSAGE_PATH` instead.
+ *
+ * `TARGET_TMUX_SESSION` is appended dynamically by `buildTmuxSessionEnv`
+ * when the caller passes a target session (monitor sidecars — Q6). It is
+ * not in the static list because most instances don't have a target.
  */
 export const TMUX_SAFE_ENV_KEYS = [
   'MESSAGE_ID',
@@ -115,13 +119,23 @@ export const TMUX_SAFE_ENV_KEYS = [
 /**
  * Derive the tmux-safe subset of a host-shell env record. Strips
  * MESSAGE_CONTENT (and any other key not in `TMUX_SAFE_ENV_KEYS`).
+ *
+ * When `opts.targetTmuxSession` is set, also includes `TARGET_TMUX_SESSION`
+ * in the result — used by monitor sidecars (Q6) to point capture-pane /
+ * send-keys at the paired worker's tmux session.
  */
-export function buildTmuxSessionEnv(hostEnv: Record<string, string>): Record<string, string> {
+export function buildTmuxSessionEnv(
+  hostEnv: Record<string, string>,
+  opts?: { targetTmuxSession?: string },
+): Record<string, string> {
   const out: Record<string, string> = {};
   for (const key of TMUX_SAFE_ENV_KEYS) {
     if (key in hostEnv) {
       out[key] = hostEnv[key]!;
     }
+  }
+  if (opts?.targetTmuxSession) {
+    out['TARGET_TMUX_SESSION'] = opts.targetTmuxSession;
   }
   return out;
 }

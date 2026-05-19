@@ -329,4 +329,94 @@ describe('InstanceReaper — Q3 invariants', () => {
     const fresh = db.getAgentInstance(inst.id)!;
     assert.equal(fresh.state, 'running', 'state unchanged');
   });
+
+  // ── Q6: monitor sidecar teardown ────────────────────────────────────
+
+  it('Q6: worker completion tears down paired monitor (kill_session + cleanup)', async () => {
+    const { db, commands, driver, reaper } = makeEnv();
+    seedTemplate(db, 'worker-r6');
+    seedTemplate(db, 'mon-r6', { hookStart: 'echo m-start', hookPrepare: null, hookCleanup: 'echo monitor-cleanup-marker' });
+    seedTopic(db, 'worker-r6', { monitorTemplate: 'mon-r6' });
+
+    const id = await spawnAndWaitRunning(driver, db, 'worker-r6', '{}');
+    // Wait for the monitor to spawn too.
+    const deadline = Date.now() + 2000;
+    let monitor: ReturnType<typeof db.findMonitorForWorker> = null;
+    while (Date.now() < deadline) {
+      monitor = db.findMonitorForWorker(id);
+      if (monitor && monitor.state === 'running') break;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    assert.ok(monitor, 'monitor row exists');
+    assert.equal(monitor!.state, 'running');
+
+    const inst = db.getAgentInstance(id)!;
+    writeFileSync(inst.replyPath, '{}');
+    writeFileSync(inst.statusPath, 'ok\n');
+
+    const lenBefore = commands.length;
+    await reaper.wake(inst.id);
+    const tail = commands.slice(lenBefore);
+
+    // kill_session for the MONITOR specifically.
+    const monitorKill = tail.find(
+      (c) => c.action === 'kill_session' && (c as Extract<ProxyCommand, { action: 'kill_session' }>).sessionName === monitor!.tmuxSession,
+    );
+    assert.ok(monitorKill, 'kill_session dispatched for monitor session');
+
+    // cleanup exec for the monitor (carrying the cleanup marker), cwd=cwdBase.
+    const monitorCleanup = tail.find(
+      (c) => c.action === 'exec'
+        && (c as Extract<ProxyCommand, { action: 'exec' }>).command.includes('monitor-cleanup-marker'),
+    ) as Extract<ProxyCommand, { action: 'exec' }> | undefined;
+    assert.ok(monitorCleanup, 'monitor cleanup exec dispatched');
+    assert.equal(monitorCleanup!.cwd, '/tmp', 'cleanup runs in cwd_base');
+
+    // kill_session precedes cleanup (mirrors invariant #6 for the monitor).
+    const monKillIdx = tail.indexOf(monitorKill!);
+    const monCleanupIdx = tail.indexOf(monitorCleanup!);
+    assert.ok(monKillIdx < monCleanupIdx, `monitor kill_session(${monKillIdx}) precedes monitor cleanup(${monCleanupIdx})`);
+
+    // Monitor row reaches `completed`.
+    const finalMonitor = db.getAgentInstance(monitor!.id);
+    assert.ok(finalMonitor, 'monitor row still exists');
+    assert.equal(finalMonitor!.state, 'completed', 'monitor reaches completed');
+    assert.ok(finalMonitor!.completedAt, 'monitor.completedAt set');
+  });
+
+  it('Q6: monitor that calls collab complete first is finalised independently and worker is untouched', async () => {
+    const { db, driver, reaper } = makeEnv();
+    seedTemplate(db, 'worker-r6b');
+    seedTemplate(db, 'mon-r6b', { hookStart: 'echo m-start', hookPrepare: null, hookCleanup: 'echo m-cleanup' });
+    seedTopic(db, 'worker-r6b', { monitorTemplate: 'mon-r6b' });
+
+    const workerId = await spawnAndWaitRunning(driver, db, 'worker-r6b', '{}');
+    const deadline = Date.now() + 2000;
+    let monitor = null as ReturnType<typeof db.findMonitorForWorker>;
+    while (Date.now() < deadline) {
+      monitor = db.findMonitorForWorker(workerId);
+      if (monitor && monitor.state === 'running') break;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    assert.ok(monitor, 'monitor row exists');
+
+    // Monitor finalises FIRST — write status to its own status path. Then
+    // tryFinalize on the monitor row directly. Worker stays running.
+    writeFileSync(monitor!.replyPath, '{}');
+    writeFileSync(monitor!.statusPath, 'ok\n');
+
+    await reaper.wake(monitor!.id);
+
+    const monitorAfter = db.getAgentInstance(monitor!.id)!;
+    assert.equal(monitorAfter.state, 'completed', 'monitor reaches terminal state independently');
+
+    // Worker still running, untouched.
+    const workerAfter = db.getAgentInstance(workerId)!;
+    assert.equal(workerAfter.state, 'running', 'worker still running');
+    assert.equal(workerAfter.completedAt, null, 'worker not yet completed');
+
+    // findMonitorForWorker now returns null — the monitor is terminal.
+    const stillLive = db.findMonitorForWorker(workerId);
+    assert.equal(stillLive, null, 'no live monitor remains for the worker');
+  });
 });
