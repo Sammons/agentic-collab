@@ -22,6 +22,7 @@ import { syncPersonasToDb, syncPersonasWithDiff, getPersonasDir } from './person
 import { TopicDelivery } from './topic-delivery.ts';
 import { InstanceReaper } from './instance-reaper.ts';
 import { ApprovalService } from './approvals.ts';
+import { BootReconciler, ProxyReconnectHandler, OrphanedWorktreeSweep } from './recovery.ts';
 import { AccountStore } from './accounts.ts';
 import { isRunning } from '../shared/agent-entity.ts';
 import { resolveSecret, getSecretPath } from '../shared/config.ts';
@@ -280,6 +281,32 @@ const approvals = new ApprovalService({
   onEvent: (event) => wss.broadcastEvent(event),
 });
 
+// ── v3 Q8: Crash recovery ──
+//
+// Three coordinated routines reconcile ephemeral state. The boot reconciler
+// runs once before listen (so traffic never sees orphaned rows); the
+// reconnect handler is invoked from the proxy-register route; the orphan
+// sweep ticks on a 60s cadence after listen.
+const bootReconciler = new BootReconciler({
+  db,
+  proxyDispatch,
+  instanceReaper,
+  topicDelivery,
+  onEvent: (event) => wss.broadcastEvent(event),
+});
+
+const proxyReconnectHandler = new ProxyReconnectHandler({
+  db,
+  proxyDispatch,
+  onEvent: (event) => wss.broadcastEvent(event),
+});
+
+const orphanedWorktreeSweep = new OrphanedWorktreeSweep({
+  db,
+  proxyDispatch,
+  onEvent: (event) => wss.broadcastEvent(event),
+});
+
 const routeCtx: RouteContext = {
   db,
   wss,
@@ -298,6 +325,11 @@ const routeCtx: RouteContext = {
   topicDelivery,
   instanceReaper,
   approvals,
+  recovery: {
+    reconciler: bootReconciler,
+    reconnectHandler: proxyReconnectHandler,
+    orphanSweep: orphanedWorktreeSweep,
+  },
   reloadPersonas: () => {
     // Q4: forward `template_updated` events to WS subscribers so the Q9
     // dashboard can refresh the templates tree without a full reload.
@@ -455,6 +487,7 @@ async function shutdown(): Promise<void> {
   usagePoller.stop();
   reminderDispatcher.stop();
   instanceReaper.stop();
+  orphanedWorktreeSweep.stop();
   await usagePoller.cleanup().catch(err =>
     console.error('[orchestrator] Usage session cleanup error:', err));
 
@@ -478,6 +511,17 @@ process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
 
 // ── Start ──
+
+// v3 Q8: reconcile live `agent_instances` rows BEFORE traffic. We may have
+// crashed mid-flight: an instance whose status file is non-empty just needs
+// to be finalised via the reaper; one whose tmux session is alive resumes
+// waiting for `collab complete`; one whose session is gone is marked failed
+// with best-effort cleanup. Bounded by the existing proxy retry budget —
+// if a proxy is unreachable, its rows are skipped and picked up when the
+// proxy reconnects (`ProxyReconnectHandler`).
+await bootReconciler.reconcile().catch((err) => {
+  console.error('[boot-reconcile] failed:', err);
+});
 
 server.listen(PORT, '0.0.0.0', async () => {
   console.log(`[orchestrator] Listening on port ${PORT}`);
@@ -535,6 +579,11 @@ server.listen(PORT, '0.0.0.0', async () => {
   usagePoller.start();
   reminderDispatcher.start();
   instanceReaper.start();
+
+  // v3 Q8: orphaned-worktree sweep ticks on a 60s cadence. Best-effort, never
+  // throws. Removes `wt-*` directories under any template's `cwd_base` that
+  // have no corresponding live `agent_instances.worktree_path` entry.
+  orphanedWorktreeSweep.start();
 
   // Start Telegram polling for enabled destinations
   const telegramDests = db.listDestinations().filter(d => d.type === 'telegram' && d.enabled);

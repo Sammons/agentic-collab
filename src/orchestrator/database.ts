@@ -860,6 +860,53 @@ export class Database {
   }
 
   /**
+   * Q8: list `agent_instances` rows owned by a specific proxy. When
+   * `options.onlyLive` is true (the default for crash-recovery callers),
+   * filters to non-terminal states; otherwise returns every row regardless
+   * of state. Used by the proxy-reconnect handler to fail orphaned
+   * instances whose sessions died with the proxy.
+   */
+  listAgentInstancesByProxy(
+    proxyId: string,
+    options?: { onlyLive: boolean },
+  ): AgentInstanceRow[] {
+    const onlyLive = options?.onlyLive ?? true;
+    const sql = onlyLive
+      ? `SELECT * FROM agent_instances
+          WHERE proxy_id = ?
+            AND state IN ('spawning', 'running', 'completing')
+          ORDER BY id ASC`
+      : `SELECT * FROM agent_instances
+          WHERE proxy_id = ?
+          ORDER BY id ASC`;
+    const rows = this.db.prepare(sql).all(proxyId) as Array<Record<string, unknown>>;
+    return rows.map(mapAgentInstanceRow);
+  }
+
+  /**
+   * Q8: list DISTINCT `cwd_base` values from ephemeral templates. The
+   * orphaned-worktree sweep walks these directories looking for `wt-*`
+   * subdirs that have no matching `agent_instances.worktree_path` entry.
+   * Persistent templates are excluded — their cwd is a long-lived working
+   * directory, not a worktree base.
+   */
+  listCwdBases(): { templateId: string; cwdBase: string }[] {
+    const rows = this.db.prepare(`
+      SELECT id AS template_id, cwd_base
+        FROM agent_templates
+       WHERE persistent = 0 AND cwd_base IS NOT NULL AND cwd_base != ''
+    `).all() as Array<Record<string, unknown>>;
+    // Dedupe while preserving the first template id observed for each base.
+    const seen = new Map<string, string>();
+    for (const r of rows) {
+      const base = r['cwd_base'] as string;
+      const tid = r['template_id'] as string;
+      if (!seen.has(base)) seen.set(base, tid);
+    }
+    return Array.from(seen.entries()).map(([cwdBase, templateId]) => ({ templateId, cwdBase }));
+  }
+
+  /**
    * Insert a paired monitor instance for a worker. Unlike
    * `claimAndCreateInstance`, this is a plain INSERT — monitors are not
    * driven by a `topic_queue` claim and have no queue row. Used by Q6's

@@ -35,6 +35,7 @@ import type { UsagePoller } from './usage-poller.ts';
 import type { TopicDelivery } from './topic-delivery.ts';
 import type { InstanceReaper } from './instance-reaper.ts';
 import type { ApprovalService } from './approvals.ts';
+import type { BootReconciler, ProxyReconnectHandler, OrphanedWorktreeSweep } from './recovery.ts';
 
 /** Validates agent and persona names: 1-63 chars, alphanumeric start, [a-zA-Z0-9_-]. */
 const NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$/;
@@ -80,6 +81,18 @@ export type RouteContext = {
    * always populates it. Endpoints return 503 when absent.
    */
   approvals?: ApprovalService;
+  /**
+   * v3 Q8 crash recovery — optional. The boot reconciler runs once at
+   * startup (before `server.listen`) so it's not exposed via routes; the
+   * reconnect handler is invoked from `/api/proxy/register` to fail
+   * orphaned instances on a freshly-returning proxy; the orphan sweep is
+   * driven by an interval, not a route. Populated by production `main.ts`.
+   */
+  recovery?: {
+    reconciler: BootReconciler;
+    reconnectHandler: ProxyReconnectHandler;
+    orphanSweep: OrphanedWorktreeSweep;
+  };
   /** Reload personas from disk; populated alongside `topicDelivery`. */
   reloadPersonas?: () => { synced: number; created: string[]; updated: string[]; skipped: string[] };
 };
@@ -883,6 +896,18 @@ route('POST', '/api/proxy/register', async (req, res, _match, ctx) => {
   recoverFailedAgents(ctx, body.proxyId).catch((err) => {
     console.error(`[proxy-register] Recovery failed for ${body.proxyId}:`, err);
   });
+
+  // v3 Q8: every live `agent_instances` row on this proxy died when the
+  // proxy died. Mark them failed (best-effort cleanup) — running this AFTER
+  // `recoverFailedAgents` so persistent agents that survived in tmux can
+  // still self-heal first. Fire-and-forget; don't block the registration
+  // response (the response was already sent above).
+  if (ctx.recovery) {
+    const pid = body.proxyId as string;
+    ctx.recovery.reconnectHandler.onProxyRegister(pid).catch((err) => {
+      console.error(`[proxy-register] Instance reconcile failed for ${pid}:`, err);
+    });
+  }
 });
 
 route('POST', '/api/proxy/heartbeat', async (req, res, _match, ctx) => {
