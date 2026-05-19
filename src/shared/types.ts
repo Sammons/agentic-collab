@@ -354,6 +354,45 @@ export type AgentInstanceRow = {
 /** Status values used in the `topic_queue.status` column. */
 export type TopicQueueStatus = 'queued' | 'claimed' | 'completed' | 'failed';
 
+// ── Approvals (v3 Q5) ──
+
+/**
+ * State machine for an approval row:
+ *   pending  → approved | rejected | amended | withdrawn (terminal)
+ *
+ * Terminal states are immutable; `setState` rejects callers that try to
+ * mutate a terminal row. `withdrawn` is creator-only while pending.
+ */
+export type ApprovalState = 'pending' | 'approved' | 'rejected' | 'amended' | 'withdrawn';
+
+/**
+ * Row in the `approvals` table. Approvals are first-class CRUD records
+ * categorised by `channel` (`approval:<channel>`); they are *not* a
+ * message-routing surface — auto-notification on state change routes
+ * through the existing message dispatcher to the requester's address.
+ */
+export type ApprovalRow = {
+  id: string;
+  requesterAddr: string;
+  channel: string;
+  payload: string;
+  state: ApprovalState;
+  amendmentsJson: string | null;
+  createdAt: string;
+  updatedAt: string;
+  decidedBy: string | null;
+  decidedAt: string | null;
+};
+
+/** Row in the `approval_events` audit table — one per state transition / lifecycle event. */
+export type ApprovalEventRow = {
+  id: number;
+  approvalId: string;
+  eventType: string;
+  payload: string | null;
+  createdAt: string;
+};
+
 /**
  * Row in the `topic_queue` table. Each `topic:<tmpl>/<name>` publish lands as
  * one row; the TopicDelivery driver claims rows atomically and pairs each

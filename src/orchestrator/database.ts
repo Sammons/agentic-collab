@@ -10,6 +10,9 @@ import type {
   AgentRecord,
   AgentState,
   AgentTemplateRow,
+  ApprovalEventRow,
+  ApprovalRow,
+  ApprovalState,
   DashboardMessage,
   EngineConfigRecord,
   EngineType,
@@ -235,6 +238,37 @@ const SCHEMA = `
     ON agent_instances(agent_template, state);
   CREATE INDEX IF NOT EXISTS idx_agent_instances_topic
     ON agent_instances(agent_template, spawned_from_topic, state);
+
+  -- v3 Q5: approvals + audit log. Approvals are first-class CRUD records
+  -- categorised by channel (the approval: address class); they are
+  -- never a message-routing surface. State change auto-notifies the
+  -- requester via the existing message dispatcher. amendments_json
+  -- carries a JSON array of prior payload revisions (set:amended path).
+  CREATE TABLE IF NOT EXISTS approvals (
+    id              TEXT PRIMARY KEY,
+    requester_addr  TEXT NOT NULL,
+    channel         TEXT NOT NULL,
+    payload         TEXT NOT NULL,
+    state           TEXT NOT NULL DEFAULT 'pending',
+    amendments_json TEXT,
+    created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+    updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+    decided_by      TEXT,
+    decided_at      TEXT
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_approvals_channel_state ON approvals(channel, state);
+  CREATE INDEX IF NOT EXISTS idx_approvals_requester    ON approvals(requester_addr);
+
+  CREATE TABLE IF NOT EXISTS approval_events (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    approval_id  TEXT NOT NULL REFERENCES approvals(id) ON DELETE CASCADE,
+    event_type   TEXT NOT NULL,
+    payload      TEXT,
+    created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_approval_events_id ON approval_events(approval_id);
 `;
 
 export class Database {
@@ -920,6 +954,167 @@ export class Database {
              completed_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
        WHERE id = ?
     `).run(status, id);
+  }
+
+  // ── Approvals (v3 Q5) ──
+  //
+  // Approvals are first-class CRUD records categorised by channel. State
+  // transitions are linear: `pending` is the only non-terminal state.
+  // Mutating a terminal row is a precondition failure (the caller's job to
+  // surface as 409). Withdraw is creator-only while pending (the caller
+  // resolves to 403 / 409 as appropriate). Each call also records a row in
+  // `approval_events` so the audit trail is intact even when the auto-notify
+  // path drops messages.
+
+  createApproval(opts: {
+    id: string;
+    requesterAddr: string;
+    channel: string;
+    payload: string;
+  }): ApprovalRow {
+    this.db.prepare(`
+      INSERT INTO approvals (id, requester_addr, channel, payload, state)
+      VALUES (?, ?, ?, ?, 'pending')
+    `).run(opts.id, opts.requesterAddr, opts.channel, opts.payload);
+    const row = this.db.prepare(
+      'SELECT * FROM approvals WHERE id = ?',
+    ).get(opts.id) as Record<string, unknown>;
+    return mapApprovalRow(row);
+  }
+
+  getApproval(id: string): ApprovalRow | null {
+    const row = this.db.prepare(
+      'SELECT * FROM approvals WHERE id = ?',
+    ).get(id) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    return mapApprovalRow(row);
+  }
+
+  /**
+   * List approvals filtered by channel and optional state. Newest first so
+   * dashboards (Q9) can paginate from the top.
+   */
+  listApprovalsByChannel(channel: string, state?: ApprovalState): ApprovalRow[] {
+    const rows = (state
+      ? this.db.prepare(
+          'SELECT * FROM approvals WHERE channel = ? AND state = ? ORDER BY created_at DESC',
+        ).all(channel, state)
+      : this.db.prepare(
+          'SELECT * FROM approvals WHERE channel = ? ORDER BY created_at DESC',
+        ).all(channel)
+    ) as Array<Record<string, unknown>>;
+    return rows.map(mapApprovalRow);
+  }
+
+  /**
+   * Atomic state transition. Returns the updated row, or null if the
+   * approval does not exist OR is already in a terminal state. When
+   * `payload` is supplied (typical for `amended`), the prior payload is
+   * appended to `amendments_json` (a JSON array of `{ payload, replacedAt }`
+   * entries) before the row's `payload` column is overwritten.
+   */
+  setApprovalState(
+    id: string,
+    state: 'approved' | 'rejected' | 'amended',
+    opts: { decidedBy?: string | null; payload?: string | null } = {},
+  ): ApprovalRow | null {
+    const begin = this.db.prepare('BEGIN IMMEDIATE');
+    const commit = this.db.prepare('COMMIT');
+    const rollback = this.db.prepare('ROLLBACK');
+    begin.run();
+    try {
+      const cur = this.db.prepare('SELECT * FROM approvals WHERE id = ?')
+        .get(id) as Record<string, unknown> | undefined;
+      if (!cur) {
+        rollback.run();
+        return null;
+      }
+      if (cur['state'] !== 'pending') {
+        rollback.run();
+        return null;
+      }
+      let nextPayload = cur['payload'] as string;
+      let nextAmendments = (cur['amendments_json'] as string | null) ?? null;
+      if (typeof opts.payload === 'string' && opts.payload.length > 0) {
+        // Append the prior payload to the amendments array before replacing it.
+        const arr: unknown[] = nextAmendments ? safeJsonParseArray(nextAmendments) : [];
+        arr.push({ payload: nextPayload, replacedAt: nowIso() });
+        nextAmendments = JSON.stringify(arr);
+        nextPayload = opts.payload;
+      }
+      this.db.prepare(`
+        UPDATE approvals
+           SET state = ?,
+               payload = ?,
+               amendments_json = ?,
+               updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now'),
+               decided_by = ?,
+               decided_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
+         WHERE id = ?
+      `).run(state, nextPayload, nextAmendments, opts.decidedBy ?? null, id);
+      const updated = this.db.prepare('SELECT * FROM approvals WHERE id = ?')
+        .get(id) as Record<string, unknown>;
+      commit.run();
+      return mapApprovalRow(updated);
+    } catch (err) {
+      try { rollback.run(); } catch { /* already rolled back */ }
+      throw err;
+    }
+  }
+
+  /**
+   * Withdraw an approval. Succeeds only when the row is still `pending` AND
+   * the supplied `requesterAddr` matches the original creator. Returns the
+   * granular outcome so routes can map to 200 / 403 / 404 / 409.
+   */
+  withdrawApproval(
+    id: string,
+    requesterAddr: string,
+  ): 'ok' | 'not-found' | 'not-pending' | 'not-creator' {
+    const begin = this.db.prepare('BEGIN IMMEDIATE');
+    const commit = this.db.prepare('COMMIT');
+    const rollback = this.db.prepare('ROLLBACK');
+    begin.run();
+    try {
+      const cur = this.db.prepare('SELECT * FROM approvals WHERE id = ?')
+        .get(id) as Record<string, unknown> | undefined;
+      if (!cur) { rollback.run(); return 'not-found'; }
+      if (cur['state'] !== 'pending') { rollback.run(); return 'not-pending'; }
+      if (cur['requester_addr'] !== requesterAddr) { rollback.run(); return 'not-creator'; }
+      this.db.prepare(`
+        UPDATE approvals
+           SET state = 'withdrawn',
+               updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
+         WHERE id = ?
+      `).run(id);
+      commit.run();
+      return 'ok';
+    } catch (err) {
+      try { rollback.run(); } catch { /* already rolled back */ }
+      throw err;
+    }
+  }
+
+  recordApprovalEvent(
+    approvalId: string,
+    eventType: string,
+    payload?: string | null,
+  ): ApprovalEventRow {
+    this.db.prepare(`
+      INSERT INTO approval_events (approval_id, event_type, payload)
+      VALUES (?, ?, ?)
+    `).run(approvalId, eventType, payload ?? null);
+    const row = this.db.prepare(
+      'SELECT * FROM approval_events WHERE id = last_insert_rowid()',
+    ).get() as Record<string, unknown>;
+    return mapApprovalEventRow(row);
+  }
+
+  listApprovalEvents(approvalId: string): ApprovalEventRow[] {
+    const rows = this.db.prepare(
+      'SELECT * FROM approval_events WHERE approval_id = ? ORDER BY id ASC',
+    ).all(approvalId) as Array<Record<string, unknown>>;
+    return rows.map(mapApprovalEventRow);
   }
 
   // ── Events ──
@@ -1789,6 +1984,46 @@ function mapTopicQueueRow(row: Record<string, unknown>): TopicQueueRow {
     createdAt: row['created_at'] as string,
     completedAt: (row['completed_at'] as string | null) ?? null,
   };
+}
+
+function mapApprovalRow(row: Record<string, unknown>): ApprovalRow {
+  return {
+    id: row['id'] as string,
+    requesterAddr: row['requester_addr'] as string,
+    channel: row['channel'] as string,
+    payload: row['payload'] as string,
+    state: row['state'] as ApprovalState,
+    amendmentsJson: (row['amendments_json'] as string | null) ?? null,
+    createdAt: row['created_at'] as string,
+    updatedAt: row['updated_at'] as string,
+    decidedBy: (row['decided_by'] as string | null) ?? null,
+    decidedAt: (row['decided_at'] as string | null) ?? null,
+  };
+}
+
+function mapApprovalEventRow(row: Record<string, unknown>): ApprovalEventRow {
+  return {
+    id: row['id'] as number,
+    approvalId: row['approval_id'] as string,
+    eventType: row['event_type'] as string,
+    payload: (row['payload'] as string | null) ?? null,
+    createdAt: row['created_at'] as string,
+  };
+}
+
+/** Read an ISO timestamp matching the SCHEMA's `strftime` literal so DB/code agree. */
+function nowIso(): string {
+  return new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+}
+
+/** Parse a JSON string that should be an array; return `[]` on anything malformed. */
+function safeJsonParseArray(s: string): unknown[] {
+  try {
+    const parsed = JSON.parse(s);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
 }
 
 /** camelCase → snake_case for updateAgentState extra fields. */

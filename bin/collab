@@ -414,6 +414,148 @@ cmd('fail', 'fail --reason <text>', 'Ephemeral: signal failure', async (args) =>
   }
 }, 'ephemeral');
 
+// ── v3 Q5: approvals CRUD subcommands ────────────────────────────────────
+//
+// Wraps the orchestrator's REST surface. The requester address defaults to
+// $COLLAB_AGENT (injected by the orchestrator) and falls back to "dashboard"
+// when run from the host. Subcommand dispatch lives inside the `approval`
+// command so the help banner only shows one line.
+
+function approvalRequester() {
+  return process.env['COLLAB_AGENT'] || 'dashboard';
+}
+
+function parseApprovalFlags(args, schema) {
+  const result = {};
+  const positional = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg.startsWith('--')) {
+      const key = arg.slice(2);
+      if (schema[key] && args[i + 1] !== undefined) {
+        result[key] = args[++i];
+      } else if (schema[key] === 'bool') {
+        result[key] = true;
+      }
+    } else {
+      positional.push(arg);
+    }
+  }
+  return { flags: result, positional };
+}
+
+async function approvalCreate(args) {
+  const { flags } = parseApprovalFlags(args, { channel: true, payload: true, requester: true });
+  if (!flags.channel) {
+    console.error('usage: collab approval create --channel <c> --payload <json> [--requester <addr>]');
+    process.exit(1);
+  }
+  const payload = flags.payload ?? '{}';
+  const body = {
+    requesterAddr: flags.requester || approvalRequester(),
+    channel: flags.channel,
+    payload,
+  };
+  const data = await api('POST', '/api/approvals', body);
+  console.log(data.id);
+}
+
+async function approvalGet(args) {
+  const id = args[0];
+  if (!id) {
+    console.error('usage: collab approval get <id>');
+    process.exit(1);
+  }
+  const data = await api('GET', `/api/approvals/${encodeURIComponent(id)}`);
+  console.log(JSON.stringify(data, null, 2));
+}
+
+async function approvalSet(args) {
+  const id = args[0];
+  const rest = args.slice(1);
+  const { flags } = parseApprovalFlags(rest, { state: true, payload: true, 'decided-by': true });
+  if (!id || !flags.state) {
+    console.error('usage: collab approval set <id> --state approved|rejected|amended [--payload <json>] [--decided-by <name>]');
+    process.exit(1);
+  }
+  const body = { state: flags.state };
+  if (flags.payload !== undefined) body.payload = flags.payload;
+  if (flags['decided-by']) body.decidedBy = flags['decided-by'];
+  const data = await api('POST', `/api/approvals/${encodeURIComponent(id)}/set`, body);
+  console.log(JSON.stringify(data, null, 2));
+}
+
+async function approvalWithdraw(args) {
+  const id = args[0];
+  if (!id) {
+    console.error('usage: collab approval withdraw <id> [--requester <addr>]');
+    process.exit(1);
+  }
+  const { flags } = parseApprovalFlags(args.slice(1), { requester: true });
+  const body = { requesterAddr: flags.requester || approvalRequester() };
+  const data = await api('POST', `/api/approvals/${encodeURIComponent(id)}/withdraw`, body);
+  console.log(JSON.stringify(data, null, 2));
+}
+
+async function approvalAwait(args) {
+  const id = args[0];
+  if (!id) {
+    console.error('usage: collab approval await <id> [--timeout <ms>]');
+    process.exit(1);
+  }
+  const { flags } = parseApprovalFlags(args.slice(1), { timeout: true });
+  const totalTimeoutMs = flags.timeout ? parseInt(flags.timeout, 10) : 600_000;
+  const deadline = Date.now() + totalTimeoutMs;
+  // Plain polling per the spec — every 500ms.
+  for (;;) {
+    const row = await api('GET', `/api/approvals/${encodeURIComponent(id)}`);
+    if (row.state && row.state !== 'pending') {
+      console.log(JSON.stringify(row, null, 2));
+      return;
+    }
+    if (Date.now() >= deadline) {
+      console.error(`timeout: approval ${id} still pending after ${totalTimeoutMs}ms`);
+      process.exit(2);
+    }
+    await new Promise((r) => setTimeout(r, 500));
+  }
+}
+
+async function approvalList(args) {
+  const { flags } = parseApprovalFlags(args, { channel: true, state: true });
+  if (!flags.channel) {
+    console.error('usage: collab approval list --channel <c> [--state <s>]');
+    process.exit(1);
+  }
+  const qs = new URLSearchParams();
+  qs.set('channel', flags.channel);
+  if (flags.state) qs.set('state', flags.state);
+  const data = await api('GET', `/api/approvals?${qs.toString()}`);
+  console.log(JSON.stringify(data, null, 2));
+}
+
+cmd('approval', 'approval <create|get|set|withdraw|await|list> [args...]', 'Manage approval records', async (args) => {
+  const sub = args[0];
+  const rest = args.slice(1);
+  switch (sub) {
+    case 'create':   return approvalCreate(rest);
+    case 'get':      return approvalGet(rest);
+    case 'set':      return approvalSet(rest);
+    case 'withdraw': return approvalWithdraw(rest);
+    case 'await':    return approvalAwait(rest);
+    case 'list':     return approvalList(rest);
+    default:
+      console.error('usage: collab approval <create|get|set|withdraw|await|list> [args...]');
+      console.error('  create --channel <c> --payload <json>');
+      console.error('  get <id>');
+      console.error('  set <id> --state <approved|rejected|amended> [--payload <json>]');
+      console.error('  withdraw <id>');
+      console.error('  await <id> [--timeout <ms>]');
+      console.error('  list --channel <c> [--state <s>]');
+      process.exit(1);
+  }
+});
+
 cmd('spawn', 'spawn <name> [task...]', 'Spawn an agent', async (args) => {
   const name = args[0];
   if (!name) { console.error('usage: collab spawn <name> [task...]'); process.exit(1); }
