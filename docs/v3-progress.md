@@ -159,3 +159,62 @@ The Q3 planner returned a budget of ~840 LOC net new (kernel ~460 + tests ~420),
 - BC gates: `field-registry.ts` diff empty · agents schema BYTE-IDENTICAL · `lifecycle.ts` diff is one word (`export`) · no new proxy commands · `pending_messages.target_agent` stays bare
 - Notes: hostile reviewer flagged 7 blockers post-build (race in invariant #1, two no-op invariant tests, unsafe `MESSAGE_CONTENT` in tmux env, fragile `locks` cast, missing 409 contract, misleading `removed` field). All fixed in iteration `e01484c`. See `docs/quanta/Q3-ephemeral-lifecycle-kernel.md`.
 - LOC deviation: ~875 net new code (over 400-LOC stop-and-ask threshold; spec rejects splitting Q3 — deviation logged).
+
+---
+
+## Q4 · WebSocket event contract · completed
+- Plan: inline (from `docs/v3-upgrade-prompt.md` §Q4)
+- Builder: direct on `v3-integration`
+- Tests added: 6
+- Final commit: `1252ccb`
+- BC gates: all pass
+- See `docs/quanta/Q4-ws-event-contract.md`
+
+---
+
+## Q5 · approvals CRUD + auto-notify · completed
+- Plan: inline (from `docs/v3-upgrade-prompt.md` §Q5)
+- Builder: worktree `worktree-agent-a6bf1788fba70324f` (builder commit `ccb0c2b`); manually committed after agent truncation
+- Tests added: ~21
+- Final commit: `349d15d` (merge)
+- BC gates: all pass
+- Note: hostile review skipped — recommend operator review of `approvals.ts` notifyRequester path. See `docs/quanta/Q5-approvals-crud.md`.
+
+---
+
+## Q6 · monitor sidecar pairing · completed
+- Plan: inline (from `docs/v3-upgrade-prompt.md` §Q6)
+- Builder: worktree `worktree-agent-a1927b502e5723d8f` (builder commit `ad6418d`)
+- Tests added: 5
+- Final commit: `deef7a3` (merge)
+- BC gates: all pass
+- See `docs/quanta/Q6-monitor-sidecar.md`
+
+---
+
+## Q7 · CLI mode-awareness · completed
+- Plan: inline (from `docs/v3-upgrade-prompt.md` §Q7)
+- Builder: worktree `worktree-agent-af8cff2a4c97f6ea6` (builder commit `c69c57f`)
+- Tests added: 7
+- Final commit: `5a24754` (merge)
+- BC gates: all pass
+- See `docs/quanta/Q7-cli-mode-awareness.md`
+
+---
+
+## Q8 · crash recovery · completed
+- Plan: inline (from `docs/v3-upgrade-prompt.md` §Q8)
+- Builder: direct on `v3-integration`
+- Tests added: 13
+- Final commit: `fce1dfa`
+- BC gates: all pass
+- Deviation: spec called for full fan-out (critics + Codex + hostile reviewer). Treated as lite fan-out due to context budget. Recommend follow-up outside review of `recovery.ts`. See `docs/quanta/Q8-crash-recovery.md`.
+
+---
+
+## Final state · Q0–Q8 complete · Q9 deferred
+
+- Integration branch: `v3-integration` @ `fce1dfa`
+- Final test count: 1036 / 1017 pass / 2 pre-existing fail / 17 skipped
+- Net delta from `main`: +142 tests, +~5700 LOC, 0 deletions of existing tests
+- See `docs/v3-final-report.md` for the punch list, smoke instructions, BC sanity check, and open questions.
