@@ -1019,14 +1019,25 @@ export function updateFrontmatterField(filePath: string, field: string, value: s
 /**
  * Compose the full system prompt for an agent.
  * Combines persona + messaging instructions + orchestrator rules.
+ *
+ * `mode` controls a final lifecycle-context addendum:
+ *   - 'persistent' (default): agents have an ongoing inbox, run continuously.
+ *   - 'ephemeral': agents own exactly one message and must call
+ *     `collab complete` (or `collab fail`) to finalise; the worktree and tmux
+ *     session are torn down immediately afterwards.
+ *
+ * The default preserves 2.x behaviour — every existing caller that omits
+ * `mode` gets the persistent flavour, which today is the only flavour.
  */
 export function composeSystemPrompt(opts: {
   agentName: string;
   personaContent?: string | null;
   orchestratorHost: string;
   peers?: string[];
+  mode?: 'persistent' | 'ephemeral';
 }): string {
   const parts: string[] = [];
+  const mode = opts.mode ?? 'persistent';
 
   // Persona content
   if (opts.personaContent) {
@@ -1069,6 +1080,28 @@ Your terminal output, tool calls, and reasoning are invisible to the operator �
 
 Use /compact proactively when your context grows large.
 Keep context light — delegate to sub-agents when appropriate.`);
+
+  // Lifecycle-context addendum. Branches on mode so the engine knows whether
+  // it is a long-lived persistent agent or a single-shot ephemeral worker.
+  if (mode === 'ephemeral') {
+    parts.push(`
+
+## Ephemeral execution
+You are handling exactly one message and must complete. When done, call:
+\`\`\`
+collab complete --reply '<json>'
+\`\`\`
+Or to signal failure:
+\`\`\`
+collab fail --reason '<text>'
+\`\`\`
+The tmux session and worktree will be torn down after you complete.`);
+  } else {
+    parts.push(`
+
+## Persistent inbox
+Your inbox is delivered via tmux paste. You may receive multiple messages over time; stay running and continue handling them as they arrive.`);
+  }
 
   return parts.join('\n');
 }

@@ -167,6 +167,46 @@ describe('Persona', () => {
       assert.ok(prompt.includes('/compact'));
       assert.ok(prompt.includes('context'));
     });
+
+    // v3 Q7: mode-aware lifecycle addendum.
+    it('persistent mode (default) appends the persistent-inbox addendum', () => {
+      const prompt = composeSystemPrompt({
+        agentName: 'agent-1',
+        orchestratorHost: 'http://localhost:3000',
+      });
+      assert.ok(prompt.includes('## Persistent inbox'));
+      assert.ok(prompt.includes('delivered via tmux paste'));
+      // Persistent prompt must NOT instruct the agent to call complete/fail.
+      assert.ok(!prompt.includes('Ephemeral execution'));
+      assert.ok(!prompt.includes('collab complete --reply'));
+    });
+
+    it('persistent mode explicit matches the default mode output', () => {
+      const def = composeSystemPrompt({
+        agentName: 'agent-1',
+        orchestratorHost: 'http://localhost:3000',
+      });
+      const explicit = composeSystemPrompt({
+        agentName: 'agent-1',
+        orchestratorHost: 'http://localhost:3000',
+        mode: 'persistent',
+      });
+      assert.equal(def, explicit);
+    });
+
+    it('ephemeral mode includes the collab complete --reply instruction', () => {
+      const prompt = composeSystemPrompt({
+        agentName: 'agent-1',
+        orchestratorHost: 'http://localhost:3000',
+        mode: 'ephemeral',
+      });
+      assert.ok(prompt.includes('## Ephemeral execution'));
+      assert.ok(prompt.includes("collab complete --reply '<json>'"));
+      assert.ok(prompt.includes("collab fail --reason '<text>'"));
+      assert.ok(prompt.includes('handling exactly one message'));
+      // Ephemeral prompt must NOT carry the persistent-inbox addendum.
+      assert.ok(!prompt.includes('Persistent inbox'));
+    });
   });
 
   describe('parseFrontmatter', () => {
