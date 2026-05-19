@@ -13,13 +13,21 @@
  * exclusively in `agent_templates` and `topics`.
  */
 
-import type { AgentTemplateRow, TopicRow } from '../shared/types.ts';
+import type { AgentTemplateRow, TopicRow, WsTemplateUpdatedEvent } from '../shared/types.ts';
 import type { Database } from './database.ts';
 import type { PersonaFrontmatter, TopicSpec } from './persona.ts';
 import { serializeHookValue } from './persona.ts';
 
 /** Topic names follow the same shape as agent identifiers. */
 const NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/;
+
+/**
+ * Optional sink for Q4 `template_updated` events. Threaded through
+ * `syncTemplate` so callers (`persona.ts:trySyncTemplate`) can wire the
+ * orchestrator's `wss.broadcastEvent` without coupling this module to the
+ * full WS server type. `removed` is reserved for Q8's orphan sweep.
+ */
+export type TemplateSyncEventSink = (event: WsTemplateUpdatedEvent) => void;
 
 /**
  * Idempotently sync one persona to the template tables.
@@ -38,11 +46,18 @@ export function syncTemplate(
   name: string,
   fm: PersonaFrontmatter,
   personaPath: string | null,
+  onEvent?: TemplateSyncEventSink,
 ): void {
   const engine = fm.engine;
   if (!engine || typeof engine !== 'string' || engine.length === 0) {
     throw new Error(`template "${name}": engine is required`);
   }
+
+  // Q4 emits `template_updated` after a successful upsert. Distinguish
+  // `added` from `modified` by peeking at the row *before* the upsert
+  // runs — a `null` pre-upsert read means this is a first-time install.
+  const wasPresent = db.getAgentTemplate(name) !== null;
+  const action: WsTemplateUpdatedEvent['action'] = wasPresent ? 'modified' : 'added';
 
   // Spec: `persistent` defaults to true when absent (backwards compatibility
   // with today's persona files). The frontmatter parser leaves flat top-level
@@ -76,6 +91,7 @@ export function syncTemplate(
     // Persistent templates: clear any stale topics rows from a prior
     // ephemeral lifetime of the same template id.
     db.replaceTopicsForTemplate(name, []);
+    if (onEvent) onEvent({ type: 'template_updated', templateId: name, action });
     return;
   }
 
@@ -116,6 +132,7 @@ export function syncTemplate(
     replySchemaPath: t.reply_schema ?? null,
   }));
   db.replaceTopicsForTemplate(name, topicRows);
+  if (onEvent) onEvent({ type: 'template_updated', templateId: name, action });
 }
 
 /** Validate parsed TopicSpec entries; throws on the first failure to avoid

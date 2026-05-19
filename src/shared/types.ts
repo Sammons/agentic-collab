@@ -429,7 +429,94 @@ export type WsNotificationEvent = {
   priority: string;
 };
 
-export type WsEvent = WsInitEvent | WsAgentUpdateEvent | WsMessageEvent | WsProxyEvent | WsQueueUpdateEvent | WsIndicatorUpdateEvent | WsStoresUpdateEvent | WsDestinationsUpdateEvent | WsNotificationEvent;
+// ── v3 events: templates / topics / instances / approvals ──
+//
+// Snake-case `type` values follow the existing WS convention. Dashboard
+// consumers currently ignore unknown event types (see
+// `src/dashboard/connection.ts`'s default-less switch) so adding these
+// is non-breaking — Q9 will wire the consumer side.
+
+/**
+ * Emitted by `template-sync.ts` when a persona reload writes or rewrites
+ * an `agent_templates` row. `removed` is reserved for Q8's orphan sweep
+ * — Q4 only emits `added` and `modified`.
+ */
+export type WsTemplateUpdatedEvent = {
+  type: 'template_updated';
+  templateId: string;
+  action: 'added' | 'modified' | 'removed';
+};
+
+/**
+ * Emitted by `topic-delivery.ts` whenever the queued depth for a topic
+ * changes (publish, claim, or completion). `depth` is the count of rows
+ * in `topic_queue` with status='queued' for the (template, topic) pair.
+ */
+export type WsTopicQueueChangedEvent = {
+  type: 'topic_queue_changed';
+  agentTemplate: string;
+  topic: string;
+  depth: number;
+};
+
+/**
+ * Emitted by `topic-delivery.ts` once an ephemeral instance has reached
+ * `running` state (start hook pasted, env set, IPC files allocated).
+ */
+export type WsInstanceSpawnedEvent = {
+  type: 'instance_spawned';
+  instance: AgentInstanceRow;
+};
+
+/**
+ * Emitted by `instance-reaper.ts` once an instance reaches terminal
+ * `completed` state (status file said `ok`, reply routed, cleanup done).
+ */
+export type WsInstanceCompletedEvent = {
+  type: 'instance_completed';
+  instance: AgentInstanceRow;
+};
+
+/**
+ * Emitted by `topic-delivery.ts` (spawn-side failure) or
+ * `instance-reaper.ts` (status file said error) when an instance reaches
+ * terminal `failed` state. `reason` mirrors `instance.failureReason` but
+ * is exposed separately so subscribers don't have to dig into the row.
+ */
+export type WsInstanceFailedEvent = {
+  type: 'instance_failed';
+  instance: AgentInstanceRow;
+  reason: string | null;
+};
+
+/**
+ * Emitted by approvals (Q5) when an approval row's `state` column
+ * changes. Q4 only ships the type so subscribers can subscribe ahead of
+ * the producer landing.
+ */
+export type WsApprovalChangedEvent = {
+  type: 'approval_changed';
+  approvalId: string;
+  state: string;
+  channel: string;
+};
+
+export type WsEvent =
+  | WsInitEvent
+  | WsAgentUpdateEvent
+  | WsMessageEvent
+  | WsProxyEvent
+  | WsQueueUpdateEvent
+  | WsIndicatorUpdateEvent
+  | WsStoresUpdateEvent
+  | WsDestinationsUpdateEvent
+  | WsNotificationEvent
+  | WsTemplateUpdatedEvent
+  | WsTopicQueueChangedEvent
+  | WsInstanceSpawnedEvent
+  | WsInstanceCompletedEvent
+  | WsInstanceFailedEvent
+  | WsApprovalChangedEvent;
 
 // ── Proxy API ──
 

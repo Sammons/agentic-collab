@@ -233,6 +233,88 @@ describe('InstanceReaper — Q3 invariants', () => {
     }
   });
 
+  // ── Q4: typed WS event emissions on completion path ─────────────────
+  //
+  // Reaper's `onEvent` callback mirrors the topic-delivery surface — it must
+  // emit `instance_completed` on ok status, `instance_failed` on error
+  // status, and a `topic_queue_changed` recompute after the queue row flips
+  // terminal. The shapes match `WsEvent` exactly so main.ts can pass it
+  // straight to `wss.broadcastEvent`.
+
+  it('Q4: emits instance_completed on successful finalization', async () => {
+    const db = new Database(join(tmpDir, `r-${Date.now()}-${Math.random().toString(36).slice(2)}.db`));
+    db.registerProxy('p1', 'tok', 'localhost:3100');
+    const commands: ProxyCommand[] = [];
+    const dispatch = async (_pid: string, cmd: ProxyCommand): Promise<ProxyResponse> => {
+      commands.push(cmd);
+      return { ok: true, data: '' };
+    };
+    const locks = new LockManager(db.rawDb);
+    const messageDispatcher = new MessageDispatcher({ db, locks, proxyDispatch: dispatch, orchestratorHost: 'http://localhost:3000' });
+    const driver = new TopicDelivery({ db, proxyDispatch: dispatch, orchestratorHost: 'x', ipcRoot, locks });
+    const events: Array<{ type: string; [k: string]: unknown }> = [];
+    const reaper = new InstanceReaper({
+      db, proxyDispatch: dispatch, messageDispatcher, topicDelivery: driver, sweepIntervalMs: 50,
+      onEvent: (ev) => events.push(ev as { type: string }),
+    });
+
+    seedTemplate(db, 'tQ4ok');
+    seedTopic(db, 'tQ4ok');
+    const id = await spawnAndWaitRunning(driver, db, 'tQ4ok', '{}');
+    const inst = db.getAgentInstance(id)!;
+    writeFileSync(inst.replyPath, '{"r":1}');
+    writeFileSync(inst.statusPath, 'ok\n');
+
+    await reaper.wake(inst.id);
+
+    const completed = events.filter((e) => e.type === 'instance_completed');
+    assert.equal(completed.length, 1, 'one instance_completed event');
+    const ev = completed[0] as { instance: { id: string; state: string } };
+    assert.equal(ev.instance.id, inst.id);
+    assert.equal(ev.instance.state, 'completed', 'event payload is the post-update row');
+
+    // And a queue-depth recompute follows the queue-row flip.
+    const queueDepth = events.filter((e) => e.type === 'topic_queue_changed');
+    assert.ok(queueDepth.length >= 1, 'at least one topic_queue_changed after completion');
+    assert.equal((queueDepth[queueDepth.length - 1] as { topic: string }).topic, 'echo');
+  });
+
+  it('Q4: emits instance_failed when status is `error`', async () => {
+    const db = new Database(join(tmpDir, `r-${Date.now()}-${Math.random().toString(36).slice(2)}.db`));
+    db.registerProxy('p1', 'tok', 'localhost:3100');
+    const commands: ProxyCommand[] = [];
+    const dispatch = async (_pid: string, cmd: ProxyCommand): Promise<ProxyResponse> => {
+      commands.push(cmd);
+      return { ok: true, data: '' };
+    };
+    const locks = new LockManager(db.rawDb);
+    const messageDispatcher = new MessageDispatcher({ db, locks, proxyDispatch: dispatch, orchestratorHost: 'http://localhost:3000' });
+    const driver = new TopicDelivery({ db, proxyDispatch: dispatch, orchestratorHost: 'x', ipcRoot, locks });
+    const events: Array<{ type: string; [k: string]: unknown }> = [];
+    const reaper = new InstanceReaper({
+      db, proxyDispatch: dispatch, messageDispatcher, topicDelivery: driver, sweepIntervalMs: 50,
+      onEvent: (ev) => events.push(ev as { type: string }),
+    });
+
+    seedTemplate(db, 'tQ4err');
+    seedTopic(db, 'tQ4err');
+    const id = await spawnAndWaitRunning(driver, db, 'tQ4err', '{}');
+    const inst = db.getAgentInstance(id)!;
+    writeFileSync(inst.replyPath, 'unused');
+    // Status `error\n<details>` → reaper records failure_reason and emits failed.
+    writeFileSync(inst.statusPath, 'error\nthe agent ran out of context');
+
+    await reaper.wake(inst.id);
+
+    const failed = events.filter((e) => e.type === 'instance_failed');
+    assert.equal(failed.length, 1, 'one instance_failed event');
+    const ev = failed[0] as { instance: { id: string; state: string; failureReason: string | null }; reason: string | null };
+    assert.equal(ev.instance.id, inst.id);
+    assert.equal(ev.instance.state, 'failed');
+    assert.equal(ev.reason, ev.instance.failureReason, 'event.reason mirrors instance.failureReason');
+    assert.ok(ev.reason && ev.reason.includes('ran out of context'), 'reason carries the agent-supplied detail');
+  });
+
   it('invariant #7 (secondary): empty status file = in-progress; no finalization', async () => {
     const { db, driver, reaper, commands } = makeEnv();
     seedTemplate(db, 'tL');

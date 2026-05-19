@@ -36,6 +36,9 @@ import type {
   ProxyCommand,
   ProxyResponse,
   TopicRow,
+  WsInstanceFailedEvent,
+  WsInstanceSpawnedEvent,
+  WsTopicQueueChangedEvent,
 } from '../shared/types.ts';
 import { shellQuote } from '../shared/utils.ts';
 import { resolveHook } from './hook-resolver.ts';
@@ -59,14 +62,25 @@ export type TopicDeliveryOptions = {
   locks: LockManager;
   /** Resolver returning a proxy id to spawn on. Defaults to first registered. */
   resolveProxyId?: () => string | null;
-  /** Optional WS broadcast for `instance-spawned` / `instance-failed` events. */
+  /**
+   * Optional WS broadcast surface — receives typed `WsEvent`-shaped
+   * payloads that callers (orchestrator main.ts) forward verbatim through
+   * `wss.broadcast(JSON.stringify(event))`. Q4 wired this with snake-case
+   * `type` discriminants to match the dashboard's existing conventions.
+   */
   onEvent?: (event: TopicDeliveryEvent) => void;
 };
 
+/**
+ * Subset of `WsEvent` produced by this driver. Lives here (not on
+ * `WsEvent` itself) so test harnesses can capture the union without
+ * importing the full WS server type. The shapes are intentionally
+ * identical to the corresponding `Ws*` types in `shared/types.ts`.
+ */
 export type TopicDeliveryEvent =
-  | { type: 'instance-spawned'; instance: AgentInstanceRow }
-  | { type: 'instance-failed'; instance: AgentInstanceRow; reason: string }
-  | { type: 'topic-queue-changed'; agentTemplate: string; topicName: string; depth: number };
+  | WsInstanceSpawnedEvent
+  | WsInstanceFailedEvent
+  | WsTopicQueueChangedEvent;
 
 /** Concise outcome surface for routes/tests. */
 export type PublishResult = {
@@ -327,11 +341,13 @@ export class TopicDelivery {
       return;
     }
 
-    // Step 7 — mark running. Reaper takes over from here.
+    // Step 7 — mark running. Reaper takes over from here. Emit
+    // `instance_spawned` with the post-update row so subscribers see the
+    // running state directly (Q4 contract).
     this.db.updateInstanceState(instance.id, 'running');
     const refreshed = this.db.getAgentInstance(instance.id);
     if (refreshed) {
-      this.onEvent({ type: 'instance-spawned', instance: refreshed });
+      this.onEvent({ type: 'instance_spawned', instance: refreshed });
     }
   }
 
@@ -370,8 +386,11 @@ export class TopicDelivery {
       failureReason: reason,
     });
     this.db.markTopicQueueCompleted(queueId, 'failed');
+    // Q4: emit `topic_queue_changed` after the queue-row state flips so
+    // subscribers see depth recover even when spawn fails early.
+    this.broadcastDepth(instance.agentTemplate, instance.spawnedFromTopic ?? '');
     const refreshed = this.db.getAgentInstance(instance.id) ?? instance;
-    this.onEvent({ type: 'instance-failed', instance: refreshed, reason });
+    this.onEvent({ type: 'instance_failed', instance: refreshed, reason });
 
     if (runCleanup && cleanupOpts && cleanupOpts.template.hookCleanup) {
       const cleanupWrapped = wrapWithEnv(cleanupOpts.template.hookCleanup, cleanupOpts.env);
@@ -392,9 +411,18 @@ export class TopicDelivery {
     }
   }
 
+  /**
+   * Emit `topic_queue_changed` with the current queued depth per Q4 spec.
+   * Depth is the count of `topic_queue` rows in `status='queued'` for the
+   * given (template, topic) pair — i.e. work still waiting to be claimed,
+   * not live instances. Guard against empty topic names (defensive — the
+   * fail path constructs them from row data that may be null on malformed
+   * runs).
+   */
   private broadcastDepth(agentTemplate: string, topicName: string): void {
-    const depth = this.db.countLiveInstancesForTopic(agentTemplate, topicName);
-    this.onEvent({ type: 'topic-queue-changed', agentTemplate, topicName, depth });
+    if (!topicName) return;
+    const depth = this.db.countQueuedTopicMessages(agentTemplate, topicName);
+    this.onEvent({ type: 'topic_queue_changed', agentTemplate, topic: topicName, depth });
   }
 }
 

@@ -1117,7 +1117,7 @@ function serializeIndicators(value?: IndicatorDefinition[]): string | null {
 // ── Startup Sync ──
 
 import type { Database } from './database.ts';
-import { syncTemplate } from './template-sync.ts';
+import { syncTemplate, type TemplateSyncEventSink } from './template-sync.ts';
 
 /** Any non-empty engine string is valid. Engine configs provide defaults but are not required. */
 function isValidEngine(engine: string | undefined | null): engine is string {
@@ -1139,15 +1139,18 @@ function isEphemeralTemplate(fm: PersonaFrontmatter): boolean {
 }
 
 /** Run syncTemplate against the persona, downgrading exceptions to warnings.
- *  Returns true if a template row was written, false if validation failed. */
+ *  Returns true if a template row was written, false if validation failed.
+ *  `onTemplateEvent` is forwarded to syncTemplate so callers can wire the
+ *  orchestrator's `wss.broadcastEvent` for Q4 `template_updated` events. */
 function trySyncTemplate(
   db: Database,
   name: string,
   fm: PersonaFrontmatter,
   personaPath: string | null,
+  onTemplateEvent?: TemplateSyncEventSink,
 ): boolean {
   try {
-    syncTemplate(db, name, fm, personaPath);
+    syncTemplate(db, name, fm, personaPath, onTemplateEvent);
     return true;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -1161,7 +1164,12 @@ function trySyncTemplate(
  * Call before spawn/resume to pick up config changes (engine, model, etc.).
  * Returns true if the persona was found and synced.
  */
-export function syncSinglePersona(db: Database, name: string, personasDir?: string): boolean {
+export function syncSinglePersona(
+  db: Database,
+  name: string,
+  personasDir?: string,
+  onTemplateEvent?: TemplateSyncEventSink,
+): boolean {
   const dir = personasDir ?? getPersonasDir();
   const filePath = join(dir, `${name}.md`);
   let raw: string;
@@ -1181,7 +1189,7 @@ export function syncSinglePersona(db: Database, name: string, personasDir?: stri
   // v3: every loaded persona produces an `agent_templates` row (persistent
   // or ephemeral). Failures here are logged but don't block persistent-agent
   // sync for backwards compatibility.
-  trySyncTemplate(db, name, fm, filePath);
+  trySyncTemplate(db, name, fm, filePath, onTemplateEvent);
 
   // Ephemeral templates do NOT populate the `agents` table — they have no
   // cwd, and the `agents` schema is intentionally untouched in v3.
@@ -1204,7 +1212,11 @@ export function syncSinglePersona(db: Database, name: string, personasDir?: stri
  * Preserves runtime state (active/idle/suspended, session, proxy, etc.).
  * Returns count of agents synced.
  */
-export function syncPersonasToDb(db: Database, personasDir?: string): number {
+export function syncPersonasToDb(
+  db: Database,
+  personasDir?: string,
+  onTemplateEvent?: TemplateSyncEventSink,
+): number {
   const personas = scanPersonas(personasDir);
   const dir = personasDir ?? getPersonasDir();
   let synced = 0;
@@ -1222,7 +1234,7 @@ export function syncPersonasToDb(db: Database, personasDir?: string): number {
     // v3: every persona produces an `agent_templates` row. Ephemeral templates
     // are validated by template-sync (which throws on missing cwd_base, etc.).
     const personaPath = join(dir, `${name}.md`);
-    const templated = trySyncTemplate(db, name, frontmatter, personaPath);
+    const templated = trySyncTemplate(db, name, frontmatter, personaPath, onTemplateEvent);
 
     if (isEphemeralTemplate(frontmatter)) {
       // Ephemeral templates skip the `agents` table entirely. The `cwd`-required
@@ -1277,7 +1289,11 @@ function validateFrontmatter(name: string, fm: PersonaFrontmatter): string[] {
   return warnings;
 }
 
-export function syncPersonasWithDiff(db: Database, personasDir?: string): SyncDiffResult {
+export function syncPersonasWithDiff(
+  db: Database,
+  personasDir?: string,
+  onTemplateEvent?: TemplateSyncEventSink,
+): SyncDiffResult {
   const personas = scanPersonas(personasDir);
   const dir = personasDir ?? getPersonasDir();
   const result: SyncDiffResult = { created: [], updated: [], unchanged: [], skipped: [] };
@@ -1294,7 +1310,7 @@ export function syncPersonasWithDiff(db: Database, personasDir?: string): SyncDi
     // v3: every persona produces an `agent_templates` row. Persistent rows
     // get a minimal template; ephemeral ones additionally populate `topics`.
     const personaPath = join(dir, `${name}.md`);
-    const templated = trySyncTemplate(db, name, frontmatter, personaPath);
+    const templated = trySyncTemplate(db, name, frontmatter, personaPath, onTemplateEvent);
 
     if (isEphemeralTemplate(frontmatter)) {
       // Ephemeral templates do not appear in the `agents` table. They are

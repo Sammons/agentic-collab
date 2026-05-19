@@ -256,9 +256,8 @@ const topicDelivery = new TopicDelivery({
   orchestratorHost: ORCHESTRATOR_HOST,
   ipcRoot: INSTANCES_DIR,
   locks,
-  onEvent: (event) => {
-    wss.broadcast(JSON.stringify({ type: event.type, ...event }));
-  },
+  // Q4: typed WS broadcast — `event` is already a `WsEvent` shape.
+  onEvent: (event) => wss.broadcastEvent(event),
 });
 
 const instanceReaper = new InstanceReaper({
@@ -266,9 +265,7 @@ const instanceReaper = new InstanceReaper({
   proxyDispatch,
   messageDispatcher,
   topicDelivery,
-  onEvent: (event) => {
-    wss.broadcast(JSON.stringify({ type: event.type, ...event }));
-  },
+  onEvent: (event) => wss.broadcastEvent(event),
 });
 
 const routeCtx: RouteContext = {
@@ -289,7 +286,9 @@ const routeCtx: RouteContext = {
   topicDelivery,
   instanceReaper,
   reloadPersonas: () => {
-    const diff = syncPersonasWithDiff(db);
+    // Q4: forward `template_updated` events to WS subscribers so the Q9
+    // dashboard can refresh the templates tree without a full reload.
+    const diff = syncPersonasWithDiff(db, undefined, (event) => wss.broadcastEvent(event));
     return {
       synced: diff.created.length + diff.updated.length,
       created: diff.created,
@@ -472,7 +471,9 @@ server.listen(PORT, '0.0.0.0', async () => {
   console.log(`[orchestrator] Dashboard: http://localhost:${PORT}/dashboard`);
   console.log(`[orchestrator] DB: ${DB_PATH}`);
 
-  // Sync persona files → SQLite (idempotent merge)
+  // Sync persona files → SQLite (idempotent merge). No WS subscribers yet at
+  // boot — `template_updated` events at this point would have no audience, so
+  // skip the sink. The hot-reload watcher below wires it.
   try {
     const synced = syncPersonasToDb(db);
     if (synced > 0) {
@@ -497,7 +498,7 @@ server.listen(PORT, '0.0.0.0', async () => {
         if (lastPersonaHash === '') { lastPersonaHash = hash; return; } // skip first run
         lastPersonaHash = hash;
 
-        const diff = syncPersonasWithDiff(db);
+        const diff = syncPersonasWithDiff(db, undefined, (event) => wss.broadcastEvent(event));
         const changed = [...diff.created, ...diff.updated];
         if (changed.length > 0) {
           console.log(`[persona-watch] Hot-reloaded: ${changed.join(', ')}`);

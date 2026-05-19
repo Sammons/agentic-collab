@@ -27,9 +27,12 @@ import type {
   AgentTemplateRow,
   ProxyCommand,
   ProxyResponse,
+  WsInstanceCompletedEvent,
+  WsInstanceFailedEvent,
+  WsTopicQueueChangedEvent,
 } from '../shared/types.ts';
 import type { MessageDispatcher } from './message-dispatcher.ts';
-import type { TopicDelivery, TopicDeliveryEvent } from './topic-delivery.ts';
+import type { TopicDelivery } from './topic-delivery.ts';
 import { shellQuote } from '../shared/utils.ts';
 import { buildInstanceEnv } from './instance-env.ts';
 
@@ -62,8 +65,22 @@ export type InstanceReaperOptions = {
    * `defaultFsAdapter` which forwards to `node:fs`.
    */
   fsAdapter?: ReaperFsAdapter;
-  onEvent?: (event: TopicDeliveryEvent | { type: 'instance-completed'; instance: AgentInstanceRow }) => void;
+  /**
+   * Typed event surface. Mirrors `WsEvent` shapes for the events this
+   * module produces (`instance_completed`, `instance_failed`, and the
+   * `topic_queue_changed` recompute triggered by the completion sweep).
+   */
+  onEvent?: (event: ReaperEvent) => void;
 };
+
+/**
+ * Subset of `WsEvent` produced by the reaper. Mirrors `TopicDeliveryEvent`
+ * in shape so `main.ts` can plug a single `wss.broadcastEvent` into either.
+ */
+export type ReaperEvent =
+  | WsInstanceCompletedEvent
+  | WsInstanceFailedEvent
+  | WsTopicQueueChangedEvent;
 
 const DEFAULT_SWEEP_MS = 1500;
 
@@ -254,9 +271,27 @@ export class InstanceReaper {
       this.db.markTopicQueueCompleted(row.queueId, finalState);
     }
 
+    // Q4: emit typed lifecycle events. `instance_completed` carries the
+    // post-finalize row so subscribers can render terminal state without a
+    // round-trip; `instance_failed` additionally exposes `reason` so
+    // dashboards can surface the failure message without inspecting the row.
     const finalRow = this.db.getAgentInstance(row.id);
     if (finalRow) {
-      this.onEvent({ type: status === 'ok' ? 'instance-completed' : 'instance-failed', instance: finalRow, reason: finalRow.failureReason ?? '' } as TopicDeliveryEvent);
+      if (status === 'ok') {
+        this.onEvent({ type: 'instance_completed', instance: finalRow });
+      } else {
+        this.onEvent({ type: 'instance_failed', instance: finalRow, reason: finalRow.failureReason ?? null });
+      }
+    }
+    // And recompute the queue depth — completion likely freed a slot.
+    if (row.spawnedFromTopic) {
+      const depth = this.db.countQueuedTopicMessages(row.agentTemplate, row.spawnedFromTopic);
+      this.onEvent({
+        type: 'topic_queue_changed',
+        agentTemplate: row.agentTemplate,
+        topic: row.spawnedFromTopic,
+        depth,
+      });
     }
 
     // Step 8: drain next queued row.

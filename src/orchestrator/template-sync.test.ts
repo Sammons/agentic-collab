@@ -330,6 +330,70 @@ describe('template-sync', () => {
       assert.deepEqual(afterStmts, beforeStmts);
     });
 
+    it('Q4: emits template_updated:added on first sync of a template', () => {
+      const { db, dir } = makeDb();
+      try {
+        const events: Array<{ type: string; templateId: string; action: string }> = [];
+        const sink = (ev: { type: 'template_updated'; templateId: string; action: 'added' | 'modified' | 'removed' }) =>
+          events.push(ev);
+
+        syncTemplate(db, 'q4-new-eph', {
+          engine: 'claude',
+          persistent: false,
+          cwd_base: '/tmp/q4',
+          topics: [{ name: 'first' }],
+        }, null, sink);
+
+        const filtered = events.filter((e) => e.type === 'template_updated' && e.templateId === 'q4-new-eph');
+        assert.equal(filtered.length, 1, 'one template_updated event');
+        assert.equal(filtered[0]!.action, 'added', 'first sync is `added`');
+
+        // Persistent variant: same expectation.
+        syncTemplate(db, 'q4-new-pers', {
+          engine: 'claude',
+        }, null, sink);
+        const persFiltered = events.filter((e) => e.templateId === 'q4-new-pers');
+        assert.equal(persFiltered.length, 1);
+        assert.equal(persFiltered[0]!.action, 'added');
+      } finally {
+        db.close();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('Q4: emits template_updated:modified on resync with changed fields', () => {
+      const { db, dir } = makeDb();
+      try {
+        const events: Array<{ type: string; templateId: string; action: string }> = [];
+        const sink = (ev: { type: 'template_updated'; templateId: string; action: 'added' | 'modified' | 'removed' }) =>
+          events.push(ev);
+
+        // First sync — produces an `added` event.
+        syncTemplate(db, 'q4-mod', {
+          engine: 'claude',
+          persistent: false,
+          cwd_base: '/tmp/q4-mod',
+          topics: [{ name: 'one', concurrency: 1 }],
+        }, null, sink);
+        assert.equal(events.filter((e) => e.templateId === 'q4-mod').length, 1);
+        assert.equal(events.filter((e) => e.templateId === 'q4-mod')[0]!.action, 'added');
+
+        // Second sync with a changed concurrency — must emit `modified`.
+        syncTemplate(db, 'q4-mod', {
+          engine: 'claude',
+          persistent: false,
+          cwd_base: '/tmp/q4-mod',
+          topics: [{ name: 'one', concurrency: 3 }],
+        }, null, sink);
+        const all = events.filter((e) => e.templateId === 'q4-mod');
+        assert.equal(all.length, 2, 'two events total for q4-mod');
+        assert.equal(all[1]!.action, 'modified', 'resync emits `modified`');
+      } finally {
+        db.close();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
     it('fresh DB has agent_templates and topics tables created', () => {
       const { db, dir } = makeDb();
       try {

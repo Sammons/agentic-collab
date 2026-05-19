@@ -775,6 +775,19 @@ export class Database {
   }
 
   /**
+   * Count rows in `topic_queue` still waiting to be claimed for the given
+   * (template, topic). Used by Q4's `topic_queue_changed` WS event to report
+   * the live queue depth to subscribers.
+   */
+  countQueuedTopicMessages(agentTemplate: string, topicName: string): number {
+    const row = this.db.prepare(`
+      SELECT COUNT(*) AS n FROM topic_queue
+       WHERE agent_template = ? AND topic_name = ? AND status = 'queued'
+    `).get(agentTemplate, topicName) as Record<string, unknown> | undefined;
+    return Number(row?.['n'] ?? 0);
+  }
+
+  /**
    * Count live (non-terminal) `agent_instances` rows for the given topic.
    * Used by TopicDelivery to enforce per-topic concurrency caps.
    */

@@ -6,6 +6,7 @@
 import { createHash } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
+import type { WsEvent } from './types.ts';
 
 const MAGIC_STRING = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 const MAX_FRAME_BYTES = 1_048_576; // 1 MB — reject frames larger than this
@@ -145,6 +146,16 @@ export class WebSocketServer {
         client.socket.write(frame);
       }
     }
+  }
+
+  /**
+   * Typed convenience wrapper around `broadcast`. v3-era emitters
+   * (`topic-delivery`, `instance-reaper`, `template-sync`) call this so
+   * the event payload structure is constrained by the `WsEvent` union
+   * rather than constructed ad-hoc.
+   */
+  broadcastEvent(event: WsEvent): void {
+    this.broadcast(JSON.stringify(event));
   }
 
   /**

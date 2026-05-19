@@ -321,6 +321,59 @@ describe('TopicDelivery — Q3 invariants', () => {
     assert.match(src, /process\.env\['PATH'\]\s*=\s*`\$\{collabBinDir\}/, 'proxy prepends bin/ to PATH');
   });
 
+  // ── Q4: typed WS event emissions ────────────────────────────────────
+  //
+  // The driver receives a recording `onEvent` callback shaped identically to
+  // `wss.broadcastEvent` (typed `WsEvent`). These tests freeze the contract
+  // for `instance_spawned` and `topic_queue_changed` so consumer-side Q9 work
+  // can rely on stable payload shapes.
+
+  it('Q4: emits instance_spawned event after claim+insert succeeds', async () => {
+    seedTemplate(db, 'tQ4a');
+    seedTopic(db, 'tQ4a');
+    const events: Array<{ type: string; [k: string]: unknown }> = [];
+    const driver = new TopicDelivery({
+      db, proxyDispatch: dispatch, orchestratorHost: 'x', ipcRoot, locks: new LockManager(db.rawDb),
+      onEvent: (ev) => events.push(ev as { type: string }),
+    });
+
+    await driver.publish({ agentTemplate: 'tQ4a', topicName: 'echo', payload: '{}' });
+    // Let the fire-and-forget spawn complete (start hook pasted, state=running).
+    await new Promise((r) => setTimeout(r, 250));
+
+    const spawned = events.filter((e) => e.type === 'instance_spawned');
+    assert.equal(spawned.length, 1, 'exactly one instance_spawned event');
+    const inst = (spawned[0] as { instance: { id: string; state: string; agentTemplate: string } }).instance;
+    assert.ok(inst, 'event carries an instance row');
+    assert.equal(inst.agentTemplate, 'tQ4a');
+    assert.equal(inst.state, 'running', 'instance state is post-update (running)');
+  });
+
+  it('Q4: emits topic_queue_changed when a queue row is claimed', async () => {
+    seedTemplate(db, 'tQ4b');
+    seedTopic(db, 'tQ4b');
+    const events: Array<{ type: string; [k: string]: unknown }> = [];
+    const driver = new TopicDelivery({
+      db, proxyDispatch: dispatch, orchestratorHost: 'x', ipcRoot, locks: new LockManager(db.rawDb),
+      onEvent: (ev) => events.push(ev as { type: string }),
+    });
+
+    await driver.publish({ agentTemplate: 'tQ4b', topicName: 'echo', payload: '{}' });
+    await new Promise((r) => setTimeout(r, 250));
+
+    const depthEvents = events.filter((e) => e.type === 'topic_queue_changed');
+    // We expect at least 2: one after enqueue (depth=1), one after claim (depth=0).
+    assert.ok(depthEvents.length >= 2, `at least two topic_queue_changed events (got ${depthEvents.length})`);
+    for (const ev of depthEvents) {
+      assert.equal((ev as { agentTemplate: string }).agentTemplate, 'tQ4b');
+      assert.equal((ev as { topic: string }).topic, 'echo');
+      assert.equal(typeof (ev as { depth: unknown }).depth, 'number');
+    }
+    // After claim resolves the queue row, depth must drop to zero.
+    const finalDepth = depthEvents[depthEvents.length - 1] as { depth: number };
+    assert.equal(finalDepth.depth, 0, 'depth=0 after claim drained the queued row');
+  });
+
   it('invariant #9: pending_messages.target_agent never contains a prefix colon for topic publish', async () => {
     seedTemplate(db, 'tG');
     seedTopic(db, 'tG');
