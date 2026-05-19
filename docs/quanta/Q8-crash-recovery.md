@@ -31,6 +31,42 @@ Skipped due to context budget. Q8 review is recommended as a follow-up before re
 - SHA: `fce1dfa` on `v3-integration`.
 
 ## Open questions for follow-up
-- Outside-review of `recovery.ts` (Codex or human) recommended before deploy.
-- `topic_queue` rows for orphaned instances are marked `'failed'`; the v3 vision spec said "requeued or marked failed per topic policy". Q8 hardcoded "always fail" — needs a topic-level config (`reque_on_orphan: bool`) in Q5+/Q2 follow-up if requeue policy is wanted.
-- The sweep's default proxy choice (`proxies[0]`) is multi-host-fragile.
+- `topic_queue` rows for orphaned instances default to `'failed'`. `V3_RECOVERY_QUEUE_POLICY=requeue` flips the global policy to requeue. A per-topic `requeue_on_orphan` flag (Q2 schema change) remains a future enhancement.
+- The multi-host proxy resolver (C5) is a heuristic — it joins on `agent_instances` history. A freshly provisioned host with zero ephemeral history will still hit the "no proxy known" path. Proper fix needs host-aware template metadata.
+
+## Hostile-review / Codex-outside-review fixes (post-`fce1dfa`)
+
+CRITICAL:
+- **C1 — bounded boot reconcile.** Added `wallClockCapMs` (default 30s, env `BOOT_RECONCILE_TIMEOUT_MS`) and parallel chunks (default 10). Cap-hit logs a warning with the unreconciled count; reconnect handler / periodic sweep covers the remainder.
+- **C2 — `ProxyReconnectHandler` probes `has_session` first.** Mirrors the persistent self-heal in `routes.ts:128-137`. `data: true` → leave alone (live tmux); `data: false` → fail; `ok: false` → skip (proxy unreachable mid-handler).
+- **C3 — sweep single-flight.** `sweepInFlight` guard prevents overlapping ticks from racing the read-then-rm sequence.
+- **C4 — sweep TOCTOU mitigation.** Immediately before each `rm` exec: (a) re-query `listLiveAgentInstances` and skip if the path is now claimed; (b) 60s mtime grace (env-configurable via `mtimeGraceMs`) so freshly-mkdir'd dirs aren't removed. Clock-skew clamp on `Math.max(0, now - mtime)` so a 0ms grace doesn't false-positive on filesystems that report sub-millisecond futures.
+- **C5 — multi-host orphan removal.** Default `proxyResolver` joins `agent_instances` × `agent_templates` × `proxies` to pick a proxy that has serviced this `cwd_base`. Logs a one-time warning and skips when no candidate exists.
+- **C6 — `'spawning'` / `'completing'` excluded from recovery's working set.** Q3 owns `'spawning'`; the reaper owns `'completing'`. Recovery touching either produces contradictory terminal outcomes.
+
+HIGH:
+- **H1 — cleanup gated on worktree existence.** Boot reconciler's dead-session path matches the reconnect handler: only run `cleanup` exec if `worktree_path` is a directory on disk.
+- **H2 — `'completing'` excluded from reconnect handler.** Reaper has exclusive ownership; covered by C6's filter.
+- **H3 — `V3_RECOVERY_QUEUE_POLICY=fail|requeue` env switch.** Default `fail` (terminal). `requeue` calls a new `db.requeueTopicQueueRow(id)` accessor that resets `status='queued'` and clears `claimed_by_instance`/`worktree_path`. Per-topic policy deferred to a future quantum.
+- **H4 — `onProxyRegister` single-flight per proxy_id.** `inFlightProxies` set prevents back-to-back register calls from double-processing the same instance set.
+- **H5 — `git -C <repo_root>` for worktree removal.** Looks up the source repo from `agent_templates.repo_root` when present; falls back to plain `rm -rf` otherwise.
+
+MEDIUM:
+- **M1 — ordering asserted via timeline arrays.** "STATUS-ready → reaper.wake" test now records the wake call directly. "Dead session → mark-failed" test now asserts cleanup exec is dispatched BEFORE the `'failed'` state transition.
+- **M2 — idempotency asserts no double-effects.** Re-running `reconcile()` produces EXACTLY one cleanup exec and EXACTLY one `instance_failed` WS event.
+- **M3 — known limitation documented.** `buildCleanupEnv` reads template fields at recovery time, not at spawn time. Worktree-derived fields are stable (stored on the instance row); template-derived fields may be stale if the template was edited mid-flight.
+- **M4 — proxy-unreachable reconnect test.** `has_session` returning `{ ok: false }` mid-handler: row skipped, no kill, no cleanup.
+
+LOW:
+- **L1 — dropped dead `topicDelivery?` option** on `BootReconcilerOptions`.
+- **L2 — `DEFAULT_WORKTREE_PREFIX = /^wt-/` extracted** to `shared/utils.ts`.
+- **L3 — corrected the "T+60s vs T+0" comment** in `main.ts`.
+
+### Files touched (post-`fce1dfa`)
+- `src/orchestrator/recovery.ts` — full rewrite of all three classes (BootReconciler chunked + capped, ProxyReconnectHandler probe-first + single-flight, OrphanedWorktreeSweep single-flight + TOCTOU + multi-host).
+- `src/orchestrator/recovery.test.ts` — 28 tests (was 13), with ordering / idempotency / TOCTOU / single-flight / multi-host / queue-policy / spawning-excluded / completing-excluded / proxy-unreachable coverage.
+- `src/orchestrator/database.ts` — `listLiveAgentInstances` + `listAgentInstancesByProxy` accept `excludeStates`; new `requeueTopicQueueRow(id)` accessor.
+- `src/orchestrator/main.ts` — removed `topicDelivery` from `BootReconciler` call; updated T+60s comment.
+- `src/shared/utils.ts` — exported `DEFAULT_WORKTREE_PREFIX`.
+
+No new npm deps. No `ALTER TABLE` against any pre-existing table. `field-registry.ts` is untouched.

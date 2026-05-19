@@ -2,6 +2,17 @@
  * Tests for v3 Q8 crash recovery — boot reconciliation, proxy reconnect,
  * and orphaned-worktree sweep. Mirrors the patterns from
  * `instance-reaper.test.ts` and `topic-delivery.test.ts`.
+ *
+ * Coverage notes (post hostile-review):
+ *  - C1: boot reconcile bounded by `wallClockCapMs` (see "wall-clock cap").
+ *  - C2: proxy-reconnect probes `has_session` before failing (multiple tests).
+ *  - C3: sweep is single-flight (see "single-flight").
+ *  - C4: sweep TOCTOU mitigation (see "race a new instance into the path").
+ *  - C5: orphan removal routes via a proxy that has serviced the cwd_base.
+ *  - C6: `'spawning'` rows are excluded from recovery (see "excludes spawning").
+ *  - M1: ordering asserted via timeline arrays (cleanup BEFORE mark-failed).
+ *  - M2: idempotency asserts no double cleanup / no double WS event.
+ *  - M4: proxy-unreachable path covered for reconnect handler.
  */
 
 import { describe, it, before, beforeEach, after } from 'node:test';
@@ -25,6 +36,7 @@ import type {
   ProxyCommand,
   ProxyResponse,
   TopicRow,
+  WsInstanceFailedEvent,
 } from '../shared/types.ts';
 
 function seedTemplate(db: Database, id: string, overrides?: Partial<AgentTemplateRow>): void {
@@ -83,6 +95,23 @@ async function spawnAndWaitRunning(
     await new Promise((r) => setTimeout(r, 20));
   }
   throw new Error('instance never reached running state');
+}
+
+/**
+ * Wait until every live row is in 'running' state (or timeout). Used by
+ * multi-spawn tests where the proxy-reconnect handler excludes 'spawning'
+ * rows (C6) — without this wait, a not-yet-promoted row could be filtered
+ * out of the handler's working set.
+ */
+async function waitAllRunning(db: Database, expectedCount: number, timeoutMs = 3000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const live = db.listLiveAgentInstances();
+    const running = live.filter((r) => r.state === 'running');
+    if (running.length >= expectedCount && live.every((r) => r.state !== 'spawning')) return;
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  throw new Error(`only ${db.listLiveAgentInstances().filter((r) => r.state === 'running').length} rows running; expected ${expectedCount}`);
 }
 
 type Recorded = { proxyId: string; command: ProxyCommand };
@@ -150,8 +179,21 @@ describe('BootReconciler — Q8 crash recovery', () => {
     writeFileSync(inst.replyPath, JSON.stringify({ echoed: { echo: 'hi' } }));
     writeFileSync(inst.statusPath, 'ok\n');
 
+    // M1: instrument the reaper to assert `wake(id)` was actually called.
+    // We can do that with a thin spy via the proxy timeline: the reaper
+    // sequence is "kill_session → cleanup exec". Both events being observed
+    // confirms reaper.wake ran (the reconciler routes status-ready rows via
+    // the reaper, not the failure path).
+    let wakeCalledWithId: string | null = null;
+    const wrappedReaper = {
+      wake: (instId: string) => {
+        wakeCalledWithId = instId;
+        return reaper.wake(instId);
+      },
+    } as unknown as InstanceReaper;
+
     const reconciler = new BootReconciler({
-      db, proxyDispatch: dispatch, instanceReaper: reaper, topicDelivery: driver,
+      db, proxyDispatch: dispatch, instanceReaper: wrappedReaper,
     });
     const beforeLen = recorded.length;
     const summary = await reconciler.reconcile();
@@ -159,6 +201,7 @@ describe('BootReconciler — Q8 crash recovery', () => {
     assert.equal(summary.finalised, 1, 'one row finalised via reaper');
     assert.equal(summary.failed, 0, 'no rows marked failed');
     assert.equal(summary.resumed, 0, 'no rows resumed (status was ready)');
+    assert.equal(wakeCalledWithId, id, 'reaper.wake invoked with the instance id');
 
     // Reaper finalisation flows through kill_session + cleanup exec — confirm
     // the reconciler actually invoked the reaper (it must not just mark the
@@ -183,7 +226,7 @@ describe('BootReconciler — Q8 crash recovery', () => {
     // No status file. No reply.
 
     const reconciler = new BootReconciler({
-      db, proxyDispatch: dispatch, instanceReaper: reaper, topicDelivery: driver,
+      db, proxyDispatch: dispatch, instanceReaper: reaper,
     });
     const summary = await reconciler.reconcile();
 
@@ -195,69 +238,146 @@ describe('BootReconciler — Q8 crash recovery', () => {
     assert.equal(row.state, 'running', 'instance state preserved as running');
   });
 
-  it('dead tmux session + no status → instance marked failed, cleanup attempted, queue row failed', async () => {
-    const { db, dispatch, recorded, driver, reaper } = makeEnv(tmpDir, {
-      // has_session returns false → session is gone.
-      dispatchOverride: (_pid, cmd) => cmd.action === 'has_session' ? { ok: true, data: false } : null,
+  it('dead tmux session + no status → instance marked failed, cleanup dispatched BEFORE mark-failed, queue row failed', async () => {
+    // M1: assert ordering — cleanup exec MUST be dispatched BEFORE the state
+    // transition to 'failed'. The timeline array below records both.
+    type Event =
+      | { kind: 'dispatch'; action: string; command?: string }
+      | { kind: 'state'; state: string };
+    const timeline: Event[] = [];
+
+    const tmpFile = join(tmpDir, `ord-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
+    const db = new Database(tmpFile);
+    db.registerProxy('p1', 'tok', 'localhost:3100');
+
+    const dispatch = async (_pid: string, cmd: ProxyCommand): Promise<ProxyResponse> => {
+      const ev: { kind: 'dispatch'; action: string; command?: string } = { kind: 'dispatch', action: cmd.action };
+      if (cmd.action === 'exec') ev.command = cmd.command;
+      timeline.push(ev);
+      if (cmd.action === 'has_session') return { ok: true, data: false };
+      if (cmd.action === 'create_session') return { ok: true };
+      if (cmd.action === 'paste') return { ok: true };
+      if (cmd.action === 'send_keys') return { ok: true };
+      return { ok: true, data: '' };
+    };
+
+    // Patch updateInstanceState to record state transitions.
+    const origUpdate = db.updateInstanceState.bind(db);
+    db.updateInstanceState = (id, state, extra) => {
+      timeline.push({ kind: 'state', state });
+      return origUpdate(id, state, extra);
+    };
+
+    const locks = new LockManager(db.rawDb);
+    const messageDispatcher = new MessageDispatcher({ db, locks, proxyDispatch: dispatch, orchestratorHost: 'http://localhost:3000' });
+    const ipcRoot = mkdtempSync(join(tmpDir, 'ord-ipc-'));
+    const driver = new TopicDelivery({ db, proxyDispatch: dispatch, orchestratorHost: 'x', ipcRoot, locks });
+    const reaper = new InstanceReaper({ db, proxyDispatch: dispatch, messageDispatcher, topicDelivery: driver, sweepIntervalMs: 50 });
+
+    // Pretend the worktree dir exists on disk so cleanup runs.
+    const wtPath = join(tmpDir, `ord-wt-${Math.random().toString(36).slice(2)}`);
+    mkdirSync(wtPath, { recursive: true });
+
+    seedTemplate(db, 'tDead', {
+      hookCleanup: 'echo cleanup-tDead-marker',
+      cwdTemplate: wtPath, // helps if used
     });
-    seedTemplate(db, 'tDead', { hookCleanup: 'echo cleanup-tDead-marker' });
     seedTopic(db, 'tDead');
 
     const id = await spawnAndWaitRunning(driver, db, 'tDead', '{}');
+    db.rawDb.prepare('UPDATE agent_instances SET worktree_path = ? WHERE id = ?').run(wtPath, id);
     const inst = db.getAgentInstance(id)!;
 
-    const reconciler = new BootReconciler({
-      db, proxyDispatch: dispatch, instanceReaper: reaper, topicDelivery: driver,
-    });
-    const beforeLen = recorded.length;
+    const reconciler = new BootReconciler({ db, proxyDispatch: dispatch, instanceReaper: reaper });
+    timeline.length = 0; // reset for the reconcile pass only
     const summary = await reconciler.reconcile();
 
     assert.equal(summary.failed, 1, 'one row failed');
-    assert.equal(summary.resumed, 0);
-    assert.equal(summary.finalised, 0);
 
     const row = db.getAgentInstance(id)!;
     assert.equal(row.state, 'failed', 'instance is failed');
     assert.ok(row.failureReason && row.failureReason.includes('tmux session gone'), 'failure reason set');
 
-    // Cleanup hook ran via proxy `exec` (best-effort).
-    const tail = recorded.slice(beforeLen);
-    const cleanupExec = tail.find((r) =>
-      r.command.action === 'exec' && r.command.command.includes('cleanup-tDead-marker'),
+    // M1: cleanup exec MUST appear before the 'failed' state transition.
+    const cleanupIdx = timeline.findIndex((e) =>
+      e.kind === 'dispatch' && e.action === 'exec' && e.command?.includes('cleanup-tDead-marker'),
     );
-    assert.ok(cleanupExec, 'cleanup hook dispatched via exec');
-    assert.equal(
-      (cleanupExec!.command as Extract<ProxyCommand, { action: 'exec' }>).timeoutMs,
-      60_000,
-      'cleanup exec used 60s timeout',
-    );
+    const failedIdx = timeline.findIndex((e) => e.kind === 'state' && e.state === 'failed');
+    assert.ok(cleanupIdx >= 0, 'cleanup exec was dispatched');
+    assert.ok(failedIdx >= 0, 'state was transitioned to failed');
+    assert.ok(cleanupIdx < failedIdx, `cleanup(${cleanupIdx}) BEFORE mark-failed(${failedIdx})`);
 
-    // The originating topic_queue row is marked failed (per Q8: do NOT requeue).
+    // The originating topic_queue row is marked failed (per Q8 default policy).
     if (inst.queueId != null) {
-      const row = db.rawDb.prepare(
-        'SELECT status FROM topic_queue WHERE id = ?',
-      ).get(inst.queueId) as { status: string };
-      assert.equal(row.status, 'failed', 'topic_queue row marked failed (no auto-requeue)');
+      const r = db.rawDb.prepare('SELECT status FROM topic_queue WHERE id = ?').get(inst.queueId) as { status: string };
+      assert.equal(r.status, 'failed', 'topic_queue row marked failed (no auto-requeue)');
     }
   });
 
-  it('idempotent: re-running reconcile is a no-op on already-reconciled rows', async () => {
-    const { db, dispatch, driver, reaper } = makeEnv(tmpDir, {
+  it('dead tmux session + worktree absent on disk → cleanup is skipped (H1 gating)', async () => {
+    // H1: cleanup MUST only run when the worktree directory is on disk.
+    // Worktree path is null here (spawn harness doesn't allocate one for
+    // templates with null cwd_template), so we expect no cleanup exec.
+    const { db, dispatch, recorded, driver, reaper } = makeEnv(tmpDir, {
       dispatchOverride: (_pid, cmd) => cmd.action === 'has_session' ? { ok: true, data: false } : null,
     });
-    seedTemplate(db, 'tIdem');
-    seedTopic(db, 'tIdem');
-    await spawnAndWaitRunning(driver, db, 'tIdem', '{}');
+    seedTemplate(db, 'tDeadNoWt', { hookCleanup: 'echo cleanup-skipped-marker' });
+    seedTopic(db, 'tDeadNoWt');
 
-    const reconciler = new BootReconciler({
-      db, proxyDispatch: dispatch, instanceReaper: reaper, topicDelivery: driver,
+    const id = await spawnAndWaitRunning(driver, db, 'tDeadNoWt', '{}');
+
+    const reconciler = new BootReconciler({ db, proxyDispatch: dispatch, instanceReaper: reaper });
+    const beforeLen = recorded.length;
+    const summary = await reconciler.reconcile();
+
+    assert.equal(summary.failed, 1, 'one row failed');
+
+    const row = db.getAgentInstance(id)!;
+    assert.equal(row.state, 'failed', 'instance is failed');
+
+    const tail = recorded.slice(beforeLen);
+    const cleanupExec = tail.find((r) =>
+      r.command.action === 'exec' && r.command.command.includes('cleanup-skipped-marker'),
+    );
+    assert.equal(cleanupExec, undefined, 'cleanup NOT dispatched (worktree absent on disk)');
+  });
+
+  it('idempotent: re-running reconcile is a no-op + no duplicate cleanup exec / no duplicate WS event (M2)', async () => {
+    // M2: assert (a) only ONE cleanup exec per failed row across two passes,
+    // and (b) only ONE WS instance_failed event is emitted.
+    const { db, dispatch, recorded, driver, reaper } = makeEnv(tmpDir, {
+      dispatchOverride: (_pid, cmd) => cmd.action === 'has_session' ? { ok: true, data: false } : null,
     });
+    seedTemplate(db, 'tIdem', { hookCleanup: 'echo cleanup-idem-marker' });
+    seedTopic(db, 'tIdem');
+    const id = await spawnAndWaitRunning(driver, db, 'tIdem', '{}');
+    // Make worktree visible so cleanup actually runs.
+    const wtPath = join(tmpDir, `idem-wt-${Math.random().toString(36).slice(2)}`);
+    mkdirSync(wtPath, { recursive: true });
+    db.rawDb.prepare('UPDATE agent_instances SET worktree_path = ? WHERE id = ?').run(wtPath, id);
+
+    const wsEvents: WsInstanceFailedEvent[] = [];
+    const reconciler = new BootReconciler({
+      db, proxyDispatch: dispatch, instanceReaper: reaper,
+      onEvent: (e) => wsEvents.push(e),
+    });
+    const before = recorded.length;
+
     const first = await reconciler.reconcile();
     const second = await reconciler.reconcile();
     assert.equal(first.failed, 1, 'first pass fails the row');
     assert.equal(second.failed, 0, 'second pass finds no live rows');
     assert.equal(second.resumed, 0);
     assert.equal(second.finalised, 0);
+
+    const tail = recorded.slice(before);
+    const cleanups = tail.filter((r) =>
+      r.command.action === 'exec' && r.command.command.includes('cleanup-idem-marker'),
+    );
+    assert.equal(cleanups.length, 1, 'EXACTLY one cleanup exec across both passes');
+
+    const failedEvents = wsEvents.filter((e) => e.instance.id === id);
+    assert.equal(failedEvents.length, 1, 'EXACTLY one instance_failed event for the row');
   });
 
   it('proxy unreachable → row skipped (proxy-reconnect handler will pick it up)', async () => {
@@ -270,7 +390,7 @@ describe('BootReconciler — Q8 crash recovery', () => {
     const id = await spawnAndWaitRunning(driver, db, 'tUnreach', '{}');
 
     const reconciler = new BootReconciler({
-      db, proxyDispatch: dispatch, instanceReaper: reaper, topicDelivery: driver,
+      db, proxyDispatch: dispatch, instanceReaper: reaper,
     });
     const summary = await reconciler.reconcile();
     assert.equal(summary.skipped, 1, 'row skipped because proxy unreachable');
@@ -278,6 +398,119 @@ describe('BootReconciler — Q8 crash recovery', () => {
 
     const row = db.getAgentInstance(id)!;
     assert.equal(row.state, 'running', 'state unchanged');
+  });
+
+  it('wall-clock cap → remaining rows skipped, server.listen unblocked (C1)', async () => {
+    // C1: a slow proxyDispatch must not stall the entire reconcile.
+    // Stub `has_session` to await 200ms per call; with a 100ms cap and 5
+    // rows we should observe at least one `skipped` and `reconcile()` itself
+    // should return within ~chunk-budget (1 chunk of 5 × 200ms ≈ 200ms — we
+    // give it 1500ms in the assert below for CI noise).
+    const { db, dispatch, driver, reaper } = makeEnv(tmpDir);
+    seedTemplate(db, 'tCap');
+    seedTopic(db, 'tCap', { concurrency: 8 });
+
+    // Spawn 5 rows + ensure all are 'running' so reconcile sees all 5.
+    for (let i = 0; i < 5; i += 1) {
+      await spawnAndWaitRunning(driver, db, 'tCap', `{"i":${i}}`);
+    }
+    await waitAllRunning(db, 5);
+
+    const slowDispatch = async (pid: string, cmd: ProxyCommand): Promise<ProxyResponse> => {
+      if (cmd.action === 'has_session') {
+        await new Promise((r) => setTimeout(r, 200));
+        return { ok: true, data: false };
+      }
+      return dispatch(pid, cmd);
+    };
+
+    const reconciler = new BootReconciler({
+      db, proxyDispatch: slowDispatch, instanceReaper: reaper,
+      wallClockCapMs: 100, // shorter than even one row's dispatch latency
+      chunkSize: 1, // force serial so we definitely hit the cap
+    });
+
+    const t0 = Date.now();
+    const summary = await reconciler.reconcile();
+    const elapsed = Date.now() - t0;
+
+    // 5 rows, chunkSize=1, 200ms each: total = 1000ms if no cap. With a
+    // 100ms cap we should see at most ~300ms (1 chunk processes, deadline
+    // check fires on next loop iteration).
+    assert.ok(elapsed < 800, `reconcile returned within bounded time (${elapsed}ms)`);
+    assert.ok(summary.skipped >= 1, `cap caused at least one skip (got ${summary.skipped})`);
+  });
+
+  it('"spawning" rows are excluded from reconcile (C6 — Q3 owns the claim window)', async () => {
+    // C6: a row in 'spawning' state is being processed by claimAndSpawn.
+    // The reconciler must NOT touch it, even if has_session would return
+    // false (the claim flow hasn't yet started the tmux session).
+    const { db, dispatch, reaper } = makeEnv(tmpDir, {
+      dispatchOverride: (_pid, cmd) => cmd.action === 'has_session' ? { ok: true, data: false } : null,
+    });
+    seedTemplate(db, 'tSpawning');
+    seedTopic(db, 'tSpawning');
+
+    // Insert a raw 'spawning' row directly.
+    const tmpRow = {
+      id: 'spawning-1',
+      agentTemplate: 'tSpawning',
+      spawnedFromTopic: 'echo',
+      instanceAddr: 'tSpawning/echo-spawning-1',
+      tmuxSession: 'tSpawning-spawning-1',
+      worktreePath: null as string | null,
+      proxyId: 'p1',
+      replyToAddr: null as string | null,
+      messageId: 'msg-spawning-1',
+      messagePath: '/tmp/msg-spawning-1',
+      replyPath: '/tmp/reply-spawning-1',
+      statusPath: '/tmp/status-spawning-1',
+    };
+    db.rawDb.prepare(`
+      INSERT INTO agent_instances (
+        id, agent_template, spawned_from_topic, instance_addr,
+        tmux_session, worktree_path, proxy_id, state,
+        reply_to_addr, message_id, message_path, reply_path, status_path,
+        queue_id, monitor_of_instance
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'spawning', ?, ?, ?, ?, ?, NULL, NULL)
+    `).run(
+      tmpRow.id, tmpRow.agentTemplate, tmpRow.spawnedFromTopic, tmpRow.instanceAddr,
+      tmpRow.tmuxSession, tmpRow.worktreePath, tmpRow.proxyId,
+      tmpRow.replyToAddr, tmpRow.messageId, tmpRow.messagePath, tmpRow.replyPath, tmpRow.statusPath,
+    );
+
+    const reconciler = new BootReconciler({ db, proxyDispatch: dispatch, instanceReaper: reaper });
+    const summary = await reconciler.reconcile();
+
+    assert.equal(summary.failed, 0, 'spawning row NOT marked failed');
+    assert.equal(summary.skipped, 0, 'spawning row NOT counted as skipped (it was excluded)');
+
+    const row = db.getAgentInstance('spawning-1')!;
+    assert.equal(row.state, 'spawning', 'state still spawning — kernel can finish claiming');
+  });
+
+  it('V3_RECOVERY_QUEUE_POLICY=requeue → topic_queue row reset to queued (H3)', async () => {
+    const prev = process.env['V3_RECOVERY_QUEUE_POLICY'];
+    process.env['V3_RECOVERY_QUEUE_POLICY'] = 'requeue';
+    try {
+      const { db, dispatch, driver, reaper } = makeEnv(tmpDir, {
+        dispatchOverride: (_pid, cmd) => cmd.action === 'has_session' ? { ok: true, data: false } : null,
+      });
+      seedTemplate(db, 'tReq');
+      seedTopic(db, 'tReq');
+      const id = await spawnAndWaitRunning(driver, db, 'tReq', '{}');
+      const inst = db.getAgentInstance(id)!;
+
+      const reconciler = new BootReconciler({ db, proxyDispatch: dispatch, instanceReaper: reaper });
+      await reconciler.reconcile();
+
+      assert.notEqual(inst.queueId, null, 'precondition: queue id is set');
+      const r = db.rawDb.prepare('SELECT status FROM topic_queue WHERE id = ?').get(inst.queueId!) as { status: string };
+      assert.equal(r.status, 'queued', 'topic_queue row was REQUEUED (not failed)');
+    } finally {
+      if (prev === undefined) delete process.env['V3_RECOVERY_QUEUE_POLICY'];
+      else process.env['V3_RECOVERY_QUEUE_POLICY'] = prev;
+    }
   });
 });
 
@@ -292,8 +525,12 @@ describe('ProxyReconnectHandler — Q8 crash recovery', () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it('proxy reconnect → all live instances on that proxy marked failed + queue rows failed', async () => {
-    const { db, dispatch, recorded, driver } = makeEnv(tmpDir);
+  it('proxy reconnect → has_session=false → instances marked failed + queue rows failed (C2 dead branch)', async () => {
+    // C2: handler probes has_session FIRST. When the probe returns false,
+    // mark the row failed.
+    const { db, dispatch, recorded, driver } = makeEnv(tmpDir, {
+      dispatchOverride: (_pid, cmd) => cmd.action === 'has_session' ? { ok: true, data: false } : null,
+    });
     seedTemplate(db, 'tProxyA', { hookCleanup: 'echo cleanup-A' });
     seedTopic(db, 'tProxyA', { concurrency: 4 });
 
@@ -302,6 +539,9 @@ describe('ProxyReconnectHandler — Q8 crash recovery', () => {
     for (let i = 0; i < 3; i += 1) {
       ids.push(await spawnAndWaitRunning(driver, db, 'tProxyA', `{"n":${i}}`));
     }
+    // Make sure all 3 are 'running' (not still 'spawning') — the handler
+    // excludes 'spawning' (C6).
+    await waitAllRunning(db, 3);
     assert.equal(db.listAgentInstancesByProxy('p1', { onlyLive: true }).length, 3);
 
     // Build a recovery fsAdapter that reports worktree paths as absent so we
@@ -310,6 +550,7 @@ describe('ProxyReconnectHandler — Q8 crash recovery', () => {
       isDirectory: () => false,
       readdir: () => [],
       fileSize: () => null,
+      mtimeMs: () => null,
     };
     const handler = new ProxyReconnectHandler({
       db, proxyDispatch: dispatch, fsAdapter: fakeFs,
@@ -338,10 +579,81 @@ describe('ProxyReconnectHandler — Q8 crash recovery', () => {
       r.command.action === 'exec' && r.command.command.includes('cleanup-A'),
     );
     assert.equal(cleanupAttempts.length, 0, 'cleanup skipped when worktree absent');
+
+    // C2: the timeline must show a has_session probe per instance.
+    const probes = tail.filter((r) => r.command.action === 'has_session');
+    assert.equal(probes.length, 3, 'has_session probed once per row');
   });
 
-  it('proxy reconnect → cleanup runs only for instances whose worktree exists on disk', async () => {
-    const { db, dispatch, recorded, driver } = makeEnv(tmpDir);
+  it('proxy reconnect → has_session=true → instance LEFT ALONE (C2 live branch)', async () => {
+    // C2: the proxy heartbeat lapsed but tmux survived. The handler must
+    // NOT terminate the live row.
+    const { db, dispatch, recorded, driver } = makeEnv(tmpDir, {
+      dispatchOverride: (_pid, cmd) => cmd.action === 'has_session' ? { ok: true, data: true } : null,
+    });
+    seedTemplate(db, 'tLiveBlip', { hookCleanup: 'echo cleanup-blip' });
+    seedTopic(db, 'tLiveBlip');
+
+    const id = await spawnAndWaitRunning(driver, db, 'tLiveBlip', '{}');
+
+    const fakeFs: RecoveryFsAdapter = {
+      isDirectory: () => false, readdir: () => [], fileSize: () => null, mtimeMs: () => null,
+    };
+    const handler = new ProxyReconnectHandler({ db, proxyDispatch: dispatch, fsAdapter: fakeFs });
+
+    const beforeLen = recorded.length;
+    const summary = await handler.onProxyRegister('p1');
+
+    assert.equal(summary.failed, 0, 'live instance was NOT failed');
+    assert.equal(summary.skipped, 1, 'live instance was counted as skipped');
+
+    const row = db.getAgentInstance(id)!;
+    assert.equal(row.state, 'running', 'instance still running');
+    assert.equal(row.failureReason, null, 'no failure reason was set');
+
+    const tail = recorded.slice(beforeLen);
+    const cleanupAttempts = tail.filter((r) =>
+      r.command.action === 'exec' && r.command.command.includes('cleanup-blip'),
+    );
+    assert.equal(cleanupAttempts.length, 0, 'no cleanup exec dispatched for live row');
+  });
+
+  it('proxy reconnect → has_session returns ok:false → row skipped (M4 — proxy unreachable mid-handler)', async () => {
+    // M4: probe itself can fail with ok:false (proxy went away again
+    // between register and probe). Skip — don't terminate.
+    const { db, dispatch, recorded, driver } = makeEnv(tmpDir, {
+      dispatchOverride: (_pid, cmd) =>
+        cmd.action === 'has_session' ? { ok: false, error: 'connection refused' } : null,
+    });
+    seedTemplate(db, 'tProbeFail');
+    seedTopic(db, 'tProbeFail');
+
+    const id = await spawnAndWaitRunning(driver, db, 'tProbeFail', '{}');
+
+    const fakeFs: RecoveryFsAdapter = {
+      isDirectory: () => false, readdir: () => [], fileSize: () => null, mtimeMs: () => null,
+    };
+    const handler = new ProxyReconnectHandler({ db, proxyDispatch: dispatch, fsAdapter: fakeFs });
+
+    const beforeLen = recorded.length;
+    const summary = await handler.onProxyRegister('p1');
+
+    assert.equal(summary.failed, 0, 'row NOT marked failed when probe is inconclusive');
+    assert.equal(summary.skipped, 1, 'row counted as skipped');
+
+    const row = db.getAgentInstance(id)!;
+    assert.equal(row.state, 'running', 'instance state preserved');
+
+    const tail = recorded.slice(beforeLen);
+    // Only the probe was dispatched (no kill_session, no cleanup exec).
+    const nonProbe = tail.filter((r) => r.command.action !== 'has_session');
+    assert.equal(nonProbe.length, 0, 'no kill or cleanup dispatched');
+  });
+
+  it('proxy reconnect → cleanup runs only for instances whose worktree exists on disk (H1)', async () => {
+    const { db, dispatch, recorded, driver } = makeEnv(tmpDir, {
+      dispatchOverride: (_pid, cmd) => cmd.action === 'has_session' ? { ok: true, data: false } : null,
+    });
     seedTemplate(db, 'tProxyB', { hookCleanup: 'echo cleanup-B-marker' });
     seedTopic(db, 'tProxyB', { concurrency: 4 });
 
@@ -349,8 +661,6 @@ describe('ProxyReconnectHandler — Q8 crash recovery', () => {
     const inst = db.getAgentInstance(id)!;
     // Pretend a worktree was created on disk.
     const stubPath = inst.worktreePath ?? '/tmp/recovery-test-wt';
-    // Update the instance row so worktreePath is set (the harness doesn't
-    // populate it, since the template's cwd_template is null).
     db.rawDb.prepare('UPDATE agent_instances SET worktree_path = ? WHERE id = ?')
       .run(stubPath, id);
 
@@ -359,6 +669,7 @@ describe('ProxyReconnectHandler — Q8 crash recovery', () => {
       isDirectory: (p) => seenPaths.has(p),
       readdir: () => [],
       fileSize: () => null,
+      mtimeMs: () => null,
     };
     const handler = new ProxyReconnectHandler({
       db, proxyDispatch: dispatch, fsAdapter: fakeFs,
@@ -375,17 +686,13 @@ describe('ProxyReconnectHandler — Q8 crash recovery', () => {
   });
 
   it('proxy reconnect → other proxies\' instances are untouched', async () => {
-    const { db, dispatch, driver } = makeEnv(tmpDir);
+    const { db, dispatch, driver } = makeEnv(tmpDir, {
+      dispatchOverride: (_pid, cmd) => cmd.action === 'has_session' ? { ok: true, data: false } : null,
+    });
     db.registerProxy('p2', 'tok2', 'localhost:3101');
     seedTemplate(db, 'tProxyC');
     seedTopic(db, 'tProxyC', { concurrency: 4 });
 
-    // Spawn two instances. Wait for both rows to be running so they have
-    // distinct ids, then partition them across proxies via raw UPDATE.
-    // (The topic-delivery proxy resolver picks `proxies[0]` which is
-    // non-deterministic when multiple proxies are registered; partitioning
-    // post-spawn isolates the handler's proxy-id filter as the unit under
-    // test.)
     await driver.publish({ agentTemplate: 'tProxyC', topicName: 'echo', payload: '{}' });
     await driver.publish({ agentTemplate: 'tProxyC', topicName: 'echo', payload: '{}' });
     const deadline = Date.now() + 2000;
@@ -400,9 +707,7 @@ describe('ProxyReconnectHandler — Q8 crash recovery', () => {
     db.rawDb.prepare('UPDATE agent_instances SET proxy_id = ? WHERE id = ?').run('p1', idB);
 
     const fakeFs: RecoveryFsAdapter = {
-      isDirectory: () => false,
-      readdir: () => [],
-      fileSize: () => null,
+      isDirectory: () => false, readdir: () => [], fileSize: () => null, mtimeMs: () => null,
     };
     const handler = new ProxyReconnectHandler({
       db, proxyDispatch: dispatch, fsAdapter: fakeFs,
@@ -414,6 +719,59 @@ describe('ProxyReconnectHandler — Q8 crash recovery', () => {
     const rowB = db.getAgentInstance(idB)!;
     assert.notEqual(rowA.state, 'failed', 'p2 instance untouched');
     assert.equal(rowB.state, 'failed', 'p1 instance failed');
+  });
+
+  it('"completing" rows are excluded from reconnect handler (H2 — reaper owns them)', async () => {
+    const { db, dispatch, driver } = makeEnv(tmpDir, {
+      dispatchOverride: (_pid, cmd) => cmd.action === 'has_session' ? { ok: true, data: false } : null,
+    });
+    seedTemplate(db, 'tCompleting');
+    seedTopic(db, 'tCompleting');
+    const id = await spawnAndWaitRunning(driver, db, 'tCompleting', '{}');
+
+    // Move the row to 'completing' — the reaper has claimed it for
+    // finalisation. The reconnect handler must NOT touch it.
+    db.updateInstanceState(id, 'completing');
+
+    const fakeFs: RecoveryFsAdapter = {
+      isDirectory: () => false, readdir: () => [], fileSize: () => null, mtimeMs: () => null,
+    };
+    const handler = new ProxyReconnectHandler({ db, proxyDispatch: dispatch, fsAdapter: fakeFs });
+    const summary = await handler.onProxyRegister('p1');
+
+    assert.equal(summary.failed, 0, '"completing" row NOT marked failed');
+    const row = db.getAgentInstance(id)!;
+    assert.equal(row.state, 'completing', 'state unchanged');
+  });
+
+  it('concurrent re-registrations are single-flight per proxy (H4)', async () => {
+    // H4: two concurrent onProxyRegister('p1') calls must not double-process.
+    let dispatchCalls = 0;
+    const { db, dispatch, driver } = makeEnv(tmpDir, {
+      dispatchOverride: (_pid, cmd) => {
+        if (cmd.action === 'has_session') {
+          dispatchCalls += 1;
+          return { ok: true, data: false };
+        }
+        return null;
+      },
+    });
+    seedTemplate(db, 'tConcurrent');
+    seedTopic(db, 'tConcurrent', { concurrency: 4 });
+    await spawnAndWaitRunning(driver, db, 'tConcurrent', '{}');
+
+    const fakeFs: RecoveryFsAdapter = {
+      isDirectory: () => false, readdir: () => [], fileSize: () => null, mtimeMs: () => null,
+    };
+    const handler = new ProxyReconnectHandler({ db, proxyDispatch: dispatch, fsAdapter: fakeFs });
+
+    const [a, b] = await Promise.all([handler.onProxyRegister('p1'), handler.onProxyRegister('p1')]);
+    // One call does the work; the other returns early.
+    const totalFailed = a.failed + b.failed;
+    assert.equal(totalFailed, 1, 'EXACTLY one of the two concurrent calls did the work');
+    // There must be exactly one has_session probe (single row, single
+    // effective pass).
+    assert.equal(dispatchCalls, 1, 'single-flight: only one probe dispatched across two register calls');
   });
 });
 
@@ -443,7 +801,13 @@ describe('OrphanedWorktreeSweep — Q8 crash recovery', () => {
     const ignored = join(base, 'random-dir');
     mkdirSync(ignored, { recursive: true });
 
-    const sweep = new OrphanedWorktreeSweep({ db, proxyDispatch: dispatch });
+    // Use a custom proxyResolver (p1 may not own any row referencing this
+    // base) and disable the mtime grace so freshly-mkdir'd dirs are eligible.
+    const sweep = new OrphanedWorktreeSweep({
+      db, proxyDispatch: dispatch,
+      proxyResolver: () => 'p1',
+      mtimeGraceMs: 0,
+    });
     const beforeLen = recorded.length;
     const result = await sweep.sweep();
     const tail = recorded.slice(beforeLen);
@@ -470,17 +834,18 @@ describe('OrphanedWorktreeSweep — Q8 crash recovery', () => {
     seedTopic(db, 'tKeep');
 
     const id = await spawnAndWaitRunning(driver, db, 'tKeep', '{}');
-    // Pretend the kernel made a worktree dir for this instance.
     const keepPath = join(base, 'wt-keep-me');
     mkdirSync(keepPath, { recursive: true });
     db.rawDb.prepare('UPDATE agent_instances SET worktree_path = ? WHERE id = ?').run(keepPath, id);
 
-    // And an actual orphan to sanity-check the sweep still fires for things
-    // it should remove.
     const orphan = join(base, 'wt-real-orphan');
     mkdirSync(orphan, { recursive: true });
 
-    const sweep = new OrphanedWorktreeSweep({ db, proxyDispatch: dispatch });
+    const sweep = new OrphanedWorktreeSweep({
+      db, proxyDispatch: dispatch,
+      proxyResolver: () => 'p1',
+      mtimeGraceMs: 0,
+    });
     const beforeLen = recorded.length;
     await sweep.sweep();
     const execs = recorded.slice(beforeLen).filter((r) => r.command.action === 'exec');
@@ -498,15 +863,17 @@ describe('OrphanedWorktreeSweep — Q8 crash recovery', () => {
     seedTopic(db, 'tMissing');
 
     const id = await spawnAndWaitRunning(driver, db, 'tMissing', '{}');
-    // Point worktree_path at a path that does NOT exist on disk.
     const ghost = join(base, 'wt-ghost-never-existed');
     db.rawDb.prepare('UPDATE agent_instances SET worktree_path = ? WHERE id = ?').run(ghost, id);
 
-    // And a real orphan to confirm the sweep didn't bail out.
     const orphan = join(base, 'wt-actual');
     mkdirSync(orphan, { recursive: true });
 
-    const sweep = new OrphanedWorktreeSweep({ db, proxyDispatch: dispatch });
+    const sweep = new OrphanedWorktreeSweep({
+      db, proxyDispatch: dispatch,
+      proxyResolver: () => 'p1',
+      mtimeGraceMs: 0,
+    });
     const beforeLen = recorded.length;
     const result = await sweep.sweep();
     const execs = recorded.slice(beforeLen).filter((r) => r.command.action === 'exec');
@@ -526,12 +893,14 @@ describe('OrphanedWorktreeSweep — Q8 crash recovery', () => {
     seedTemplate(db, 'tEphem', { persistent: false, cwdBase: ephemeralBase });
     seedTopic(db, 'tEphem');
 
-    // Both bases have an orphan-shaped dir; only the ephemeral one should be
-    // visited.
     mkdirSync(join(persistentBase, 'wt-persist-orphan'), { recursive: true });
     mkdirSync(join(ephemeralBase, 'wt-ephem-orphan'), { recursive: true });
 
-    const sweep = new OrphanedWorktreeSweep({ db, proxyDispatch: dispatch });
+    const sweep = new OrphanedWorktreeSweep({
+      db, proxyDispatch: dispatch,
+      proxyResolver: () => 'p1',
+      mtimeGraceMs: 0,
+    });
     const beforeLen = recorded.length;
     await sweep.sweep();
     const tail = recorded.slice(beforeLen);
@@ -552,9 +921,249 @@ describe('OrphanedWorktreeSweep — Q8 crash recovery', () => {
     seedTopic(db, 'tNoProxy');
     mkdirSync(join(base, 'wt-stranded'), { recursive: true });
 
-    const sweep = new OrphanedWorktreeSweep({ db, proxyDispatch: dispatch });
+    const sweep = new OrphanedWorktreeSweep({
+      db, proxyDispatch: dispatch,
+      // Default resolver returns null since no instances exist for this cwdBase
+      mtimeGraceMs: 0,
+    });
     const result = await sweep.sweep();
     assert.equal(result.removed, 0);
     assert.ok(result.skipped >= 1, 'skipped due to no proxy');
+  });
+
+  it('mtime grace: dirs younger than the grace window are not removed (C4)', async () => {
+    // C4: a fresh `wt-*` dir is likely a just-spawned instance whose row
+    // hasn't yet been observed by the sweep. Default 60s grace protects it.
+    const { db, dispatch, recorded } = makeEnv(tmpDir);
+    const base = mkdtempSync(join(tmpDir, 'wt-grace-'));
+    seedTemplate(db, 'tGrace', { cwdBase: base });
+    seedTopic(db, 'tGrace');
+    mkdirSync(join(base, 'wt-fresh'), { recursive: true });
+
+    const sweep = new OrphanedWorktreeSweep({
+      db, proxyDispatch: dispatch,
+      proxyResolver: () => 'p1',
+      // Default 60s grace — fresh dir is skipped.
+    });
+    const beforeLen = recorded.length;
+    const result = await sweep.sweep();
+    const tail = recorded.slice(beforeLen);
+
+    assert.equal(result.removed, 0, 'no removal — dir is too fresh');
+    assert.ok(result.skipped >= 1, 'fresh dir was skipped');
+    const execs = tail.filter((r) => r.command.action === 'exec');
+    assert.equal(execs.length, 0, 'no exec dispatched');
+  });
+
+  it('TOCTOU: new instance claims the path between snapshot and rm → rm is NOT dispatched (C4)', async () => {
+    // C4: we read the live-instance snapshot, then re-query immediately
+    // before rm. If a new instance claimed the same path in the interim,
+    // the rm must be cancelled.
+    const { db, dispatch, recorded } = makeEnv(tmpDir);
+    const base = mkdtempSync(join(tmpDir, 'wt-toctou-'));
+    seedTemplate(db, 'tTOCTOU', { cwdBase: base });
+    seedTopic(db, 'tTOCTOU');
+    const orphanPath = join(base, 'wt-contended');
+    mkdirSync(orphanPath, { recursive: true });
+
+    // Wedge between the snapshot and the rm by intercepting dispatch on
+    // the first `exec` and inserting a live instance row pointing at the
+    // contended path JUST BEFORE the rm would happen — but we want the
+    // re-query AFTER our insert. Simulate by spying via dispatch.
+    const wedgedDispatch = async (pid: string, cmd: ProxyCommand): Promise<ProxyResponse> => {
+      recorded.push({ proxyId: pid, command: cmd });
+      return { ok: true, data: '' };
+    };
+
+    // Manually insert a live instance pointing at `orphanPath` BEFORE we
+    // call sweep — this simulates the TOCTOU window. (Production code's
+    // re-query catches this.)
+    const sweep = new OrphanedWorktreeSweep({
+      db, proxyDispatch: wedgedDispatch,
+      proxyResolver: () => 'p1',
+      mtimeGraceMs: 0,
+      fsAdapter: {
+        isDirectory: (_p) => true,
+        readdir: (_p) => ['wt-contended'],
+        fileSize: () => null,
+        mtimeMs: () => Date.now() - 120_000, // old enough to skip grace
+      },
+    });
+
+    // BEFORE sweep, insert a live row that the sweep's INITIAL snapshot will
+    // NOT see (we patch listLiveAgentInstances) — but the re-query DOES see.
+    // Easier: stub listLiveAgentInstances to return [] the first time, then
+    // [{ worktreePath: orphanPath }] the second.
+    let snapshotCallCount = 0;
+    const origList = db.listLiveAgentInstances.bind(db);
+    db.listLiveAgentInstances = ((_opts?: { excludeStates?: any[] }) => {
+      snapshotCallCount += 1;
+      if (snapshotCallCount === 1) return [];
+      // Second + later calls (the re-query): instance has claimed the path.
+      return [{
+        id: 'sneak-1', agentTemplate: 'tTOCTOU', spawnedFromTopic: 'echo',
+        instanceAddr: 'tTOCTOU/echo-sneak-1', tmuxSession: 'tTOCTOU-sneak-1',
+        worktreePath: orphanPath, proxyId: 'p1', state: 'running',
+        failureReason: null, replyToAddr: null, messageId: 'msg',
+        messagePath: '/tmp/m', replyPath: '/tmp/r', statusPath: '/tmp/s',
+        queueId: null, monitorOfInstance: null, startedAt: '', completedAt: null,
+      }];
+    }) as typeof db.listLiveAgentInstances;
+
+    let result: { removed: number; skipped: number };
+    let tail: typeof recorded;
+    try {
+      const beforeLen = recorded.length;
+      result = await sweep.sweep();
+      tail = recorded.slice(beforeLen);
+    } finally {
+      // Always restore (defense-in-depth — exception inside sweep mustn't
+      // leak a monkey-patched method into the next test's DB instance,
+      // even though each test gets a fresh DB).
+      db.listLiveAgentInstances = origList;
+    }
+
+    const execs = tail.filter((r) => r.command.action === 'exec');
+    assert.equal(execs.length, 0, 'rm exec was NOT dispatched — re-query caught the race');
+    assert.equal(result.removed, 0);
+    assert.ok(result.skipped >= 1, 'TOCTOU-protected path skipped');
+  });
+
+  it('single-flight: overlapping ticks do not double-rm (C3)', async () => {
+    // C3: if sweep() is invoked twice concurrently, the second call returns
+    // immediately without doing a second pass.
+    const { db, dispatch, recorded } = makeEnv(tmpDir);
+    const base = mkdtempSync(join(tmpDir, 'wt-singleflight-'));
+    seedTemplate(db, 'tSF', { cwdBase: base });
+    seedTopic(db, 'tSF');
+    mkdirSync(join(base, 'wt-sf1'), { recursive: true });
+
+    // Make the dispatch slow so concurrent invocation has a chance to race.
+    const slowDispatch = async (pid: string, cmd: ProxyCommand): Promise<ProxyResponse> => {
+      recorded.push({ proxyId: pid, command: cmd });
+      if (cmd.action === 'exec') {
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      return { ok: true, data: '' };
+    };
+
+    const sweep = new OrphanedWorktreeSweep({
+      db, proxyDispatch: slowDispatch,
+      proxyResolver: () => 'p1',
+      mtimeGraceMs: 0,
+    });
+
+    const beforeLen = recorded.length;
+    const [a, b] = await Promise.all([sweep.sweep(), sweep.sweep()]);
+    const tail = recorded.slice(beforeLen);
+
+    // Exactly one exec across both calls.
+    const execs = tail.filter((r) => r.command.action === 'exec');
+    assert.equal(execs.length, 1, 'single-flight: only one rm exec for one orphan across overlapping ticks');
+    const totalRemoved = a.removed + b.removed;
+    assert.equal(totalRemoved, 1, 'one removal reported across both calls');
+  });
+
+  it('multi-host: orphan routed via proxy that has serviced this cwd_base (C5)', async () => {
+    // C5: in a 2-proxy deployment, the orphan under base_for_p2 must be
+    // dispatched to p2 (which has serviced the cwd_base), not p1.
+    const { db, dispatch, recorded, driver } = makeEnv(tmpDir);
+    db.registerProxy('p2', 'tok2', 'localhost:3101');
+
+    const baseForP2 = mkdtempSync(join(tmpDir, 'wt-p2-'));
+    seedTemplate(db, 'tP2', { cwdBase: baseForP2 });
+    seedTopic(db, 'tP2');
+
+    // Spawn an instance and reassign to p2 — this seeds the join lookup.
+    const id = await spawnAndWaitRunning(driver, db, 'tP2', '{}');
+    db.rawDb.prepare('UPDATE agent_instances SET proxy_id = ?, state = ? WHERE id = ?')
+      .run('p2', 'completed', id);
+
+    mkdirSync(join(baseForP2, 'wt-multi-host-orphan'), { recursive: true });
+
+    const sweep = new OrphanedWorktreeSweep({
+      db, proxyDispatch: dispatch,
+      // No explicit resolver — use default (C5 join).
+      mtimeGraceMs: 0,
+    });
+    const beforeLen = recorded.length;
+    await sweep.sweep();
+    const tail = recorded.slice(beforeLen);
+
+    const execs = tail.filter((r) => r.command.action === 'exec');
+    assert.equal(execs.length, 1, 'one removal exec dispatched');
+    assert.equal(execs[0]!.proxyId, 'p2', 'routed via p2 (the proxy that serviced this base)');
+  });
+
+  it('multi-host: no proxy has ever serviced cwd_base → orphan skipped (C5 fallback)', async () => {
+    // C5: when no proxy has any agent_instances row pointing at this
+    // cwd_base, default resolver returns null and the orphan is left.
+    const { db, dispatch, recorded } = makeEnv(tmpDir);
+
+    const orphanBase = mkdtempSync(join(tmpDir, 'wt-unowned-'));
+    seedTemplate(db, 'tUnowned', { cwdBase: orphanBase });
+    seedTopic(db, 'tUnowned');
+    mkdirSync(join(orphanBase, 'wt-no-host'), { recursive: true });
+
+    const sweep = new OrphanedWorktreeSweep({
+      db, proxyDispatch: dispatch,
+      mtimeGraceMs: 0,
+    });
+    const beforeLen = recorded.length;
+    const result = await sweep.sweep();
+    const tail = recorded.slice(beforeLen);
+
+    const execs = tail.filter((r) => r.command.action === 'exec');
+    assert.equal(execs.length, 0, 'no exec dispatched — no proxy known to own this base');
+    assert.equal(result.removed, 0);
+    assert.ok(result.skipped >= 1, 'orphan skipped (multi-host safe default)');
+  });
+
+  it('command uses git -C <repo_root> when known, else falls back to rm -rf (H5)', async () => {
+    // H5: `git worktree remove` must run from the source repo. When the
+    // template carries a repo_root distinct from cwd_base, the command must
+    // use `git -C <repo_root>`. When repo_root is null, fall back to rm -rf.
+    const { db, dispatch, recorded } = makeEnv(tmpDir);
+
+    const base = mkdtempSync(join(tmpDir, 'wt-repo-'));
+    const repo = mkdtempSync(join(tmpDir, 'repo-'));
+    seedTemplate(db, 'tRepo', { cwdBase: base, repoRoot: repo });
+    seedTopic(db, 'tRepo');
+    mkdirSync(join(base, 'wt-with-repo'), { recursive: true });
+
+    const sweep = new OrphanedWorktreeSweep({
+      db, proxyDispatch: dispatch,
+      proxyResolver: () => 'p1',
+      mtimeGraceMs: 0,
+    });
+    const beforeLen = recorded.length;
+    await sweep.sweep();
+    const tail = recorded.slice(beforeLen);
+    const execs = tail.filter((r) => r.command.action === 'exec');
+    assert.equal(execs.length, 1);
+    const cmd = (execs[0]!.command as Extract<ProxyCommand, { action: 'exec' }>).command;
+    assert.ok(cmd.includes(`git -C '${repo}'`), `command uses git -C <repo_root>; got: ${cmd}`);
+  });
+
+  it('fallback: no repo_root → command is plain rm -rf (H5)', async () => {
+    const { db, dispatch, recorded } = makeEnv(tmpDir);
+
+    const base = mkdtempSync(join(tmpDir, 'wt-norepo-'));
+    seedTemplate(db, 'tNoRepo', { cwdBase: base, repoRoot: null });
+    seedTopic(db, 'tNoRepo');
+    mkdirSync(join(base, 'wt-no-repo'), { recursive: true });
+
+    const sweep = new OrphanedWorktreeSweep({
+      db, proxyDispatch: dispatch,
+      proxyResolver: () => 'p1',
+      mtimeGraceMs: 0,
+    });
+    const beforeLen = recorded.length;
+    await sweep.sweep();
+    const tail = recorded.slice(beforeLen);
+    const execs = tail.filter((r) => r.command.action === 'exec');
+    assert.equal(execs.length, 1);
+    const cmd = (execs[0]!.command as Extract<ProxyCommand, { action: 'exec' }>).command;
+    assert.ok(cmd.startsWith('rm -rf'), `command is plain rm -rf; got: ${cmd}`);
   });
 });

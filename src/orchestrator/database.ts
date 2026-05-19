@@ -850,12 +850,17 @@ export class Database {
     return mapAgentInstanceRow(row);
   }
 
-  listLiveAgentInstances(): AgentInstanceRow[] {
-    const rows = this.db.prepare(`
-      SELECT * FROM agent_instances
-       WHERE state IN ('spawning', 'running', 'completing')
-       ORDER BY id ASC
-    `).all() as Array<Record<string, unknown>>;
+  listLiveAgentInstances(options?: { excludeStates?: AgentInstanceState[] }): AgentInstanceRow[] {
+    const exclude = new Set<AgentInstanceState>(options?.excludeStates ?? []);
+    const allLive: AgentInstanceState[] = ['spawning', 'running', 'completing'];
+    const states = allLive.filter((s) => !exclude.has(s));
+    if (states.length === 0) return [];
+    const placeholders = states.map(() => '?').join(', ');
+    const rows = this.db.prepare(
+      `SELECT * FROM agent_instances
+        WHERE state IN (${placeholders})
+        ORDER BY id ASC`,
+    ).all(...states) as Array<Record<string, unknown>>;
     return rows.map(mapAgentInstanceRow);
   }
 
@@ -865,21 +870,38 @@ export class Database {
    * filters to non-terminal states; otherwise returns every row regardless
    * of state. Used by the proxy-reconnect handler to fail orphaned
    * instances whose sessions died with the proxy.
+   *
+   * `excludeStates` further filters the live set — Q8's reconnect handler
+   * excludes `'spawning'` (owned by Q3's claim flow) and `'completing'`
+   * (owned by the reaper) so recovery doesn't race their authoritative
+   * transitions.
    */
   listAgentInstancesByProxy(
     proxyId: string,
-    options?: { onlyLive: boolean },
+    options?: { onlyLive: boolean; excludeStates?: AgentInstanceState[] },
   ): AgentInstanceRow[] {
     const onlyLive = options?.onlyLive ?? true;
-    const sql = onlyLive
-      ? `SELECT * FROM agent_instances
+    const exclude = new Set<AgentInstanceState>(options?.excludeStates ?? []);
+    if (!onlyLive) {
+      const rows = this.db.prepare(
+        `SELECT * FROM agent_instances
           WHERE proxy_id = ?
-            AND state IN ('spawning', 'running', 'completing')
-          ORDER BY id ASC`
-      : `SELECT * FROM agent_instances
-          WHERE proxy_id = ?
-          ORDER BY id ASC`;
-    const rows = this.db.prepare(sql).all(proxyId) as Array<Record<string, unknown>>;
+          ORDER BY id ASC`,
+      ).all(proxyId) as Array<Record<string, unknown>>;
+      return rows
+        .map(mapAgentInstanceRow)
+        .filter((r) => !exclude.has(r.state));
+    }
+    const allLive: AgentInstanceState[] = ['spawning', 'running', 'completing'];
+    const states = allLive.filter((s) => !exclude.has(s));
+    if (states.length === 0) return [];
+    const placeholders = states.map(() => '?').join(', ');
+    const rows = this.db.prepare(
+      `SELECT * FROM agent_instances
+        WHERE proxy_id = ?
+          AND state IN (${placeholders})
+        ORDER BY id ASC`,
+    ).all(proxyId, ...states) as Array<Record<string, unknown>>;
     return rows.map(mapAgentInstanceRow);
   }
 
@@ -1003,6 +1025,29 @@ export class Database {
     `).run(status, id);
   }
 
+  /**
+   * Q8: requeue a `topic_queue` row whose claim got orphaned by a crash or
+   * proxy disconnect. Resets `status` back to `'queued'` and clears the
+   * `claimed_by_instance` / `worktree_path` columns so a fresh `claimAndSpawn`
+   * pass can grab it. Idempotent: only acts on rows currently in `'claimed'`
+   * or `'failed'`. Returns true if a row was actually requeued.
+   *
+   * Gated by env `V3_RECOVERY_QUEUE_POLICY=requeue`; the default policy is
+   * `'fail'` (terminal), matching the original Q8 spec.
+   */
+  requeueTopicQueueRow(id: number): boolean {
+    const result = this.db.prepare(`
+      UPDATE topic_queue
+         SET status = 'queued',
+             claimed_by_instance = NULL,
+             worktree_path = NULL,
+             completed_at = NULL
+       WHERE id = ?
+         AND status IN ('claimed', 'failed')
+    `).run(id);
+    return result.changes > 0;
+  }
+
   // ── Approvals (v3 Q5) ──
   //
   // Approvals are first-class CRUD records categorised by channel. State
@@ -1054,16 +1099,41 @@ export class Database {
   }
 
   /**
+   * List approvals across ALL channels, optionally filtered by state. Newest
+   * first. Powers the dashboard inbox (Q9) which surfaces a single feed of
+   * decisions awaiting human attention regardless of channel.
+   */
+  listApprovals(options: { state?: ApprovalState } = {}): ApprovalRow[] {
+    const rows = (options.state
+      ? this.db.prepare(
+          'SELECT * FROM approvals WHERE state = ? ORDER BY created_at DESC',
+        ).all(options.state)
+      : this.db.prepare(
+          'SELECT * FROM approvals ORDER BY created_at DESC',
+        ).all()
+    ) as Array<Record<string, unknown>>;
+    return rows.map(mapApprovalRow);
+  }
+
+  /**
    * Atomic state transition. Returns the updated row, or null if the
    * approval does not exist OR is already in a terminal state. When
    * `payload` is supplied (typical for `amended`), the prior payload is
    * appended to `amendments_json` (a JSON array of `{ payload, replacedAt }`
    * entries) before the row's `payload` column is overwritten.
+   *
+   * If `opts.event` is supplied, a row is inserted into `approval_events`
+   * within the same transaction so the audit trail can never fall out of
+   * sync with the state column.
    */
   setApprovalState(
     id: string,
     state: 'approved' | 'rejected' | 'amended',
-    opts: { decidedBy?: string | null; payload?: string | null } = {},
+    opts: {
+      decidedBy?: string | null;
+      payload?: string | null;
+      event?: { eventType: string; payload?: string | null };
+    } = {},
   ): ApprovalRow | null {
     const begin = this.db.prepare('BEGIN IMMEDIATE');
     const commit = this.db.prepare('COMMIT');
@@ -1101,6 +1171,15 @@ export class Database {
       `).run(state, nextPayload, nextAmendments, opts.decidedBy ?? null, id);
       const updated = this.db.prepare('SELECT * FROM approvals WHERE id = ?')
         .get(id) as Record<string, unknown>;
+      // Audit-event insert is in the same transaction so a throw here rolls
+      // back the state change. Otherwise an audit-write failure would leave
+      // the audit trail silently out of sync with the row's state column.
+      if (opts.event) {
+        this.db.prepare(`
+          INSERT INTO approval_events (approval_id, event_type, payload)
+          VALUES (?, ?, ?)
+        `).run(id, opts.event.eventType, opts.event.payload ?? null);
+      }
       commit.run();
       return mapApprovalRow(updated);
     } catch (err) {

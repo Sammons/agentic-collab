@@ -286,12 +286,11 @@ const approvals = new ApprovalService({
 // Three coordinated routines reconcile ephemeral state. The boot reconciler
 // runs once before listen (so traffic never sees orphaned rows); the
 // reconnect handler is invoked from the proxy-register route; the orphan
-// sweep ticks on a 60s cadence after listen.
+// sweep ticks on a 60s cadence (first tick at T+60s, NOT T+0).
 const bootReconciler = new BootReconciler({
   db,
   proxyDispatch,
   instanceReaper,
-  topicDelivery,
   onEvent: (event) => wss.broadcastEvent(event),
 });
 
@@ -580,9 +579,12 @@ server.listen(PORT, '0.0.0.0', async () => {
   reminderDispatcher.start();
   instanceReaper.start();
 
-  // v3 Q8: orphaned-worktree sweep ticks on a 60s cadence. Best-effort, never
-  // throws. Removes `wt-*` directories under any template's `cwd_base` that
-  // have no corresponding live `agent_instances.worktree_path` entry.
+  // v3 Q8: orphaned-worktree sweep ticks on a 60s cadence. The first tick
+  // fires at T+60s (setInterval semantics), NOT immediately at boot — boot
+  // reconciliation has already run by this point, so a delayed first sweep
+  // is intentional. Best-effort, never throws. Removes `wt-*` directories
+  // under any template's `cwd_base` that have no corresponding live
+  // `agent_instances.worktree_path` entry.
   orphanedWorktreeSweep.start();
 
   // Start Telegram polling for enabled destinations
