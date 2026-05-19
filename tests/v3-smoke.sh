@@ -109,19 +109,20 @@ curl -sf -X POST "${ORCH_URL}/api/personas/reload" >/dev/null || {
 PAYLOAD='{"msg":"hello"}'
 RESP=$(curl -sf -X POST "${ORCH_URL}/api/topics/publish" \
   -H 'content-type: application/json' \
-  -d "{\"to\":\"topic:test-echo/echo\",\"payload\":${PAYLOAD},\"replyTo\":\"smoke-harness\"}")
-MESSAGE_ID=$(node -e "console.log(JSON.parse(process.argv[1]).messageId || process.argv[1])" "$RESP")
-if [ -z "$MESSAGE_ID" ] || [ "$MESSAGE_ID" = "undefined" ]; then
-  echo "FAIL: publish did not return messageId. Response: $RESP"; exit 2
+  -d "{\"agentTemplate\":\"test-echo\",\"topicName\":\"echo\",\"payload\":${PAYLOAD},\"replyToAddr\":\"smoke-harness\"}")
+QUEUE_ID=$(node -e "const r=JSON.parse(process.argv[1]);console.log(r.queueId??'')" "$RESP")
+if [ -z "$QUEUE_ID" ] || [ "$QUEUE_ID" = "undefined" ]; then
+  echo "FAIL: publish did not return queueId. Response: $RESP"; exit 2
 fi
 
-echo "smoke: published $MESSAGE_ID, waiting up to ${TIMEOUT_S}s for completion"
+echo "smoke: published (queueId=$QUEUE_ID), waiting up to ${TIMEOUT_S}s for completion"
 
 # Poll for instance row reaching terminal state.
+# agent_instances.queue_id is the foreign key to topic_queue.id (Q3 schema).
 START_T=$(date +%s)
 INSTANCE_STATE=""
 while [ $(( $(date +%s) - START_T )) -lt "$TIMEOUT_S" ]; do
-  INSTANCE_STATE=$(sqlite3 "$DB_PATH" "SELECT state FROM agent_instances WHERE id IN (SELECT claimed_by_instance FROM topic_queue WHERE message_id='${MESSAGE_ID}') LIMIT 1" 2>/dev/null || echo "")
+  INSTANCE_STATE=$(sqlite3 "$DB_PATH" "SELECT state FROM agent_instances WHERE queue_id=${QUEUE_ID} LIMIT 1" 2>/dev/null || echo "")
   case "$INSTANCE_STATE" in
     completed|failed) break ;;
   esac
@@ -134,7 +135,7 @@ fi
 
 # ── Assertions ──────────────────────────────────────────────
 # 1. agent_instances row has completed_at set
-COMPLETED_AT=$(sqlite3 "$DB_PATH" "SELECT completed_at FROM agent_instances WHERE id IN (SELECT claimed_by_instance FROM topic_queue WHERE message_id='${MESSAGE_ID}') LIMIT 1")
+COMPLETED_AT=$(sqlite3 "$DB_PATH" "SELECT completed_at FROM agent_instances WHERE queue_id=${QUEUE_ID} LIMIT 1")
 if [ -z "$COMPLETED_AT" ]; then
   echo "FAIL: completed_at not set on instance"; exit 2
 fi
@@ -144,10 +145,12 @@ if compgen -G "${REPO}/wt-*" >/dev/null; then
   echo "FAIL: leftover worktree directory: $(ls -d ${REPO}/wt-* 2>/dev/null)"; exit 2
 fi
 
-# 3. No tmux session left for this instance
-INSTANCE_ID=$(sqlite3 "$DB_PATH" "SELECT id FROM agent_instances WHERE id IN (SELECT claimed_by_instance FROM topic_queue WHERE message_id='${MESSAGE_ID}') LIMIT 1")
-if tmux has-session -t "test-echo-${INSTANCE_ID}" 2>/dev/null; then
-  echo "FAIL: leftover tmux session test-echo-${INSTANCE_ID}"; exit 2
+# 3. No tmux session left for this instance.
+# Q3 names sessions `inst-${template_id}-${instance_id}` (topic-delivery.ts:186).
+INSTANCE_ID=$(sqlite3 "$DB_PATH" "SELECT id FROM agent_instances WHERE queue_id=${QUEUE_ID} LIMIT 1")
+TMUX_SESSION="inst-test-echo-${INSTANCE_ID}"
+if tmux has-session -t "${TMUX_SESSION}" 2>/dev/null; then
+  echo "FAIL: leftover tmux session ${TMUX_SESSION}"; exit 2
 fi
 
 # 4. pending_messages.target_agent has no prefix leakage from this run
@@ -173,4 +176,4 @@ if ! echo "$REPLY_ROW" | grep -q '"echoed"'; then
   echo "FAIL: reply did not contain echoed payload. Got: $REPLY_ROW"; exit 2
 fi
 
-echo "smoke: PASS (instance=${INSTANCE_ID}, message=${MESSAGE_ID})"
+echo "smoke: PASS (instance=${INSTANCE_ID}, queueId=${QUEUE_ID})"

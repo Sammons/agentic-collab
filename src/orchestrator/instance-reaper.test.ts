@@ -226,11 +226,10 @@ describe('InstanceReaper — Q3 invariants', () => {
     const row = db.rawDb.prepare(
       `SELECT target_agent FROM pending_messages ORDER BY id DESC LIMIT 1`,
     ).get() as Record<string, unknown> | undefined;
-    if (row) {
-      const target = String(row['target_agent']);
-      assert.equal(target, 'publisher', 'bare name, no prefix');
-      assert.ok(!target.includes(':'), 'target_agent has no colon');
-    }
+    assert.ok(row, 'pending_messages row exists after wake (regression sentinel — invariant #9 only meaningful if a row was actually enqueued)');
+    const target = String(row['target_agent']);
+    assert.equal(target, 'publisher', 'bare name, no prefix');
+    assert.ok(!target.includes(':'), 'target_agent has no colon');
   });
 
   // ── Q4: typed WS event emissions on completion path ─────────────────
