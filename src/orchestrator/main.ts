@@ -19,6 +19,10 @@ import { ReminderDispatcher } from './reminder-dispatcher.ts';
 import { shutdownAgents, restoreAllAgents } from './network.ts';
 import type { LifecycleContext } from './lifecycle.ts';
 import { syncPersonasToDb, syncPersonasWithDiff, getPersonasDir } from './persona.ts';
+import { TopicDelivery } from './topic-delivery.ts';
+import { InstanceReaper } from './instance-reaper.ts';
+import { ApprovalService } from './approvals.ts';
+import { BootReconciler, ProxyReconnectHandler, OrphanedWorktreeSweep } from './recovery.ts';
 import { AccountStore } from './accounts.ts';
 import { isRunning } from '../shared/agent-entity.ts';
 import { resolveSecret, getSecretPath } from '../shared/config.ts';
@@ -78,6 +82,14 @@ async function proxyDispatch(proxyId: string, command: ProxyCommand): Promise<Pr
     }
 
     try {
+      // `exec` commands may carry an explicit timeoutMs that is larger than
+      // the default 15s fetch ceiling (e.g. `git worktree add` at 60s).
+      // Bump the orchestrator-side abort to outlive the proxy-side timeout
+      // by a 5s buffer for HTTP + proxy-startup overhead. Non-exec commands
+      // keep the 15s ceiling.
+      const fetchTimeout = command.action === 'exec'
+        ? Math.max(15_000, (command.timeoutMs ?? 5_000) + 5_000)
+        : 15_000;
       const resp = await fetch(`http://${proxy.host}/command`, {
         method: 'POST',
         headers: {
@@ -85,7 +97,7 @@ async function proxyDispatch(proxyId: string, command: ProxyCommand): Promise<Pr
           'x-proxy-token': proxy.token,
         },
         body: JSON.stringify(command),
-        signal: AbortSignal.timeout(15_000),
+        signal: AbortSignal.timeout(fetchTimeout),
       });
 
       if (!resp.ok) {
@@ -235,6 +247,65 @@ if (voiceOpts) {
 
 const telegramDispatcher = new TelegramDispatcher();
 
+// ── v3 Q3: Topic delivery + instance reaper ──
+
+const INSTANCES_DIR = join(dirname(DB_PATH), 'instances');
+mkdirSync(INSTANCES_DIR, { recursive: true });
+
+const topicDelivery = new TopicDelivery({
+  db,
+  proxyDispatch,
+  orchestratorHost: ORCHESTRATOR_HOST,
+  ipcRoot: INSTANCES_DIR,
+  locks,
+  // Q4: typed WS broadcast — `event` is already a `WsEvent` shape.
+  onEvent: (event) => wss.broadcastEvent(event),
+});
+
+const instanceReaper = new InstanceReaper({
+  db,
+  proxyDispatch,
+  messageDispatcher,
+  topicDelivery,
+  onEvent: (event) => wss.broadcastEvent(event),
+});
+
+// ── v3 Q5: Approvals service ──
+//
+// Auto-notifies requesters on state change via the existing message
+// dispatcher (paste for live ephemeral instances, persistent enqueue for
+// agent: addresses). Emits `approval_changed` WS events.
+const approvals = new ApprovalService({
+  db,
+  messageDispatcher,
+  onEvent: (event) => wss.broadcastEvent(event),
+});
+
+// ── v3 Q8: Crash recovery ──
+//
+// Three coordinated routines reconcile ephemeral state. The boot reconciler
+// runs once before listen (so traffic never sees orphaned rows); the
+// reconnect handler is invoked from the proxy-register route; the orphan
+// sweep ticks on a 60s cadence (first tick at T+60s, NOT T+0).
+const bootReconciler = new BootReconciler({
+  db,
+  proxyDispatch,
+  instanceReaper,
+  onEvent: (event) => wss.broadcastEvent(event),
+});
+
+const proxyReconnectHandler = new ProxyReconnectHandler({
+  db,
+  proxyDispatch,
+  onEvent: (event) => wss.broadcastEvent(event),
+});
+
+const orphanedWorktreeSweep = new OrphanedWorktreeSweep({
+  db,
+  proxyDispatch,
+  onEvent: (event) => wss.broadcastEvent(event),
+});
+
 const routeCtx: RouteContext = {
   db,
   wss,
@@ -250,6 +321,25 @@ const routeCtx: RouteContext = {
   pagesDir: PAGES_DIR,
   storesDir: STORES_DIR,
   telegramDispatcher,
+  topicDelivery,
+  instanceReaper,
+  approvals,
+  recovery: {
+    reconciler: bootReconciler,
+    reconnectHandler: proxyReconnectHandler,
+    orphanSweep: orphanedWorktreeSweep,
+  },
+  reloadPersonas: () => {
+    // Q4: forward `template_updated` events to WS subscribers so the Q9
+    // dashboard can refresh the templates tree without a full reload.
+    const diff = syncPersonasWithDiff(db, undefined, (event) => wss.broadcastEvent(event));
+    return {
+      synced: diff.created.length + diff.updated.length,
+      created: diff.created,
+      updated: diff.updated,
+      skipped: diff.skipped,
+    };
+  },
 };
 
 const router = createRouter(routeCtx);
@@ -395,6 +485,8 @@ async function shutdown(): Promise<void> {
   messageDispatcher.stop();
   usagePoller.stop();
   reminderDispatcher.stop();
+  instanceReaper.stop();
+  orphanedWorktreeSweep.stop();
   await usagePoller.cleanup().catch(err =>
     console.error('[orchestrator] Usage session cleanup error:', err));
 
@@ -419,12 +511,25 @@ process.on('SIGINT', shutdown);
 
 // ── Start ──
 
+// v3 Q8: reconcile live `agent_instances` rows BEFORE traffic. We may have
+// crashed mid-flight: an instance whose status file is non-empty just needs
+// to be finalised via the reaper; one whose tmux session is alive resumes
+// waiting for `collab complete`; one whose session is gone is marked failed
+// with best-effort cleanup. Bounded by the existing proxy retry budget —
+// if a proxy is unreachable, its rows are skipped and picked up when the
+// proxy reconnects (`ProxyReconnectHandler`).
+await bootReconciler.reconcile().catch((err) => {
+  console.error('[boot-reconcile] failed:', err);
+});
+
 server.listen(PORT, '0.0.0.0', async () => {
   console.log(`[orchestrator] Listening on port ${PORT}`);
   console.log(`[orchestrator] Dashboard: http://localhost:${PORT}/dashboard`);
   console.log(`[orchestrator] DB: ${DB_PATH}`);
 
-  // Sync persona files → SQLite (idempotent merge)
+  // Sync persona files → SQLite (idempotent merge). No WS subscribers yet at
+  // boot — `template_updated` events at this point would have no audience, so
+  // skip the sink. The hot-reload watcher below wires it.
   try {
     const synced = syncPersonasToDb(db);
     if (synced > 0) {
@@ -449,7 +554,7 @@ server.listen(PORT, '0.0.0.0', async () => {
         if (lastPersonaHash === '') { lastPersonaHash = hash; return; } // skip first run
         lastPersonaHash = hash;
 
-        const diff = syncPersonasWithDiff(db);
+        const diff = syncPersonasWithDiff(db, undefined, (event) => wss.broadcastEvent(event));
         const changed = [...diff.created, ...diff.updated];
         if (changed.length > 0) {
           console.log(`[persona-watch] Hot-reloaded: ${changed.join(', ')}`);
@@ -472,6 +577,15 @@ server.listen(PORT, '0.0.0.0', async () => {
   healthMonitor.start();
   usagePoller.start();
   reminderDispatcher.start();
+  instanceReaper.start();
+
+  // v3 Q8: orphaned-worktree sweep ticks on a 60s cadence. The first tick
+  // fires at T+60s (setInterval semantics), NOT immediately at boot — boot
+  // reconciliation has already run by this point, so a delayed first sweep
+  // is intentional. Best-effort, never throws. Removes `wt-*` directories
+  // under any template's `cwd_base` that have no corresponding live
+  // `agent_instances.worktree_path` entry.
+  orphanedWorktreeSweep.start();
 
   // Start Telegram polling for enabled destinations
   const telegramDests = db.listDestinations().filter(d => d.type === 'telegram' && d.enabled);

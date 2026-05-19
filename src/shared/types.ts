@@ -4,6 +4,8 @@
 
 // ── Agent ──
 
+export type { Address } from './address.ts';
+
 export type AgentState = 'void' | 'spawning' | 'resuming' | 'suspending' | 'active' | 'idle' | 'suspended' | 'failed';
 
 export type EngineType = 'claude' | 'codex' | 'opencode';
@@ -271,6 +273,145 @@ export type ProxyRegistration = {
   registeredAt: string;
 };
 
+// ── Agent Templates / Topics (v3 ephemeral-agent surface) ──
+
+/**
+ * Row in the `agent_templates` table. Populated by template-sync from
+ * persona frontmatter. Persistent personas produce a minimal row (engine,
+ * model, hook_start, hook_exit); ephemeral templates additionally carry
+ * cwd_base, cwd_template, repo_root and the host-shell prepare/cleanup
+ * hooks. These fields never flow through the `agents` table or the scalar
+ * field-registry — `agents` schema is untouched.
+ */
+export type AgentTemplateRow = {
+  id: string;
+  personaPath: string | null;
+  engine: string;
+  model: string | null;
+  persistent: boolean;
+  cwdBase: string | null;
+  cwdTemplate: string | null;
+  repoRoot: string | null;
+  hookStart: string | null;
+  hookExit: string | null;
+  hookPrepare: string | null;
+  hookCleanup: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+/**
+ * Row in the `topics` table. Each row is a (template, name) tuple owned by
+ * an `agent_templates` row. Ephemeral templates declare topics that publishers
+ * address via `topic:<template>/<name>`.
+ */
+export type TopicRow = {
+  agentTemplate: string;
+  name: string;
+  hookPrepareOverride: string | null;
+  hookStartOverride: string | null;
+  hookCleanupOverride: string | null;
+  monitorTemplate: string | null;
+  concurrency: number;
+  schemaPath: string | null;
+  replySchemaPath: string | null;
+};
+
+/** Lifecycle states for `agent_instances` rows. */
+export type AgentInstanceState =
+  | 'spawning'
+  | 'running'
+  | 'completing'
+  | 'completed'
+  | 'failed';
+
+/**
+ * Row in the `agent_instances` table — one per ephemeral spawn driven by the
+ * TopicDelivery kernel. Separate from `agents` so the persistent-agent state
+ * machine, health monitor, and cool-down logic stay untouched.
+ */
+export type AgentInstanceRow = {
+  id: string;
+  agentTemplate: string;
+  spawnedFromTopic: string | null;
+  instanceAddr: string;
+  tmuxSession: string;
+  worktreePath: string | null;
+  proxyId: string;
+  state: AgentInstanceState;
+  failureReason: string | null;
+  replyToAddr: string | null;
+  messageId: string;
+  messagePath: string;
+  replyPath: string;
+  statusPath: string;
+  queueId: number | null;
+  monitorOfInstance: string | null;
+  startedAt: string;
+  completedAt: string | null;
+};
+
+/** Status values used in the `topic_queue.status` column. */
+export type TopicQueueStatus = 'queued' | 'claimed' | 'completed' | 'failed';
+
+// ── Approvals (v3 Q5) ──
+
+/**
+ * State machine for an approval row:
+ *   pending  → approved | rejected | amended | withdrawn (terminal)
+ *
+ * Terminal states are immutable; `setState` rejects callers that try to
+ * mutate a terminal row. `withdrawn` is creator-only while pending.
+ */
+export type ApprovalState = 'pending' | 'approved' | 'rejected' | 'amended' | 'withdrawn';
+
+/**
+ * Row in the `approvals` table. Approvals are first-class CRUD records
+ * categorised by `channel` (`approval:<channel>`); they are *not* a
+ * message-routing surface — auto-notification on state change routes
+ * through the existing message dispatcher to the requester's address.
+ */
+export type ApprovalRow = {
+  id: string;
+  requesterAddr: string;
+  channel: string;
+  payload: string;
+  state: ApprovalState;
+  amendmentsJson: string | null;
+  createdAt: string;
+  updatedAt: string;
+  decidedBy: string | null;
+  decidedAt: string | null;
+};
+
+/** Row in the `approval_events` audit table — one per state transition / lifecycle event. */
+export type ApprovalEventRow = {
+  id: number;
+  approvalId: string;
+  eventType: string;
+  payload: string | null;
+  createdAt: string;
+};
+
+/**
+ * Row in the `topic_queue` table. Each `topic:<tmpl>/<name>` publish lands as
+ * one row; the TopicDelivery driver claims rows atomically and pairs each
+ * claim with an `agent_instances` row.
+ */
+export type TopicQueueRow = {
+  id: number;
+  agentTemplate: string;
+  topicName: string;
+  payload: string;
+  replyToAddr: string | null;
+  inReplyTo: string | null;
+  status: TopicQueueStatus;
+  claimedByInstance: string | null;
+  worktreePath: string | null;
+  createdAt: string;
+  completedAt: string | null;
+};
+
 // ── WebSocket Events (Orchestrator → Dashboard) ──
 
 export type WsInitEvent = {
@@ -327,7 +468,94 @@ export type WsNotificationEvent = {
   priority: string;
 };
 
-export type WsEvent = WsInitEvent | WsAgentUpdateEvent | WsMessageEvent | WsProxyEvent | WsQueueUpdateEvent | WsIndicatorUpdateEvent | WsStoresUpdateEvent | WsDestinationsUpdateEvent | WsNotificationEvent;
+// ── v3 events: templates / topics / instances / approvals ──
+//
+// Snake-case `type` values follow the existing WS convention. Dashboard
+// consumers currently ignore unknown event types (see
+// `src/dashboard/connection.ts`'s default-less switch) so adding these
+// is non-breaking — Q9 will wire the consumer side.
+
+/**
+ * Emitted by `template-sync.ts` when a persona reload writes or rewrites
+ * an `agent_templates` row. `removed` is reserved for Q8's orphan sweep
+ * — Q4 only emits `added` and `modified`.
+ */
+export type WsTemplateUpdatedEvent = {
+  type: 'template_updated';
+  templateId: string;
+  action: 'added' | 'modified' | 'removed';
+};
+
+/**
+ * Emitted by `topic-delivery.ts` whenever the queued depth for a topic
+ * changes (publish, claim, or completion). `depth` is the count of rows
+ * in `topic_queue` with status='queued' for the (template, topic) pair.
+ */
+export type WsTopicQueueChangedEvent = {
+  type: 'topic_queue_changed';
+  agentTemplate: string;
+  topic: string;
+  depth: number;
+};
+
+/**
+ * Emitted by `topic-delivery.ts` once an ephemeral instance has reached
+ * `running` state (start hook pasted, env set, IPC files allocated).
+ */
+export type WsInstanceSpawnedEvent = {
+  type: 'instance_spawned';
+  instance: AgentInstanceRow;
+};
+
+/**
+ * Emitted by `instance-reaper.ts` once an instance reaches terminal
+ * `completed` state (status file said `ok`, reply routed, cleanup done).
+ */
+export type WsInstanceCompletedEvent = {
+  type: 'instance_completed';
+  instance: AgentInstanceRow;
+};
+
+/**
+ * Emitted by `topic-delivery.ts` (spawn-side failure) or
+ * `instance-reaper.ts` (status file said error) when an instance reaches
+ * terminal `failed` state. `reason` mirrors `instance.failureReason` but
+ * is exposed separately so subscribers don't have to dig into the row.
+ */
+export type WsInstanceFailedEvent = {
+  type: 'instance_failed';
+  instance: AgentInstanceRow;
+  reason: string | null;
+};
+
+/**
+ * Emitted by approvals (Q5) when an approval row's `state` column
+ * changes. Q4 only ships the type so subscribers can subscribe ahead of
+ * the producer landing.
+ */
+export type WsApprovalChangedEvent = {
+  type: 'approval_changed';
+  approvalId: string;
+  state: string;
+  channel: string;
+};
+
+export type WsEvent =
+  | WsInitEvent
+  | WsAgentUpdateEvent
+  | WsMessageEvent
+  | WsProxyEvent
+  | WsQueueUpdateEvent
+  | WsIndicatorUpdateEvent
+  | WsStoresUpdateEvent
+  | WsDestinationsUpdateEvent
+  | WsNotificationEvent
+  | WsTemplateUpdatedEvent
+  | WsTopicQueueChangedEvent
+  | WsInstanceSpawnedEvent
+  | WsInstanceCompletedEvent
+  | WsInstanceFailedEvent
+  | WsApprovalChangedEvent;
 
 // ── Proxy API ──
 

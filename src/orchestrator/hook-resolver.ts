@@ -53,6 +53,33 @@ export type TemplateVars = {
   PERSONA_PROMPT?: string;
   /** Path to the persona prompt file on disk */
   PERSONA_PROMPT_FILEPATH?: string;
+
+  // ── v3 ephemeral lifecycle (populated only for ephemeral spawns) ──
+  /** IPC path: payload the agent reads */
+  MESSAGE_PATH?: string;
+  /** IPC path: reply the agent writes */
+  REPLY_PATH?: string;
+  /** IPC path: status marker (`ok` / `error\n<...>`) */
+  STATUS_PATH?: string;
+  /** Per-message worktree directory created by `prepare`. */
+  WORKTREE_PATH?: string;
+  /** Template's `cwd_base` — a real existing directory, used as create_session cwd. */
+  CWD_BASE?: string;
+  /** Repo from which `prepare` takes worktrees (defaults to `cwd_base`). */
+  REPO_ROOT?: string;
+  /** Template id (`<template>` portion of `topic:<template>/<topic>`). */
+  AGENT_TEMPLATE?: string;
+  /** Topic name (`<topic>` portion of `topic:<template>/<topic>`). */
+  TOPIC_NAME?: string;
+  /** Unique per-message id. */
+  MESSAGE_ID?: string;
+  /** Live address for this instance (`agent:<template>/<instance-id>`). */
+  INSTANCE_ADDR?: string;
+  /** Address the orchestrator will send the reply to on completion. */
+  REPLY_TO_ADDR?: string;
+  /** Bare instance id (without the `agent:<template>/` prefix). */
+  INSTANCE_ID?: string;
+
   /** Captured variables from pipeline capture steps (fallback for $VAR interpolation) */
   capturedVars?: Record<string, string>;
 };
@@ -254,6 +281,13 @@ function applyPresetOptions(hook: PresetHook, context?: HookContext): HookContex
 const SHELL_QUOTE_VARS: ReadonlySet<keyof TemplateVars> = new Set([
   'PERSONA_PROMPT',
   'PERSONA_PROMPT_FILEPATH',
+  // v3 path values may contain spaces, `$`, etc. — always shell-quote.
+  'WORKTREE_PATH',
+  'MESSAGE_PATH',
+  'REPLY_PATH',
+  'STATUS_PATH',
+  'CWD_BASE',
+  'REPO_ROOT',
 ]);
 
 /**

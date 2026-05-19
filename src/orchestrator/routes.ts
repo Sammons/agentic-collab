@@ -17,6 +17,7 @@ import type { WebSocketServer } from '../shared/websocket-server.ts';
 import type { AgentState, DashboardMessage, DestinationRecord, EngineType, PendingMessage, ProxyCommand, ProxyResponse, ProxyRegistration } from '../shared/types.ts';
 import type { TelegramDispatcher } from './telegram.ts';
 import { sanitizeMessage, generateMessageId } from '../shared/sanitize.ts';
+import { parseAddress } from '../shared/address.ts';
 import { getVersion, versionsMatch } from '../shared/version.ts';
 import type { LockManager } from '../shared/lock.ts';
 import { getPersonasDir, parseFrontmatter, createPersonaAndAgent, syncSinglePersona, syncPersonasWithDiff, updateFrontmatterField, resolvePersonaPath, toHostPath } from './persona.ts';
@@ -31,6 +32,10 @@ import { shutdownAgents, restoreAllAgents } from './network.ts';
 import { sessionName } from '../shared/agent-entity.ts';
 import type { MessageDispatcher } from './message-dispatcher.ts';
 import type { UsagePoller } from './usage-poller.ts';
+import type { TopicDelivery } from './topic-delivery.ts';
+import type { InstanceReaper } from './instance-reaper.ts';
+import type { ApprovalService } from './approvals.ts';
+import type { BootReconciler, ProxyReconnectHandler, OrphanedWorktreeSweep } from './recovery.ts';
 
 /** Validates agent and persona names: 1-63 chars, alphanumeric start, [a-zA-Z0-9_-]. */
 const NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$/;
@@ -63,6 +68,33 @@ export type RouteContext = {
   pagesDir: string;
   storesDir: string;
   telegramDispatcher: TelegramDispatcher;
+  /**
+   * v3 Q3 ephemeral surface — optional so test fixtures that don't exercise
+   * topic delivery don't need to construct one. Production `main.ts` always
+   * populates both. Endpoints that depend on these return 503 when absent.
+   */
+  topicDelivery?: TopicDelivery;
+  instanceReaper?: InstanceReaper;
+  /**
+   * v3 Q5 approvals — optional so test fixtures that don't exercise the
+   * approval surface don't need to construct one. Production `main.ts`
+   * always populates it. Endpoints return 503 when absent.
+   */
+  approvals?: ApprovalService;
+  /**
+   * v3 Q8 crash recovery — optional. The boot reconciler runs once at
+   * startup (before `server.listen`) so it's not exposed via routes; the
+   * reconnect handler is invoked from `/api/proxy/register` to fail
+   * orphaned instances on a freshly-returning proxy; the orphan sweep is
+   * driven by an interval, not a route. Populated by production `main.ts`.
+   */
+  recovery?: {
+    reconciler: BootReconciler;
+    reconnectHandler: ProxyReconnectHandler;
+    orphanSweep: OrphanedWorktreeSweep;
+  };
+  /** Reload personas from disk; populated alongside `topicDelivery`. */
+  reloadPersonas?: () => { synced: number; created: string[]; updated: string[]; skipped: string[] };
 };
 
 /**
@@ -313,6 +345,53 @@ route('POST', '/api/agents/send', async (req, res, _match, ctx) => {
     return json(res, 400, { error: 'from, to, message, topic required' });
   }
 
+  // Q1: address-prefix routing. `topic:` is wired through ctx.topicDelivery
+  // (Q3); `agent-instance:` dispatches synchronously through the message
+  // dispatcher's `deliverToInstance` (Q3 — never persists to pending_messages).
+  // `approval:` is wired by Q5.
+  const addr = parseAddress(body.to);
+  if (addr.class === 'malformed') {
+    return json(res, 400, { error: 'malformed address', reason: addr.reason });
+  }
+  if (addr.class === 'topic') {
+    if (!ctx.topicDelivery) {
+      return json(res, 503, { error: 'topic delivery not configured' });
+    }
+    const payload = typeof body.message === 'string' ? body.message : JSON.stringify(body.message ?? {});
+    const result = await ctx.topicDelivery.publish({
+      agentTemplate: addr.template,
+      topicName: addr.topic,
+      payload,
+      replyToAddr: typeof body.from === 'string' ? body.from : null,
+      inReplyTo: typeof body.inReplyTo === 'string' ? body.inReplyTo : null,
+    });
+    if (!result.ok) {
+      return json(res, 400, { error: result.reason });
+    }
+    return json(res, 202, { ok: true, queueId: result.queueId, status: 'queued' });
+  }
+  if (addr.class === 'approval') {
+    // approval:<channel> is a categorisation, not a sendable address. The
+    // v3 spec is explicit: approvals are CRUD, not enqueue — `send` cannot
+    // auto-create approvals (Q5).
+    return json(res, 400, {
+      error: 'approval channel is not a sendable address; use POST /api/approvals to create an approval',
+      class: 'approval',
+      channel: addr.channel,
+    });
+  }
+  if (addr.class === 'agent-instance') {
+    // Sync deliver via paste. Never persists into pending_messages.
+    const text = typeof body.message === 'string' ? body.message : JSON.stringify(body.message ?? {});
+    const deliveryResult = await ctx.messageDispatcher.deliverToInstance(addr.instanceId, text);
+    if (!deliveryResult.ok) {
+      return json(res, 503, { error: 'instance not deliverable', reason: deliveryResult.reason, ...(deliveryResult.error ? { details: deliveryResult.error } : {}) });
+    }
+    return json(res, 200, { ok: true });
+  }
+  // addr.class === 'agent' — use bare name for storage / lookup.
+  body.to = addr.name;
+
   const target = ctx.db.getAgent(body.to);
   if (!target) return json(res, 404, { error: `Target agent "${body.to}" not found` });
   if (target.state === 'void') {
@@ -383,6 +462,48 @@ route('POST', '/api/dashboard/send', async (req, res, _match, ctx) => {
     return json(res, 400, { error: 'agent, message, topic required' });
   }
 
+  // Q1: address-prefix routing on body.agent. Q3 wires `topic:` (through
+  // ctx.topicDelivery) and `agent-instance:` (through deliverToInstance).
+  const dashAddr = parseAddress(body.agent);
+  if (dashAddr.class === 'malformed') {
+    return json(res, 400, { error: 'malformed address', reason: dashAddr.reason });
+  }
+  if (dashAddr.class === 'topic') {
+    if (!ctx.topicDelivery) {
+      return json(res, 503, { error: 'topic delivery not configured' });
+    }
+    const payload = typeof body.message === 'string' ? body.message : JSON.stringify(body.message ?? {});
+    const result = await ctx.topicDelivery.publish({
+      agentTemplate: dashAddr.template,
+      topicName: dashAddr.topic,
+      payload,
+      replyToAddr: 'dashboard',
+      inReplyTo: typeof body.inReplyTo === 'string' ? body.inReplyTo : null,
+    });
+    if (!result.ok) {
+      return json(res, 400, { error: result.reason });
+    }
+    return json(res, 202, { ok: true, queueId: result.queueId, status: 'queued' });
+  }
+  if (dashAddr.class === 'approval') {
+    // approval:<channel> is a categorisation, not a sendable address.
+    // (See `/api/agents/send` above for the rationale.)
+    return json(res, 400, {
+      error: 'approval channel is not a sendable address; use POST /api/approvals to create an approval',
+      class: 'approval',
+      channel: dashAddr.channel,
+    });
+  }
+  if (dashAddr.class === 'agent-instance') {
+    const text = typeof body.message === 'string' ? body.message : JSON.stringify(body.message ?? {});
+    const deliveryResult = await ctx.messageDispatcher.deliverToInstance(dashAddr.instanceId, text);
+    if (!deliveryResult.ok) {
+      return json(res, 503, { error: 'instance not deliverable', reason: deliveryResult.reason, ...(deliveryResult.error ? { details: deliveryResult.error } : {}) });
+    }
+    return json(res, 200, { ok: true });
+  }
+  body.agent = dashAddr.name;
+
   const agent = ctx.db.getAgent(body.agent);
   if (!agent) return json(res, 404, { error: `Agent "${body.agent}" not found` });
 
@@ -408,6 +529,177 @@ route('POST', '/api/dashboard/send', async (req, res, _match, ctx) => {
   }
 
   json(res, 202, { ok: true, msg, queueId: pending.id, status: 'pending' });
+});
+
+// ── v3 Q3: topic publish + instance complete + persona reload ──
+
+route('POST', '/api/topics/publish', async (req, res, _match, ctx) => {
+  if (!ctx.topicDelivery) {
+    return json(res, 503, { error: 'topic delivery not configured' });
+  }
+  const body = await readJson(req);
+  if (typeof body.agentTemplate !== 'string' || typeof body.topicName !== 'string') {
+    return json(res, 400, { error: 'agentTemplate and topicName required' });
+  }
+  const payload = typeof body.payload === 'string' ? body.payload : JSON.stringify(body.payload ?? {});
+  const result = await ctx.topicDelivery.publish({
+    agentTemplate: body.agentTemplate,
+    topicName: body.topicName,
+    payload,
+    replyToAddr: typeof body.replyToAddr === 'string' ? body.replyToAddr : null,
+    inReplyTo: typeof body.inReplyTo === 'string' ? body.inReplyTo : null,
+  });
+  if (!result.ok) {
+    return json(res, 400, { error: result.reason });
+  }
+  json(res, 202, { ok: true, queueId: result.queueId, templateId: result.templateId, topicName: result.topicName });
+});
+
+route('POST', '/api/instances/:id/complete', async (_req, res, match, ctx) => {
+  if (!ctx.instanceReaper) {
+    return json(res, 503, { error: 'instance reaper not configured' });
+  }
+  const id = match.pathname.groups['id'];
+  if (!id) return json(res, 400, { error: 'instance id required' });
+  const instance = ctx.db.getAgentInstance(id);
+  if (!instance) {
+    return json(res, 404, { error: 'unknown instance' });
+  }
+  if (instance.state === 'completed' || instance.state === 'failed') {
+    return json(res, 409, { error: 'already terminal', state: instance.state });
+  }
+  // Wake — does not block on result.
+  ctx.instanceReaper.wake(id).catch((err) => {
+    console.error(`[routes] reaper.wake(${id}) failed:`, (err as Error).message);
+  });
+  json(res, 202, { ok: true });
+});
+
+route('POST', '/api/personas/reload', async (_req, res, _match, ctx) => {
+  if (!ctx.reloadPersonas) {
+    return json(res, 503, { error: 'persona reload not configured' });
+  }
+  try {
+    const diff = ctx.reloadPersonas();
+    json(res, 200, { ok: true, ...diff });
+  } catch (err) {
+    json(res, 500, { error: (err as Error).message });
+  }
+});
+
+// ── v3 Q5: approvals CRUD ──
+//
+// Approvals are first-class records categorised by `channel` (the
+// `approval:<channel>` address class). They are *not* a sendable address —
+// `/api/agents/send` and `/api/dashboard/send` return 400 for `approval:`
+// addresses with a pointer back to POST /api/approvals.
+
+route('POST', '/api/approvals', async (req, res, _match, ctx) => {
+  if (!ctx.approvals) return json(res, 503, { error: 'approvals not configured' });
+  const body = await readJson(req);
+  if (typeof body.requesterAddr !== 'string' || typeof body.channel !== 'string') {
+    return json(res, 400, { error: 'requesterAddr and channel required' });
+  }
+  const payload = typeof body.payload === 'string'
+    ? body.payload
+    : JSON.stringify(body.payload ?? {});
+  const result = ctx.approvals.create({
+    requesterAddr: body.requesterAddr,
+    channel: body.channel,
+    payload,
+  });
+  if (!result.ok) return json(res, 400, { error: result.reason });
+  return json(res, 201, result.approval);
+});
+
+route('GET', '/api/approvals/:id', async (_req, res, match, ctx) => {
+  if (!ctx.approvals) return json(res, 503, { error: 'approvals not configured' });
+  const id = match.pathname.groups['id'];
+  if (!id) return json(res, 400, { error: 'approval id required' });
+  const row = ctx.db.getApproval(id);
+  if (!row) return json(res, 404, { error: 'approval not found' });
+  return json(res, 200, row);
+});
+
+// Both `channel` and `state` are optional and AND'd together when present.
+// Omitting `channel` returns the cross-channel feed used by the dashboard
+// inbox (Q9). `state` is validated against the canonical enum either way.
+route('GET', '/api/approvals', async (req, res, _match, ctx) => {
+  if (!ctx.approvals) return json(res, 503, { error: 'approvals not configured' });
+  const url = new URL(req.url!, `http://${req.headers.host}`);
+  const channel = url.searchParams.get('channel');
+  const stateRaw = url.searchParams.get('state') ?? undefined;
+  const allowed = ['pending', 'approved', 'rejected', 'amended', 'withdrawn'];
+  if (stateRaw && !allowed.includes(stateRaw)) {
+    return json(res, 400, { error: `state must be one of ${allowed.join('|')}` });
+  }
+  const state = stateRaw as 'pending' | 'approved' | 'rejected' | 'amended' | 'withdrawn' | undefined;
+  const rows = channel
+    ? ctx.db.listApprovalsByChannel(channel, state)
+    : ctx.db.listApprovals(state ? { state } : {});
+  return json(res, 200, rows);
+});
+
+route('POST', '/api/approvals/:id/set', async (req, res, match, ctx) => {
+  if (!ctx.approvals) return json(res, 503, { error: 'approvals not configured' });
+  const id = match.pathname.groups['id'];
+  if (!id) return json(res, 400, { error: 'approval id required' });
+  const body = await readJson(req);
+  if (typeof body.state !== 'string') return json(res, 400, { error: 'state required' });
+  if (body.state !== 'approved' && body.state !== 'rejected' && body.state !== 'amended') {
+    return json(res, 400, { error: 'state must be approved|rejected|amended' });
+  }
+  const payload = typeof body.payload === 'string'
+    ? body.payload
+    : body.payload != null ? JSON.stringify(body.payload) : null;
+  // `amended` rewrites the active payload; rejecting the call here keeps
+  // the audit trail honest. Otherwise the route silently leaves the prior
+  // payload in place while the row's state column claims "amended".
+  if (body.state === 'amended' && (payload === null || payload === '')) {
+    return json(res, 400, { error: 'amended state requires --payload' });
+  }
+  const result = await ctx.approvals.setState(id, body.state, {
+    decidedBy: typeof body.decidedBy === 'string' ? body.decidedBy : null,
+    payload,
+  });
+  if (!result.ok) {
+    if (result.reason === 'not-found') return json(res, 404, { error: 'approval not found' });
+    if (result.reason === 'already-terminal') return json(res, 409, { error: 'approval is already terminal' });
+    return json(res, 400, { error: result.reason });
+  }
+  return json(res, 200, result.approval);
+});
+
+route('POST', '/api/approvals/:id/withdraw', async (req, res, match, ctx) => {
+  if (!ctx.approvals) return json(res, 503, { error: 'approvals not configured' });
+  const id = match.pathname.groups['id'];
+  if (!id) return json(res, 400, { error: 'approval id required' });
+  const body = await readJson(req);
+  if (typeof body.requesterAddr !== 'string') {
+    return json(res, 400, { error: 'requesterAddr required' });
+  }
+  const result = await ctx.approvals.withdraw(id, body.requesterAddr);
+  if (!result.ok) {
+    if (result.reason === 'not-found') return json(res, 404, { error: 'approval not found' });
+    if (result.reason === 'not-creator') return json(res, 403, { error: 'only the creator may withdraw' });
+    if (result.reason === 'not-pending') return json(res, 409, { error: 'approval is not pending' });
+    return json(res, 400, { error: result.reason });
+  }
+  return json(res, 200, result.approval);
+});
+
+// Non-blocking single read — per spec ("plain polling, not long-poll").
+// Returns the current row immediately (200) regardless of state. Callers
+// (`collab approval await`, dashboard inbox) poll client-side at whatever
+// interval suits them. The endpoint is retained for path-compatibility
+// with earlier drafts; functionally identical to GET /api/approvals/:id.
+route('GET', '/api/approvals/:id/await', async (_req, res, match, ctx) => {
+  if (!ctx.approvals) return json(res, 503, { error: 'approvals not configured' });
+  const id = match.pathname.groups['id'];
+  if (!id) return json(res, 400, { error: 'approval id required' });
+  const row = ctx.db.getApproval(id);
+  if (!row) return json(res, 404, { error: 'approval not found' });
+  return json(res, 200, row);
 });
 
 route('POST', '/api/dashboard/upload', async (req, res, _match, ctx) => {
@@ -609,6 +901,18 @@ route('POST', '/api/proxy/register', async (req, res, _match, ctx) => {
   recoverFailedAgents(ctx, body.proxyId).catch((err) => {
     console.error(`[proxy-register] Recovery failed for ${body.proxyId}:`, err);
   });
+
+  // v3 Q8: every live `agent_instances` row on this proxy died when the
+  // proxy died. Mark them failed (best-effort cleanup) — running this AFTER
+  // `recoverFailedAgents` so persistent agents that survived in tmux can
+  // still self-heal first. Fire-and-forget; don't block the registration
+  // response (the response was already sent above).
+  if (ctx.recovery) {
+    const pid = body.proxyId as string;
+    ctx.recovery.reconnectHandler.onProxyRegister(pid).catch((err) => {
+      console.error(`[proxy-register] Instance reconcile failed for ${pid}:`, err);
+    });
+  }
 });
 
 route('POST', '/api/proxy/heartbeat', async (req, res, _match, ctx) => {

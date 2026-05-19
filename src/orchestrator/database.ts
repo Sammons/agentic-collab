@@ -5,8 +5,14 @@
 
 import { DatabaseSync } from 'node:sqlite';
 import type {
+  AgentInstanceRow,
+  AgentInstanceState,
   AgentRecord,
   AgentState,
+  AgentTemplateRow,
+  ApprovalEventRow,
+  ApprovalRow,
+  ApprovalState,
   DashboardMessage,
   EngineConfigRecord,
   EngineType,
@@ -21,6 +27,9 @@ import type {
   PageRecord,
   DataStoreRecord,
   DestinationRecord,
+  TopicQueueRow,
+  TopicQueueStatus,
+  TopicRow,
 } from '../shared/types.ts';
 import {
   configColumnMap,
@@ -142,6 +151,124 @@ const SCHEMA = `
     created_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
     updated_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
   );
+
+  -- v3: agent templates. Populated by template-sync from persona frontmatter.
+  -- This table is the home of the new template-only fields; the agents
+  -- table is intentionally untouched (no new columns, no ALTER TABLE).
+  CREATE TABLE IF NOT EXISTS agent_templates (
+    id              TEXT PRIMARY KEY,
+    persona_path    TEXT,
+    engine          TEXT NOT NULL,
+    model           TEXT,
+    persistent      INTEGER NOT NULL DEFAULT 1,
+    cwd_base        TEXT,
+    cwd_template    TEXT,
+    repo_root       TEXT,
+    hook_start      TEXT,
+    hook_exit       TEXT,
+    hook_prepare    TEXT,
+    hook_cleanup    TEXT,
+    created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+  );
+
+  -- v3: topic declarations belong to one agent_templates row each.
+  CREATE TABLE IF NOT EXISTS topics (
+    agent_template          TEXT NOT NULL REFERENCES agent_templates(id) ON DELETE CASCADE,
+    name                    TEXT NOT NULL,
+    hook_prepare_override   TEXT,
+    hook_start_override     TEXT,
+    hook_cleanup_override   TEXT,
+    monitor_template        TEXT,
+    concurrency             INTEGER NOT NULL DEFAULT 1,
+    schema_path             TEXT,
+    reply_schema_path       TEXT,
+    PRIMARY KEY (agent_template, name)
+  );
+
+  -- v3 Q3: per-topic message queue. Each topic address publish lands as
+  -- one row here. The orchestrator's TopicDelivery driver claims rows
+  -- atomically and spawns an agent_instances row for each claim. The
+  -- status column progresses queued -> claimed -> completed | failed.
+  CREATE TABLE IF NOT EXISTS topic_queue (
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent_template        TEXT NOT NULL,
+    topic_name            TEXT NOT NULL,
+    payload               TEXT NOT NULL,
+    reply_to_addr         TEXT,
+    in_reply_to           TEXT,
+    status                TEXT NOT NULL DEFAULT 'queued',
+    claimed_by_instance   TEXT,
+    worktree_path         TEXT,
+    created_at            TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    completed_at          TEXT
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_topic_queue_lookup
+    ON topic_queue(agent_template, topic_name, status);
+
+  -- v3 Q3: ephemeral agent instances. A separate table from agents so the
+  -- persistent-agent state machine, health monitor, and cool-down logic stay
+  -- untouched. Health-monitor + message-dispatcher cool-down queries hit only
+  -- the agents table, which means rows here are implicitly excluded.
+  CREATE TABLE IF NOT EXISTS agent_instances (
+    id                      TEXT PRIMARY KEY,
+    agent_template          TEXT NOT NULL,
+    spawned_from_topic      TEXT,
+    instance_addr           TEXT NOT NULL,
+    tmux_session            TEXT NOT NULL,
+    worktree_path           TEXT,
+    proxy_id                TEXT NOT NULL,
+    state                   TEXT NOT NULL DEFAULT 'spawning',
+    failure_reason          TEXT,
+    reply_to_addr           TEXT,
+    message_id              TEXT NOT NULL,
+    message_path            TEXT NOT NULL,
+    reply_path              TEXT NOT NULL,
+    status_path             TEXT NOT NULL,
+    queue_id                INTEGER,
+    monitor_of_instance     TEXT,
+    started_at              TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    completed_at            TEXT
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_agent_instances_state
+    ON agent_instances(state);
+  CREATE INDEX IF NOT EXISTS idx_agent_instances_template
+    ON agent_instances(agent_template, state);
+  CREATE INDEX IF NOT EXISTS idx_agent_instances_topic
+    ON agent_instances(agent_template, spawned_from_topic, state);
+
+  -- v3 Q5: approvals + audit log. Approvals are first-class CRUD records
+  -- categorised by channel (the approval: address class); they are
+  -- never a message-routing surface. State change auto-notifies the
+  -- requester via the existing message dispatcher. amendments_json
+  -- carries a JSON array of prior payload revisions (set:amended path).
+  CREATE TABLE IF NOT EXISTS approvals (
+    id              TEXT PRIMARY KEY,
+    requester_addr  TEXT NOT NULL,
+    channel         TEXT NOT NULL,
+    payload         TEXT NOT NULL,
+    state           TEXT NOT NULL DEFAULT 'pending',
+    amendments_json TEXT,
+    created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+    updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+    decided_by      TEXT,
+    decided_at      TEXT
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_approvals_channel_state ON approvals(channel, state);
+  CREATE INDEX IF NOT EXISTS idx_approvals_requester    ON approvals(requester_addr);
+
+  CREATE TABLE IF NOT EXISTS approval_events (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    approval_id  TEXT NOT NULL REFERENCES approvals(id) ON DELETE CASCADE,
+    event_type   TEXT NOT NULL,
+    payload      TEXT,
+    created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_approval_events_id ON approval_events(approval_id);
 `;
 
 export class Database {
@@ -440,6 +567,680 @@ export class Database {
   deleteAgent(name: string): boolean {
     const result = this.db.prepare('DELETE FROM agents WHERE name = ?').run(name);
     return result.changes > 0;
+  }
+
+  // ── Agent Templates / Topics (v3 ephemeral surface) ──
+  // Populated by template-sync; the `agents` table is intentionally untouched.
+
+  /** Insert or replace an `agent_templates` row. `createdAt`/`updatedAt` are
+   *  managed by SQL defaults — values on the input row are ignored. */
+  upsertAgentTemplate(row: AgentTemplateRow): void {
+    this.db.prepare(`
+      INSERT INTO agent_templates (
+        id, persona_path, engine, model, persistent,
+        cwd_base, cwd_template, repo_root,
+        hook_start, hook_exit, hook_prepare, hook_cleanup,
+        updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+      ON CONFLICT(id) DO UPDATE SET
+        persona_path   = excluded.persona_path,
+        engine         = excluded.engine,
+        model          = excluded.model,
+        persistent     = excluded.persistent,
+        cwd_base       = excluded.cwd_base,
+        cwd_template   = excluded.cwd_template,
+        repo_root      = excluded.repo_root,
+        hook_start     = excluded.hook_start,
+        hook_exit      = excluded.hook_exit,
+        hook_prepare   = excluded.hook_prepare,
+        hook_cleanup   = excluded.hook_cleanup,
+        updated_at     = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+    `).run(
+      row.id,
+      row.personaPath,
+      row.engine,
+      row.model,
+      row.persistent ? 1 : 0,
+      row.cwdBase,
+      row.cwdTemplate,
+      row.repoRoot,
+      row.hookStart,
+      row.hookExit,
+      row.hookPrepare,
+      row.hookCleanup,
+    );
+  }
+
+  /** Replace the topics rows for a template in a single transaction. */
+  replaceTopicsForTemplate(templateId: string, topics: TopicRow[]): void {
+    const tx = this.db.prepare('BEGIN');
+    const commit = this.db.prepare('COMMIT');
+    const rollback = this.db.prepare('ROLLBACK');
+    const del = this.db.prepare('DELETE FROM topics WHERE agent_template = ?');
+    const ins = this.db.prepare(`
+      INSERT INTO topics (
+        agent_template, name,
+        hook_prepare_override, hook_start_override, hook_cleanup_override,
+        monitor_template, concurrency, schema_path, reply_schema_path
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    tx.run();
+    try {
+      del.run(templateId);
+      for (const t of topics) {
+        ins.run(
+          t.agentTemplate,
+          t.name,
+          t.hookPrepareOverride,
+          t.hookStartOverride,
+          t.hookCleanupOverride,
+          t.monitorTemplate,
+          t.concurrency,
+          t.schemaPath,
+          t.replySchemaPath,
+        );
+      }
+      commit.run();
+    } catch (err) {
+      rollback.run();
+      throw err;
+    }
+  }
+
+  getAgentTemplate(id: string): AgentTemplateRow | null {
+    const row = this.db.prepare(
+      'SELECT * FROM agent_templates WHERE id = ?',
+    ).get(id) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    return mapAgentTemplateRow(row);
+  }
+
+  listAgentTemplates(): AgentTemplateRow[] {
+    const rows = this.db.prepare(
+      'SELECT * FROM agent_templates ORDER BY id ASC',
+    ).all() as Array<Record<string, unknown>>;
+    return rows.map(mapAgentTemplateRow);
+  }
+
+  getTopicsForTemplate(templateId: string): TopicRow[] {
+    const rows = this.db.prepare(
+      'SELECT * FROM topics WHERE agent_template = ? ORDER BY name ASC',
+    ).all(templateId) as Array<Record<string, unknown>>;
+    return rows.map(mapTopicRow);
+  }
+
+  // ── Topic Queue + Agent Instances (v3 Q3 ephemeral lifecycle) ──
+  // The agents table is intentionally untouched. Health-monitor and the
+  // message-dispatcher cool-down read only `agents`, so rows in
+  // `agent_instances` are implicitly excluded from both.
+
+  /** Enqueue one message on a topic. Status starts as 'queued'. */
+  enqueueTopicMessage(opts: {
+    agentTemplate: string;
+    topicName: string;
+    payload: string;
+    replyToAddr?: string | null;
+    inReplyTo?: string | null;
+  }): TopicQueueRow {
+    this.db.prepare(`
+      INSERT INTO topic_queue (
+        agent_template, topic_name, payload, reply_to_addr, in_reply_to, status
+      ) VALUES (?, ?, ?, ?, ?, 'queued')
+    `).run(
+      opts.agentTemplate,
+      opts.topicName,
+      opts.payload,
+      opts.replyToAddr ?? null,
+      opts.inReplyTo ?? null,
+    );
+    const row = this.db.prepare(
+      'SELECT * FROM topic_queue WHERE id = last_insert_rowid()',
+    ).get() as Record<string, unknown>;
+    return mapTopicQueueRow(row);
+  }
+
+  /**
+   * Atomic claim: BEGIN IMMEDIATE → UPDATE the next queued row to 'claimed'
+   * (returning the row) → INSERT a paired `agent_instances` row in the same
+   * transaction → COMMIT. Returns null when no queued row is available.
+   *
+   * The combined transaction guarantees that as soon as a claim commits the
+   * instance is addressable (`agent:<tmpl>/<id>` resolves) — the address
+   * resolver cannot observe a "claimed but not inserted" window.
+   */
+  claimAndCreateInstance(opts: {
+    agentTemplate: string;
+    topicName: string;
+    instanceId: string;
+    instanceAddr: string;
+    tmuxSession: string;
+    proxyId: string;
+    messageId: string;
+    messagePath: string;
+    replyPath: string;
+    statusPath: string;
+    worktreePath: string | null;
+    monitorOfInstance?: string | null;
+    /**
+     * Per-topic concurrency cap. The claim only commits when the count of
+     * live `agent_instances` rows for (template, topic) is strictly less than
+     * this value. If omitted, no concurrency gate is applied (legacy callers).
+     */
+    concurrency?: number;
+  }): { queue: TopicQueueRow; instance: AgentInstanceRow } | null {
+    const begin = this.db.prepare('BEGIN IMMEDIATE');
+    const commit = this.db.prepare('COMMIT');
+    const rollback = this.db.prepare('ROLLBACK');
+    begin.run();
+    try {
+      // Invariant #1: check the live count INSIDE the transaction. Two
+      // concurrent ticks cannot both observe `live < cap` because
+      // BEGIN IMMEDIATE serializes writes — the second tick blocks until the
+      // first commits, then re-reads the count.
+      if (typeof opts.concurrency === 'number') {
+        const liveRow = this.db.prepare(`
+          SELECT COUNT(*) AS n FROM agent_instances
+           WHERE agent_template = ? AND spawned_from_topic = ?
+             AND state IN ('spawning', 'running', 'completing')
+        `).get(opts.agentTemplate, opts.topicName) as Record<string, unknown> | undefined;
+        const live = Number(liveRow?.['n'] ?? 0);
+        if (live >= opts.concurrency) {
+          rollback.run();
+          return null;
+        }
+      }
+
+      // SQLite's node:sqlite supports RETURNING. Update the oldest queued row.
+      const claimStmt = this.db.prepare(`
+        UPDATE topic_queue
+           SET status = 'claimed', claimed_by_instance = ?, worktree_path = ?
+         WHERE id = (
+           SELECT id FROM topic_queue
+            WHERE agent_template = ? AND topic_name = ? AND status = 'queued'
+            ORDER BY id ASC
+            LIMIT 1
+         )
+        RETURNING *
+      `);
+      const claimed = claimStmt.get(
+        opts.instanceId,
+        opts.worktreePath,
+        opts.agentTemplate,
+        opts.topicName,
+      ) as Record<string, unknown> | undefined;
+      if (!claimed) {
+        rollback.run();
+        return null;
+      }
+      const queueRow = mapTopicQueueRow(claimed);
+
+      this.db.prepare(`
+        INSERT INTO agent_instances (
+          id, agent_template, spawned_from_topic, instance_addr,
+          tmux_session, worktree_path, proxy_id, state,
+          reply_to_addr, message_id, message_path, reply_path, status_path,
+          queue_id, monitor_of_instance
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'spawning', ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        opts.instanceId,
+        opts.agentTemplate,
+        opts.topicName,
+        opts.instanceAddr,
+        opts.tmuxSession,
+        opts.worktreePath,
+        opts.proxyId,
+        queueRow.replyToAddr,
+        opts.messageId,
+        opts.messagePath,
+        opts.replyPath,
+        opts.statusPath,
+        queueRow.id,
+        opts.monitorOfInstance ?? null,
+      );
+      const insRow = this.db.prepare(
+        'SELECT * FROM agent_instances WHERE id = ?',
+      ).get(opts.instanceId) as Record<string, unknown>;
+      commit.run();
+      return { queue: queueRow, instance: mapAgentInstanceRow(insRow) };
+    } catch (err) {
+      try { rollback.run(); } catch { /* already rolled back */ }
+      throw err;
+    }
+  }
+
+  /**
+   * Count rows in `topic_queue` still waiting to be claimed for the given
+   * (template, topic). Used by Q4's `topic_queue_changed` WS event to report
+   * the live queue depth to subscribers.
+   */
+  countQueuedTopicMessages(agentTemplate: string, topicName: string): number {
+    const row = this.db.prepare(`
+      SELECT COUNT(*) AS n FROM topic_queue
+       WHERE agent_template = ? AND topic_name = ? AND status = 'queued'
+    `).get(agentTemplate, topicName) as Record<string, unknown> | undefined;
+    return Number(row?.['n'] ?? 0);
+  }
+
+  /**
+   * Count live (non-terminal) `agent_instances` rows for the given topic.
+   * Used by TopicDelivery to enforce per-topic concurrency caps.
+   */
+  countLiveInstancesForTopic(agentTemplate: string, topicName: string): number {
+    const row = this.db.prepare(`
+      SELECT COUNT(*) AS n FROM agent_instances
+       WHERE agent_template = ? AND spawned_from_topic = ?
+         AND state IN ('spawning', 'running', 'completing')
+    `).get(agentTemplate, topicName) as Record<string, unknown> | undefined;
+    return Number(row?.['n'] ?? 0);
+  }
+
+  getAgentInstance(id: string): AgentInstanceRow | null {
+    const row = this.db.prepare(
+      'SELECT * FROM agent_instances WHERE id = ?',
+    ).get(id) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    return mapAgentInstanceRow(row);
+  }
+
+  getAgentInstanceByAddr(addr: string): AgentInstanceRow | null {
+    const row = this.db.prepare(
+      'SELECT * FROM agent_instances WHERE instance_addr = ?',
+    ).get(addr) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    return mapAgentInstanceRow(row);
+  }
+
+  listLiveAgentInstances(options?: { excludeStates?: AgentInstanceState[] }): AgentInstanceRow[] {
+    const exclude = new Set<AgentInstanceState>(options?.excludeStates ?? []);
+    const allLive: AgentInstanceState[] = ['spawning', 'running', 'completing'];
+    const states = allLive.filter((s) => !exclude.has(s));
+    if (states.length === 0) return [];
+    const placeholders = states.map(() => '?').join(', ');
+    const rows = this.db.prepare(
+      `SELECT * FROM agent_instances
+        WHERE state IN (${placeholders})
+        ORDER BY id ASC`,
+    ).all(...states) as Array<Record<string, unknown>>;
+    return rows.map(mapAgentInstanceRow);
+  }
+
+  /**
+   * Q8: list `agent_instances` rows owned by a specific proxy. When
+   * `options.onlyLive` is true (the default for crash-recovery callers),
+   * filters to non-terminal states; otherwise returns every row regardless
+   * of state. Used by the proxy-reconnect handler to fail orphaned
+   * instances whose sessions died with the proxy.
+   *
+   * `excludeStates` further filters the live set — Q8's reconnect handler
+   * excludes `'spawning'` (owned by Q3's claim flow) and `'completing'`
+   * (owned by the reaper) so recovery doesn't race their authoritative
+   * transitions.
+   */
+  listAgentInstancesByProxy(
+    proxyId: string,
+    options?: { onlyLive: boolean; excludeStates?: AgentInstanceState[] },
+  ): AgentInstanceRow[] {
+    const onlyLive = options?.onlyLive ?? true;
+    const exclude = new Set<AgentInstanceState>(options?.excludeStates ?? []);
+    if (!onlyLive) {
+      const rows = this.db.prepare(
+        `SELECT * FROM agent_instances
+          WHERE proxy_id = ?
+          ORDER BY id ASC`,
+      ).all(proxyId) as Array<Record<string, unknown>>;
+      return rows
+        .map(mapAgentInstanceRow)
+        .filter((r) => !exclude.has(r.state));
+    }
+    const allLive: AgentInstanceState[] = ['spawning', 'running', 'completing'];
+    const states = allLive.filter((s) => !exclude.has(s));
+    if (states.length === 0) return [];
+    const placeholders = states.map(() => '?').join(', ');
+    const rows = this.db.prepare(
+      `SELECT * FROM agent_instances
+        WHERE proxy_id = ?
+          AND state IN (${placeholders})
+        ORDER BY id ASC`,
+    ).all(proxyId, ...states) as Array<Record<string, unknown>>;
+    return rows.map(mapAgentInstanceRow);
+  }
+
+  /**
+   * Q8: list DISTINCT `cwd_base` values from ephemeral templates. The
+   * orphaned-worktree sweep walks these directories looking for `wt-*`
+   * subdirs that have no matching `agent_instances.worktree_path` entry.
+   * Persistent templates are excluded — their cwd is a long-lived working
+   * directory, not a worktree base.
+   */
+  listCwdBases(): { templateId: string; cwdBase: string }[] {
+    const rows = this.db.prepare(`
+      SELECT id AS template_id, cwd_base
+        FROM agent_templates
+       WHERE persistent = 0 AND cwd_base IS NOT NULL AND cwd_base != ''
+    `).all() as Array<Record<string, unknown>>;
+    // Dedupe while preserving the first template id observed for each base.
+    const seen = new Map<string, string>();
+    for (const r of rows) {
+      const base = r['cwd_base'] as string;
+      const tid = r['template_id'] as string;
+      if (!seen.has(base)) seen.set(base, tid);
+    }
+    return Array.from(seen.entries()).map(([cwdBase, templateId]) => ({ templateId, cwdBase }));
+  }
+
+  /**
+   * Insert a paired monitor instance for a worker. Unlike
+   * `claimAndCreateInstance`, this is a plain INSERT — monitors are not
+   * driven by a `topic_queue` claim and have no queue row. Used by Q6's
+   * monitor sidecar pairing.
+   *
+   * Caller guarantees `monitorOfInstance` references a live worker; no FK
+   * enforcement is configured on `agent_instances` for SQLite WAL friendliness.
+   */
+  createMonitorInstance(opts: {
+    id: string;
+    agentTemplate: string;
+    monitorOfInstance: string;
+    instanceAddr: string;
+    tmuxSession: string;
+    worktreePath: string | null;
+    messagePath: string;
+    replyPath: string;
+    statusPath: string;
+    proxyId: string;
+  }): AgentInstanceRow {
+    this.db.prepare(`
+      INSERT INTO agent_instances (
+        id, agent_template, spawned_from_topic, instance_addr,
+        tmux_session, worktree_path, proxy_id, state,
+        reply_to_addr, message_id, message_path, reply_path, status_path,
+        queue_id, monitor_of_instance
+      ) VALUES (?, ?, NULL, ?, ?, ?, ?, 'spawning', NULL, ?, ?, ?, ?, NULL, ?)
+    `).run(
+      opts.id,
+      opts.agentTemplate,
+      opts.instanceAddr,
+      opts.tmuxSession,
+      opts.worktreePath,
+      opts.proxyId,
+      opts.id,
+      opts.messagePath,
+      opts.replyPath,
+      opts.statusPath,
+      opts.monitorOfInstance,
+    );
+    const row = this.db.prepare(
+      'SELECT * FROM agent_instances WHERE id = ?',
+    ).get(opts.id) as Record<string, unknown>;
+    return mapAgentInstanceRow(row);
+  }
+
+  /**
+   * Find the live monitor instance paired with `workerInstanceId`, if any.
+   * Returns the first non-terminal monitor row (there should only ever be
+   * one — the pairing is 1:1 per Q6 spec).
+   */
+  findMonitorForWorker(workerInstanceId: string): AgentInstanceRow | null {
+    const row = this.db.prepare(`
+      SELECT * FROM agent_instances
+       WHERE monitor_of_instance = ?
+         AND state NOT IN ('completed', 'failed')
+       LIMIT 1
+    `).get(workerInstanceId) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    return mapAgentInstanceRow(row);
+  }
+
+  updateInstanceState(
+    id: string,
+    state: AgentInstanceState,
+    extra?: {
+      completedAt?: string | null;
+      failureReason?: string | null;
+    },
+  ): void {
+    const sets: string[] = ['state = ?'];
+    const params: unknown[] = [state];
+    if (extra && Object.prototype.hasOwnProperty.call(extra, 'completedAt')) {
+      sets.push('completed_at = ?');
+      params.push(extra.completedAt ?? null);
+    }
+    if (extra && Object.prototype.hasOwnProperty.call(extra, 'failureReason')) {
+      sets.push('failure_reason = ?');
+      params.push(extra.failureReason ?? null);
+    }
+    params.push(id);
+    this.db.prepare(
+      `UPDATE agent_instances SET ${sets.join(', ')} WHERE id = ?`,
+    ).run(...params);
+  }
+
+  /** Mark a topic_queue row as finished (completed or failed). */
+  markTopicQueueCompleted(id: number, status: 'completed' | 'failed'): void {
+    this.db.prepare(`
+      UPDATE topic_queue
+         SET status = ?,
+             completed_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+       WHERE id = ?
+    `).run(status, id);
+  }
+
+  /**
+   * Q8: requeue a `topic_queue` row whose claim got orphaned by a crash or
+   * proxy disconnect. Resets `status` back to `'queued'` and clears the
+   * `claimed_by_instance` / `worktree_path` columns so a fresh `claimAndSpawn`
+   * pass can grab it. Idempotent: only acts on rows currently in `'claimed'`
+   * or `'failed'`. Returns true if a row was actually requeued.
+   *
+   * Gated by env `V3_RECOVERY_QUEUE_POLICY=requeue`; the default policy is
+   * `'fail'` (terminal), matching the original Q8 spec.
+   */
+  requeueTopicQueueRow(id: number): boolean {
+    const result = this.db.prepare(`
+      UPDATE topic_queue
+         SET status = 'queued',
+             claimed_by_instance = NULL,
+             worktree_path = NULL,
+             completed_at = NULL
+       WHERE id = ?
+         AND status IN ('claimed', 'failed')
+    `).run(id);
+    return result.changes > 0;
+  }
+
+  // ── Approvals (v3 Q5) ──
+  //
+  // Approvals are first-class CRUD records categorised by channel. State
+  // transitions are linear: `pending` is the only non-terminal state.
+  // Mutating a terminal row is a precondition failure (the caller's job to
+  // surface as 409). Withdraw is creator-only while pending (the caller
+  // resolves to 403 / 409 as appropriate). Each call also records a row in
+  // `approval_events` so the audit trail is intact even when the auto-notify
+  // path drops messages.
+
+  createApproval(opts: {
+    id: string;
+    requesterAddr: string;
+    channel: string;
+    payload: string;
+  }): ApprovalRow {
+    this.db.prepare(`
+      INSERT INTO approvals (id, requester_addr, channel, payload, state)
+      VALUES (?, ?, ?, ?, 'pending')
+    `).run(opts.id, opts.requesterAddr, opts.channel, opts.payload);
+    const row = this.db.prepare(
+      'SELECT * FROM approvals WHERE id = ?',
+    ).get(opts.id) as Record<string, unknown>;
+    return mapApprovalRow(row);
+  }
+
+  getApproval(id: string): ApprovalRow | null {
+    const row = this.db.prepare(
+      'SELECT * FROM approvals WHERE id = ?',
+    ).get(id) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    return mapApprovalRow(row);
+  }
+
+  /**
+   * List approvals filtered by channel and optional state. Newest first so
+   * dashboards (Q9) can paginate from the top.
+   */
+  listApprovalsByChannel(channel: string, state?: ApprovalState): ApprovalRow[] {
+    const rows = (state
+      ? this.db.prepare(
+          'SELECT * FROM approvals WHERE channel = ? AND state = ? ORDER BY created_at DESC',
+        ).all(channel, state)
+      : this.db.prepare(
+          'SELECT * FROM approvals WHERE channel = ? ORDER BY created_at DESC',
+        ).all(channel)
+    ) as Array<Record<string, unknown>>;
+    return rows.map(mapApprovalRow);
+  }
+
+  /**
+   * List approvals across ALL channels, optionally filtered by state. Newest
+   * first. Powers the dashboard inbox (Q9) which surfaces a single feed of
+   * decisions awaiting human attention regardless of channel.
+   */
+  listApprovals(options: { state?: ApprovalState } = {}): ApprovalRow[] {
+    const rows = (options.state
+      ? this.db.prepare(
+          'SELECT * FROM approvals WHERE state = ? ORDER BY created_at DESC',
+        ).all(options.state)
+      : this.db.prepare(
+          'SELECT * FROM approvals ORDER BY created_at DESC',
+        ).all()
+    ) as Array<Record<string, unknown>>;
+    return rows.map(mapApprovalRow);
+  }
+
+  /**
+   * Atomic state transition. Returns the updated row, or null if the
+   * approval does not exist OR is already in a terminal state. When
+   * `payload` is supplied (typical for `amended`), the prior payload is
+   * appended to `amendments_json` (a JSON array of `{ payload, replacedAt }`
+   * entries) before the row's `payload` column is overwritten.
+   *
+   * If `opts.event` is supplied, a row is inserted into `approval_events`
+   * within the same transaction so the audit trail can never fall out of
+   * sync with the state column.
+   */
+  setApprovalState(
+    id: string,
+    state: 'approved' | 'rejected' | 'amended',
+    opts: {
+      decidedBy?: string | null;
+      payload?: string | null;
+      event?: { eventType: string; payload?: string | null };
+    } = {},
+  ): ApprovalRow | null {
+    const begin = this.db.prepare('BEGIN IMMEDIATE');
+    const commit = this.db.prepare('COMMIT');
+    const rollback = this.db.prepare('ROLLBACK');
+    begin.run();
+    try {
+      const cur = this.db.prepare('SELECT * FROM approvals WHERE id = ?')
+        .get(id) as Record<string, unknown> | undefined;
+      if (!cur) {
+        rollback.run();
+        return null;
+      }
+      if (cur['state'] !== 'pending') {
+        rollback.run();
+        return null;
+      }
+      let nextPayload = cur['payload'] as string;
+      let nextAmendments = (cur['amendments_json'] as string | null) ?? null;
+      if (typeof opts.payload === 'string' && opts.payload.length > 0) {
+        // Append the prior payload to the amendments array before replacing it.
+        const arr: unknown[] = nextAmendments ? safeJsonParseArray(nextAmendments) : [];
+        arr.push({ payload: nextPayload, replacedAt: nowIso() });
+        nextAmendments = JSON.stringify(arr);
+        nextPayload = opts.payload;
+      }
+      this.db.prepare(`
+        UPDATE approvals
+           SET state = ?,
+               payload = ?,
+               amendments_json = ?,
+               updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now'),
+               decided_by = ?,
+               decided_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
+         WHERE id = ?
+      `).run(state, nextPayload, nextAmendments, opts.decidedBy ?? null, id);
+      const updated = this.db.prepare('SELECT * FROM approvals WHERE id = ?')
+        .get(id) as Record<string, unknown>;
+      // Audit-event insert is in the same transaction so a throw here rolls
+      // back the state change. Otherwise an audit-write failure would leave
+      // the audit trail silently out of sync with the row's state column.
+      if (opts.event) {
+        this.db.prepare(`
+          INSERT INTO approval_events (approval_id, event_type, payload)
+          VALUES (?, ?, ?)
+        `).run(id, opts.event.eventType, opts.event.payload ?? null);
+      }
+      commit.run();
+      return mapApprovalRow(updated);
+    } catch (err) {
+      try { rollback.run(); } catch { /* already rolled back */ }
+      throw err;
+    }
+  }
+
+  /**
+   * Withdraw an approval. Succeeds only when the row is still `pending` AND
+   * the supplied `requesterAddr` matches the original creator. Returns the
+   * granular outcome so routes can map to 200 / 403 / 404 / 409.
+   */
+  withdrawApproval(
+    id: string,
+    requesterAddr: string,
+  ): 'ok' | 'not-found' | 'not-pending' | 'not-creator' {
+    const begin = this.db.prepare('BEGIN IMMEDIATE');
+    const commit = this.db.prepare('COMMIT');
+    const rollback = this.db.prepare('ROLLBACK');
+    begin.run();
+    try {
+      const cur = this.db.prepare('SELECT * FROM approvals WHERE id = ?')
+        .get(id) as Record<string, unknown> | undefined;
+      if (!cur) { rollback.run(); return 'not-found'; }
+      if (cur['state'] !== 'pending') { rollback.run(); return 'not-pending'; }
+      if (cur['requester_addr'] !== requesterAddr) { rollback.run(); return 'not-creator'; }
+      this.db.prepare(`
+        UPDATE approvals
+           SET state = 'withdrawn',
+               updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
+         WHERE id = ?
+      `).run(id);
+      commit.run();
+      return 'ok';
+    } catch (err) {
+      try { rollback.run(); } catch { /* already rolled back */ }
+      throw err;
+    }
+  }
+
+  recordApprovalEvent(
+    approvalId: string,
+    eventType: string,
+    payload?: string | null,
+  ): ApprovalEventRow {
+    this.db.prepare(`
+      INSERT INTO approval_events (approval_id, event_type, payload)
+      VALUES (?, ?, ?)
+    `).run(approvalId, eventType, payload ?? null);
+    const row = this.db.prepare(
+      'SELECT * FROM approval_events WHERE id = last_insert_rowid()',
+    ).get() as Record<string, unknown>;
+    return mapApprovalEventRow(row);
+  }
+
+  listApprovalEvents(approvalId: string): ApprovalEventRow[] {
+    const rows = this.db.prepare(
+      'SELECT * FROM approval_events WHERE approval_id = ? ORDER BY id ASC',
+    ).all(approvalId) as Array<Record<string, unknown>>;
+    return rows.map(mapApprovalEventRow);
   }
 
   // ── Events ──
@@ -1237,6 +2038,118 @@ function mapDestinationRow(row: Record<string, unknown>): DestinationRecord {
     createdAt: row['created_at'] as string,
     updatedAt: row['updated_at'] as string,
   };
+}
+
+function mapAgentTemplateRow(row: Record<string, unknown>): AgentTemplateRow {
+  return {
+    id: row['id'] as string,
+    personaPath: (row['persona_path'] as string | null) ?? null,
+    engine: row['engine'] as string,
+    model: (row['model'] as string | null) ?? null,
+    persistent: ((row['persistent'] as number) ?? 1) === 1,
+    cwdBase: (row['cwd_base'] as string | null) ?? null,
+    cwdTemplate: (row['cwd_template'] as string | null) ?? null,
+    repoRoot: (row['repo_root'] as string | null) ?? null,
+    hookStart: (row['hook_start'] as string | null) ?? null,
+    hookExit: (row['hook_exit'] as string | null) ?? null,
+    hookPrepare: (row['hook_prepare'] as string | null) ?? null,
+    hookCleanup: (row['hook_cleanup'] as string | null) ?? null,
+    createdAt: row['created_at'] as string,
+    updatedAt: row['updated_at'] as string,
+  };
+}
+
+function mapTopicRow(row: Record<string, unknown>): TopicRow {
+  return {
+    agentTemplate: row['agent_template'] as string,
+    name: row['name'] as string,
+    hookPrepareOverride: (row['hook_prepare_override'] as string | null) ?? null,
+    hookStartOverride: (row['hook_start_override'] as string | null) ?? null,
+    hookCleanupOverride: (row['hook_cleanup_override'] as string | null) ?? null,
+    monitorTemplate: (row['monitor_template'] as string | null) ?? null,
+    concurrency: (row['concurrency'] as number) ?? 1,
+    schemaPath: (row['schema_path'] as string | null) ?? null,
+    replySchemaPath: (row['reply_schema_path'] as string | null) ?? null,
+  };
+}
+
+function mapAgentInstanceRow(row: Record<string, unknown>): AgentInstanceRow {
+  return {
+    id: row['id'] as string,
+    agentTemplate: row['agent_template'] as string,
+    spawnedFromTopic: (row['spawned_from_topic'] as string | null) ?? null,
+    instanceAddr: row['instance_addr'] as string,
+    tmuxSession: row['tmux_session'] as string,
+    worktreePath: (row['worktree_path'] as string | null) ?? null,
+    proxyId: row['proxy_id'] as string,
+    state: row['state'] as AgentInstanceState,
+    failureReason: (row['failure_reason'] as string | null) ?? null,
+    replyToAddr: (row['reply_to_addr'] as string | null) ?? null,
+    messageId: row['message_id'] as string,
+    messagePath: row['message_path'] as string,
+    replyPath: row['reply_path'] as string,
+    statusPath: row['status_path'] as string,
+    queueId: (row['queue_id'] as number | null) ?? null,
+    monitorOfInstance: (row['monitor_of_instance'] as string | null) ?? null,
+    startedAt: row['started_at'] as string,
+    completedAt: (row['completed_at'] as string | null) ?? null,
+  };
+}
+
+function mapTopicQueueRow(row: Record<string, unknown>): TopicQueueRow {
+  return {
+    id: row['id'] as number,
+    agentTemplate: row['agent_template'] as string,
+    topicName: row['topic_name'] as string,
+    payload: row['payload'] as string,
+    replyToAddr: (row['reply_to_addr'] as string | null) ?? null,
+    inReplyTo: (row['in_reply_to'] as string | null) ?? null,
+    status: row['status'] as TopicQueueStatus,
+    claimedByInstance: (row['claimed_by_instance'] as string | null) ?? null,
+    worktreePath: (row['worktree_path'] as string | null) ?? null,
+    createdAt: row['created_at'] as string,
+    completedAt: (row['completed_at'] as string | null) ?? null,
+  };
+}
+
+function mapApprovalRow(row: Record<string, unknown>): ApprovalRow {
+  return {
+    id: row['id'] as string,
+    requesterAddr: row['requester_addr'] as string,
+    channel: row['channel'] as string,
+    payload: row['payload'] as string,
+    state: row['state'] as ApprovalState,
+    amendmentsJson: (row['amendments_json'] as string | null) ?? null,
+    createdAt: row['created_at'] as string,
+    updatedAt: row['updated_at'] as string,
+    decidedBy: (row['decided_by'] as string | null) ?? null,
+    decidedAt: (row['decided_at'] as string | null) ?? null,
+  };
+}
+
+function mapApprovalEventRow(row: Record<string, unknown>): ApprovalEventRow {
+  return {
+    id: row['id'] as number,
+    approvalId: row['approval_id'] as string,
+    eventType: row['event_type'] as string,
+    payload: (row['payload'] as string | null) ?? null,
+    createdAt: row['created_at'] as string,
+  };
+}
+
+/** Read an ISO timestamp matching the SCHEMA's `strftime` literal so DB/code agree. */
+function nowIso(): string {
+  return new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+}
+
+/** Parse a JSON string that should be an array; return `[]` on anything malformed. */
+function safeJsonParseArray(s: string): unknown[] {
+  try {
+    const parsed = JSON.parse(s);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
 }
 
 /** camelCase → snake_case for updateAgentState extra fields. */

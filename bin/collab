@@ -13,10 +13,27 @@
  *   COLLAB_AGENT            — Default agent name for send/reply (set by orchestrator)
  */
 
-import { readFileSync, existsSync, mkdtempSync, writeFileSync, readdirSync } from 'node:fs';
-import { basename, join, resolve } from 'node:path';
+import { readFileSync, existsSync, mkdtempSync, writeFileSync, readdirSync, renameSync, mkdirSync } from 'node:fs';
+import { basename, dirname, join, resolve } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { execSync } from 'node:child_process';
+
+// ── Mode Detection ──
+//
+// v3 Q7: the CLI is mode-aware. An "ephemeral" agent runs once per message
+// inside a topic-spawned worktree+tmux session. The orchestrator sets a
+// specific env trio (MESSAGE_ID + AGENT_TEMPLATE + REPLY_PATH) before pasting
+// the `start` hook. We require ALL THREE to flip into ephemeral mode —
+// accidental partial leakage from a parent shell must not switch a persistent
+// agent's CLI mode.
+
+function isEphemeralMode() {
+  return Boolean(
+    process.env['MESSAGE_ID']
+    && process.env['AGENT_TEMPLATE']
+    && process.env['REPLY_PATH'],
+  );
+}
 
 // ── Config Resolution ──
 
@@ -126,8 +143,15 @@ function requireAgentName(explicit) {
 
 const COMMANDS = {};
 
-function cmd(name, usage, desc, fn) {
-  COMMANDS[name] = { usage, desc, fn };
+// `mode` controls help visibility:
+//   'both'       — visible in both persistent and ephemeral help (default)
+//   'persistent' — visible only when the CLI is NOT in ephemeral mode
+//   'ephemeral'  — visible only when the CLI IS in ephemeral mode
+// Mode never gates execution — `complete`/`fail` still error cleanly via
+// `requireEphemeralEnv()` if invoked outside an ephemeral context. The mode
+// tag only controls what `collab --help` lists.
+function cmd(name, usage, desc, fn, mode = 'both') {
+  COMMANDS[name] = { usage, desc, fn, mode };
 }
 
 function formatReplyContext(message, inReplyTo) {
@@ -217,13 +241,15 @@ async function dispatchSend({ target, topic, message, replyReminder, inReplyTo, 
     process.exit(1);
   }
 
-  // Validate target before sending
-  if (target !== 'operator' && target !== 'dashboard') {
+  // Validate target before sending.
+  // Address-prefixed targets (agent:/topic:/approval:) bypass the bare-name check.
+  // Bare names continue to be validated against /api/agents.
+  if (target !== 'operator' && target !== 'dashboard' && !target.includes(':')) {
     const agents = await api('GET', '/api/agents');
     const agentNames = agents.map(a => a.name);
     if (!agentNames.includes(target)) {
       console.error(`error: unknown target "${target}"`);
-      console.error(`valid targets: operator, dashboard, ${agentNames.join(', ')}`);
+      console.error(`valid targets: operator, dashboard, agent:<name>, topic:<tmpl>/<name>, approval:<channel>, ${agentNames.join(', ')}`);
       process.exit(1);
     }
   }
@@ -288,6 +314,251 @@ cmd('send', 'send <target> --topic <topic> [--in-reply-to <text>] [--notify [pri
 
 cmd('reply', 'reply --topic <topic> [--in-reply-to <text>] <message>', 'Compatibility alias for send operator', async (args) => {
   await dispatchSend(parseSendArgs(args, 'operator'));
+});
+
+// ── v3 Q3: ephemeral instance signaling ──────────────────────────────────
+//
+// Used inside an ephemeral agent's tmux session. The orchestrator injects
+// the env contract (MESSAGE_ID, REPLY_PATH, STATUS_PATH, INSTANCE_ID, ...)
+// via `tmux set-environment` before pasting the `start` hook. Both
+// subcommands:
+//   1. Validate the env trio is present (otherwise the agent is in persistent
+//      mode and shouldn't be calling these).
+//   2. Atomically write $REPLY_PATH and $STATUS_PATH (tmp + rename) so the
+//      reaper's `statSync(...).size === 0` in-progress check is reliable.
+//   3. POST /api/instances/$INSTANCE_ID/complete to wake the reaper. If the
+//      POST fails, the reaper picks the instance up on its next sweep.
+// Both are idempotent — a second call is a no-op (409 from the orchestrator).
+
+function requireEphemeralEnv() {
+  const messageId = process.env['MESSAGE_ID'];
+  const replyPath = process.env['REPLY_PATH'];
+  const statusPath = process.env['STATUS_PATH'];
+  const instanceId = process.env['INSTANCE_ID'];
+  if (!messageId || !replyPath || !statusPath || !instanceId) {
+    console.error('error: `collab complete`/`fail` require ephemeral env vars');
+    console.error('  MESSAGE_ID, REPLY_PATH, STATUS_PATH, INSTANCE_ID must all be set');
+    console.error('  these are injected by the orchestrator on ephemeral spawn');
+    process.exit(1);
+  }
+  return { messageId, replyPath, statusPath, instanceId };
+}
+
+function atomicWrite(path, content) {
+  mkdirSync(dirname(path), { recursive: true });
+  const tmp = `${path}.tmp-${process.pid}-${Date.now()}`;
+  writeFileSync(tmp, content);
+  renameSync(tmp, path);
+}
+
+cmd('complete', 'complete --reply <json>', 'Ephemeral: signal success and reply', async (args) => {
+  let reply = null;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--reply' && args[i + 1]) { reply = args[++i]; }
+  }
+  if (reply === null) {
+    console.error('usage: collab complete --reply <json>');
+    process.exit(1);
+  }
+  const { instanceId, replyPath, statusPath } = requireEphemeralEnv();
+  atomicWrite(replyPath, reply);
+  atomicWrite(statusPath, 'ok\n');
+  // Best-effort wake — if the orchestrator is unreachable, the reaper will
+  // pick this up on its next sweep anyway.
+  try {
+    await init();
+    const resp = await fetch(`${_host}/api/instances/${encodeURIComponent(instanceId)}/complete`, {
+      method: 'POST',
+      headers: headers(),
+    });
+    if (resp.status === 409) {
+      console.log('already completed');
+      return;
+    }
+    if (!resp.ok) {
+      console.warn(`warning: completion POST returned ${resp.status} — reaper will retry`);
+    }
+    console.log('completed');
+  } catch (err) {
+    console.warn(`warning: completion POST failed (${err.message}) — reaper will retry`);
+  }
+}, 'ephemeral');
+
+cmd('fail', 'fail --reason <text>', 'Ephemeral: signal failure', async (args) => {
+  let reason = null;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--reason' && args[i + 1]) { reason = args[++i]; }
+  }
+  if (reason === null) {
+    console.error('usage: collab fail --reason <text>');
+    process.exit(1);
+  }
+  const { instanceId, statusPath } = requireEphemeralEnv();
+  atomicWrite(statusPath, `error\n${reason}\n`);
+  try {
+    await init();
+    const resp = await fetch(`${_host}/api/instances/${encodeURIComponent(instanceId)}/complete`, {
+      method: 'POST',
+      headers: headers(),
+    });
+    if (resp.status === 409) {
+      console.log('already failed');
+      return;
+    }
+    if (!resp.ok) {
+      console.warn(`warning: failure POST returned ${resp.status} — reaper will retry`);
+    }
+    console.log('failed');
+  } catch (err) {
+    console.warn(`warning: failure POST failed (${err.message}) — reaper will retry`);
+  }
+}, 'ephemeral');
+
+// ── v3 Q5: approvals CRUD subcommands ────────────────────────────────────
+//
+// Wraps the orchestrator's REST surface. The requester address defaults to
+// $COLLAB_AGENT (injected by the orchestrator) and falls back to "dashboard"
+// when run from the host. Subcommand dispatch lives inside the `approval`
+// command so the help banner only shows one line.
+
+function approvalRequester() {
+  return process.env['COLLAB_AGENT'] || 'dashboard';
+}
+
+function parseApprovalFlags(args, schema) {
+  const result = {};
+  const positional = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg.startsWith('--')) {
+      const key = arg.slice(2);
+      if (schema[key] && args[i + 1] !== undefined) {
+        result[key] = args[++i];
+      } else if (schema[key] === 'bool') {
+        result[key] = true;
+      }
+    } else {
+      positional.push(arg);
+    }
+  }
+  return { flags: result, positional };
+}
+
+async function approvalCreate(args) {
+  const { flags } = parseApprovalFlags(args, { channel: true, payload: true, requester: true });
+  if (!flags.channel) {
+    console.error('usage: collab approval create --channel <c> [--payload <json>] [--requester <addr>]');
+    console.error('  --payload defaults to "{}" when omitted');
+    process.exit(1);
+  }
+  const payload = flags.payload ?? '{}';
+  const body = {
+    requesterAddr: flags.requester || approvalRequester(),
+    channel: flags.channel,
+    payload,
+  };
+  const data = await api('POST', '/api/approvals', body);
+  console.log(data.id);
+}
+
+async function approvalGet(args) {
+  const id = args[0];
+  if (!id) {
+    console.error('usage: collab approval get <id>');
+    process.exit(1);
+  }
+  const data = await api('GET', `/api/approvals/${encodeURIComponent(id)}`);
+  console.log(JSON.stringify(data, null, 2));
+}
+
+async function approvalSet(args) {
+  const id = args[0];
+  const rest = args.slice(1);
+  const { flags } = parseApprovalFlags(rest, { state: true, payload: true, 'decided-by': true });
+  if (!id || !flags.state) {
+    console.error('usage: collab approval set <id> --state approved|rejected|amended [--payload <json>] [--decided-by <name>]');
+    process.exit(1);
+  }
+  const body = { state: flags.state };
+  if (flags.payload !== undefined) body.payload = flags.payload;
+  if (flags['decided-by']) body.decidedBy = flags['decided-by'];
+  const data = await api('POST', `/api/approvals/${encodeURIComponent(id)}/set`, body);
+  console.log(JSON.stringify(data, null, 2));
+}
+
+async function approvalWithdraw(args) {
+  const id = args[0];
+  if (!id) {
+    console.error('usage: collab approval withdraw <id> [--requester <addr>]');
+    process.exit(1);
+  }
+  const { flags } = parseApprovalFlags(args.slice(1), { requester: true });
+  const body = { requesterAddr: flags.requester || approvalRequester() };
+  const data = await api('POST', `/api/approvals/${encodeURIComponent(id)}/withdraw`, body);
+  console.log(JSON.stringify(data, null, 2));
+}
+
+async function approvalAwait(args) {
+  const id = args[0];
+  if (!id) {
+    console.error('usage: collab approval await <id> [--timeout <ms>] [--interval <ms>]');
+    console.error('  --timeout   max wait in ms; default 600000 (10 minutes); exits non-zero on timeout');
+    console.error('  --interval  poll interval in ms; default 500');
+    process.exit(1);
+  }
+  const { flags } = parseApprovalFlags(args.slice(1), { timeout: true, interval: true });
+  // Defaults: 10 minute timeout, 500ms poll interval. Plain client-side
+  // polling per the v3 spec — the server's /await endpoint is a single
+  // non-blocking read, so the CLI is the source of truth for cadence.
+  const totalTimeoutMs = flags.timeout ? parseInt(flags.timeout, 10) : 600_000;
+  const intervalMs = flags.interval ? parseInt(flags.interval, 10) : 500;
+  const deadline = Date.now() + totalTimeoutMs;
+  for (;;) {
+    const row = await api('GET', `/api/approvals/${encodeURIComponent(id)}`);
+    if (row.state && row.state !== 'pending') {
+      console.log(JSON.stringify(row, null, 2));
+      return;
+    }
+    if (Date.now() >= deadline) {
+      console.error(`timeout: approval ${id} still pending after ${totalTimeoutMs}ms`);
+      process.exit(2);
+    }
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+}
+
+async function approvalList(args) {
+  // Both --channel and --state are optional; the server AND's them when
+  // present and returns the cross-channel feed when both are omitted.
+  const { flags } = parseApprovalFlags(args, { channel: true, state: true });
+  const qs = new URLSearchParams();
+  if (flags.channel) qs.set('channel', flags.channel);
+  if (flags.state) qs.set('state', flags.state);
+  const path = qs.toString() ? `/api/approvals?${qs.toString()}` : '/api/approvals';
+  const data = await api('GET', path);
+  console.log(JSON.stringify(data, null, 2));
+}
+
+cmd('approval', 'approval <create|get|set|withdraw|await|list> [args...]', 'Manage approval records', async (args) => {
+  const sub = args[0];
+  const rest = args.slice(1);
+  switch (sub) {
+    case 'create':   return approvalCreate(rest);
+    case 'get':      return approvalGet(rest);
+    case 'set':      return approvalSet(rest);
+    case 'withdraw': return approvalWithdraw(rest);
+    case 'await':    return approvalAwait(rest);
+    case 'list':     return approvalList(rest);
+    default:
+      console.error('usage: collab approval <create|get|set|withdraw|await|list> [args...]');
+      console.error('  create --channel <c> [--payload <json>]      (payload defaults to "{}")');
+      console.error('  get <id>');
+      console.error('  set <id> --state <approved|rejected|amended> [--payload <json>]');
+      console.error('  withdraw <id>');
+      console.error('  await <id> [--timeout <ms>] [--interval <ms>] (timeout defaults to 600000 ms)');
+      console.error('  list [--channel <c>] [--state <s>]');
+      process.exit(1);
+  }
 });
 
 cmd('spawn', 'spawn <name> [task...]', 'Spawn an agent', async (args) => {
@@ -801,10 +1072,34 @@ cmd('destinations', 'destinations {list|add|delete|test}', 'Manage notification 
 // ── Main ──
 
 function showHelp() {
+  const ephemeral = isEphemeralMode();
+
+  // Mode-specific banner: ephemeral agents are reminded they own exactly one
+  // message and must finalise via `collab complete`/`fail`. Persistent agents
+  // get their address and inbox guidance.
+  if (ephemeral) {
+    const messageId = process.env['MESSAGE_ID'];
+    const agentTemplate = process.env['AGENT_TEMPLATE'];
+    const topicName = process.env['TOPIC_NAME'] ?? '<unknown>';
+    console.log(`You are handling message ${messageId} on topic ${agentTemplate}/${topicName}. Call \`collab complete --reply '<json>'\` when done, or \`collab fail --reason <text>\` to signal failure.\n`);
+  } else {
+    const agent = process.env['COLLAB_AGENT'] ?? '<unset>';
+    console.log(`Agent: ${agent}. Send messages with: \`collab send <target> --topic <t> <msg>\`. Inbox is delivered via tmux paste.\n`);
+  }
+
   console.log('collab — CLI for agentic-collab orchestrator\n');
   console.log('Usage: collab <command> [args...]\n');
   console.log('Commands:');
-  const visible = Object.values(COMMANDS).filter(c => !c.hidden);
+
+  // Filter by mode: 'both' is always visible; 'ephemeral'-only commands hide
+  // in persistent mode; 'persistent'-only commands hide in ephemeral mode.
+  // Aliases inherit `mode` via object-spread at registration.
+  const visible = Object.values(COMMANDS).filter(c => {
+    if (c.hidden) return false;
+    if (c.mode === 'both' || c.mode === undefined) return true;
+    if (ephemeral) return c.mode === 'ephemeral';
+    return c.mode === 'persistent';
+  });
   const maxUsage = Math.max(...visible.map(c => c.usage.length));
   for (const c of visible) {
     console.log(`  ${c.usage.padEnd(maxUsage + 2)}  ${c.desc}`);

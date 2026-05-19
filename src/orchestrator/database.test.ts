@@ -914,4 +914,122 @@ describe('Database', () => {
       assert.notEqual(after, '2020-01-01T00:00:00Z');
     });
   });
+
+  // v3: ephemeral template surface. Schema BC: `agents` table columns are
+  // byte-identical to before v3; `agent_templates` and `topics` are new and
+  // sit alongside it.
+  describe('agent_templates and topics tables (v3)', () => {
+    let tDir: string;
+    let tDb: Database;
+
+    before(() => {
+      tDir = mkdtempSync(join(tmpdir(), 'agentic-collab-tpl-'));
+      tDb = new Database(join(tDir, 'tpl.db'));
+    });
+
+    after(() => {
+      tDb.close();
+      rmSync(tDir, { recursive: true, force: true });
+    });
+
+    it('fresh DB creates agent_templates and topics tables', () => {
+      const tpl = tDb.rawDb.prepare("PRAGMA table_info(agent_templates)").all() as Array<Record<string, unknown>>;
+      const topics = tDb.rawDb.prepare("PRAGMA table_info(topics)").all() as Array<Record<string, unknown>>;
+      assert.ok(tpl.length > 0);
+      assert.ok(topics.length > 0);
+    });
+
+    it('agents column set is byte-identical to the pre-v3 snapshot', () => {
+      // Hard-coded snapshot of the `agents` column set from main (database.ts
+      // base schema + sort_order/hook_spawn/hook_start/captured_vars special
+      // cases + field-registry config columns: launch_env, account, custom_buttons,
+      // indicators, agent_group, icon). If any field-registry change adds a
+      // new column, this gate trips so we know the Q2 BC contract was broken.
+      const expected = [
+        'account', 'agent_group', 'captured_vars', 'created_at',
+        'current_session_id', 'custom_buttons', 'cwd', 'engine', 'failed_at',
+        'failure_reason', 'hook_compact', 'hook_exit', 'hook_interrupt',
+        'hook_resume', 'hook_spawn', 'hook_start', 'hook_submit', 'icon',
+        'indicators', 'last_activity', 'last_context_pct', 'launch_env',
+        'model', 'name', 'permissions', 'persona', 'proxy_host', 'proxy_id',
+        'reload_queued', 'reload_task', 'sort_order', 'spawn_count', 'state',
+        'state_before_shutdown', 'thinking', 'tmux_session', 'version',
+      ].sort();
+      const cols = (tDb.rawDb.prepare('PRAGMA table_info(agents)').all() as Array<Record<string, unknown>>)
+        .map((c) => c['name'] as string)
+        .sort();
+      assert.deepEqual(cols, expected);
+    });
+
+    it('upsertAgentTemplate and getAgentTemplate round-trip', () => {
+      tDb.upsertAgentTemplate({
+        id: 'rt',
+        personaPath: '/personas/rt.md',
+        engine: 'claude',
+        model: 'opus',
+        persistent: false,
+        cwdBase: '/tmp/rt',
+        cwdTemplate: '/tmp/rt/wt-{{message_id}}',
+        repoRoot: '/tmp/rt',
+        hookStart: 'bash run.sh',
+        hookExit: null,
+        hookPrepare: 'git worktree add',
+        hookCleanup: 'git worktree remove',
+        createdAt: '',
+        updatedAt: '',
+      });
+      const fetched = tDb.getAgentTemplate('rt')!;
+      assert.equal(fetched.id, 'rt');
+      assert.equal(fetched.persistent, false);
+      assert.equal(fetched.cwdBase, '/tmp/rt');
+      assert.equal(fetched.repoRoot, '/tmp/rt');
+      assert.equal(fetched.hookPrepare, 'git worktree add');
+    });
+
+    it('replaceTopicsForTemplate deletes existing rows then inserts new ones', () => {
+      // template already exists from prior test
+      tDb.replaceTopicsForTemplate('rt', [
+        {
+          agentTemplate: 'rt', name: 'a',
+          hookPrepareOverride: null, hookStartOverride: null, hookCleanupOverride: null,
+          monitorTemplate: null, concurrency: 1, schemaPath: null, replySchemaPath: null,
+        },
+        {
+          agentTemplate: 'rt', name: 'b',
+          hookPrepareOverride: null, hookStartOverride: null, hookCleanupOverride: null,
+          monitorTemplate: 'mon', concurrency: 4, schemaPath: './s.json', replySchemaPath: null,
+        },
+      ]);
+      let topics = tDb.getTopicsForTemplate('rt');
+      assert.deepEqual(topics.map((t) => t.name).sort(), ['a', 'b']);
+
+      // Replace with just one row.
+      tDb.replaceTopicsForTemplate('rt', [
+        {
+          agentTemplate: 'rt', name: 'c',
+          hookPrepareOverride: null, hookStartOverride: null, hookCleanupOverride: null,
+          monitorTemplate: null, concurrency: 1, schemaPath: null, replySchemaPath: null,
+        },
+      ]);
+      topics = tDb.getTopicsForTemplate('rt');
+      assert.deepEqual(topics.map((t) => t.name), ['c']);
+    });
+
+    it('listAgentTemplates returns rows in id order', () => {
+      tDb.upsertAgentTemplate({
+        id: 'aaa', personaPath: null, engine: 'claude', model: null, persistent: true,
+        cwdBase: null, cwdTemplate: null, repoRoot: null,
+        hookStart: null, hookExit: null, hookPrepare: null, hookCleanup: null,
+        createdAt: '', updatedAt: '',
+      });
+      tDb.upsertAgentTemplate({
+        id: 'zzz', personaPath: null, engine: 'codex', model: null, persistent: true,
+        cwdBase: null, cwdTemplate: null, repoRoot: null,
+        hookStart: null, hookExit: null, hookPrepare: null, hookCleanup: null,
+        createdAt: '', updatedAt: '',
+      });
+      const ids = tDb.listAgentTemplates().map((t) => t.id);
+      assert.ok(ids.indexOf('aaa') < ids.indexOf('zzz'));
+    });
+  });
 });

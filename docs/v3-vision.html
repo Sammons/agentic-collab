@@ -1,0 +1,649 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>agentic-collab 3.0 — vision</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --bg-elev: #161b22;
+    --bg-card: #1c2128;
+    --border: #30363d;
+    --border-dim: #21262d;
+    --fg: #e6edf3;
+    --fg-dim: #8b949e;
+    --accent: #58a6ff;
+    --accent2: #7ee787;
+    --orange: #ffa657;
+    --red: #ff7b72;
+    --purple: #d2a8ff;
+    --yellow: #e3b341;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--mono);
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 48px 32px 96px;
+    line-height: 1.55;
+    font-size: 13.5px;
+  }
+  h1 { font-size: 32px; font-weight: 600; margin: 0 0 6px; letter-spacing: -0.02em; }
+  h2 { font-size: 18px; margin: 56px 0 16px; color: var(--accent); border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+  h3 { font-size: 14px; margin: 20px 0 10px; color: var(--accent2); }
+  .subtitle { color: var(--fg-dim); margin-bottom: 8px; }
+  .meta { color: var(--fg-dim); font-size: 12px; margin-bottom: 24px; }
+  .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 6px; padding: 16px 20px; margin: 12px 0; }
+  .card.tight { padding: 12px 16px; }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; }
+  code { background: var(--bg-elev); padding: 1px 6px; border-radius: 3px; color: var(--orange); font-size: 12.5px; }
+  pre { background: var(--bg-elev); border: 1px solid var(--border-dim); border-radius: 6px; padding: 14px 18px; overflow-x: auto; font-size: 12.5px; line-height: 1.5; }
+  pre code { background: none; padding: 0; color: var(--fg); }
+  .step { display: flex; gap: 14px; align-items: flex-start; margin: 12px 0; }
+  .step-num { background: var(--accent); color: var(--bg); width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 600; flex-shrink: 0; font-size: 12px; }
+  .step-body { flex: 1; padding-top: 1px; }
+  table { border-collapse: collapse; width: 100%; margin: 8px 0; font-size: 12.5px; }
+  th, td { border: 1px solid var(--border); padding: 8px 12px; text-align: left; vertical-align: top; }
+  th { background: var(--bg-elev); color: var(--accent); font-weight: 600; }
+  .dim { color: var(--fg-dim); }
+  .accent { color: var(--accent); }
+  .accent2 { color: var(--accent2); }
+  .orange { color: var(--orange); }
+  .purple { color: var(--purple); }
+  .red { color: var(--red); }
+  .yellow { color: var(--yellow); }
+  svg { width: 100%; height: auto; display: block; }
+  .label-strong { font-weight: 600; color: var(--fg); }
+  .tag { display: inline-block; background: var(--bg-elev); border: 1px solid var(--border); border-radius: 3px; padding: 1px 8px; font-size: 11.5px; color: var(--accent); margin-right: 4px; }
+  .tag.new { color: var(--accent2); border-color: var(--accent2); }
+  .tag.kept { color: var(--fg-dim); }
+  .tag.drop { color: var(--red); border-color: var(--red); }
+  ul.tight { margin: 6px 0; padding-left: 22px; }
+  ul.tight li { margin: 3px 0; }
+  .legend { display: flex; gap: 18px; font-size: 12px; color: var(--fg-dim); flex-wrap: wrap; margin: 8px 0 4px; }
+  .legend-dot { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
+  .toc { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 12px; margin: 16px 0 0; }
+  .toc a { color: var(--fg-dim); text-decoration: none; }
+  .toc a:hover { color: var(--accent); }
+</style>
+</head>
+<body>
+
+<h1>agentic-collab 3.0</h1>
+<div class="subtitle">topics as ephemeral-spawn addresses · messaging unchanged · proxy stays thin</div>
+<div class="meta">design diamond · rev 16 · companion to <code>docs/v3-vision.md</code></div>
+
+<div class="toc">
+  <a href="#north-star">north star</a>
+  <a href="#components">components</a>
+  <a href="#addresses">addresses</a>
+  <a href="#delivery">topic delivery</a>
+  <a href="#template">agent template</a>
+  <a href="#approvals">approvals</a>
+  <a href="#cli">cli</a>
+  <a href="#data">data model</a>
+  <a href="#proxy">proxy role</a>
+  <a href="#recovery">crash recovery</a>
+  <a href="#delta">what changes</a>
+  <a href="#scope">scope boundaries</a>
+</div>
+
+<!-- ─────────────────────────────────────────────────────────── -->
+<h2 id="north-star">North star</h2>
+<div class="card">
+  Inter-agent messaging is <span class="label-strong">unchanged</span>. Publishers send to an address; they don't care what's on the other side. New: a class of address — a <span class="accent2 label-strong">topic</span> declared by an ephemeral agent template — that, when delivered to, runs a host-shell <code>prepare</code> hook, creates a tmux session, pastes the engine <code>start</code> command into it, waits for the agent to signal completion, then runs <code>cleanup</code>.
+  <br><br>
+  The publisher writes the same <code>send(addr, msg)</code> either way.
+</div>
+
+<!-- ─────────────────────────────────────────────────────────── -->
+<h2 id="components">Components</h2>
+<div class="legend">
+  <span><span class="legend-dot" style="background:#58a6ff"></span>orchestrator (Docker)</span>
+  <span><span class="legend-dot" style="background:#7ee787"></span>proxy (host)</span>
+  <span><span class="legend-dot" style="background:#ffa657"></span>persistent agent</span>
+  <span><span class="legend-dot" style="background:#d2a8ff"></span>ephemeral instance</span>
+  <span><span class="legend-dot" style="background:#e3b341"></span>human</span>
+</div>
+
+<svg viewBox="0 0 1100 540" xmlns="http://www.w3.org/2000/svg" font-family="ui-monospace, monospace" font-size="12">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#8b949e"/>
+    </marker>
+    <marker id="arr-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#58a6ff"/>
+    </marker>
+    <marker id="arr-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#7ee787"/>
+    </marker>
+  </defs>
+
+  <!-- Human / dashboard -->
+  <rect x="40" y="30" width="160" height="60" rx="6" fill="#1c2128" stroke="#e3b341" stroke-width="1.5"/>
+  <text x="120" y="55" text-anchor="middle" fill="#e3b341" font-weight="600">Human / UI</text>
+  <text x="120" y="74" text-anchor="middle" fill="#8b949e" font-size="11">approvals · topic browser</text>
+
+  <!-- Orchestrator -->
+  <rect x="320" y="30" width="460" height="180" rx="6" fill="#1c2128" stroke="#58a6ff" stroke-width="1.5"/>
+  <text x="550" y="55" text-anchor="middle" fill="#58a6ff" font-weight="600">Orchestrator (Docker)</text>
+  <line x1="340" y1="68" x2="760" y2="68" stroke="#30363d"/>
+  <text x="340" y="90" fill="#e6edf3">SQLite WAL · HTTP API · WebSocket</text>
+  <text x="340" y="110" fill="#7ee787">+ topic_queue · agent_instances · approvals</text>
+  <text x="340" y="130" fill="#e6edf3">message dispatch · cool-down · lifecycle locks</text>
+  <text x="340" y="150" fill="#7ee787">+ instance reaper · address resolver</text>
+  <text x="340" y="170" fill="#e6edf3">persona/template loader</text>
+  <text x="340" y="190" fill="#8b949e" font-size="11">agents/*.md  →  agent_templates + topics</text>
+
+  <!-- Proxy -->
+  <rect x="320" y="270" width="460" height="120" rx="6" fill="#1c2128" stroke="#7ee787" stroke-width="1.5"/>
+  <text x="550" y="295" text-anchor="middle" fill="#7ee787" font-weight="600">Proxy (host)</text>
+  <line x1="340" y1="308" x2="760" y2="308" stroke="#30363d"/>
+  <text x="340" y="330" fill="#e6edf3">/command : create_session, paste, exec, kill_session, …</text>
+  <text x="340" y="350" fill="#e6edf3">/upload  : file streaming</text>
+  <text x="340" y="370" fill="#8b949e" font-size="11">no new commands · still thin · still stateless</text>
+
+  <!-- Persistent agent -->
+  <rect x="40" y="270" width="220" height="120" rx="6" fill="#1c2128" stroke="#ffa657" stroke-width="1.5"/>
+  <text x="150" y="295" text-anchor="middle" fill="#ffa657" font-weight="600">Persistent agent</text>
+  <line x1="60" y1="308" x2="240" y2="308" stroke="#30363d"/>
+  <text x="60" y="330" fill="#e6edf3">long-running tmux</text>
+  <text x="60" y="350" fill="#e6edf3" font-size="11.5">addr: agent:gitea-lead</text>
+  <text x="60" y="372" fill="#8b949e" font-size="11">behaviour: unchanged</text>
+
+  <!-- Ephemeral instance -->
+  <rect x="840" y="270" width="220" height="120" rx="6" fill="#1c2128" stroke="#d2a8ff" stroke-width="1.5"/>
+  <text x="950" y="295" text-anchor="middle" fill="#d2a8ff" font-weight="600">Ephemeral instance</text>
+  <line x1="860" y1="308" x2="1040" y2="308" stroke="#30363d"/>
+  <text x="860" y="330" fill="#e6edf3">worktree · tmux · engine</text>
+  <text x="860" y="350" fill="#e6edf3" font-size="11.5">addr: agent:tmpl/inst-id</text>
+  <text x="860" y="372" fill="#8b949e" font-size="11">life: one message</text>
+
+  <!-- Topic queue (under orchestrator) -->
+  <rect x="320" y="430" width="460" height="80" rx="6" fill="#1c2128" stroke="#d2a8ff" stroke-width="1" stroke-dasharray="4 3"/>
+  <text x="550" y="455" text-anchor="middle" fill="#d2a8ff" font-weight="600">topic:&lt;template&gt;/&lt;name&gt; queue</text>
+  <text x="340" y="478" fill="#8b949e" font-size="11">single-consumer · drains by spawning ephemeral instances</text>
+  <text x="340" y="497" fill="#8b949e" font-size="11">examples: topic:aws-account-lead/provision · topic:gitea-lead/repo-create</text>
+
+  <!-- Arrows: human → orchestrator -->
+  <line x1="200" y1="60" x2="318" y2="60" stroke="#8b949e" stroke-width="1.4" marker-end="url(#arr)"/>
+  <text x="259" y="52" text-anchor="middle" fill="#8b949e" font-size="11">approvals · sends</text>
+
+  <!-- Orchestrator → Proxy -->
+  <line x1="550" y1="210" x2="550" y2="268" stroke="#58a6ff" stroke-width="1.4" marker-end="url(#arr-blue)"/>
+  <text x="560" y="245" fill="#58a6ff" font-size="11">proxyDispatch</text>
+
+  <!-- Proxy → persistent agent (paste) -->
+  <line x1="320" y1="335" x2="262" y2="335" stroke="#7ee787" stroke-width="1.4" marker-end="url(#arr-green)"/>
+  <text x="284" y="328" fill="#7ee787" font-size="11" text-anchor="middle">paste</text>
+
+  <!-- Proxy → ephemeral (start hook exec) -->
+  <line x1="780" y1="335" x2="838" y2="335" stroke="#7ee787" stroke-width="1.4" marker-end="url(#arr-green)"/>
+  <text x="810" y="328" fill="#7ee787" font-size="11" text-anchor="middle">exec start hook</text>
+
+  <!-- Topic queue → ephemeral (spawn arrow back up) -->
+  <path d="M 780 470 Q 870 470 950 392" fill="none" stroke="#d2a8ff" stroke-width="1.4" marker-end="url(#arr)"/>
+  <text x="880" y="438" fill="#d2a8ff" font-size="11">spawn</text>
+
+  <!-- Ephemeral → orchestrator (collab complete) -->
+  <path d="M 950 268 Q 950 230 780 130" fill="none" stroke="#d2a8ff" stroke-width="1.4" marker-end="url(#arr)"/>
+  <text x="880" y="200" fill="#d2a8ff" font-size="11">collab complete</text>
+</svg>
+
+<!-- ─────────────────────────────────────────────────────────── -->
+<h2 id="addresses">Addresses</h2>
+<div class="grid-3">
+  <div class="card">
+    <div><span class="tag kept">unchanged</span><span class="orange label-strong">agent:</span></div>
+    <pre><code>agent:gitea-lead</code></pre>
+    <div class="dim">Persistent agent's inbox.</div>
+    <br>
+    <pre><code>agent:aws-account-lead/inst-7a3f</code></pre>
+    <div class="dim">A live ephemeral instance. Messages paste into its tmux session for the duration of its run.</div>
+  </div>
+  <div class="card">
+    <div><span class="tag new">new</span><span class="purple label-strong">topic:</span></div>
+    <pre><code>topic:aws-account-lead/provision</code></pre>
+    <div class="dim">Sending enqueues; the orchestrator drains by spawning ephemeral instances of the declaring template.</div>
+    <br>
+    <div class="dim">Topic names scoped to their declaring template — two templates may each declare <code>provision</code> without collision.</div>
+  </div>
+  <div class="card">
+    <div><span class="tag new">new</span><span class="accent2 label-strong">approval:</span></div>
+    <pre><code>approval:aws-account-provision</code></pre>
+    <div class="dim">A human-decision channel. Approvals are CRUD records categorised by channel — not message queues that spawn workers.</div>
+    <br>
+    <div class="dim">Distinct prefix prevents the "topic = spawn compute" overload.</div>
+  </div>
+</div>
+
+<div class="card tight">
+  <span class="dim">Send call is identical for agent: and topic:</span>
+  <pre><code>collab send &lt;addr&gt; --payload '{...}' [--in-reply-to &lt;id&gt;]</code></pre>
+  Fire-and-forget. Replies arrive as separate inbound messages with optional <code>in_reply_to</code>. Approvals use their own CRUD subcommands.
+</div>
+
+<!-- ─────────────────────────────────────────────────────────── -->
+<h2 id="delivery">Topic delivery sequence</h2>
+
+<div class="card tight dim" style="margin-bottom:18px">
+  Two kinds of hooks, by execution surface:
+  <span class="accent2">prepare</span> / <span class="accent2">cleanup</span> are <em>host-shell</em> (run via proxy <code>exec</code>) ·
+  <span class="orange">start</span> is <em>tmux paste</em> (typed into the pane).
+  The proxy gets <span class="label-strong">no new commands</span>.
+</div>
+
+<svg viewBox="0 0 1100 620" xmlns="http://www.w3.org/2000/svg" font-family="ui-monospace, monospace" font-size="12">
+  <defs>
+    <marker id="d-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#8b949e"/>
+    </marker>
+  </defs>
+
+  <!-- Lanes -->
+  <text x="80" y="20" fill="#58a6ff" font-weight="600">Orchestrator</text>
+  <text x="370" y="20" fill="#7ee787" font-weight="600">Proxy</text>
+  <text x="660" y="20" fill="#d2a8ff" font-weight="600">Ephemeral instance</text>
+  <text x="940" y="20" fill="#e3b341" font-weight="600">Filesystem</text>
+
+  <line x1="80"  y1="30" x2="80"  y2="610" stroke="#30363d"/>
+  <line x1="370" y1="30" x2="370" y2="610" stroke="#30363d"/>
+  <line x1="660" y1="30" x2="660" y2="610" stroke="#30363d"/>
+  <line x1="940" y1="30" x2="940" y2="610" stroke="#30363d"/>
+
+  <!-- Step 1: allocate -->
+  <circle cx="80" cy="60" r="11" fill="#58a6ff"/><text x="80" y="64" text-anchor="middle" fill="#0d1117" font-weight="700">1</text>
+  <rect x="100" y="46" width="240" height="30" rx="4" fill="#1c2128" stroke="#30363d"/>
+  <text x="110" y="65" fill="#e6edf3">allocate IPC paths, MESSAGE_ID</text>
+  <line x1="340" y1="60" x2="938" y2="60" stroke="#8b949e" stroke-dasharray="3 3" marker-end="url(#d-arr)"/>
+  <text x="640" y="52" text-anchor="middle" fill="#8b949e" font-size="11">write $MESSAGE_PATH, empty $REPLY_PATH + $STATUS_PATH</text>
+
+  <!-- Step 2: prepare via proxy exec -->
+  <circle cx="80" cy="105" r="11" fill="#58a6ff"/><text x="80" y="109" text-anchor="middle" fill="#0d1117" font-weight="700">2</text>
+  <rect x="100" y="91" width="240" height="30" rx="4" fill="#1c2128" stroke="#7ee787"/>
+  <text x="110" y="110" fill="#7ee787">prepare hook → proxy exec</text>
+  <line x1="340" y1="105" x2="368" y2="105" stroke="#7ee787" marker-end="url(#d-arr)"/>
+
+  <!-- Step 2b: proxy executes host shell -->
+  <circle cx="370" cy="140" r="11" fill="#7ee787"/><text x="370" y="144" text-anchor="middle" fill="#0d1117" font-weight="700">2b</text>
+  <rect x="390" y="126" width="240" height="30" rx="4" fill="#1c2128" stroke="#30363d"/>
+  <text x="400" y="145" fill="#e6edf3">host shell: git worktree add</text>
+  <line x1="630" y1="140" x2="938" y2="140" stroke="#8b949e" stroke-dasharray="3 3" marker-end="url(#d-arr)"/>
+  <text x="785" y="132" text-anchor="middle" fill="#8b949e" font-size="11">worktree dir created at $WORKTREE_PATH</text>
+
+  <!-- Step 3: create_session -->
+  <circle cx="80" cy="185" r="11" fill="#58a6ff"/><text x="80" y="189" text-anchor="middle" fill="#0d1117" font-weight="700">3</text>
+  <rect x="100" y="171" width="240" height="30" rx="4" fill="#1c2128" stroke="#30363d"/>
+  <text x="110" y="190" fill="#e6edf3">create_session against cwd_base</text>
+  <line x1="340" y1="185" x2="368" y2="185" stroke="#8b949e" marker-end="url(#d-arr)"/>
+
+  <!-- Step 4: tmux set-environment + paste start -->
+  <circle cx="80" cy="230" r="11" fill="#58a6ff"/><text x="80" y="234" text-anchor="middle" fill="#0d1117" font-weight="700">4</text>
+  <rect x="100" y="216" width="240" height="30" rx="4" fill="#1c2128" stroke="#ffa657"/>
+  <text x="110" y="235" fill="#ffa657">set-env + paste start hook</text>
+  <line x1="340" y1="230" x2="368" y2="230" stroke="#ffa657" marker-end="url(#d-arr)"/>
+
+  <!-- Step 4b: proxy pastes into tmux -->
+  <circle cx="370" cy="265" r="11" fill="#7ee787"/><text x="370" y="269" text-anchor="middle" fill="#0d1117" font-weight="700">4b</text>
+  <rect x="390" y="251" width="240" height="30" rx="4" fill="#1c2128" stroke="#30363d"/>
+  <text x="400" y="270" fill="#e6edf3">paste into tmux pane → engine starts</text>
+  <line x1="630" y1="265" x2="658" y2="265" stroke="#8b949e" marker-end="url(#d-arr)"/>
+
+  <!-- Step 5: agent runs -->
+  <circle cx="660" cy="310" r="11" fill="#d2a8ff"/><text x="660" y="314" text-anchor="middle" fill="#0d1117" font-weight="700">5</text>
+  <rect x="680" y="296" width="240" height="30" rx="4" fill="#1c2128" stroke="#30363d"/>
+  <text x="690" y="315" fill="#e6edf3">agent runs; collab send / approval await</text>
+
+  <!-- Step 6: collab complete -->
+  <circle cx="660" cy="355" r="11" fill="#d2a8ff"/><text x="660" y="359" text-anchor="middle" fill="#0d1117" font-weight="700">6</text>
+  <rect x="680" y="341" width="240" height="30" rx="4" fill="#1c2128" stroke="#30363d"/>
+  <text x="690" y="360" fill="#e6edf3">collab complete --reply '{...}'</text>
+  <line x1="920" y1="355" x2="938" y2="355" stroke="#8b949e" marker-end="url(#d-arr)"/>
+  <text x="930" y="343" text-anchor="middle" fill="#8b949e" font-size="11">$STATUS_PATH=ok, $REPLY_PATH</text>
+
+  <!-- Step 6b: HTTP notify (dashed back to orchestrator) -->
+  <path d="M 680 365 Q 380 400 100 367" fill="none" stroke="#d2a8ff" stroke-dasharray="3 3" stroke-width="1.2" marker-end="url(#d-arr)"/>
+  <text x="380" y="414" fill="#d2a8ff" font-size="11" text-anchor="middle">HTTP notify (or reaper picks up status file)</text>
+
+  <!-- Step 7: send reply -->
+  <circle cx="80" cy="430" r="11" fill="#58a6ff"/><text x="80" y="434" text-anchor="middle" fill="#0d1117" font-weight="700">7</text>
+  <rect x="100" y="416" width="240" height="30" rx="4" fill="#1c2128" stroke="#30363d"/>
+  <text x="110" y="435" fill="#e6edf3">send(REPLY_TO_ADDR, reply, in_reply_to)</text>
+
+  <!-- Step 8: kill_session -->
+  <circle cx="80" cy="475" r="11" fill="#58a6ff"/><text x="80" y="479" text-anchor="middle" fill="#0d1117" font-weight="700">8</text>
+  <rect x="100" y="461" width="240" height="30" rx="4" fill="#1c2128" stroke="#30363d"/>
+  <text x="110" y="480" fill="#e6edf3">kill_session</text>
+  <line x1="340" y1="475" x2="368" y2="475" stroke="#8b949e" marker-end="url(#d-arr)"/>
+
+  <!-- Step 9: cleanup via proxy exec -->
+  <circle cx="80" cy="520" r="11" fill="#58a6ff"/><text x="80" y="524" text-anchor="middle" fill="#0d1117" font-weight="700">9</text>
+  <rect x="100" y="506" width="240" height="30" rx="4" fill="#1c2128" stroke="#7ee787"/>
+  <text x="110" y="525" fill="#7ee787">cleanup hook → proxy exec</text>
+  <line x1="340" y1="520" x2="368" y2="520" stroke="#7ee787" marker-end="url(#d-arr)"/>
+
+  <!-- Step 9b: proxy executes cleanup shell -->
+  <circle cx="370" cy="555" r="11" fill="#7ee787"/><text x="370" y="559" text-anchor="middle" fill="#0d1117" font-weight="700">9b</text>
+  <rect x="390" y="541" width="240" height="30" rx="4" fill="#1c2128" stroke="#30363d"/>
+  <text x="400" y="560" fill="#e6edf3">host shell: git worktree remove</text>
+  <line x1="630" y1="555" x2="938" y2="555" stroke="#8b949e" stroke-dasharray="3 3" marker-end="url(#d-arr)"/>
+  <text x="785" y="582" text-anchor="middle" fill="#8b949e" font-size="11">worktree dir removed</text>
+</svg>
+
+<!-- ─────────────────────────────────────────────────────────── -->
+<h2 id="template">Agent template anatomy</h2>
+<div class="card">
+  Same shape as today's persona files (YAML frontmatter + markdown body). Lives in <code>agents/*.md</code>.
+  New fields are scoped to <em>ephemeral</em> templates: <code>persistent</code>, <code>cwd_base</code>, <code>cwd_template</code>, <code>repo_root</code>, <code>prepare</code>, <code>cleanup</code>, <code>topics</code>.
+  Existing persona files load unchanged with <code>persistent: true</code>.
+</div>
+
+<pre><code>---
+id: aws-account-lead
+<span style="color:#7ee787">persistent: false</span>
+engine: claude
+model: opus
+
+<span class="dim"># cwd_base is real & existing — used as create_session cwd.</span>
+<span style="color:#7ee787">cwd_base: /var/agentic/work/aws-account-lead</span>
+<span class="dim"># cwd_template is per-message; prepare creates this directory.</span>
+<span style="color:#7ee787">cwd_template: /var/agentic/work/aws-account-lead/wt-{{message_id}}</span>
+
+<span class="dim"># Host-shell hooks (run via proxy exec). NEW mechanism.</span>
+<span style="color:#7ee787">prepare</span>: |
+  git -C "$REPO_ROOT" worktree add "$WORKTREE_PATH" main
+<span style="color:#7ee787">cleanup</span>: |
+  git -C "$REPO_ROOT" worktree remove --force "$WORKTREE_PATH"
+
+<span class="dim"># Tmux-paste hook (today's mechanism). Typed into the pane.</span>
+<span style="color:#ffa657">start</span>: |
+  cd "$WORKTREE_PATH" && claude --session-id "$MESSAGE_ID" &lt; "$MESSAGE_PATH"
+
+<span style="color:#7ee787">topics:
+  - name: provision
+    schema: ./schemas/provision.json
+    reply_schema: ./schemas/provision-reply.json
+    concurrency: 1
+    monitor_template: aws-account-monitor
+  - name: teardown
+    schema: ./schemas/teardown.json
+    prepare: ./teardown-prepare.sh         # optional per-topic override</span>
+---
+
+# AWS Account Lead
+
+You provision and tear down AWS accounts...
+</code></pre>
+
+<h3>Two env contracts, by hook kind</h3>
+<div class="grid-2">
+  <div class="card tight">
+    <div class="label-strong accent2">prepare / cleanup · host shell (proxy exec)</div>
+    <ul class="tight">
+      <li><code>MESSAGE_PATH</code>, <code>MESSAGE_CONTENT</code></li>
+      <li><code>REPLY_PATH</code>, <code>STATUS_PATH</code> · cleanup can inspect outcome</li>
+      <li><code>WORKTREE_PATH</code> · prepare creates, cleanup removes</li>
+      <li><code>CWD_BASE</code>, <code>REPO_ROOT</code></li>
+      <li><code>AGENT_TEMPLATE</code>, <code>TOPIC_NAME</code>, <code>MESSAGE_ID</code></li>
+      <li><code>INSTANCE_ADDR</code>, <code>REPLY_TO_ADDR</code></li>
+    </ul>
+  </div>
+  <div class="card tight">
+    <div class="label-strong orange">start · tmux paste</div>
+    <div class="dim" style="margin-bottom:6px">Same vars exported into the session via <code>tmux set-environment</code> before paste, so the line can reference them and they expand as it's typed.</div>
+    <ul class="tight">
+      <li>all of the above, plus</li>
+      <li><code>TMUX_SESSION</code> · the session that was just created</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ─────────────────────────────────────────────────────────── -->
+<h2 id="approvals">Approvals — CRUD + auto-notify</h2>
+<div class="card tight dim" style="margin-bottom:14px">
+  Approvals are categorised by <span class="accent2">channel</span> (<code>approval:&lt;channel&gt;</code>), not by topic. A channel is a UI feed label, not a routing target — the auto-notify message goes to the <em>requester's agent address</em>, never to <code>approval:</code>.
+</div>
+
+<svg viewBox="0 0 1100 280" xmlns="http://www.w3.org/2000/svg" font-family="ui-monospace, monospace" font-size="12">
+  <defs>
+    <marker id="a-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#8b949e"/>
+    </marker>
+  </defs>
+
+  <!-- Agent -->
+  <rect x="40" y="50" width="180" height="80" rx="6" fill="#1c2128" stroke="#d2a8ff"/>
+  <text x="130" y="80" text-anchor="middle" fill="#d2a8ff" font-weight="600">Agent</text>
+  <text x="130" y="100" text-anchor="middle" fill="#8b949e" font-size="11">collab approval create</text>
+  <text x="130" y="116" text-anchor="middle" fill="#8b949e" font-size="11">collab approval await</text>
+
+  <!-- Orchestrator -->
+  <rect x="320" y="50" width="180" height="80" rx="6" fill="#1c2128" stroke="#58a6ff"/>
+  <text x="410" y="80" text-anchor="middle" fill="#58a6ff" font-weight="600">Orchestrator</text>
+  <text x="410" y="100" text-anchor="middle" fill="#8b949e" font-size="11">approvals table</text>
+  <text x="410" y="116" text-anchor="middle" fill="#8b949e" font-size="11">CRUD + ws event</text>
+
+  <!-- Approval channel (UI feed) -->
+  <rect x="600" y="50" width="180" height="80" rx="6" fill="#1c2128" stroke="#7ee787" stroke-dasharray="4 3"/>
+  <text x="690" y="80" text-anchor="middle" fill="#7ee787" font-weight="600">approval:&lt;channel&gt;</text>
+  <text x="690" y="100" text-anchor="middle" fill="#8b949e" font-size="11">UI feed · approval-changed event</text>
+
+  <!-- Human -->
+  <rect x="880" y="50" width="180" height="80" rx="6" fill="#1c2128" stroke="#e3b341"/>
+  <text x="970" y="80" text-anchor="middle" fill="#e3b341" font-weight="600">Human</text>
+  <text x="970" y="100" text-anchor="middle" fill="#8b949e" font-size="11">approve · reject · amend</text>
+
+  <!-- Arrows top row -->
+  <line x1="220" y1="90" x2="318" y2="90" stroke="#8b949e" marker-end="url(#a-arr)"/>
+  <text x="269" y="83" text-anchor="middle" fill="#8b949e" font-size="11">1. create --channel</text>
+
+  <line x1="500" y1="90" x2="598" y2="90" stroke="#8b949e" marker-end="url(#a-arr)"/>
+  <text x="549" y="83" text-anchor="middle" fill="#8b949e" font-size="11">2. emit ws event</text>
+
+  <line x1="780" y1="90" x2="878" y2="90" stroke="#8b949e" marker-end="url(#a-arr)"/>
+  <text x="829" y="83" text-anchor="middle" fill="#8b949e" font-size="11">3. UI shows</text>
+
+  <!-- Arrows bottom row -->
+  <line x1="878" y1="210" x2="500" y2="210" stroke="#8b949e" marker-end="url(#a-arr)"/>
+  <text x="690" y="200" text-anchor="middle" fill="#8b949e" font-size="11">4. set state (approved / rejected / amended)</text>
+
+  <line x1="318" y1="210" x2="220" y2="210" stroke="#8b949e" marker-end="url(#a-arr)"/>
+  <text x="269" y="200" text-anchor="middle" fill="#8b949e" font-size="11">5. auto-notify → agent: addr</text>
+
+  <!-- Vertical connectors -->
+  <line x1="410" y1="130" x2="410" y2="210" stroke="#30363d"/>
+  <line x1="130" y1="130" x2="130" y2="210" stroke="#30363d"/>
+  <line x1="970" y1="130" x2="970" y2="210" stroke="#30363d"/>
+
+  <!-- Bottom note: collab approval await polls directly -->
+  <rect x="40" y="240" width="700" height="30" rx="4" fill="#161b22" stroke="#30363d"/>
+  <text x="50" y="260" fill="#8b949e" font-size="11">↻ <tspan fill="#d2a8ff">collab approval await &lt;id&gt;</tspan> polls the orchestrator directly — doesn't depend on the notify message arriving</text>
+</svg>
+
+<h3>Approval subcommands</h3>
+<pre><code>collab approval create --channel &lt;name&gt; --payload &lt;json&gt;    <span class="dim"># returns approval_id</span>
+collab approval get &lt;id&gt;
+collab approval set &lt;id&gt; --state approved|rejected|amended [--payload …]
+collab approval withdraw &lt;id&gt;
+collab approval await &lt;id&gt;                                  <span class="dim"># blocks until terminal</span></code></pre>
+
+<!-- ─────────────────────────────────────────────────────────── -->
+<h2 id="cli">CLI surface — mode-aware</h2>
+<div class="card">
+  The <code>collab</code> binary detects ephemeral context from env (presence of <code>$MESSAGE_ID</code> + <code>$AGENT_TEMPLATE</code> + <code>$REPLY_PATH</code>) and adapts its help text, exposed subcommands, and the system-prompt addendum injected into the engine. Persistent-mode behaviour matches today.
+</div>
+
+<div class="grid-2">
+  <div class="card tight">
+    <div class="label-strong accent">Persistent mode</div>
+    <pre><code>collab send &lt;addr&gt; --payload …
+collab approval create / get / set / withdraw / await</code></pre>
+    <div class="dim">Banner: <em>"You are agent:gitea-lead. Messages arrive in your inbox; reply by sending."</em></div>
+  </div>
+  <div class="card tight">
+    <div class="label-strong purple">Ephemeral mode</div>
+    <pre><code>collab send &lt;addr&gt; --payload …
+collab approval create --channel … / get / set / withdraw / await
+<span class="accent2">collab complete --reply &lt;json&gt;</span>
+<span class="accent2">collab fail --reason &lt;text&gt;</span></code></pre>
+    <div class="dim">Banner: <em>"You are handling message $MESSAGE_ID on topic &lt;tmpl&gt;/&lt;topic&gt;. Call <code>collab complete</code> when done."</em></div>
+  </div>
+</div>
+
+<div class="card tight dim">
+  The system prompt composed by <code>persona.ts</code> also branches on mode: ephemeral agents are told they handle exactly one message and must complete; persistent agents are told they have an ongoing inbox.
+  <br><br>
+  <span class="label-strong">Backwards compat:</span> today's <code>collab send</code> syntax (<code>&lt;target&gt; --topic &lt;category&gt; &lt;message&gt;</code>) keeps working. The <code>--topic</code> flag retains its 2.x meaning (message category); v3's <code>topic:</code> is encoded in the <code>&lt;addr&gt;</code> prefix. The client-side <code>/api/agents</code> target validation in <code>bin/collab</code> is widened to accept prefixed addresses without rejecting them as "no such agent".
+</div>
+
+<!-- ─────────────────────────────────────────────────────────── -->
+<h2 id="data">Data model</h2>
+<div class="legend">
+  <span><span class="legend-dot" style="background:#7ee787"></span>new in 3.0</span>
+  <span><span class="legend-dot" style="background:#8b949e"></span>existing 2.x · untouched</span>
+</div>
+
+<pre><code><span class="accent2">agent_templates</span>    (id PK, persona_path, engine, model, persistent BOOL,
+                    cwd_base?, cwd_template?, repo_root?,
+                    hook_start?, hook_exit?, hook_prepare?, hook_cleanup?,
+                    ...other hooks as today)
+
+<span class="accent2">topics</span>             (agent_template FK, name,
+                    hook_prepare_override?, hook_start_override?, hook_cleanup_override?,
+                    monitor_template?, concurrency, schema?, reply_schema?,
+                    PRIMARY KEY (agent_template, name))
+
+<span class="accent2">topic_queue</span>        (id PK, agent_template FK, topic_name, payload, reply_to_addr?,
+                    in_reply_to?, status, claimed_by_instance?, worktree_path?, created_at)
+
+<span class="accent2">agent_instances</span>    (id PK, agent_template FK, spawned_from_topic?, instance_addr,
+                    tmux_session, worktree_path, proxy_id, state,
+                    monitor_of_instance?, started_at, completed_at?)
+
+<span class="accent2">approvals</span>          (id PK, requester_addr, channel, payload, state,
+                    amendments_json?, created_at, updated_at, decided_by?, decided_at?)
+
+<span class="accent2">approval_events</span>    (approval_id FK, event_type, payload, created_at)
+
+<span class="dim">agents             ← unchanged · persistent agents only · NO new columns
+messages           ← unchanged · today's message inboxes
+locks              ← unchanged · 3-phase lifecycle locking
+events             ← unchanged · audit log</span>
+</code></pre>
+
+<div class="card tight dim">
+  Template-only fields (<code>persistent</code>, <code>cwd_base</code>, <code>cwd_template</code>, <code>repo_root</code>, <code>prepare</code>, <code>cleanup</code>, <code>topics</code>) are stored exclusively in <code>agent_templates</code> via a new template-sync routine — they <span class="label-strong">never</span> flow through <code>field-registry.buildUpsertOptsFromFrontmatter</code>, so no <code>ALTER TABLE agents</code> runs.<br><br>
+  <code>agent_instances</code> is intentionally separate from <code>agents</code> to keep the persistent-agent state machine uncontaminated by ephemeral concerns. Health-monitor and cool-down explicitly exclude rows in <code>agent_instances</code>.
+</div>
+
+<!-- ─────────────────────────────────────────────────────────── -->
+<h2 id="proxy">Proxy role</h2>
+<div class="card">
+  <span class="label-strong">No new commands on the proxy.</span> The existing <code>/command</code> vocabulary suffices: <code>prepare</code>/<code>cleanup</code> go through <code>exec</code>; tmux session via <code>create_session</code> / <code>kill_session</code> / <code>has_session</code>; <code>start</code> goes through today's tmux <code>paste</code> path.
+  <br><br>
+  Active-instance state (instance ↔ tmux session ↔ worktree) lives in the orchestrator's DB (<code>agent_instances</code>), not in the proxy. This preserves the proxy's thin-stateless design intent.
+</div>
+
+<!-- ─────────────────────────────────────────────────────────── -->
+<h2 id="recovery">Crash recovery</h2>
+<table>
+  <thead><tr><th>Scenario</th><th>Recovery</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>Orchestrator restart while instances are live</td>
+      <td>Walk <code>agent_instances</code> in non-terminal state. For each: check <code>$STATUS_PATH</code> — if present, process completion. Otherwise ask proxy <code>has_session</code>: alive → resume waiting; gone → run <code>cleanup</code> hook, mark failed, requeue topic_queue row per policy.</td>
+    </tr>
+    <tr>
+      <td>Proxy restart while instances are live</td>
+      <td>All sessions on that proxy are gone. On its next registration heartbeat, orchestrator marks every live <code>agent_instances</code> row on that proxy failed, runs <code>cleanup</code> hooks where the worktree still exists on disk, requeues topic_queue entries.</td>
+    </tr>
+    <tr>
+      <td>Orphaned worktrees</td>
+      <td><code>cleanup</code> hook owns worktree removal. If it fails or never runs, a periodic sweep checks <code>cwd_base</code> against live <code>agent_instances.worktree_path</code> values and removes leftovers.</td>
+    </tr>
+    <tr>
+      <td>Agent forgets to call <code>collab complete</code></td>
+      <td>Per-instance outer timeout (configurable per topic) trips → orchestrator treats as failure: kill tmux session, run <code>cleanup</code>, requeue or fail.</td>
+    </tr>
+    <tr>
+      <td>Approval mid-flight at restart</td>
+      <td>Pure DB state. No recovery needed — pending approvals just remain pending until a human resolves them.</td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- ─────────────────────────────────────────────────────────── -->
+<h2 id="delta">What changes</h2>
+<table>
+  <thead><tr><th>Concern</th><th>2.x</th><th>3.0</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>Persistent agents</td>
+      <td>persona file → live tmux</td>
+      <td>agent file (<code>persistent: true</code>) → live tmux · <span class="dim">same observable behaviour</span></td>
+    </tr>
+    <tr>
+      <td>Sending messages</td>
+      <td><code>send(agentId, msg)</code></td>
+      <td><code>send(address, msg)</code> · agent or topic · <span class="dim">same fire-and-forget</span></td>
+    </tr>
+    <tr>
+      <td>Ephemeral work</td>
+      <td><span class="dim">n/a</span></td>
+      <td>agent file declares topics → prepare (host shell) · create_session · start (paste) · run · complete · kill · cleanup (host shell)</td>
+    </tr>
+    <tr>
+      <td>Approvals</td>
+      <td><span class="dim">n/a</span></td>
+      <td>CRUD resource categorised by channel + auto-notify message to requester</td>
+    </tr>
+    <tr>
+      <td>Monitors</td>
+      <td>per-agent health-monitor in orchestrator</td>
+      <td>sidecar template paired with worker via the same lifecycle hooks</td>
+    </tr>
+    <tr>
+      <td>Hook kinds</td>
+      <td>tmux-paste only (<code>start</code>, <code>exit</code>, …)</td>
+      <td>+ host-shell hooks (<code>prepare</code>, <code>cleanup</code>) via existing proxy <code>exec</code></td>
+    </tr>
+    <tr>
+      <td>Proxy commands</td>
+      <td>tmux + exec + upload</td>
+      <td><span class="dim">unchanged — no new commands</span></td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- ─────────────────────────────────────────────────────────── -->
+<h2 id="scope">Scope boundaries</h2>
+<div class="grid-2">
+  <div class="card">
+    <div class="label-strong accent2">What we don't own</div>
+    <ul class="tight dim">
+      <li>Secrets / credentials — script and surface concern</li>
+      <li>Knowledge stores — managed independently</li>
+      <li>Where the hook actually runs (docker exec, firecracker, ssh) — opaque to orchestrator</li>
+      <li>What happens inside the worktree once the hook is in charge</li>
+    </ul>
+  </div>
+  <div class="card">
+    <div class="label-strong accent">What we don't touch (from 2.x)</div>
+    <ul class="tight dim">
+      <li>tmux runtime, SQLite WAL, zero-dep, Node 24 native TS</li>
+      <li>Message dispatch, cool-down, lifecycle state machine, fire-and-forget send semantics</li>
+      <li>Persona file shape; existing files default to <code>persistent: true</code></li>
+      <li><code>agents</code> table — schema and state machine; field-registry gets no new columns</li>
+      <li>Persistent-agent tmux-paste <code>start</code> / <code>exit</code> semantics</li>
+      <li>Proxy <code>/command</code> surface</li>
+      <li>Health-monitor + cool-down — persistent-agent concerns only</li>
+    </ul>
+  </div>
+</div>
+
+</body>
+</html>
