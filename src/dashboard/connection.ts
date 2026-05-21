@@ -10,7 +10,7 @@
  * (per-event broadcasts).
  */
 import type { AgentRecord, DashboardMessage, Team } from '../shared/types.ts';
-import { state, emit, selectAllAgentsInitial } from './state.ts';
+import { state, emit, selectAllAgentsInitial, saveToken } from './state.ts';
 
 type WsEvent =
   | { type: 'init'; agents: AgentRecord[]; threads: Record<string, DashboardMessage[]>; teams?: Team[] }
@@ -25,6 +25,8 @@ type WsEvent =
 let socket: WebSocket | null = null;
 let reconnectDelay = 1000;
 const MAX_RECONNECT_DELAY = 30000;
+let didOpenOnce = false;
+let connectionAttempts = 0;
 
 function wsUrl(): string {
   const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -35,6 +37,7 @@ function wsUrl(): string {
 export function connect(): void {
   state.connected = 'connecting';
   emit('connection-changed');
+  connectionAttempts++;
 
   try {
     socket = new WebSocket(wsUrl());
@@ -44,9 +47,14 @@ export function connect(): void {
     return;
   }
 
+  let openedThisAttempt = false;
+
   socket.addEventListener('open', () => {
+    openedThisAttempt = true;
+    didOpenOnce = true;
     state.connected = 'connected';
     reconnectDelay = 1000;
+    connectionAttempts = 0;
     emit('connection-changed');
     console.log('[v3] WebSocket connected');
   });
@@ -64,12 +72,55 @@ export function connect(): void {
   socket.addEventListener('close', () => {
     state.connected = 'disconnected';
     emit('connection-changed');
+    // Auth detection: WS closes before opening + we never had a working
+    // session = the server probably 401'd us. Prompt for a token.
+    if (!openedThisAttempt && !didOpenOnce && connectionAttempts >= 1) {
+      void promptForToken();
+      return;
+    }
     scheduleReconnect();
   });
 
   socket.addEventListener('error', () => {
     // 'close' will follow; reconnect is handled there.
   });
+}
+
+async function promptForToken(): Promise<void> {
+  // Verify whether auth is actually required by hitting a known endpoint.
+  // If the orchestrator is running with no secret, auth is open and the WS
+  // close was due to something else — just reconnect.
+  try {
+    const res = await fetch('/api/orchestrator/status');
+    if (res.ok) {
+      // Server is up and reachable — but our WS closed. Try once more with
+      // a token from the user.
+    }
+  } catch {
+    // Network/down. Fall through to reconnect.
+    scheduleReconnect();
+    return;
+  }
+
+  const existing = state.token ?? '';
+  const provided = window.prompt(
+    'Orchestrator token (from ~/.config/agentic-collab/secret or env ORCHESTRATOR_SECRET):',
+    existing,
+  );
+  if (provided === null) {
+    // User cancelled — give up and try in a while.
+    scheduleReconnect();
+    return;
+  }
+  const trimmed = provided.trim();
+  if (!trimmed) {
+    scheduleReconnect();
+    return;
+  }
+  saveToken(trimmed);
+  connectionAttempts = 0;
+  reconnectDelay = 1000;
+  connect();
 }
 
 function scheduleReconnect(): void {

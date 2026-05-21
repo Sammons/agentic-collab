@@ -9,6 +9,7 @@ import { pipeline } from 'node:stream/promises';
 import { timingSafeEqual } from 'node:crypto';
 import { readdirSync, readFileSync, writeFileSync, mkdirSync, unlinkSync, existsSync, rmSync, statSync, createWriteStream } from 'node:fs';
 import { join } from 'node:path';
+import { stripTypeScriptTypes } from 'node:module';
 import { DatabaseSync } from 'node:sqlite';
 import { renderMarkdown, wrapInHtml, DOC_PAGES } from '../docs/render.ts';
 import { hostname } from 'node:os';
@@ -197,7 +198,10 @@ route('GET', '/dashboard/assets/:path+', async (req, res, match) => {
   }
   try {
     const fullPath = join(import.meta.dirname!, '..', 'dashboard', filePath);
-    const content = readFileSync(fullPath, 'utf-8');
+    let content = readFileSync(fullPath, 'utf-8');
+    // .ts → strip type annotations so the browser can parse as JS.
+    // Node 24's stripTypeScriptTypes() preserves line/column for source maps.
+    if (ext === '.ts') content = stripTypeScriptTypes(content);
     res.writeHead(200, {
       'content-type': contentType,
       'cache-control': 'no-cache, no-store, must-revalidate',
