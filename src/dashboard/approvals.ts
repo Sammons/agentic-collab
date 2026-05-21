@@ -65,6 +65,7 @@ function teardown(): void {
   }
   approvals = [];
   selectedId = null;
+  document.body.classList.remove('ap-show-detail');
 }
 
 /* ── master ───────────────────────────────────────────────────────── */
@@ -127,6 +128,8 @@ function renderMaster(): void {
       // Refresh selection styling
       list.querySelectorAll('.ap-item').forEach((n) => n.classList.remove('active'));
       el.classList.add('active');
+      // On mobile, switch to detail-only view.
+      document.body.classList.add('ap-show-detail');
       void loadDetail(selectedId);
     });
   });
@@ -178,6 +181,10 @@ function renderDetail(a: ApprovalRow): void {
   const isTerminal = a.state !== 'pending';
   pane.innerHTML = `
     <div class="ap-detail-hdr">
+      <button class="ap-detail-back" data-back style="display:none;">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="10 3 5 8 10 13"/></svg>
+        Back to list
+      </button>
       <div class="crumb">
         <span class="chan">${escapeHtml(a.channel)}</span>
         <span class="sep">/</span>
@@ -223,6 +230,17 @@ function renderDetail(a: ApprovalRow): void {
     pane.querySelector<HTMLElement>('[data-withdraw]')?.addEventListener('click', () => {
       if (!window.confirm('Withdraw this approval?')) return;
       void withdraw(a.id);
+    });
+  }
+
+  // Mobile-only back button — visible when in stacked-detail mode.
+  const backBtn = pane.querySelector<HTMLElement>('[data-back]');
+  if (backBtn) {
+    const isMobile = () => window.matchMedia('(max-width: 768px)').matches;
+    if (isMobile()) backBtn.style.display = 'inline-flex';
+    backBtn.addEventListener('click', () => {
+      document.body.classList.remove('ap-show-detail');
+      selectedId = null;
     });
   }
 }

@@ -2,7 +2,8 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#ecedea">
 <title>agentic-collab — v3</title>
 
 <!-- Google Fonts: Bricolage Grotesque (variable) + Geist Mono -->
@@ -23,11 +24,22 @@
 <link rel="stylesheet" href="/dashboard/assets/styles/settings.css">
 <link rel="stylesheet" href="/dashboard/assets/styles/search.css">
 <link rel="stylesheet" href="/dashboard/assets/styles/overlays.css">
+<link rel="stylesheet" href="/dashboard/assets/styles/responsive.css">
 
 </head>
 <body>
 
+  <!-- Mobile hamburger — hidden on desktop, fixed top-left on mobile. -->
+  <button class="mobile-menu" id="mobileMenuBtn" aria-label="Open sidebar" type="button">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+  </button>
+
+  <!-- Sidebar — fixed/drawer on mobile, static rail on desktop. -->
   <aside class="sidebar" id="sidebar"></aside>
+
+  <!-- Scrim — tap to close drawer on mobile. -->
+  <div class="sidebar-scrim" id="sidebarScrim" aria-hidden="true"></div>
+
   <main class="main" id="route-root">
     <div class="route-placeholder">
       <div class="eyebrow">Loading</div>

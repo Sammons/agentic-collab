@@ -34,7 +34,51 @@ function boot(): void {
   setupSearch();
   setupRouter();
   setupSidebar();
+  setupMobileNav();
   connect();
+}
+
+/**
+ * Mobile drawer behavior — sidebar is a slide-in panel on narrow viewports.
+ *  - Hamburger button (#mobileMenuBtn) opens the drawer
+ *  - Scrim (#sidebarScrim) closes it on tap
+ *  - Navigating (clicking a nav-action or member eye-icon) auto-closes
+ *  - Escape key also closes
+ * On desktop (>= 769px) the CSS makes the hamburger + scrim display:none
+ * and the sidebar is always visible; this JS is harmless there.
+ */
+function setupMobileNav(): void {
+  const btn = document.getElementById('mobileMenuBtn');
+  const sidebar = document.getElementById('sidebar');
+  const scrim = document.getElementById('sidebarScrim');
+  if (!btn || !sidebar || !scrim) return;
+
+  const open = () => {
+    sidebar.classList.add('is-open');
+    scrim.classList.add('is-visible');
+    document.body.classList.add('drawer-open');
+  };
+  const close = () => {
+    sidebar.classList.remove('is-open');
+    scrim.classList.remove('is-visible');
+    document.body.classList.remove('drawer-open');
+  };
+
+  btn.addEventListener('click', () => {
+    if (sidebar.classList.contains('is-open')) close(); else open();
+  });
+  scrim.addEventListener('click', close);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && sidebar.classList.contains('is-open')) close();
+  });
+  // Close drawer when the user navigates via the sidebar so the new
+  // surface gets full mobile width. Only on narrow viewports.
+  sidebar.addEventListener('click', (e) => {
+    const t = e.target as HTMLElement;
+    if (t.closest('[data-go], [data-eye]')) {
+      if (window.matchMedia('(max-width: 768px)').matches) close();
+    }
+  });
 }
 
 if (document.readyState === 'loading') {
