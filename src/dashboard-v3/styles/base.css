@@ -1,0 +1,135 @@
+/* ──────────────────────────────────────────────────────────────────────
+   Greenroom — base tokens + reset
+   Mirrors :root from docs/v3-dashboard-design.html. Single source of truth
+   for palette/type/radius. Surface CSS reads from these vars only.
+   ────────────────────────────────────────────────────────────────────── */
+
+:root {
+  /* paper — base + variants for nesting */
+  --paper:        #ecedea;
+  --paper-2:      #e4e5e1;
+  --paper-card:   #f6f6f3;
+  --paper-hover:  #ecede9;
+  --paper-sel:    #d8d9d4;
+
+  /* ink — text/icon ramp from black-ish to nearly invisible */
+  --ink:          #16181c;
+  --ink-2:        #4a4d52;
+  --ink-3:        #797c80;
+  --ink-4:        #b3b5b1;
+
+  /* rules — borders/dividers */
+  --rule:         #cfd0cb;
+  --rule-soft:    #dbdcd7;
+  --rule-strong:  #b8b9b3;
+
+  /* accent — single bold color, used sparingly */
+  --clay:         #b85a3a;
+  --clay-soft:    #b85a3a14;
+
+  /* working colors */
+  --steel:        #436b85;
+  --steel-soft:   #436b8514;
+  --steel-bg:     #d6e0e8;
+
+  --moss:         #67855e;
+  --moss-bg:      #d8e1d2;
+
+  --plum:         #6e5982;
+  --plum-bg:      #d9d2e2;
+
+  --brick:        #94584a;
+  --brick-bg:     #e2cfc9;
+
+  /* typography */
+  --sans: 'Bricolage Grotesque', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  --mono: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* radii */
+  --radius:    4px;
+  --radius-lg: 6px;
+}
+
+/* reset + body */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--paper);
+  color: var(--ink-2);
+  font-family: var(--sans);
+  font-size: 13.5px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-variation-settings: "opsz" 14, "wdth" 100;
+}
+
+h1, h2, h3, h4 {
+  margin: 0;
+  color: var(--ink);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+p { margin: 0; }
+a { color: var(--steel); text-decoration: none; }
+a:hover { color: var(--ink); text-decoration: underline; }
+
+code, pre, kbd, samp {
+  font-family: var(--mono);
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+/* scrollbar — subtle, dual-tone */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 4px;
+  transition: background 200ms ease;
+}
+*:hover > ::-webkit-scrollbar-thumb,
+:hover::-webkit-scrollbar-thumb { background: var(--rule); }
+::-webkit-scrollbar-thumb:hover { background: var(--rule-strong); }
+
+/* placeholder shown by routes during scaffold */
+.route-placeholder {
+  padding: 64px 48px;
+  max-width: 640px;
+}
+.route-placeholder .eyebrow {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--ink-4);
+  margin-bottom: 12px;
+}
+.route-placeholder .title {
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  margin: 0 0 8px;
+}
+.route-placeholder .lede {
+  font-size: 13.5px;
+  color: var(--ink-3);
+  margin: 0;
+  line-height: 1.55;
+}
+
+/* utility: visually hidden but readable to screen readers */
+.sr-only {
+  position: absolute;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0,0,0,0);
+  white-space: nowrap; border: 0;
+}

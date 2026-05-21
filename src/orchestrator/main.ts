@@ -418,6 +418,7 @@ wss.onConnect((client) => {
   const pages = db.listPages();
   const stores = db.listStores();
   const destinations = db.listDestinations();
+  const teams = db.listTeams();
   wss.send(client, JSON.stringify({
     type: 'init',
     agents,
@@ -430,6 +431,7 @@ wss.onConnect((client) => {
     pages,
     stores,
     destinations,
+    teams,
   }));
 });
 

@@ -208,6 +208,43 @@ route('GET', '/dashboard/assets/:path+', async (req, res, match) => {
   }
 });
 
+// ── v3 Dashboard (in-progress; PRs 1–10) ──
+// Lives at /v3/ while the v2 dashboard stays at /. Cutover at PR 10.
+
+route('GET', '/v3', async (_req, res) => {
+  try {
+    const indexPath = join(import.meta.dirname!, '..', 'dashboard-v3', 'index.html');
+    const content = readFileSync(indexPath, 'utf-8');
+    res.writeHead(200, {
+      'content-type': 'text/html; charset=utf-8',
+      'cache-control': 'no-cache, no-store, must-revalidate',
+    });
+    res.end(content);
+  } catch {
+    res.writeHead(404); res.end('v3 dashboard not found');
+  }
+});
+
+route('GET', '/v3/assets/:path+', async (_req, res, match) => {
+  const filePath = match.pathname.groups['path'] ?? '';
+  const ext = filePath.slice(filePath.lastIndexOf('.'));
+  const contentType = ASSET_TYPES[ext];
+  if (filePath.includes('..') || !contentType) {
+    res.writeHead(400); res.end('Bad request'); return;
+  }
+  try {
+    const fullPath = join(import.meta.dirname!, '..', 'dashboard-v3', filePath);
+    const content = readFileSync(fullPath, 'utf-8');
+    res.writeHead(200, {
+      'content-type': contentType,
+      'cache-control': 'no-cache, no-store, must-revalidate',
+    });
+    res.end(content);
+  } catch {
+    res.writeHead(404); res.end('Not found');
+  }
+});
+
 // ── Docs ──
 
 const DOCS_DIR = join(import.meta.dirname!, '..', 'docs');
@@ -2115,6 +2152,94 @@ route('POST', '/api/reminders/swap', async (req, res, _match, ctx) => {
 
   broadcastReminderUpdate(ctx);
   json(res, 200, { ok: true });
+});
+
+// ── Teams (v3 UI grouping) ──
+// Teams are UI-only filters in the v3 sidebar. No kernel behavior. Many-to-many
+// with agents (an agent can be in multiple teams). Membership lookups happen
+// client-side from the listing endpoint; we don't expose per-agent team lookup
+// because the sidebar already has the full list.
+
+function broadcastTeamsUpdate(ctx: RouteContext): void {
+  ctx.wss.broadcast(JSON.stringify({ type: 'teams_update', teams: ctx.db.listTeams() }));
+}
+
+route('GET', '/api/teams', async (_req, res, _match, ctx) => {
+  json(res, 200, ctx.db.listTeams());
+});
+
+route('POST', '/api/teams', async (req, res, _match, ctx) => {
+  const body = await readJson(req);
+  const name = typeof body['name'] === 'string' ? body['name'] : '';
+  if (!name.trim()) return json(res, 400, { error: 'name is required' });
+  const members = Array.isArray(body['members'])
+    ? (body['members'] as unknown[]).filter((m): m is string => typeof m === 'string')
+    : [];
+  try {
+    const team = ctx.db.createTeam(name, members);
+    broadcastTeamsUpdate(ctx);
+    json(res, 201, team);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'create failed';
+    // SQLite unique-constraint violation → 409
+    if (/UNIQUE constraint failed/.test(msg)) {
+      return json(res, 409, { error: 'A team with that name already exists' });
+    }
+    json(res, 400, { error: msg });
+  }
+});
+
+route('PATCH', '/api/teams/:id', async (req, res, match, ctx) => {
+  const id = Number(match.pathname.groups['id']);
+  if (!Number.isFinite(id)) return json(res, 400, { error: 'invalid id' });
+  const body = await readJson(req);
+  const name = typeof body['name'] === 'string' ? body['name'] : '';
+  if (!name.trim()) return json(res, 400, { error: 'name is required' });
+  try {
+    const team = ctx.db.updateTeamName(id, name);
+    if (!team) return json(res, 404, { error: 'team not found' });
+    broadcastTeamsUpdate(ctx);
+    json(res, 200, team);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'update failed';
+    if (/UNIQUE constraint failed/.test(msg)) {
+      return json(res, 409, { error: 'A team with that name already exists' });
+    }
+    json(res, 400, { error: msg });
+  }
+});
+
+route('DELETE', '/api/teams/:id', async (_req, res, match, ctx) => {
+  const id = Number(match.pathname.groups['id']);
+  if (!Number.isFinite(id)) return json(res, 400, { error: 'invalid id' });
+  const ok = ctx.db.deleteTeam(id);
+  if (!ok) return json(res, 404, { error: 'team not found' });
+  broadcastTeamsUpdate(ctx);
+  res.writeHead(204);
+  res.end();
+});
+
+route('POST', '/api/teams/:id/members', async (req, res, match, ctx) => {
+  const id = Number(match.pathname.groups['id']);
+  if (!Number.isFinite(id)) return json(res, 400, { error: 'invalid id' });
+  const body = await readJson(req);
+  const agentName = typeof body['agentName'] === 'string' ? body['agentName'] : '';
+  if (!agentName.trim()) return json(res, 400, { error: 'agentName is required' });
+  const team = ctx.db.addTeamMember(id, agentName);
+  if (!team) return json(res, 404, { error: 'team not found' });
+  broadcastTeamsUpdate(ctx);
+  json(res, 200, team);
+});
+
+route('DELETE', '/api/teams/:id/members/:agentName', async (_req, res, match, ctx) => {
+  const id = Number(match.pathname.groups['id']);
+  const agentName = match.pathname.groups['agentName'] ?? '';
+  if (!Number.isFinite(id)) return json(res, 400, { error: 'invalid id' });
+  if (!agentName) return json(res, 400, { error: 'agentName is required' });
+  const team = ctx.db.removeTeamMember(id, agentName);
+  if (!team) return json(res, 404, { error: 'team not found' });
+  broadcastTeamsUpdate(ctx);
+  json(res, 200, team);
 });
 
 // ── Accounts ──

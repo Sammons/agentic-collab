@@ -31,7 +31,7 @@ in `docs/v3-dashboard-design.html` (the Greenroom mock).
 
 | PR  | Subject                                                  | Status      | Notes                                                                |
 |-----|----------------------------------------------------------|-------------|----------------------------------------------------------------------|
-| 1   | Foundation + sidebar/routing + Teams API                 | in_progress | Backend Teams CRUD + DB migration + WS event + serve `/v3/`. Frontend shell, sidebar (Teams tree), hash router, placeholder routes. |
+| 1   | Foundation + sidebar/routing + Teams API                 | done        | Backend Teams CRUD + DB migration + WS event + serve `/v3/`. Frontend shell, sidebar (Teams tree), hash router, placeholder routes. 26 unit tests for the Teams API; full orchestrator suite still green (pre-existing macOS persona symlink quirk unrelated). |
 | 2   | Dashboard merged chat + composer + profile popover       | pending     | Client-side merge of `state.threads{}`. @-mention. Profile popover on sender click. |
 | 3   | Agents page (flat list)                                  | pending     | Greenroom flat list, hover actions, More menu, click-row → Watch.    |
 | 4   | Watch screen                                             | pending     | Wraps `/api/agents/:name/peek` + key injection. New chrome.          |

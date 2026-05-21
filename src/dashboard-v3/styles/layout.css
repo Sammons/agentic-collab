@@ -1,0 +1,26 @@
+/* ──────────────────────────────────────────────────────────────────────
+   Shell layout — sidebar + main grid
+   ────────────────────────────────────────────────────────────────────── */
+
+body {
+  display: grid;
+  grid-template-columns: 224px 1fr;
+  min-height: 100vh;
+}
+
+.sidebar {
+  background: var(--paper);
+  border-right: 1px solid var(--rule-soft);
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  position: sticky;
+  top: 0;
+  overflow-y: auto;
+}
+
+.main {
+  background: var(--paper);
+  min-height: 100vh;
+  overflow-x: hidden;
+}

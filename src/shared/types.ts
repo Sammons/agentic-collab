@@ -261,6 +261,26 @@ export type Reminder = {
   createdAt: string;
 };
 
+// ── Teams (v3 UI grouping) ──
+
+/**
+ * A team is a UI-only grouping of agents used as a filter source in the v3
+ * dashboard sidebar. Teams have no behavioral effect on the kernel — they
+ * only shape what the operator sees in chat, reminders, and search. An
+ * agent can belong to multiple teams (many-to-many).
+ *
+ * Schema lives in two tables:
+ *   teams(id, name UNIQUE, created_at)
+ *   team_members(team_id, agent_name, added_at, PK(team_id, agent_name))
+ * Deleting a team cascades to its membership rows.
+ */
+export type Team = {
+  id: number;
+  name: string;
+  members: string[]; // agent names (sorted)
+  createdAt: string;
+};
+
 // ── Proxy Registration ──
 
 export type ProxyRegistration = {
