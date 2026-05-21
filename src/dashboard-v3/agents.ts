@@ -13,6 +13,7 @@
 import type { AgentRecord, AgentState, Team } from '../shared/types.ts';
 import { state, on, authHeaders, emit } from './state.ts';
 import { registerRoute, go } from './routing.ts';
+import { openNewAgentModal, openEditPersonaModal } from './overlays.ts';
 
 const STATE_PRIORITY: Record<AgentState, number> = {
   failed:     0,
@@ -98,8 +99,7 @@ function rerender(): void {
   }
 
   root.querySelector<HTMLElement>('[data-new-agent]')?.addEventListener('click', () => {
-    // PR 9 wires the real modal; for now, ignore (no-op + toast).
-    showToast('New agent flow ships in PR 9 (overlay modals).');
+    openNewAgentModal();
   });
   root.querySelector<HTMLElement>('[data-reload-all]')?.addEventListener('click', reloadAll);
 }
@@ -188,7 +188,7 @@ function wireRow(rowEl: HTMLElement): void {
       e.stopPropagation();
       const act = btn.dataset['act']!;
       if (act === 'watch') return go({ kind: 'watch', agentName: name });
-      if (act === 'edit')  return showToast('Edit persona ships in PR 9.');
+      if (act === 'edit')  return void openEditPersonaModal(name);
       if (act === 'more')  return openMenu(btn, name);
     });
   });
@@ -250,7 +250,7 @@ async function handleMenuItem(item: string, name: string): Promise<void> {
       showToast(`Copied: ${cmd}`);
       return;
     }
-    case 'edit':   return showToast('Edit persona ships in PR 9.');
+    case 'edit':   return void openEditPersonaModal(name);
     case 'copy': {
       await navigator.clipboard?.writeText(`agent:${name}`).catch(() => {});
       showToast(`Copied agent:${name}`);

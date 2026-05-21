@@ -15,6 +15,7 @@
  */
 import { state, on, toggleAgentSelected, toggleTeam, toggleAllAgents } from './state.ts';
 import { go } from './routing.ts';
+import { openNewTeamModal } from './overlays.ts';
 import type { Team } from '../shared/types.ts';
 
 const root = (): HTMLElement => document.getElementById('sidebar')!;
@@ -231,32 +232,10 @@ function wire(r: HTMLElement): void {
     });
   });
 
-  // New team — TODO PR 9 opens the modal. For now prompt + create inline.
+  // New team — opens the overlay modal.
   r.querySelector<HTMLElement>('[data-new-team]')?.addEventListener('click', () => {
-    const name = window.prompt('Team name?');
-    if (!name) return;
-    createTeam(name);
+    openNewTeamModal();
   });
-}
-
-async function createTeam(name: string): Promise<void> {
-  try {
-    const { authHeaders } = await import('./state.ts');
-    const res = await fetch('/api/teams', {
-      method: 'POST',
-      headers: authHeaders(),
-      body: JSON.stringify({ name }),
-    });
-    if (!res.ok) {
-      const body = await res.json().catch(() => null);
-      console.error('[teams] create failed:', body);
-      return;
-    }
-    // Optimistic refresh — but the WS teams_update broadcast will already
-    // update state.teams. No-op here.
-  } catch (err) {
-    console.error('[teams] create error:', err);
-  }
 }
 
 function escapeHtml(s: string): string {
