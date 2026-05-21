@@ -208,43 +208,6 @@ route('GET', '/dashboard/assets/:path+', async (req, res, match) => {
   }
 });
 
-// ── v3 Dashboard (in-progress; PRs 1–10) ──
-// Lives at /v3/ while the v2 dashboard stays at /. Cutover at PR 10.
-
-route('GET', '/v3', async (_req, res) => {
-  try {
-    const indexPath = join(import.meta.dirname!, '..', 'dashboard-v3', 'index.html');
-    const content = readFileSync(indexPath, 'utf-8');
-    res.writeHead(200, {
-      'content-type': 'text/html; charset=utf-8',
-      'cache-control': 'no-cache, no-store, must-revalidate',
-    });
-    res.end(content);
-  } catch {
-    res.writeHead(404); res.end('v3 dashboard not found');
-  }
-});
-
-route('GET', '/v3/assets/:path+', async (_req, res, match) => {
-  const filePath = match.pathname.groups['path'] ?? '';
-  const ext = filePath.slice(filePath.lastIndexOf('.'));
-  const contentType = ASSET_TYPES[ext];
-  if (filePath.includes('..') || !contentType) {
-    res.writeHead(400); res.end('Bad request'); return;
-  }
-  try {
-    const fullPath = join(import.meta.dirname!, '..', 'dashboard-v3', filePath);
-    const content = readFileSync(fullPath, 'utf-8');
-    res.writeHead(200, {
-      'content-type': contentType,
-      'cache-control': 'no-cache, no-store, must-revalidate',
-    });
-    res.end(content);
-  } catch {
-    res.writeHead(404); res.end('Not found');
-  }
-});
-
 // ── Docs ──
 
 const DOCS_DIR = join(import.meta.dirname!, '..', 'docs');

@@ -1,773 +1,486 @@
 /**
- * <settings-panel> Web Component.
- * Engine config CRUD (displayed as YAML frontmatter) and client-side preferences.
+ * Settings — five sections in a single scrolling pane.
+ *
+ *   1. Engine configs   /api/engine-configs
+ *   2. Preferences      localStorage (per-device)
+ *   3. Published pages  /api/pages
+ *   4. Data stores      /api/stores
+ *   5. Destinations     /api/destinations
+ *
+ * Sticky horizontal sub-nav at top, anchor-scrolled. Engine configs render
+ * with a meta summary + collapsed/expanded/edit states. Preferences use
+ * radio + checkbox controls; saves on change to localStorage.
  */
+import type {
+  EngineConfigRecord,
+  PageRecord,
+  DataStoreRecord,
+  DestinationRecord,
+} from '../shared/types.ts';
+import { on, authHeaders } from './state.ts';
+import { registerRoute } from './routing.ts';
 
-import { state, authHeaders } from '/dashboard/assets/state.ts';
-import { esc, showToast, confirmAction } from '/dashboard/assets/utils.ts';
-import { icon } from '/dashboard/assets/icons.ts';
+let configs: EngineConfigRecord[] = [];
+let pages: PageRecord[] = [];
+let stores: DataStoreRecord[] = [];
+let destinations: DestinationRecord[] = [];
+const detachers: Array<() => void> = [];
 
-const PREFS_KEY = 'dashboardPrefs';
-
-function getPrefs() {
-  try { return JSON.parse(localStorage.getItem(PREFS_KEY) || '{}'); }
-  catch { return {}; }
+export function setupSettings(): void {
+  registerRoute('settings', render);
 }
 
-function savePrefs(prefs) {
-  localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
+function render(root: HTMLElement): void {
+  root.innerHTML = `
+    <div class="st-page" style="height:100vh;overflow:hidden;display:flex;flex-direction:column;background:var(--paper);">
+      <div class="st-hdr">
+        <div>
+          <h1 class="pg-title">Settings</h1>
+          <div class="pg-stats" data-stats>—</div>
+          <span class="lede">
+            Engine defaults applied to agents, client-side preferences for this device,
+            published page surfaces, agent-writable data stores, and outbound destinations.
+          </span>
+        </div>
+      </div>
+      <div class="st-subnav" data-subnav>
+        <span class="jump on" data-jump="engines">Engine configs <span class="ct" data-c-engines>0</span></span>
+        <span class="jump" data-jump="prefs">Preferences</span>
+        <span class="jump" data-jump="pages">Published pages <span class="ct" data-c-pages>0</span></span>
+        <span class="jump" data-jump="stores">Data stores <span class="ct" data-c-stores>0</span></span>
+        <span class="jump" data-jump="destinations">Destinations <span class="ct" data-c-destinations>0</span></span>
+      </div>
+      <div class="st-scroll" style="flex:1;overflow-y:auto;" data-scroll></div>
+    </div>
+  `;
+  void loadAll();
+  wireSubnav(root);
+
+  detachers.push(on('ws:engine_config_update', () => void loadAll()));
+  detachers.push(on('ws:engine_config_deleted', () => void loadAll()));
+  detachers.push(on('ws:pages_update', () => void loadAll()));
+  detachers.push(on('ws:stores_update', () => void loadAll()));
+  detachers.push(on('ws:destinations_update', () => void loadAll()));
+  detachers.push(on('route-changed', (r) => {
+    if ((r as { kind?: string })?.kind !== 'settings') teardown();
+  }));
 }
 
-// Convert engine config record to YAML frontmatter string
-function configToYaml(cfg) {
-  const lines = [];
-  lines.push(`engine: ${cfg.engine || ''}`);
-  if (cfg.model) lines.push(`model: ${cfg.model}`);
-  if (cfg.thinking) lines.push(`thinking: ${cfg.thinking}`);
-  if (cfg.permissions) lines.push(`permissions: ${cfg.permissions}`);
-  // Hooks — stored as JSON strings, display as YAML pipeline
-  for (const hookKey of ['hookStart', 'hookResume', 'hookCompact', 'hookExit', 'hookInterrupt', 'hookReload', 'hookSubmit']) {
-    const yamlKey = hookKey.replace('hook', '').toLowerCase();
-    const val = cfg[hookKey];
-    if (!val) continue;
-    try {
-      const steps = JSON.parse(val);
-      if (Array.isArray(steps)) {
-        lines.push(`${yamlKey}:`);
-        for (const step of steps) {
-          if (step.type === 'shell' || step.command) {
-            lines.push(`  - shell: ${step.command || step.shell}`);
-          } else if (step.type === 'wait' || step.wait != null) {
-            lines.push(`  - wait: ${step.ms || step.wait || step.duration || 5000}`);
-          } else if (step.type === 'capture' || step.capture) {
-            lines.push(`  - capture:`);
-            const c = step.capture || step;
-            if (c.lines) lines.push(`      lines: ${c.lines}`);
-            if (c.regex) lines.push(`      regex: ${c.regex}`);
-            if (c.var) lines.push(`      var: ${c.var}`);
-          } else if (step.type === 'keystroke' || step.key || step.keystroke) {
-            lines.push(`  - keystroke: ${step.key || step.keystroke}`);
-          } else {
-            // Fallback: show as JSON
-            lines.push(`  - ${JSON.stringify(step)}`);
-          }
-        }
-      } else {
-        lines.push(`${yamlKey}: ${val}`);
-      }
-    } catch {
-      lines.push(`${yamlKey}: ${val}`);
-    }
+function teardown(): void {
+  while (detachers.length) {
+    const fn = detachers.pop();
+    try { fn?.(); } catch {}
   }
-  // Indicators — stored as JSON string, display as YAML
-  if (cfg.indicators) {
-    try {
-      const defs = JSON.parse(cfg.indicators);
-      if (Array.isArray(defs) && defs.length > 0) {
-        lines.push('indicators:');
-        for (const def of defs) {
-          lines.push(`  ${def.id}:`);
-          if (def.regex) lines.push(`    regex: '${def.regex}'`);
-          if (def.badge) lines.push(`    badge: ${def.badge}`);
-          if (def.style) lines.push(`    style: ${def.style}`);
-          if (def.actions && typeof def.actions === 'object') {
-            lines.push('    actions:');
-            for (const [actionName, steps] of Object.entries(def.actions)) {
-              lines.push(`      ${actionName}:`);
-              for (const step of steps) {
-                if (step.type === 'keystroke' || step.keystroke) {
-                  lines.push(`        - keystroke: ${step.keystroke || step.key || ''}`);
-                } else if (step.type === 'shell' || step.command) {
-                  lines.push(`        - shell: ${step.command || step.shell || ''}`);
-                } else {
-                  lines.push(`        - ${JSON.stringify(step)}`);
-                }
-              }
-            }
-          }
-        }
-      }
-    } catch { /* skip malformed indicators */ }
-  }
-  // Detection — stored as JSON, display as YAML
-  if (cfg.detection) {
-    try {
-      const det = JSON.parse(cfg.detection);
-      lines.push('detection:');
-      const renderPatternList = (key, patterns) => {
-        if (!patterns?.length) return;
-        lines.push(`  ${key}:`);
-        for (const p of patterns) {
-          if (typeof p === 'string') {
-            lines.push(`    - '${p}'`);
-          } else {
-            lines.push(`    - pattern: '${p.pattern}'`);
-            if (p.lines != null) lines.push(`      lines: ${p.lines}`);
-          }
-        }
-      };
-      renderPatternList('idlePatterns', det.idlePatterns);
-      renderPatternList('activePatterns', det.activePatterns);
-      if (det.contextPattern) lines.push(`  contextPattern: '${det.contextPattern}'`);
-      if (det.idleThreshold != null) lines.push(`  idleThreshold: ${det.idleThreshold}`);
-      if (det.activeGraceMs != null) lines.push(`  activeGraceMs: ${det.activeGraceMs}`);
-      if (det.snapshotLines != null) lines.push(`  snapshotLines: ${det.snapshotLines}`);
-      if (det.autoRecover != null) lines.push(`  autoRecover: ${det.autoRecover}`);
-    } catch { /* skip malformed detection */ }
-  }
-  // Custom buttons — render as top-level pipeline keys
-  if (cfg.customButtons) {
-    try {
-      const btns = typeof cfg.customButtons === 'string' ? JSON.parse(cfg.customButtons) : cfg.customButtons;
-      for (const [btnName, steps] of Object.entries(btns)) {
-        lines.push(`${btnName}:`);
-        for (const step of steps) {
-          if (step.type === 'shell' || step.command) {
-            lines.push(`  - shell: ${step.command || step.shell}`);
-          } else if (step.type === 'wait' || step.ms != null) {
-            lines.push(`  - wait: ${step.ms || step.wait || step.duration || 5000}`);
-          } else if (step.type === 'keystroke' || step.key || step.keystroke) {
-            lines.push(`  - keystroke: ${step.key || step.keystroke}`);
-          } else {
-            lines.push(`  - ${JSON.stringify(step)}`);
-          }
-        }
-      }
-    } catch { /* skip malformed customButtons */ }
-  }
-  if (cfg.launchEnv && typeof cfg.launchEnv === 'object' && Object.keys(cfg.launchEnv).length > 0) {
-    lines.push('env:');
-    for (const [k, v] of Object.entries(cfg.launchEnv)) {
-      lines.push(`  ${k}: ${v}`);
-    }
-  }
-  return lines.join('\n');
 }
 
-// Parse simple YAML frontmatter back to config fields for API
-function yamlToConfig(yaml, name) {
-  const fields = { name, engine: '' };
-  const lines = yaml.split('\n');
-  let currentKey = null;
-  let currentSteps = null;
-  let inIndicators = false;
-  let indicatorDefs = [];
-  let currentIndicator = null;
-  let currentActionName = null;
-  let currentActionSteps = null;
-  let inDetection = false;
-  let detectionObj = null;
-  let detectionListKey = null;
-  const hookMap = { start: 'hookStart', resume: 'hookResume', compact: 'hookCompact', exit: 'hookExit', interrupt: 'hookInterrupt', reload: 'hookReload', submit: 'hookSubmit' };
-
-  function flushIndicatorAction() {
-    if (currentActionName && currentActionSteps && currentIndicator) {
-      if (!currentIndicator.actions) currentIndicator.actions = {};
-      currentIndicator.actions[currentActionName] = currentActionSteps;
-    }
-    currentActionName = null;
-    currentActionSteps = null;
-  }
-
-  function flushIndicator() {
-    flushIndicatorAction();
-    if (currentIndicator) indicatorDefs.push(currentIndicator);
-    currentIndicator = null;
-  }
-
-  for (const line of lines) {
-    const trimmed = line.trimEnd();
-    // Top-level key: value
-    const kvMatch = trimmed.match(/^(\w+):\s*(.*)$/);
-    if (kvMatch && !trimmed.startsWith('  ')) {
-      // Save previous hook
-      if (currentKey && currentSteps) {
-        fields[currentKey] = JSON.stringify(currentSteps);
-      }
-      currentKey = null;
-      currentSteps = null;
-      // Flush indicators if leaving that section
-      if (inIndicators) {
-        flushIndicator();
-        if (indicatorDefs.length > 0) fields.indicators = JSON.stringify(indicatorDefs);
-        inIndicators = false;
-        indicatorDefs = [];
-      }
-      // Flush detection if leaving that section
-      if (inDetection) {
-        if (detectionObj) fields.detection = JSON.stringify(detectionObj);
-        inDetection = false;
-        detectionObj = null;
-        detectionListKey = null;
-      }
-
-      const key = kvMatch[1];
-      const val = kvMatch[2].trim();
-      if (hookMap[key]) {
-        if (val) {
-          fields[hookMap[key]] = val;
-        } else {
-          currentKey = hookMap[key];
-          currentSteps = [];
-        }
-      } else if (key === 'indicators') {
-        inIndicators = true;
-      } else if (key === 'detection') {
-        inDetection = true;
-        detectionObj = {};
-      } else if (key === 'env') {
-        fields.launchEnv = {};
-      } else if (!val) {
-        // Unrecognized key with no inline value — treat as custom button pipeline
-        currentKey = `__custom__${key}`;
-        currentSteps = [];
-      } else {
-        fields[key] = val;
-      }
-    } else if (inDetection) {
-      // Detection parsing — 2 indent levels:
-      //   2-space: field (idlePatterns, activePatterns, contextPattern, etc.)
-      //   4-space: list item (- 'regex')
-      const indent = line.search(/\S/);
-      const content = trimmed.trim();
-      if (indent === 2 && content.match(/^(\w+):\s*(.*)$/)) {
-        const m = content.match(/^(\w+):\s*(.*)$/);
-        const fieldKey = m[1];
-        const fieldVal = m[2].trim().replace(/^'(.*)'$/, '$1');
-        if (fieldKey === 'idlePatterns' || fieldKey === 'activePatterns') {
-          detectionObj[fieldKey] = [];
-          detectionListKey = fieldKey;
-        } else if (fieldVal) {
-          detectionListKey = null;
-          // Numeric fields
-          if (['idleThreshold', 'activeGraceMs', 'snapshotLines'].includes(fieldKey)) {
-            detectionObj[fieldKey] = parseInt(fieldVal) || 0;
-          } else if (fieldKey === 'autoRecover') {
-            detectionObj[fieldKey] = fieldVal === 'true';
-          } else {
-            detectionObj[fieldKey] = fieldVal;
-          }
-        }
-      } else if (indent === 4 && content.startsWith('- ') && detectionListKey && detectionObj[detectionListKey]) {
-        const itemStr = content.replace(/^-\s*/, '');
-        const patternKv = itemStr.match(/^pattern:\s*(.*)$/);
-        if (patternKv) {
-          // Object format: - pattern: '...'
-          const patternObj = { pattern: patternKv[1].trim().replace(/^'(.*)'$/, '$1') };
-          detectionObj[detectionListKey].push(patternObj);
-        } else {
-          // String format: - '...'
-          detectionObj[detectionListKey].push(itemStr.replace(/^'(.*)'$/, '$1'));
-        }
-      } else if (indent === 6 && detectionListKey && detectionObj[detectionListKey]?.length > 0) {
-        // Sub-field of object pattern (e.g. lines: 3)
-        const last = detectionObj[detectionListKey][detectionObj[detectionListKey].length - 1];
-        if (typeof last === 'object') {
-          const subKv = content.match(/^(\w+):\s*(.*)$/);
-          if (subKv) last[subKv[1]] = parseInt(subKv[2]) || subKv[2].trim();
-        }
-      }
-    } else if (inIndicators) {
-      // Indicator parsing — 4 indent levels:
-      //   2-space: indicator id
-      //   4-space: indicator field (regex, badge, style, actions)
-      //   6-space: action name
-      //   8-space: action step
-      const indent = line.search(/\S/);
-      const content = trimmed.trim();
-      const subKv = content.match(/^([^\s:]+):\s*(.*)$/);
-
-      if (indent === 2 && subKv && !content.startsWith('-')) {
-        // New indicator definition
-        flushIndicator();
-        currentIndicator = { id: subKv[1] };
-      } else if (indent === 4 && subKv && currentIndicator) {
-        // Indicator field
-        const fieldKey = subKv[1];
-        const fieldVal = subKv[2].trim().replace(/^'(.*)'$/, '$1');
-        if (fieldKey === 'actions') {
-          // actions: (block start)
-        } else {
-          currentIndicator[fieldKey] = fieldVal;
-        }
-      } else if (indent === 6 && subKv && currentIndicator) {
-        // Action name
-        flushIndicatorAction();
-        currentActionName = subKv[1];
-        currentActionSteps = [];
-      } else if (indent >= 8 && content.startsWith('- ') && currentActionSteps) {
-        // Action step
-        const stepStr = content.replace(/^-\s*/, '');
-        const stepKv = stepStr.match(/^(\w+):\s*(.*)$/);
-        if (stepKv) {
-          const stepType = stepKv[1];
-          const stepVal = stepKv[2].trim();
-          if (stepType === 'keystroke') {
-            currentActionSteps.push({ type: 'keystroke', keystroke: stepVal });
-          } else if (stepType === 'shell') {
-            currentActionSteps.push({ type: 'shell', command: stepVal });
-          }
-        }
-      }
-    } else if (trimmed.startsWith('  - ') && currentSteps) {
-      // Pipeline step
-      const stepStr = trimmed.replace(/^\s+-\s*/, '');
-      const stepKv = stepStr.match(/^(\w+):\s*(.*)$/);
-      if (stepKv) {
-        const stepType = stepKv[1];
-        const stepVal = stepKv[2].trim();
-        if (stepType === 'shell') {
-          currentSteps.push({ type: 'shell', command: stepVal });
-        } else if (stepType === 'wait') {
-          currentSteps.push({ type: 'wait', ms: parseInt(stepVal) || 5000 });
-        } else if (stepType === 'keystroke') {
-          currentSteps.push({ type: 'keystroke', key: stepVal });
-        } else if (stepType === 'capture') {
-          currentSteps.push({ type: 'capture', lines: 0, regex: '', var: '' });
-        }
-      }
-    } else if (trimmed.match(/^\s{6}\w+:/) && currentSteps && currentSteps.length > 0) {
-      // Capture sub-field (flat format: lines, regex, var directly on the step)
-      const last = currentSteps[currentSteps.length - 1];
-      if (last.type === 'capture') {
-        const subKv = trimmed.trim().match(/^(\w+):\s*(.*)$/);
-        if (subKv) {
-          const v = subKv[2].trim();
-          last[subKv[1]] = isNaN(Number(v)) ? v : Number(v);
-        }
-      }
-    } else if (trimmed.match(/^\s{2}\w+:/) && fields.launchEnv) {
-      // Env key
-      const envKv = trimmed.trim().match(/^(\w+):\s*(.*)$/);
-      if (envKv) fields.launchEnv[envKv[1]] = envKv[2].trim();
-    }
-  }
-  // Save last hook
-  if (currentKey && currentSteps) {
-    fields[currentKey] = JSON.stringify(currentSteps);
-  }
-  // Save indicators if file ended while in indicators section
-  if (inIndicators) {
-    flushIndicator();
-    if (indicatorDefs.length > 0) fields.indicators = JSON.stringify(indicatorDefs);
-  }
-  // Save detection if file ended while in detection section
-  if (inDetection && detectionObj) {
-    fields.detection = JSON.stringify(detectionObj);
-  }
-  // Explicitly null out hooks that were removed from the YAML so the API clears them
-  for (const dbKey of Object.values(hookMap)) {
-    if (!(dbKey in fields)) fields[dbKey] = null;
-  }
-  // Collect custom button pipelines (keys prefixed with __custom__)
-  const customButtons = {};
-  for (const key of Object.keys(fields)) {
-    if (key.startsWith('__custom__')) {
-      const buttonName = key.slice('__custom__'.length);
-      customButtons[buttonName] = JSON.parse(fields[key]);
-      delete fields[key];
-    }
-  }
-  fields.customButtons = Object.keys(customButtons).length > 0 ? JSON.stringify(customButtons) : null;
-  return fields;
+async function loadAll(): Promise<void> {
+  await Promise.all([
+    loadConfigs(),
+    loadPages(),
+    loadStores(),
+    loadDestinations(),
+  ]);
+  rerender();
 }
 
-export class SettingsPanel extends HTMLElement {
-  _editingConfig = null;
-  _addingDest = false;
+async function loadConfigs(): Promise<void> {
+  try {
+    const res = await fetch('/api/engine-configs', { headers: authHeaders() });
+    if (res.ok) configs = await res.json() as EngineConfigRecord[];
+  } catch {}
+}
+async function loadPages(): Promise<void> {
+  try {
+    const res = await fetch('/api/pages', { headers: authHeaders() });
+    if (res.ok) pages = await res.json() as PageRecord[];
+  } catch {}
+}
+async function loadStores(): Promise<void> {
+  try {
+    const res = await fetch('/api/stores', { headers: authHeaders() });
+    if (res.ok) stores = await res.json() as DataStoreRecord[];
+  } catch {}
+}
+async function loadDestinations(): Promise<void> {
+  try {
+    const res = await fetch('/api/destinations', { headers: authHeaders() });
+    if (res.ok) destinations = await res.json() as DestinationRecord[];
+  } catch {}
+}
 
-  render() {
-    const configs = state.engineConfigs || [];
-    const prefs = getPrefs();
-    const submitMode = prefs.submitMode || 'cmd-enter';
-    const closeKb = !!prefs.closeKeyboardOnSend;
+function rerender(): void {
+  const root = document.querySelector<HTMLElement>('.st-page');
+  if (!root) return;
 
-    let html = '<div class="settings-panel">';
-    html += '<div class="settings-header"><h2>Settings</h2><button id="settingsCloseBtn" class="config-action-btn" title="Close">&times;</button></div>';
+  // Counts in chips
+  setText('[data-c-engines]', String(configs.length));
+  setText('[data-c-pages]', String(pages.length));
+  setText('[data-c-stores]', String(stores.length));
+  setText('[data-c-destinations]', String(destinations.length));
+  const stats = root.querySelector<HTMLElement>('[data-stats]');
+  if (stats) stats.innerHTML = `
+    <span class="num">${configs.length}</span> engine configs
+    <span class="sep">·</span>
+    <span class="num">${pages.length}</span> pages
+    <span class="sep">·</span>
+    <span class="num">${stores.length}</span> data stores
+    <span class="sep">·</span>
+    <span class="num">${destinations.length}</span> destinations
+  `;
 
-    // ── Engine Configs ──
-    html += '<div class="settings-section">';
-    html += '<h3>Engine Configs</h3>';
-    html += '<p class="settings-hint">Each engine config defines default frontmatter for agents using that engine. Agent-level frontmatter overrides these defaults.</p>';
+  const scroll = root.querySelector<HTMLElement>('[data-scroll]');
+  if (!scroll) return;
+  scroll.innerHTML = `
+    ${enginesSectionHtml()}
+    ${prefsSectionHtml()}
+    ${pagesSectionHtml()}
+    ${storesSectionHtml()}
+    ${destinationsSectionHtml()}
+  `;
+  wireSections(scroll);
+}
 
-    for (const cfg of configs) {
-      const isEditing = this._editingConfig === cfg.name;
-      html += `<div class="config-card" data-config="${esc(cfg.name)}">`;
-      html += `<div class="config-header"><span class="config-name">${esc(cfg.name)}</span>`;
-      html += '<span class="config-actions">';
-      if (isEditing) {
-        html += '<button class="settings-btn settings-btn-save" data-action="save">Save</button>';
-        html += '<button class="settings-btn settings-btn-cancel" data-action="cancel">Cancel</button>';
-      } else {
-        html += `<button class="config-action-btn" data-action="edit" data-name="${esc(cfg.name)}">${icon.edit(12)} Edit</button>`;
-        html += `<button class="config-action-btn config-delete-btn" data-action="delete" data-name="${esc(cfg.name)}">${icon.trash(12)} Delete</button>`;
-      }
-      html += '</span></div>';
-      if (isEditing) {
-        html += `<textarea class="config-yaml-editor" data-config-name="${esc(cfg.name)}">${esc(configToYaml(cfg))}</textarea>`;
-      } else {
-        html += `<details class="config-details"><summary>Show YAML</summary><pre class="config-yaml-display">${esc(configToYaml(cfg))}</pre></details>`;
-      }
-      html += '</div>';
-    }
+/* ── engine configs ────────────────────────────────────────────────── */
 
-    if (this._editingConfig === '__new__') {
-      html += '<div class="config-card" data-config="__new__">';
-      html += '<div class="config-header"><span class="config-name">New Config</span></div>';
-      html += '<div class="config-field"><label>Name</label><input type="text" class="config-name-input" placeholder="e.g. claude-fast" /></div>';
-      html += '<textarea class="config-yaml-editor" data-config-name="__new__">engine: claude\nmodel: sonnet</textarea>';
-      html += '<div class="config-edit-actions"><button class="settings-btn settings-btn-save" data-action="save">Create</button><button class="settings-btn settings-btn-cancel" data-action="cancel">Cancel</button></div>';
-      html += '</div>';
-    }
+function enginesSectionHtml(): string {
+  const items = configs.map((c) => engineItemHtml(c)).join('');
+  return `
+    <section class="st-section" id="sec-engines">
+      <div class="st-section-hdr">
+        <div class="title-block">
+          <h3>Engine configs</h3>
+          <span class="label">YAML frontmatter defaults</span>
+        </div>
+        <div class="right">
+          <button class="btn" data-reset-defaults>↻ Reset defaults</button>
+          <button class="btn primary" data-new-engine>+ New engine config</button>
+        </div>
+      </div>
+      <p class="lede">Each engine config defines default frontmatter for agents using that engine. Agent-level frontmatter overrides these defaults.</p>
+      ${items || `<div class="st-empty">No engine configs yet.</div>`}
+    </section>
+  `;
+}
 
-    html += '<div class="config-btn-row">';
-    html += `<button class="settings-btn settings-btn-new" id="newConfigBtn">${icon.plus(12)} New Engine Config</button>`;
-    html += `<button class="settings-btn" id="resetDefaultsBtn">Reset Defaults</button>`;
-    html += '</div>';
-    html += '</div>';
+function engineItemHtml(c: EngineConfigRecord): string {
+  const meta: string[] = [];
+  if (c.model) meta.push(`<span class="lbl">model</span> <span class="val">${escapeHtml(c.model)}</span>`);
+  if (c.thinking) meta.push(`<span class="lbl">thinking</span> <span class="val">${escapeHtml(c.thinking)}</span>`);
+  if (c.permissions) meta.push(`<span class="lbl">permissions</span> <span class="val">${escapeHtml(c.permissions)}</span>`);
+  const hookKeys = ['hookStart','hookResume','hookCompact','hookExit','hookInterrupt','hookReload','hookSubmit']
+    .filter((k) => (c as Record<string, unknown>)[k]);
+  if (hookKeys.length) meta.push(`<span class="lbl">hooks</span> <span class="val">${hookKeys.length}</span>`);
 
-    // ── Preferences ──
-    html += '<div class="settings-section">';
-    html += '<h3>Preferences</h3>';
-    html += '<div class="config-card">';
-    html += '<div class="pref-row">';
-    html += '<label class="pref-label">Submit mode</label>';
-    html += `<label class="pref-option"><input type="radio" name="submitMode" value="cmd-enter" ${submitMode === 'cmd-enter' ? 'checked' : ''} /> Cmd/Ctrl+Enter</label>`;
-    html += `<label class="pref-option"><input type="radio" name="submitMode" value="enter" ${submitMode === 'enter' ? 'checked' : ''} /> Enter</label>`;
-    html += '</div>';
-    html += '<div class="pref-row">';
-    html += `<label class="pref-option"><input type="checkbox" id="closeKbPref" ${closeKb ? 'checked' : ''} /> Close keyboard on send (iOS)</label>`;
-    html += '</div>';
-    html += '</div>';
-    html += '</div>';
+  return `
+    <div class="st-item" data-engine="${escapeHtml(c.name)}">
+      <div class="st-item-hdr">
+        <span class="nm">${escapeHtml(c.name)}</span>
+        <span class="kind ${escapeHtml(c.engine)}">engine: ${escapeHtml(c.engine)}</span>
+        <div class="actions">
+          <button data-act="delete-engine" data-name="${escapeHtml(c.name)}">Delete</button>
+        </div>
+      </div>
+      <div class="meta">${meta.join('<span class="sep">·</span>')}</div>
+    </div>
+  `;
+}
 
-    // ── Pages ──
-    html += '<div class="settings-section">';
-    html += '<h3>Published Pages</h3>';
-    const pages = state.pages || [];
-    if (pages.length === 0) {
-      html += '<p class="settings-hint">No pages published. Agents can publish via <code>collab publish &lt;slug&gt; &lt;dir&gt;</code></p>';
-    } else {
-      for (const page of pages) {
-        const size = page.totalBytes >= 1024 * 1024 ? (page.totalBytes / 1024 / 1024).toFixed(1) + ' MB' : (page.totalBytes / 1024).toFixed(0) + ' KB';
-        html += '<div class="config-card">';
-        html += `<div class="config-header">`;
-        html += `<span class="config-name"><a href="/pages/${esc(page.slug)}" target="_blank" style="color:var(--accent);text-decoration:none">${esc(page.slug)}</a></span>`;
-        html += `<span class="config-actions">`;
-        html += `<span style="font-size:11px;color:var(--text-dim)">${esc(String(page.fileCount))} files · ${size}${page.agent ? ' · ' + esc(page.agent) : ''}</span>`;
-        html += `<button class="config-action-btn config-delete-btn" data-page-delete="${esc(page.slug)}">${icon.trash(12)} Delete</button>`;
-        html += `</span></div>`;
-        html += '</div>';
-      }
-    }
-    html += '</div>';
+/* ── preferences ───────────────────────────────────────────────────── */
 
-    // ── Data Stores ──
-    html += '<div class="settings-section">';
-    html += '<h3>Data Stores</h3>';
-    const stores = state.stores || [];
-    if (stores.length === 0) {
-      html += '<p class="settings-hint">No data stores. Agents can create stores via <code>collab store create &lt;name&gt;</code></p>';
-    } else {
-      for (const store of stores) {
-        const updated = store.updatedAt ? new Date(store.updatedAt).toLocaleDateString() : '';
-        html += '<div class="config-card">';
-        html += `<div class="config-header">`;
-        html += `<span class="config-name">${esc(store.name)}</span>`;
-        html += `<span class="config-actions">`;
-        html += `<span style="font-size:11px;color:var(--text-dim)">${updated ? 'updated ' + esc(updated) : ''}${store.agent ? (updated ? ' · ' : '') + esc(store.agent) : ''}</span>`;
-        html += `<button class="config-action-btn config-delete-btn" data-store-delete="${esc(store.name)}">${icon.trash(12)} Delete</button>`;
-        html += `</span></div>`;
-        html += '</div>';
-      }
-    }
-    html += '</div>';
-
-    // ── Destinations (Telegram, etc.) ──
-    html += '<div class="settings-section">';
-    html += '<h3>Destinations</h3>';
-    const destinations = state.destinations || [];
-    if (destinations.length === 0) {
-      html += '<p class="settings-hint">No destinations configured. Add a Telegram destination to send and receive messages from agents.</p>';
-    }
-    for (const dest of destinations) {
-      const updated = dest.updatedAt ? new Date(dest.updatedAt).toLocaleDateString() : '';
-      html += '<div class="config-card">';
-      html += '<div class="config-header">';
-      html += `<span class="config-name">${esc(dest.name)} <span style="font-size:11px;color:var(--text-dim)">(${esc(dest.type)})</span></span>`;
-      html += '<span class="config-actions">';
-      html += `<span style="font-size:11px;color:var(--text-dim)">${dest.enabled ? 'enabled' : 'disabled'}${updated ? ' · ' + esc(updated) : ''}</span>`;
-      html += `<button class="config-action-btn" data-dest-test="${esc(dest.name)}">Test</button>`;
-      html += `<button class="config-action-btn config-delete-btn" data-dest-delete="${esc(dest.name)}">${icon.trash(12)} Delete</button>`;
-      html += '</span></div>';
-      html += '</div>';
-    }
-    if (this._addingDest) {
-      html += '<div class="config-card">';
-      html += '<div class="config-header"><span class="config-name">New Telegram Destination</span></div>';
-      html += '<div class="config-field"><label>Name</label><input type="text" id="destNameInput" class="config-name-input" placeholder="e.g. my-telegram" /></div>';
-      html += '<div class="config-field"><label>Bot Token</label><input type="text" id="destTokenInput" class="config-name-input" placeholder="123456:ABC-DEF..." style="flex:1" /></div>';
-      html += '<div class="config-field"><label>Chat ID</label><input type="text" id="destChatInput" class="config-name-input" placeholder="-1001234567890" /></div>';
-      html += '<p class="settings-hint" style="margin:4px 0 0">Get a bot token from <code>@BotFather</code> on Telegram. Send a message to the bot, then use the Telegram API to find your chat ID.</p>';
-      html += '<div class="config-edit-actions"><button class="settings-btn settings-btn-save" id="destSaveBtn">Add</button><button class="settings-btn settings-btn-cancel" id="destCancelBtn">Cancel</button></div>';
-      html += '</div>';
-    }
-    html += '<div class="config-btn-row">';
-    html += `<button class="settings-btn settings-btn-new" id="addDestBtn">${icon.plus(12)} Add Telegram</button>`;
-    html += '</div>';
-    html += '</div>';
-
-    html += '</div>';
-    this.innerHTML = html;
-    this._bindEvents();
-    // Auto-size textareas to fit content
-    this.querySelectorAll('.config-yaml-editor').forEach((ta) => {
-      ta.style.height = 'auto';
-      ta.style.height = ta.scrollHeight + 'px';
-      ta.addEventListener('input', () => {
-        ta.style.height = 'auto';
-        ta.style.height = ta.scrollHeight + 'px';
-      });
-    });
-    // Scroll editing card into view
-    if (this._editingConfig) {
-      const card = this.querySelector(`[data-config="${this._editingConfig}"]`);
-      if (card) card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    }
+const PREFS_KEY = 'dashboardPrefs_v3';
+type Prefs = { submitMode: 'cmd-enter' | 'enter'; closeKeyboardOnSend: boolean };
+function getPrefs(): Prefs {
+  try {
+    const raw = JSON.parse(localStorage.getItem(PREFS_KEY) ?? '{}');
+    return {
+      submitMode: raw.submitMode === 'enter' ? 'enter' : 'cmd-enter',
+      closeKeyboardOnSend: !!raw.closeKeyboardOnSend,
+    };
+  } catch {
+    return { submitMode: 'cmd-enter', closeKeyboardOnSend: false };
   }
+}
+function savePrefs(p: Prefs): void {
+  try { localStorage.setItem(PREFS_KEY, JSON.stringify(p)); } catch {}
+}
 
-  _bindEvents() {
-    this.querySelector('#settingsCloseBtn')?.addEventListener('click', () => {
-      this.dispatchEvent(new CustomEvent('close-settings', { bubbles: true }));
+function prefsSectionHtml(): string {
+  const p = getPrefs();
+  return `
+    <section class="st-section" id="sec-prefs">
+      <div class="st-section-hdr"><div class="title-block"><h3>Preferences</h3><span class="label">this device · localStorage</span></div></div>
+      <p class="lede">Saved per-browser. Not synced to the orchestrator.</p>
+
+      <div class="st-pref">
+        <div class="lbl">Submit mode<span class="sub">How the composer Send button is bound to your keyboard.</span></div>
+        <div class="ctrl">
+          <label class="radio ${p.submitMode === 'cmd-enter' ? 'on' : ''}" data-pref-submit="cmd-enter">
+            <span class="dot"></span>Cmd / Ctrl + Enter
+          </label>
+          <label class="radio ${p.submitMode === 'enter' ? 'on' : ''}" data-pref-submit="enter">
+            <span class="dot"></span>Enter
+          </label>
+        </div>
+      </div>
+
+      <div class="st-pref">
+        <div class="lbl">Close keyboard on send<span class="sub">iOS only — dismisses the on-screen keyboard after submitting.</span></div>
+        <div class="ctrl">
+          <label class="check ${p.closeKeyboardOnSend ? 'on' : ''}" data-pref-closekb>
+            <span class="box">${p.closeKeyboardOnSend ? '<svg width="9" height="9" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="2 6 5 9 10 3"/></svg>' : ''}</span>
+            ${p.closeKeyboardOnSend ? 'Enabled' : 'Disabled'}
+          </label>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+/* ── pages / stores / destinations ─────────────────────────────────── */
+
+function pagesSectionHtml(): string {
+  return `
+    <section class="st-section" id="sec-pages">
+      <div class="st-section-hdr"><div class="title-block"><h3>Published pages</h3><span class="label">static surfaces served at /pages/&lt;slug&gt;</span></div></div>
+      <p class="lede">Agents publish directories via <code>collab publish &lt;slug&gt; &lt;dir&gt;</code>.</p>
+      ${pages.length === 0
+        ? `<div class="st-empty">No pages published yet.</div>`
+        : pages.map((p) => `
+        <div class="st-item">
+          <div class="st-item-hdr">
+            <span class="nm"><a href="/pages/${escapeHtml(p.slug)}" target="_blank">${escapeHtml(p.slug)}</a></span>
+            <span class="kind">page</span>
+            <div class="actions">
+              <button data-act="delete-page" data-slug="${escapeHtml(p.slug)}">Delete</button>
+            </div>
+          </div>
+          <div class="meta">
+            <span class="num">${p.fileCount ?? 0}</span> files
+            <span class="sep">·</span>
+            <span class="num">${formatBytes(p.totalBytes ?? 0)}</span>
+            ${p.agent ? `<span class="sep">·</span> by <span class="who">${escapeHtml(p.agent)}</span>` : ''}
+          </div>
+        </div>`).join('')}
+    </section>
+  `;
+}
+
+function storesSectionHtml(): string {
+  return `
+    <section class="st-section" id="sec-stores">
+      <div class="st-section-hdr"><div class="title-block"><h3>Data stores</h3><span class="label">agent-writable key-value</span></div></div>
+      <p class="lede">Agents create stores via <code>collab store create &lt;name&gt;</code>.</p>
+      ${stores.length === 0
+        ? `<div class="st-empty">No data stores yet.</div>`
+        : stores.map((s) => `
+        <div class="st-item">
+          <div class="st-item-hdr">
+            <span class="nm">${escapeHtml(s.name)}</span>
+            <span class="kind">store</span>
+            <div class="actions">
+              <button data-act="delete-store" data-name="${escapeHtml(s.name)}">Delete</button>
+            </div>
+          </div>
+          <div class="meta">
+            ${s.updatedAt ? `updated ${ago(s.updatedAt)} ago` : 'never updated'}
+            ${s.agent ? `<span class="sep">·</span> owner <span class="who">${escapeHtml(s.agent)}</span>` : ''}
+          </div>
+        </div>`).join('')}
+    </section>
+  `;
+}
+
+function destinationsSectionHtml(): string {
+  return `
+    <section class="st-section" id="sec-destinations">
+      <div class="st-section-hdr">
+        <div class="title-block"><h3>Destinations</h3><span class="label">outbound channels</span></div>
+        <div class="right"><button class="btn primary" data-new-dest>+ Add Telegram</button></div>
+      </div>
+      <p class="lede">Agents can send messages to external destinations. Currently only Telegram is supported.</p>
+      ${destinations.length === 0
+        ? `<div class="st-empty">No destinations configured.</div>`
+        : destinations.map((d) => `
+        <div class="st-item">
+          <div class="st-item-hdr">
+            <span class="nm">${escapeHtml(d.name)}</span>
+            <span class="kind telegram">${escapeHtml(d.type)}</span>
+            <span class="state ${d.enabled ? 'enabled' : 'disabled'}"><span class="dot"></span>${d.enabled ? 'enabled' : 'disabled'}</span>
+            <div class="actions">
+              <button data-act="test-dest" data-name="${escapeHtml(d.name)}">Test</button>
+              <button data-act="delete-dest" data-name="${escapeHtml(d.name)}">Delete</button>
+            </div>
+          </div>
+        </div>`).join('')}
+    </section>
+  `;
+}
+
+/* ── wiring ────────────────────────────────────────────────────────── */
+
+function wireSubnav(root: HTMLElement): void {
+  root.querySelectorAll<HTMLElement>('[data-jump]').forEach((el) => {
+    el.addEventListener('click', () => {
+      root.querySelectorAll<HTMLElement>('.st-subnav .jump').forEach((j) => j.classList.remove('on'));
+      el.classList.add('on');
+      const target = `sec-${el.dataset['jump']}`;
+      const tgt = root.querySelector<HTMLElement>(`#${target}`);
+      tgt?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     });
+  });
+}
 
-    this.querySelector('#newConfigBtn')?.addEventListener('click', () => {
-      this._editingConfig = '__new__';
-      this.render();
+function wireSections(scope: HTMLElement): void {
+  scope.querySelectorAll<HTMLElement>('[data-pref-submit]').forEach((el) => {
+    el.addEventListener('click', () => {
+      const mode = el.dataset['prefSubmit'] as 'cmd-enter' | 'enter';
+      const p = getPrefs();
+      p.submitMode = mode;
+      savePrefs(p);
+      rerender();
     });
+  });
+  scope.querySelector<HTMLElement>('[data-pref-closekb]')?.addEventListener('click', () => {
+    const p = getPrefs();
+    p.closeKeyboardOnSend = !p.closeKeyboardOnSend;
+    savePrefs(p);
+    rerender();
+  });
 
-    this.querySelector('#resetDefaultsBtn')?.addEventListener('click', async () => {
-      if (await confirmAction('Reset default engine configs (claude, codex, opencode) to built-in defaults? Custom edits to these configs will be lost.')) {
-        await this._resetDefaults();
-      }
-    });
-
-    this.querySelectorAll('[data-page-delete]').forEach((btn) => {
-      btn.addEventListener('click', async () => {
-        const slug = btn.dataset.pageDelete;
-        if (await confirmAction(`Delete page "${slug}"? This removes all published files.`)) {
-          try {
-            const res = await fetch(`/api/pages/${encodeURIComponent(slug)}`, { method: 'DELETE', headers: authHeaders() });
-            if (res.ok) {
-              state.pages = state.pages.filter(p => p.slug !== slug);
-              showToast('Deleted', 'success');
-              this.render();
-            } else {
-              const b = await res.json().catch(() => null);
-              showToast(b?.error || 'Delete failed', 'error');
-            }
-          } catch { showToast('Network error', 'error'); }
-        }
-      });
-    });
-
-    this.querySelectorAll('[data-dest-test]').forEach((btn) => {
-      btn.addEventListener('click', async () => {
-        const name = btn.dataset.destTest;
-        try {
-          const res = await fetch(`/api/destinations/${encodeURIComponent(name)}/test`, { method: 'POST', headers: authHeaders() });
-          if (res.ok) {
-            showToast('Test message sent', 'success');
-          } else {
-            const b = await res.json().catch(() => null);
-            showToast(b?.error || 'Test failed', 'error');
-          }
-        } catch { showToast('Network error', 'error'); }
-      });
-    });
-
-    this.querySelectorAll('[data-dest-delete]').forEach((btn) => {
-      btn.addEventListener('click', async () => {
-        const name = btn.dataset.destDelete;
-        if (await confirmAction(`Delete destination "${name}"?`)) {
-          try {
-            const res = await fetch(`/api/destinations/${encodeURIComponent(name)}`, { method: 'DELETE', headers: authHeaders() });
-            if (res.ok) {
-              state.destinations = state.destinations.filter(d => d.name !== name);
-              showToast('Deleted', 'success');
-              this.render();
-            } else {
-              const b = await res.json().catch(() => null);
-              showToast(b?.error || 'Delete failed', 'error');
-            }
-          } catch { showToast('Network error', 'error'); }
-        }
-      });
-    });
-
-    this.querySelector('#addDestBtn')?.addEventListener('click', () => {
-      this._addingDest = true;
-      this.render();
-    });
-
-    this.querySelector('#destCancelBtn')?.addEventListener('click', () => {
-      this._addingDest = false;
-      this.render();
-    });
-
-    this.querySelector('#destSaveBtn')?.addEventListener('click', async () => {
-      const nameEl = this.querySelector('#destNameInput');
-      const tokenEl = this.querySelector('#destTokenInput');
-      const chatEl = this.querySelector('#destChatInput');
-      const name = nameEl?.value?.trim();
-      const botToken = tokenEl?.value?.trim();
-      const chatId = chatEl?.value?.trim();
-      if (!name || !botToken || !chatId) {
-        showToast('All fields are required', 'error');
-        return;
-      }
-      try {
-        const res = await fetch('/api/destinations', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...authHeaders() },
-          body: JSON.stringify({ name, type: 'telegram', config: { botToken, chatId }, enabled: true }),
-        });
-        if (res.ok) {
-          const dest = await res.json();
-          state.destinations = [...(state.destinations || []), dest];
-          this._addingDest = false;
-          showToast('Telegram destination added', 'success');
-          this.render();
-        } else {
-          const b = await res.json().catch(() => null);
-          showToast(b?.error || 'Failed to add destination', 'error');
-        }
-      } catch { showToast('Network error', 'error'); }
-    });
-
-    this.querySelectorAll('[data-store-delete]').forEach((btn) => {
-      btn.addEventListener('click', async () => {
-        const name = btn.dataset.storeDelete;
-        if (await confirmAction(`Delete data store "${name}"? This removes all stored data.`)) {
-          try {
-            const res = await fetch(`/api/stores/${encodeURIComponent(name)}`, { method: 'DELETE', headers: authHeaders() });
-            if (res.ok) {
-              state.stores = state.stores.filter(s => s.name !== name);
-              showToast('Deleted', 'success');
-              this.render();
-            } else {
-              const b = await res.json().catch(() => null);
-              showToast(b?.error || 'Delete failed', 'error');
-            }
-          } catch { showToast('Network error', 'error'); }
-        }
-      });
-    });
-
-    this.querySelectorAll('.config-action-btn').forEach((btn) => {
-      btn.addEventListener('click', async () => {
-        if (btn.dataset.action === 'edit') {
-          this._editingConfig = btn.dataset.name;
-          this.render();
-        } else if (btn.dataset.action === 'delete') {
-          if (await confirmAction(`Delete engine config "${btn.dataset.name}"?`)) {
-            await this._deleteConfig(btn.dataset.name);
-          }
-        }
-      });
-    });
-
-    this.querySelectorAll('.config-actions button[data-action="save"], .config-actions button[data-action="cancel"], .config-edit-actions button').forEach((btn) => {
-      btn.addEventListener('click', async () => {
-        if (btn.dataset.action === 'cancel') {
-          this._editingConfig = null;
-          this.render();
+  scope.querySelectorAll<HTMLElement>('[data-act]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const act = btn.dataset['act'];
+      switch (act) {
+        case 'delete-engine': {
+          const name = btn.dataset['name']!;
+          if (!window.confirm(`Delete engine config "${name}"?`)) return;
+          await fetch(`/api/engine-configs/${encodeURIComponent(name)}`, { method: 'DELETE', headers: authHeaders() });
+          void loadConfigs().then(rerender);
           return;
         }
-        if (btn.dataset.action === 'save') {
-          const card = btn.closest('.config-card');
-          const configName = card.dataset.config;
-          const textarea = card.querySelector('.config-yaml-editor');
-          const yaml = textarea.value;
-
-          if (configName === '__new__') {
-            const nameInput = card.querySelector('.config-name-input');
-            const name = nameInput?.value?.trim();
-            if (!name) { showToast('Name is required', 'error'); return; }
-            const fields = yamlToConfig(yaml, name);
-            if (!fields.engine) { showToast('engine is required in config', 'error'); return; }
-            await this._createConfig(fields);
-          } else {
-            const fields = yamlToConfig(yaml, configName);
-            await this._updateConfig(configName, fields);
-          }
+        case 'delete-page': {
+          const slug = btn.dataset['slug']!;
+          if (!window.confirm(`Delete page "${slug}"?`)) return;
+          await fetch(`/api/pages/${encodeURIComponent(slug)}`, { method: 'DELETE', headers: authHeaders() });
+          void loadPages().then(rerender);
+          return;
         }
-      });
+        case 'delete-store': {
+          const name = btn.dataset['name']!;
+          if (!window.confirm(`Delete store "${name}"?`)) return;
+          await fetch(`/api/stores/${encodeURIComponent(name)}`, { method: 'DELETE', headers: authHeaders() });
+          void loadStores().then(rerender);
+          return;
+        }
+        case 'test-dest': {
+          const name = btn.dataset['name']!;
+          const res = await fetch(`/api/destinations/${encodeURIComponent(name)}/test`, { method: 'POST', headers: authHeaders() });
+          if (res.ok) showToast('Test sent');
+          else showToast('Test failed', 'error');
+          return;
+        }
+        case 'delete-dest': {
+          const name = btn.dataset['name']!;
+          if (!window.confirm(`Delete destination "${name}"?`)) return;
+          await fetch(`/api/destinations/${encodeURIComponent(name)}`, { method: 'DELETE', headers: authHeaders() });
+          void loadDestinations().then(rerender);
+          return;
+        }
+      }
     });
+  });
 
-    this.querySelectorAll('input[name="submitMode"]').forEach((radio) => {
-      radio.addEventListener('change', () => {
-        const prefs = getPrefs();
-        prefs.submitMode = radio.value;
-        savePrefs(prefs);
-      });
-    });
+  scope.querySelector<HTMLElement>('[data-reset-defaults]')?.addEventListener('click', async () => {
+    if (!window.confirm('Reset built-in engine configs to defaults? Custom edits to claude/codex/opencode will be lost.')) return;
+    await fetch('/api/engine-configs/reset-defaults', { method: 'POST', headers: authHeaders() });
+    void loadConfigs().then(rerender);
+  });
 
-    this.querySelector('#closeKbPref')?.addEventListener('change', (e) => {
-      const prefs = getPrefs();
-      prefs.closeKeyboardOnSend = e.target.checked;
-      savePrefs(prefs);
-    });
-  }
+  scope.querySelector<HTMLElement>('[data-new-engine]')?.addEventListener('click', () => {
+    showToast('New engine config flow ships in PR 9.');
+  });
 
-  async _createConfig(fields) {
-    try {
-      const res = await fetch('/api/engine-configs', { method: 'POST', headers: authHeaders(), body: JSON.stringify(fields) });
-      if (!res.ok) { const b = await res.json().catch(() => null); showToast(b?.error || 'Create failed', 'error'); return; }
-      const config = await res.json();
-      const idx = state.engineConfigs.findIndex(c => c.name === config.name);
-      if (idx >= 0) state.engineConfigs[idx] = config; else state.engineConfigs.push(config);
-      this._editingConfig = null;
-      showToast('Created', 'success');
-      this.render();
-    } catch { showToast('Network error', 'error'); }
-  }
-
-  async _updateConfig(name, fields) {
-    try {
-      const res = await fetch(`/api/engine-configs/${encodeURIComponent(name)}`, { method: 'PUT', headers: authHeaders(), body: JSON.stringify(fields) });
-      if (!res.ok) { const b = await res.json().catch(() => null); showToast(b?.error || 'Update failed', 'error'); return; }
-      const config = await res.json();
-      const idx = state.engineConfigs.findIndex(c => c.name === name);
-      if (idx >= 0) state.engineConfigs[idx] = config;
-      this._editingConfig = null;
-      showToast('Saved', 'success');
-      this.render();
-    } catch { showToast('Network error', 'error'); }
-  }
-
-  async _deleteConfig(name) {
-    try {
-      const res = await fetch(`/api/engine-configs/${encodeURIComponent(name)}`, { method: 'DELETE', headers: authHeaders() });
-      if (!res.ok) { const b = await res.json().catch(() => null); showToast(b?.error || 'Delete failed', 'error'); return; }
-      state.engineConfigs = state.engineConfigs.filter(c => c.name !== name);
-      showToast('Deleted', 'success');
-      this.render();
-    } catch { showToast('Network error', 'error'); }
-  }
-
-  async _resetDefaults() {
-    try {
-      const res = await fetch('/api/engine-configs/reset-defaults', { method: 'POST', headers: authHeaders() });
-      if (!res.ok) { const b = await res.json().catch(() => null); showToast(b?.error || 'Reset failed', 'error'); return; }
-      // Refresh full list from server
-      const listRes = await fetch('/api/engine-configs', { headers: authHeaders() });
-      if (listRes.ok) state.engineConfigs = await listRes.json();
-      this._editingConfig = null;
-      showToast('Defaults restored', 'success');
-      this.render();
-    } catch { showToast('Network error', 'error'); }
-  }
+  scope.querySelector<HTMLElement>('[data-new-dest]')?.addEventListener('click', () => openTelegramForm());
 }
 
-customElements.define('settings-panel', SettingsPanel);
+function openTelegramForm(): void {
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(22,24,28,0.18);z-index:50;display:flex;align-items:center;justify-content:center;padding:24px;';
+  overlay.innerHTML = `
+    <div class="st-addform" style="background:var(--paper-card);width:520px;max-width:95vw;border-radius:6px;border:1px solid var(--rule);padding:20px;">
+      <div class="ttl" style="font-size:16px;font-weight:700;margin-bottom:14px;">+ New Telegram destination</div>
+      <div class="field"><label>Name</label><input class="ov-input" type="text" data-in-name placeholder="e.g. ops-channel"></div>
+      <div class="field"><label>Bot token</label><input class="ov-input" type="text" data-in-token placeholder="123456:ABC-DEF…"></div>
+      <div class="field"><label>Chat ID</label><input class="ov-input" type="text" data-in-chat placeholder="-1001234567890"></div>
+      <div class="help">Create a bot via <code>@BotFather</code>. Send the bot a message, then GET <code>https://api.telegram.org/bot&lt;token&gt;/getUpdates</code> to find the chat ID.</div>
+      <div class="actions" style="display:flex;gap:6px;justify-content:flex-end;margin-top:14px;">
+        <button class="btn" data-cancel>Cancel</button>
+        <button class="btn primary" data-submit>Add</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+  overlay.querySelector<HTMLElement>('[data-cancel]')?.addEventListener('click', () => overlay.remove());
+  overlay.querySelector<HTMLElement>('[data-submit]')?.addEventListener('click', async () => {
+    const name = overlay.querySelector<HTMLInputElement>('[data-in-name]')?.value.trim();
+    const botToken = overlay.querySelector<HTMLInputElement>('[data-in-token]')?.value.trim();
+    const chatId = overlay.querySelector<HTMLInputElement>('[data-in-chat]')?.value.trim();
+    if (!name || !botToken || !chatId) {
+      showToast('All fields required', 'error');
+      return;
+    }
+    try {
+      const res = await fetch('/api/destinations', {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({ name, type: 'telegram', config: { botToken, chatId }, enabled: true }),
+      });
+      if (!res.ok) {
+        const b = await res.json().catch(() => null);
+        showToast(b?.error ?? 'Add failed', 'error');
+        return;
+      }
+      overlay.remove();
+      void loadDestinations().then(rerender);
+    } catch { showToast('Network error', 'error'); }
+  });
+}
+
+/* ── helpers ───────────────────────────────────────────────────────── */
+
+function formatBytes(b: number): string {
+  if (b >= 1024 * 1024) return `${(b / 1024 / 1024).toFixed(1)} MB`;
+  if (b >= 1024) return `${Math.round(b / 1024)} KB`;
+  return `${b} B`;
+}
+
+function ago(iso: string): string {
+  const ms = Date.now() - new Date(iso).getTime();
+  if (ms < 60_000) return `${Math.floor(ms / 1000)}s`;
+  if (ms < 3_600_000) return `${Math.floor(ms / 60_000)}m`;
+  if (ms < 86_400_000) return `${Math.floor(ms / 3_600_000)}h`;
+  return `${Math.floor(ms / 86_400_000)}d`;
+}
+
+function setText(sel: string, text: string): void {
+  const el = document.querySelector<HTMLElement>(sel);
+  if (el) el.textContent = text;
+}
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function showToast(msg: string, kind: 'info' | 'error' = 'info'): void {
+  const el = document.createElement('div');
+  el.className = `chat-toast ${kind === 'error' ? 'error' : ''}`;
+  el.textContent = msg;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 3000);
+}

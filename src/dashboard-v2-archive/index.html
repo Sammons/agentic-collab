@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Agentic Collab</title>
+<link rel="stylesheet" href="/dashboard/assets/styles/base.css">
+<link rel="stylesheet" href="/dashboard/assets/styles/agent-card.css">
+<link rel="stylesheet" href="/dashboard/assets/styles/messages.css">
+<link rel="stylesheet" href="/dashboard/assets/styles/thread.css">
+<link rel="stylesheet" href="/dashboard/assets/styles/watch-panel.css">
+<link rel="stylesheet" href="/dashboard/assets/styles/reminder-panel.css">
+<link rel="stylesheet" href="/dashboard/assets/styles/modals.css">
+<link rel="stylesheet" href="/dashboard/assets/styles/settings.css">
+<link rel="stylesheet" href="/dashboard/assets/styles/files-panel.css">
+<link rel="stylesheet" href="/dashboard/assets/styles/responsive.css">
+</head>
+<body>
+<header>
+  <h1>Agentic Collab</h1>
+  <div class="hotkey-hints">
+    <kbd>&#8984;K</kbd> search
+    <kbd>&#8984;Enter</kbd> send
+    <kbd>Space</kbd> PTT
+    <kbd>Esc</kbd> close
+  </div>
+  <div class="header-actions">
+    <a href="/docs" target="_blank" class="header-btn">Docs</a>
+    <button id="settingsBtn" class="header-btn">Settings</button>
+    <div class="conn-status">
+      <div class="conn-dot" id="connDot"></div>
+      <span id="connLabel">Disconnected</span>
+    </div>
+  </div>
+</header>
+<div class="layout">
+  <div class="agent-sidebar" id="agentSidebar">
+    <button class="sidebar-toggle" id="sidebarToggle" title="Toggle sidebar (Cmd+B)"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="9" y1="3" x2="9" y2="21"/></svg></button>
+    <div id="createFormContainer"></div>
+    <div class="agent-search">
+      <span class="search-icon"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></span>
+      <input type="text" id="agentSearch" placeholder="Filter agents..." autocomplete="off" />
+      <button class="search-clear" id="agentSearchClear" type="button"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="filter-chips" id="filterChips">
+      <button class="filter-chip" data-filter="active">Active</button>
+      <button class="filter-chip" data-filter="idle">Idle</button>
+      <button class="filter-chip" data-filter="unread">Unread</button>
+      <button class="filter-chip" data-filter="recent">Recent</button>
+      <button class="filter-chip" data-filter="starred">Starred</button>
+    </div>
+    <div class="agent-list" id="agentList">
+    </div>
+  </div>
+  <div class="thread-panel" id="threadPanel">
+    <div class="thread-header" id="threadHeader">Select an agent</div>
+    <message-list class="thread-messages" id="threadMessages">
+      <div class="thread-empty">Select an agent to view messages</div>
+    </message-list>
+    <div class="persona-panel" id="personaPanel" style="display:none"></div>
+    <reminder-panel class="reminder-panel" id="reminderPanel" style="display:none"></reminder-panel>
+    <watch-panel class="watch-panel" id="watchPanel" style="display:none"></watch-panel>
+    <files-panel class="files-panel" id="filesPanel" style="display:none"></files-panel>
+    <div class="topic-breadcrumbs" id="topicBreadcrumbs" style="display:none"></div>
+    <message-input class="thread-input" id="threadInput" style="display:none">
+    </message-input>
+    <span class="voice-partial" id="voicePartial" style="display:none"></span>
+  </div>
+  <settings-panel id="settingsPanel" style="display:none" class="thread-panel"></settings-panel>
+</div>
+
+<script type="module">
+import { state, on, emit, getToken, setToken, authHeaders } from '/dashboard/assets/state.ts';
+import { esc, renderMarkdown, timeAgo, formatFileSize, showToast, promptInput, confirmAction } from '/dashboard/assets/utils.ts';
+import '/dashboard/assets/agent-card.ts';
+import '/dashboard/assets/message-list.ts';
+import '/dashboard/assets/message-input.ts';
+import '/dashboard/assets/watch-panel.ts';
+import '/dashboard/assets/reminder-panel.ts';
+import '/dashboard/assets/files-panel.ts';
+import '/dashboard/assets/settings.ts';
+import { agentAction, openCreateAgentModal, setup as setupLifecycle } from '/dashboard/assets/agent-lifecycle.ts';
+import { sendMessage, uploadFile, handleFileUpload, updateSendability, handleQueueUpdate, setup as setupMessageIO } from '/dashboard/assets/message-io.ts';
+import { voiceState, initVoice, initCommandPalette, setup as setupVoicePalette } from '/dashboard/assets/voice-palette.ts';
+import { handleAuthError, connect, fetchEngineUsage, setup as setupConnection } from '/dashboard/assets/connection.ts';
+import { renderThread, getActiveTopic, updatePageTitle, setup as setupThread } from '/dashboard/assets/thread.ts';
+import { renderAgents, selectAgent, patchAgentCard, updateAgent, addMessage, handleMessageWithdrawn, applySearchFilter, initAgentListEvents, setup as setupAgentList } from '/dashboard/assets/agent-list.ts';
+import { pushUrlState, restorePendingAgent, setup as setupUrlState } from '/dashboard/assets/url-state.ts';
+{
+
+  // handleAuthError, promptForToken — imported from connection.js
+
+  // ── State ──
+  // State imported from /dashboard/assets/state.js
+
+  // Expose state for test probe when running in test mode
+  if (new URLSearchParams(location.search).has('test')) {
+    window.__dashboardState = state;
+  }
+
+  // VOICE_TO_TEXT_PREFIX — moved to message-io.js
+  // ws, connect, updateConnStatus, promptForToken — moved to connection.js
+
+  // patchAgentCard, updateAgent, addMessage, handleMessageWithdrawn — imported from agent-list.js
+
+  // renderAgents, selectAgent — imported from agent-list.js
+  // renderThread, getActiveTopic, setActiveTopic, updatePageTitle, mobileBack — imported from thread.js
+
+  // mobileBack — imported from thread.js
+
+  // Wire connection module dependencies (must precede lifecycle + message-io which depend on handleAuthError)
+  setupConnection({ renderAgents, renderThread, updatePageTitle, updateAgent, addMessage, handleMessageWithdrawn, handleQueueUpdate, patchAgentCard, onInit: restorePendingAgent });
+
+  // Wire thread/persona module dependencies
+  setupThread({ handleAuthError, updateSendability });
+
+  // Wire agent-lifecycle module dependencies
+  setupLifecycle({ handleAuthError, selectAgent });
+
+  // Wire message-input component events
+  const msgInputEl = document.getElementById('threadInput');
+  msgInputEl.addEventListener('msg-send', (e) => sendMessage());
+  msgInputEl.addEventListener('msg-interrupt', (e) => agentAction(e.detail.agent, 'interrupt'));
+  msgInputEl.addEventListener('msg-upload', (e) => handleFileUpload(e.detail.files, e.detail.message));
+
+  // Paste image/file from clipboard — delegate to component via event
+  document.getElementById('threadInput').addEventListener('paste', (e) => {
+    const items = e.clipboardData?.items;
+    if (!items || !state.selected) return;
+
+    const files = [];
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.kind === 'file') {
+        const file = item.getAsFile();
+        if (file) files.push(file);
+      }
+    }
+
+    if (files.length === 0) return;
+    e.preventDefault();
+    const inputEl = document.getElementById('threadInput');
+    const message = inputEl.getDraft ? inputEl.getDraft().trim() : '';
+    handleFileUpload(files, message);
+  });
+
+  // Drag-and-drop on entire thread panel (messages + input area)
+  const threadPanel = document.getElementById('threadPanel');
+  threadPanel.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    threadPanel.classList.add('drag-over');
+  });
+  threadPanel.addEventListener('dragleave', (e) => {
+    // Only remove highlight when leaving the panel entirely, not child elements
+    if (!threadPanel.contains(e.relatedTarget)) {
+      threadPanel.classList.remove('drag-over');
+    }
+  });
+  threadPanel.addEventListener('drop', (e) => {
+    e.preventDefault();
+    threadPanel.classList.remove('drag-over');
+    const droppedFiles = e.dataTransfer?.files;
+    if (droppedFiles && droppedFiles.length > 0 && state.selected) {
+      const inputEl = document.getElementById('threadInput');
+      const message = inputEl?.getDraft ? inputEl.getDraft().trim() : '';
+      handleFileUpload(Array.from(droppedFiles), message);
+    }
+  });
+
+  // Withdraw/unsend message handler
+  document.getElementById('threadMessages').addEventListener('click', async (e) => {
+    const btn = e.target.closest('.msg-withdraw');
+    if (!btn) return;
+    const msgId = btn.dataset.msgId;
+    if (!msgId) return;
+    const confirmed = await confirmAction('Withdraw this message? The agent will be notified.');
+    if (!confirmed) return;
+    btn.textContent = '...';
+    btn.style.pointerEvents = 'none';
+    try {
+      const res = await fetch(`/api/dashboard/messages/${msgId}/withdraw`, {
+        method: 'POST',
+        headers: authHeaders(),
+      });
+      if (res.status === 401) { handleAuthError(); return; }
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        console.error('Withdraw failed:', body?.error || res.status);
+      }
+    } catch (err) {
+      console.error('Withdraw failed:', err);
+    }
+  });
+
+  // proxyVersionWarning, applySearchFilter, search/filter listeners — moved to agent-list.js
+
+  // Wire module dependencies
+  setupAgentList({ renderThread, updateSendability, updatePageTitle });
+  setupVoicePalette({ selectAgent });
+  setupMessageIO({ handleAuthError, getActiveTopic, renderThread, voiceState });
+
+
+  // initVoice, voice pipeline, command palette — moved to voice-palette.js
+
+
+  // ── Sidebar collapse ──
+  const sidebar = document.getElementById('agentSidebar');
+  const sidebarToggle = document.getElementById('sidebarToggle');
+  if (localStorage.getItem('sidebar_collapsed') === '1') sidebar.classList.add('collapsed');
+  sidebarToggle.addEventListener('click', () => {
+    sidebar.classList.toggle('collapsed');
+    localStorage.setItem('sidebar_collapsed', sidebar.classList.contains('collapsed') ? '1' : '0');
+  });
+  document.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'b') {
+      e.preventDefault();
+      sidebarToggle.click();
+    }
+  });
+
+  // ── Settings toggle ──
+  const settingsBtn = document.getElementById('settingsBtn');
+  const settingsPanel = document.getElementById('settingsPanel');
+  function closeSettings() {
+    settingsPanel.style.display = 'none';
+    threadPanel.style.display = '';  // Remove inline style — let CSS handle it
+    settingsBtn.style.color = 'var(--text-dim)';
+    settingsBtn.style.borderColor = 'var(--border)';
+  }
+  function openSettings() {
+    settingsPanel.style.display = 'flex';
+    threadPanel.style.display = 'none';
+    settingsBtn.style.color = 'var(--accent)';
+    settingsBtn.style.borderColor = 'var(--accent)';
+    settingsPanel.render();
+  }
+  settingsBtn.addEventListener('click', () => {
+    const isOpen = settingsPanel.style.display !== 'none';
+    if (isOpen) {
+      closeSettings();
+      pushUrlState({ settings: false });
+    } else {
+      openSettings();
+      pushUrlState({ settings: true });
+    }
+  });
+  settingsPanel.addEventListener('close-settings', () => {
+    closeSettings();
+    pushUrlState({ settings: false });
+  });
+  // Close settings when selecting an agent
+  document.getElementById('agentList').addEventListener('click', () => {
+    if (settingsPanel.style.display !== 'none') closeSettings();
+  });
+
+  // ── URL State (History API) ──
+  setupUrlState({ selectAgent, renderThread, renderAgents, openSettings, closeSettings });
+
+  // ── Init ──
+  // Always try connecting first. If the server requires auth and we don't have
+  // a token, the WebSocket will close with 401 and we'll show the auth modal.
+  connect();
+  initAgentListEvents();
+  initVoice();
+  initCommandPalette();
+  // Refresh relative timestamps in engine summary every 30s
+  setInterval(() => { if (state.agents.length > 0) renderAgents(); }, 30000);
+  // Fetch engine usage every 2 minutes (poller runs server-side every 10min)
+  fetchEngineUsage();
+  setInterval(fetchEngineUsage, 120_000);
+}
+</script>
+</body>
+</html>
