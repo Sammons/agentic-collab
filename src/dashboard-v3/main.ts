@@ -18,6 +18,7 @@ import { setupAgents } from './agents.ts';
 import { setupWatch } from './watch.ts';
 import { setupApprovals } from './approvals.ts';
 import { setupReminders } from './reminders.ts';
+import { setupSettings } from './settings.ts';
 import { connect } from './connection.ts';
 
 function boot(): void {
@@ -28,6 +29,7 @@ function boot(): void {
   setupWatch();
   setupApprovals();
   setupReminders();
+  setupSettings();
   setupRouter();
   setupSidebar();
   connect();
