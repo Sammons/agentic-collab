@@ -19,6 +19,7 @@ import { setupWatch } from './watch.ts';
 import { setupApprovals } from './approvals.ts';
 import { setupReminders } from './reminders.ts';
 import { setupSettings } from './settings.ts';
+import { setupSearch } from './search.ts';
 import { connect } from './connection.ts';
 
 function boot(): void {
@@ -30,6 +31,7 @@ function boot(): void {
   setupApprovals();
   setupReminders();
   setupSettings();
+  setupSearch();
   setupRouter();
   setupSidebar();
   connect();
