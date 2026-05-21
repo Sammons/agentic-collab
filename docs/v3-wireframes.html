@@ -1,0 +1,617 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>agentic-collab 3.0 — Q9 dashboard wireframes</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --bg-elev: #161b22;
+    --bg-card: #1c2128;
+    --bg-input: #0d1117;
+    --border: #30363d;
+    --border-dim: #21262d;
+    --fg: #e6edf3;
+    --fg-dim: #8b949e;
+    --accent: #58a6ff;
+    --accent2: #7ee787;
+    --orange: #ffa657;
+    --red: #ff7b72;
+    --purple: #d2a8ff;
+    --yellow: #e3b341;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--mono);
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 48px 32px 96px;
+    line-height: 1.55;
+    font-size: 13.5px;
+  }
+  h1 { font-size: 32px; font-weight: 600; margin: 0 0 6px; letter-spacing: -0.02em; }
+  h2 { font-size: 18px; margin: 48px 0 16px; color: var(--accent); border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+  h3 { font-size: 14px; margin: 20px 0 10px; color: var(--fg-dim); letter-spacing: 0.04em; text-transform: uppercase; }
+  .subtitle { color: var(--fg-dim); margin-bottom: 8px; }
+  .meta { color: var(--fg-dim); font-size: 12px; margin-bottom: 24px; }
+  code { background: var(--bg-elev); padding: 1px 6px; border-radius: 3px; color: var(--orange); font-size: 12.5px; }
+
+  /* Wireframe layout */
+  .frame {
+    display: grid;
+    grid-template-columns: 300px 1fr;
+    gap: 1px;
+    background: var(--border-dim);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    margin: 16px 0;
+    min-height: 560px;
+    overflow: hidden;
+  }
+  .frame .sidebar {
+    background: var(--bg-elev);
+    padding: 14px 12px;
+    overflow: hidden;
+  }
+  .frame .main {
+    background: var(--bg);
+    padding: 16px 18px;
+    overflow: hidden;
+  }
+
+  /* Toggle */
+  .toggle {
+    display: flex;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    margin-bottom: 12px;
+    overflow: hidden;
+    font-size: 11.5px;
+  }
+  .toggle button {
+    flex: 1;
+    background: transparent;
+    color: var(--fg-dim);
+    border: none;
+    padding: 6px 4px;
+    cursor: pointer;
+    font-family: var(--mono);
+  }
+  .toggle button.active { background: var(--accent); color: #0d1117; font-weight: 600; }
+  .toggle .badge { color: inherit; opacity: 0.75; margin-left: 4px; }
+
+  /* Search box */
+  .search {
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 6px 8px;
+    color: var(--fg-dim);
+    font-family: var(--mono);
+    font-size: 11.5px;
+    margin-bottom: 8px;
+  }
+
+  /* Chips */
+  .chips { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 12px; }
+  .chip {
+    background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: 10px; padding: 2px 8px;
+    color: var(--fg-dim); font-size: 11px;
+  }
+  .chip.active { color: var(--accent); border-color: var(--accent); }
+  .chip-label { color: var(--fg-dim); font-size: 11px; padding: 2px 0; margin-right: 6px; }
+
+  /* Sidebar tree */
+  .tree { font-size: 12px; }
+  .tree .node { padding: 4px 0; display: flex; align-items: center; gap: 6px; }
+  .tree .caret { color: var(--fg-dim); width: 10px; }
+  .tree .name { color: var(--fg); flex: 1; }
+  .tree .meta-inline { color: var(--fg-dim); font-size: 10.5px; }
+  .tree .child { padding-left: 18px; }
+  .tree .topic-name { color: var(--purple); }
+  .pill {
+    display: inline-block;
+    background: var(--bg-card);
+    border-radius: 9px;
+    padding: 1px 6px;
+    font-size: 10.5px;
+    color: var(--fg-dim);
+    margin-left: 4px;
+  }
+  .pill.q { color: var(--fg); }
+  .pill.q.running { color: var(--orange); }
+  .pill.q.ok { color: var(--accent2); }
+  .pill.q.fail { color: var(--red); }
+  .pill.q.idle { color: var(--fg-dim); }
+  .ind {
+    display: inline-block; width: 8px; height: 8px;
+    border-radius: 50%; vertical-align: middle; margin-right: 4px;
+  }
+  .ind.running { background: var(--orange); }
+  .ind.ok { background: var(--accent2); }
+  .ind.fail { background: var(--red); }
+  .ind.idle { background: var(--fg-dim); opacity: 0.45; }
+  .ind.pending { background: var(--orange); }
+
+  .footer-stats {
+    margin-top: 12px; padding-top: 8px;
+    border-top: 1px solid var(--border-dim);
+    color: var(--fg-dim); font-size: 11px;
+  }
+
+  /* Approval row */
+  .approval-row {
+    padding: 6px 0;
+    display: grid;
+    grid-template-columns: 14px 60px 1fr 90px 40px;
+    gap: 8px;
+    align-items: baseline;
+    font-size: 11.5px;
+    border-bottom: 1px solid var(--border-dim);
+  }
+  .approval-row:last-child { border-bottom: none; }
+  .approval-row .id { color: var(--accent); }
+  .approval-row .channel { color: var(--purple); }
+  .approval-row .req { color: var(--fg-dim); font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; }
+  .approval-row .age { color: var(--fg-dim); text-align: right; }
+
+  /* Main pane components */
+  .pane-header {
+    display: flex; align-items: baseline; gap: 12px;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 10px; margin-bottom: 14px;
+  }
+  .pane-header .title { color: var(--accent); font-size: 14.5px; font-weight: 600; }
+  .pane-header .badge { margin-left: auto; color: var(--orange); }
+
+  .card-block {
+    background: var(--bg-elev);
+    border: 1px solid var(--border-dim);
+    border-radius: 4px;
+    padding: 10px 12px;
+    margin: 10px 0;
+    font-size: 11.5px;
+  }
+  .card-block .label { color: var(--fg-dim); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 6px; }
+  .card-block.code { background: #0a0d12; }
+  pre {
+    margin: 0;
+    color: var(--fg);
+    white-space: pre-wrap;
+    font-size: 11.5px;
+  }
+  .pre-line { margin: 1px 0; }
+  .pre-line .k { color: var(--fg-dim); }
+  .pre-line .v { color: var(--fg); }
+  .pre-line .v.path { color: var(--accent2); }
+  .pre-line .v.addr { color: var(--accent); }
+
+  table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+  th { text-align: left; color: var(--fg-dim); font-weight: 400; border-bottom: 1px solid var(--border-dim); padding: 4px 6px; }
+  td { color: var(--fg); padding: 4px 6px; border-bottom: 1px solid var(--border-dim); }
+  td.id { color: var(--accent); font-family: var(--mono); }
+  td.dim { color: var(--fg-dim); }
+
+  .actions {
+    margin-top: 14px;
+    display: flex; gap: 8px; flex-wrap: wrap;
+  }
+  .btn {
+    background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: 4px; padding: 5px 12px;
+    color: var(--fg); font-family: var(--mono); font-size: 11.5px;
+    cursor: pointer;
+  }
+  .btn.primary { background: var(--accent2); color: #0d1117; border-color: var(--accent2); }
+  .btn.danger { color: var(--red); border-color: var(--red); }
+  .btn.dim { color: var(--fg-dim); }
+
+  .caption {
+    color: var(--fg-dim); font-size: 11px; margin-top: 6px; font-style: italic;
+  }
+
+  /* API table */
+  .api-table { margin: 16px 0; }
+  .api-table th, .api-table td { padding: 6px 8px; font-size: 12px; }
+  .api-table .method { color: var(--accent); font-weight: 600; }
+  .api-table .path { color: var(--purple); }
+</style>
+</head>
+<body>
+
+<h1>agentic-collab 3.0 — Q9 dashboard wireframes</h1>
+<div class="subtitle">Templates &amp; topics tree · approval inbox · live updates via Q4 WS events</div>
+<div class="meta">Spec: <code>docs/v3-vision.md</code> §"UI deltas" · markdown source: <code>docs/v3-wireframes.md</code> · scope: human follow-up (deferred from the one-shot run)</div>
+
+<!-- ─────────────────────────────────────────────────────── -->
+<h2>1 · Sidebar view toggle</h2>
+<p>The toggle sits above today's <code>Filter agents…</code> search box. Three segments; the sidebar contents swap. Existing <strong>Agents</strong> view is unchanged.</p>
+
+<div class="frame" style="grid-template-columns: 300px 1fr; min-height: 220px;">
+  <div class="sidebar">
+    <div class="toggle">
+      <button class="active">Agents <span class="badge">7</span></button>
+      <button>Templates <span class="badge">3</span></button>
+      <button>Approvals <span class="badge">3</span></button>
+    </div>
+    <div class="search">🔍 Filter ...</div>
+    <div class="chips">
+      <span class="chip">Active</span>
+      <span class="chip">Idle</span>
+      <span class="chip">Unread</span>
+      <span class="chip">Recent</span>
+      <span class="chip">Starred</span>
+    </div>
+    <div class="caption">Existing chips when "Agents" is active.</div>
+  </div>
+  <div class="main">
+    <div class="pane-header">
+      <div class="title">View toggle</div>
+    </div>
+    <p>Badge counts come from:</p>
+    <ul style="margin-left: 1em; color: var(--fg-dim);">
+      <li><b style="color: var(--fg)">Agents</b> — existing unread count.</li>
+      <li><b style="color: var(--fg)">Templates</b> — sum of <code>topic_queue</code> depths across all templates. Source: aggregated <code>topic_queue_changed</code> WS events.</li>
+      <li><b style="color: var(--fg)">Approvals</b> — count where <code>state = 'pending'</code>. Source: <code>approval_changed</code> WS events + initial <code>GET /api/approvals?state=pending</code>.</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ─────────────────────────────────────────────────────── -->
+<h2>2 · Templates &amp; Topics — sidebar tree</h2>
+
+<div class="frame">
+  <div class="sidebar">
+    <div class="toggle">
+      <button>Agents <span class="badge">7</span></button>
+      <button class="active">Templates <span class="badge">3</span></button>
+      <button>Approvals <span class="badge">3</span></button>
+    </div>
+    <div class="search">🔍 Filter templates...</div>
+    <div class="chips">
+      <span class="chip active">All</span>
+      <span class="chip">Ephemeral</span>
+      <span class="chip">Persistent</span>
+      <span class="chip">Has-queue</span>
+    </div>
+    <div class="tree">
+      <div class="node">
+        <span class="caret">▼</span>
+        <span class="name">aws-account-lead</span>
+        <span class="meta-inline">eph · 2 topics</span>
+      </div>
+      <div class="node child">
+        <span class="caret">▣</span>
+        <span class="topic-name">provision</span>
+        <span class="pill q running">q:3</span>
+        <span class="pill">c:1</span>
+      </div>
+      <div class="node child">
+        <span class="caret">▣</span>
+        <span class="topic-name">teardown</span>
+        <span class="pill q idle">q:0</span>
+        <span class="pill">c:1</span>
+      </div>
+
+      <div class="node">
+        <span class="caret">▼</span>
+        <span class="name">test-echo</span>
+        <span class="meta-inline">eph · 1 topic</span>
+      </div>
+      <div class="node child">
+        <span class="caret">▣</span>
+        <span class="topic-name">echo</span>
+        <span class="pill q ok">q:0</span>
+        <span class="pill">c:1</span>
+      </div>
+
+      <div class="node">
+        <span class="caret">▶</span>
+        <span class="name">gitea-lead</span>
+        <span class="meta-inline">persistent</span>
+      </div>
+      <div class="node">
+        <span class="caret">▶</span>
+        <span class="name">orchestrator-watch</span>
+        <span class="meta-inline">persistent</span>
+      </div>
+    </div>
+    <div class="footer-stats">11 templates · 4 ephemeral · 3 queued</div>
+  </div>
+  <div class="main">
+    <div class="pane-header">
+      <div class="title">topic:aws-account-lead/provision</div>
+      <div class="badge"><span class="ind running"></span>queue: 3</div>
+    </div>
+
+    <div class="card-block">
+      <div class="label">Stats (last 24h)</div>
+      <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px;">
+        <div><div style="color: var(--fg-dim); font-size: 11px;">spawned</div><div style="font-size: 18px;">17</div></div>
+        <div><div style="color: var(--fg-dim); font-size: 11px;">completed</div><div style="font-size: 18px; color: var(--accent2);">12</div></div>
+        <div><div style="color: var(--fg-dim); font-size: 11px;">failed</div><div style="font-size: 18px; color: var(--red);">2</div></div>
+        <div><div style="color: var(--fg-dim); font-size: 11px;">running</div><div style="font-size: 18px; color: var(--orange);">3</div></div>
+      </div>
+      <div style="margin-top: 8px; color: var(--fg-dim); font-size: 11px;">median runtime: 4m12s · p95 runtime: 11m02s</div>
+    </div>
+
+    <div class="card-block">
+      <div class="label">Live queue (3 items)</div>
+      <table>
+        <thead><tr><th>id</th><th>payload</th><th>reply_to</th></tr></thead>
+        <tbody>
+          <tr><td class="id">#q-4019</td><td class="dim">{"region":"us-east-1"...}</td><td>gitea-lead</td></tr>
+          <tr><td class="id">#q-4021</td><td class="dim">{"region":"eu-west-2"...}</td><td>gitea-lead</td></tr>
+          <tr><td class="id">#q-4023</td><td class="dim">{"region":"ap-south-1"...}</td><td>dashboard</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card-block">
+      <div class="label">Recent instances</div>
+      <table>
+        <thead><tr><th>instance</th><th>state</th><th>started</th><th>completed</th><th>exit</th></tr></thead>
+        <tbody>
+          <tr><td class="id">a7c2b1…3f</td><td><span class="ind running"></span>running</td><td class="dim">2m ago</td><td class="dim">—</td><td class="dim">—</td></tr>
+          <tr><td class="id">b8d3c2…ee</td><td><span class="ind ok"></span>completed</td><td class="dim">14m ago</td><td class="dim">9m ago</td><td style="color: var(--accent2);">ok</td></tr>
+          <tr><td class="id">c9e4d3…77</td><td><span class="ind fail"></span>failed</td><td class="dim">1h ago</td><td class="dim">42m ago</td><td style="color: var(--red);">error</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card-block">
+      <div class="label">Config</div>
+      <pre><span class="pre-line"><span class="k">concurrency:</span> <span class="v">1</span>      <span class="k">monitor_template:</span> <span class="v">aws-account-monitor</span></span>
+<span class="pre-line"><span class="k">schema:</span>       <span class="v path">./schemas/provision.json</span></span>
+<span class="pre-line"><span class="k">reply_schema:</span> <span class="v path">./schemas/provision-reply.json</span></span>
+<span class="pre-line"><span class="k">cwd_base:</span>     <span class="v path">/var/agentic/work/aws-account-lead</span></span>
+<span class="pre-line"><span class="k">start:</span>        <span class="v">bash $WORKTREE_PATH/start.sh</span></span></pre>
+    </div>
+
+    <div class="actions">
+      <button class="btn">Pause queue</button>
+      <button class="btn">Drain queue</button>
+      <button class="btn">Reload template</button>
+    </div>
+    <div class="caption">Actions are NEW endpoints — ship the read-only view first, layer mutations second.</div>
+  </div>
+</div>
+
+<!-- ─────────────────────────────────────────────────────── -->
+<h2>3 · Templates &amp; Topics — instance detail</h2>
+
+<div class="frame">
+  <div class="sidebar">
+    <div class="toggle">
+      <button>Agents <span class="badge">7</span></button>
+      <button class="active">Templates <span class="badge">3</span></button>
+      <button>Approvals <span class="badge">3</span></button>
+    </div>
+    <div class="tree" style="margin-top: 12px;">
+      <div class="node"><span class="caret">▼</span><span class="name">aws-account-lead</span></div>
+      <div class="node child"><span class="caret">▣</span><span class="topic-name">provision</span><span class="pill q running">q:3</span></div>
+      <div class="node child" style="padding-left: 36px; color: var(--accent);">▸ a7c2b1…3f running</div>
+      <div class="node child" style="padding-left: 36px; color: var(--fg-dim);">  b8d3c2…ee completed</div>
+      <div class="node child" style="padding-left: 36px; color: var(--fg-dim);">  c9e4d3…77 failed</div>
+    </div>
+  </div>
+  <div class="main">
+    <div class="pane-header">
+      <div class="title">agent:aws-account-lead/a7c2b1…3f</div>
+      <div class="badge"><span class="ind running"></span>running</div>
+    </div>
+
+    <pre style="color: var(--fg-dim); font-size: 11.5px; margin-bottom: 14px;">
+template: <span style="color: var(--fg);">aws-account-lead</span>     spawned: <span style="color: var(--fg);">2m ago</span>     proxy: <span style="color: var(--fg);">mac-mini</span>
+reply_to: <span style="color: var(--fg);">gitea-lead</span>           queue_id: <span style="color: var(--fg);">4019</span>      message_id: <span style="color: var(--fg);">m-7d3a</span></pre>
+
+    <div class="card-block code">
+      <div class="label">tmux pane</div>
+<pre style="color: var(--accent2);">$ cd /var/agentic/work/aws-account-lead/wt-m-7d3a
+$ aws sts get-caller-identity
+{
+  "UserId": "...",
+  "Account": "123456789012",
+  "Arn": "arn:aws:iam::..."
+}
+$ <span style="background: var(--fg); color: var(--bg);">▮</span></pre>
+    </div>
+
+    <div class="card-block">
+      <div class="label">IPC files</div>
+      <pre><span class="pre-line"><span class="k">MESSAGE_PATH:</span>  <span class="v path">/run/agentic-collab/ipc/a7c2b1…3f/message.json</span></span>
+<span class="pre-line"><span class="k">REPLY_PATH:</span>    <span class="v path">/run/agentic-collab/ipc/a7c2b1…3f/reply.json</span>   <span class="k">(empty)</span></span>
+<span class="pre-line"><span class="k">STATUS_PATH:</span>   <span class="v path">/run/agentic-collab/ipc/a7c2b1…3f/status.txt</span>  <span class="k">(empty)</span></span></pre>
+    </div>
+
+    <div class="card-block">
+      <div class="label">Env contract</div>
+      <pre><span class="pre-line"><span class="k">WORKTREE_PATH:</span>   <span class="v path">/var/agentic/work/aws-account-lead/wt-m-7d3a</span></span>
+<span class="pre-line"><span class="k">CWD_BASE:</span>        <span class="v path">/var/agentic/work/aws-account-lead</span></span>
+<span class="pre-line"><span class="k">REPO_ROOT:</span>       <span class="v path">/var/agentic/work/aws-account-lead</span></span>
+<span class="pre-line"><span class="k">AGENT_TEMPLATE:</span>  <span class="v">aws-account-lead</span></span>
+<span class="pre-line"><span class="k">TOPIC_NAME:</span>      <span class="v">provision</span></span>
+<span class="pre-line"><span class="k">INSTANCE_ADDR:</span>   <span class="v addr">agent:aws-account-lead/a7c2b1…3f</span></span>
+<span class="pre-line"><span class="k">REPLY_TO_ADDR:</span>   <span class="v">gitea-lead</span></span></pre>
+    </div>
+
+    <div class="actions">
+      <button class="btn danger">Fail (force)</button>
+      <button class="btn">Re-paste start</button>
+      <button class="btn primary">Send message</button>
+    </div>
+    <div class="caption">"Send message" targets the instance address — mid-run paste, per Q3 invariant #10.</div>
+  </div>
+</div>
+
+<!-- ─────────────────────────────────────────────────────── -->
+<h2>4 · Approval Inbox</h2>
+
+<div class="frame">
+  <div class="sidebar">
+    <div class="toggle">
+      <button>Agents <span class="badge">7</span></button>
+      <button>Templates <span class="badge">3</span></button>
+      <button class="active">Approvals <span class="badge">3</span></button>
+    </div>
+    <div class="search">🔍 Filter by id, channel, requester...</div>
+
+    <div class="chip-label">Channel:</div>
+    <div class="chips">
+      <span class="chip active">All</span>
+      <span class="chip">aws-account-provision</span>
+      <span class="chip">stripe-refund</span>
+      <span class="chip">deploy-prod</span>
+      <span class="chip">+2</span>
+    </div>
+
+    <div class="chip-label">State:</div>
+    <div class="chips">
+      <span class="chip active" style="color: var(--orange); border-color: var(--orange);">Pending</span>
+      <span class="chip" style="color: var(--accent2);">Approved</span>
+      <span class="chip" style="color: var(--red);">Rejected</span>
+      <span class="chip">All</span>
+    </div>
+
+    <div style="margin-top: 8px;">
+      <div class="approval-row"><span class="ind pending"></span><span class="id">a3f1…8b</span><span class="channel">aws-account-provision</span><span class="req">gitea-lead</span><span class="age">2m</span></div>
+      <div class="approval-row"><span class="ind pending"></span><span class="id">b7c2…1d</span><span class="channel">stripe-refund</span><span class="req">agent:billing/i…</span><span class="age">8m</span></div>
+      <div class="approval-row"><span class="ind pending"></span><span class="id">c4e5…9a</span><span class="channel">deploy-prod</span><span class="req">dashboard</span><span class="age">34m</span></div>
+    </div>
+
+    <div class="footer-stats" style="margin-top: 14px;">47 approvals · 3 pending</div>
+  </div>
+  <div class="main">
+    <div class="pane-header">
+      <div class="title">approval:aws-account-provision/a3f1…8b</div>
+      <div class="badge"><span class="ind pending"></span>pending</div>
+    </div>
+
+    <pre style="color: var(--fg-dim); font-size: 11.5px; margin-bottom: 14px;">
+Requester: <span style="color: var(--accent);">agent:gitea-lead</span>
+Created:   <span style="color: var(--fg);">2026-05-19T14:23:11Z</span> (2m ago)
+Updated:   <span style="color: var(--fg);">2026-05-19T14:23:11Z</span></pre>
+
+    <div class="card-block code">
+      <div class="label">Payload</div>
+<pre><span style="color: var(--fg-dim);">{</span>
+  <span style="color: var(--purple);">"region"</span><span style="color: var(--fg-dim);">:</span> <span style="color: var(--accent2);">"us-east-1"</span><span style="color: var(--fg-dim);">,</span>
+  <span style="color: var(--purple);">"purpose"</span><span style="color: var(--fg-dim);">:</span> <span style="color: var(--accent2);">"staging environment for q3-features"</span><span style="color: var(--fg-dim);">,</span>
+  <span style="color: var(--purple);">"budget_usd_per_month"</span><span style="color: var(--fg-dim);">:</span> <span style="color: var(--orange);">250</span><span style="color: var(--fg-dim);">,</span>
+  <span style="color: var(--purple);">"tags"</span><span style="color: var(--fg-dim);">: { </span><span style="color: var(--purple);">"team"</span><span style="color: var(--fg-dim);">:</span> <span style="color: var(--accent2);">"platform"</span><span style="color: var(--fg-dim);">, </span><span style="color: var(--purple);">"cost_center"</span><span style="color: var(--fg-dim);">:</span> <span style="color: var(--accent2);">"eng-infra"</span><span style="color: var(--fg-dim);"> }</span>
+<span style="color: var(--fg-dim);">}</span></pre>
+    </div>
+
+    <div class="card-block">
+      <div class="label">Timeline</div>
+      <table>
+        <thead><tr><th>at</th><th>event</th><th>by</th></tr></thead>
+        <tbody>
+          <tr><td class="dim">14:23:11</td><td>created</td><td>gitea-lead</td></tr>
+          <tr><td class="dim" colspan="3">—  (no further events yet)</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="actions">
+      <button class="btn primary">✓ Approve</button>
+      <button class="btn danger">✗ Reject</button>
+      <button class="btn">✎ Amend…</button>
+      <button class="btn dim">⊘ Withdraw</button>
+    </div>
+    <div class="caption">Decided-by: sammons (current user). Withdraw enabled only for the original requester while pending.</div>
+    <div class="caption">Once decided, requester receives an auto-notify message via the existing dispatcher: <code>"Approval &lt;id&gt; updated: &lt;state&gt;. Run 'collab approval get &lt;id&gt;' for details."</code></div>
+  </div>
+</div>
+
+<!-- ─────────────────────────────────────────────────────── -->
+<h2>5 · Approval — Amend modal</h2>
+<div style="background: var(--bg-card); border: 1px solid var(--border); border-radius: 6px; padding: 22px 26px; max-width: 720px; margin: 16px auto;">
+  <div class="pane-header" style="margin-bottom: 14px;">
+    <div class="title">Amend approval a3f1…8b</div>
+    <div class="badge" style="color: var(--fg-dim);">[ ✕ ]</div>
+  </div>
+  <p style="color: var(--fg-dim); font-size: 12px;">State transitions to <code>amended</code>; new payload version recorded. Q5's server <strong>rejects amend without a payload</strong> — the textarea below is required.</p>
+
+  <div class="card-block code" style="margin-top: 14px;">
+    <div class="label">Original payload (read-only)</div>
+<pre><span style="color: var(--fg-dim);">{ "region":</span> <span style="color: var(--accent2);">"us-east-1"</span><span style="color: var(--fg-dim);">, "budget_usd_per_month":</span> <span style="color: var(--orange);">250</span><span style="color: var(--fg-dim);">, ... }</span></pre>
+  </div>
+
+  <div class="card-block code">
+    <div class="label">Amended payload (JSON, validated client-side)</div>
+<pre><span style="color: var(--fg-dim);">{ "region":</span> <span style="color: var(--accent2);">"us-east-1"</span><span style="color: var(--fg-dim);">, "budget_usd_per_month":</span> <span style="color: var(--orange);">100</span><span style="color: var(--fg-dim);">,  </span><span style="color: var(--accent);">← human edits inline</span>
+<span style="color: var(--fg-dim);">  ... }</span></pre>
+  </div>
+
+  <div class="card-block">
+    <div class="label">Optional comment for the requester</div>
+    <div style="background: var(--bg-input); border: 1px solid var(--border-dim); border-radius: 3px; padding: 8px; min-height: 56px; color: var(--fg-dim);">budget reduced to $100/mo for staging-only — see #DEPLOY-4123 for context</div>
+  </div>
+
+  <div class="actions" style="justify-content: flex-end;">
+    <button class="btn dim">Cancel</button>
+    <button class="btn primary">Submit amend</button>
+  </div>
+</div>
+
+<!-- ─────────────────────────────────────────────────────── -->
+<h2>6 · Real-time wiring</h2>
+
+<div class="card-block">
+<pre><span style="color: var(--fg-dim);">// state.ts subscriptions added by Q9. WebSocket already in place from Q4.</span>
+<span style="color: var(--accent);">on</span>(<span style="color: var(--accent2);">'template_updated'</span>,    (ev) <span style="color: var(--accent);">=&gt;</span> templateStore.applyUpdate(ev));
+<span style="color: var(--accent);">on</span>(<span style="color: var(--accent2);">'topic_queue_changed'</span>, (ev) <span style="color: var(--accent);">=&gt;</span> topicQueueStore.applyDepth(ev));
+<span style="color: var(--accent);">on</span>(<span style="color: var(--accent2);">'instance_spawned'</span>,    (ev) <span style="color: var(--accent);">=&gt;</span> instanceStore.add(ev.instance));
+<span style="color: var(--accent);">on</span>(<span style="color: var(--accent2);">'instance_completed'</span>,  (ev) <span style="color: var(--accent);">=&gt;</span> instanceStore.update(ev.instance));
+<span style="color: var(--accent);">on</span>(<span style="color: var(--accent2);">'instance_failed'</span>,     (ev) <span style="color: var(--accent);">=&gt;</span> instanceStore.update(ev.instance));
+<span style="color: var(--accent);">on</span>(<span style="color: var(--accent2);">'approval_changed'</span>,    (ev) <span style="color: var(--accent);">=&gt;</span> approvalStore.refetch(ev.approvalId));</pre>
+</div>
+
+<!-- ─────────────────────────────────────────────────────── -->
+<h2>7 · API additions needed (additive only)</h2>
+
+<table class="api-table">
+  <thead><tr><th>Method</th><th>Path</th><th>Purpose</th></tr></thead>
+  <tbody>
+    <tr><td class="method">GET</td><td class="path">/api/templates</td><td>Sidebar tree — all <code>agent_templates</code> + joined <code>topics</code></td></tr>
+    <tr><td class="method">GET</td><td class="path">/api/topics/:template/:name/queue</td><td>Live queue rows for the topic-detail view</td></tr>
+    <tr><td class="method">GET</td><td class="path">/api/topics/:template/:name/stats</td><td>Aggregate counts + percentiles</td></tr>
+    <tr><td class="method">GET</td><td class="path">/api/agent-instances</td><td>Filtered list for the "Recent instances" pane</td></tr>
+    <tr><td class="method">GET</td><td class="path">/api/agent-instances/:id</td><td>Single-instance detail — env contract, IPC paths</td></tr>
+    <tr><td class="method">POST</td><td class="path">/api/agent-instances/:id/fail</td><td>"Fail (force)" button</td></tr>
+    <tr><td class="method">POST</td><td class="path">/api/topics/:template/:name/pause</td><td>Pause-queue</td></tr>
+    <tr><td class="method">POST</td><td class="path">/api/topics/:template/:name/drain</td><td>Drain-queue (refuse new, finish in-flight)</td></tr>
+  </tbody>
+</table>
+
+<p style="color: var(--fg-dim); font-size: 12px;"><code>/api/approvals*</code> are already in place (Q5).</p>
+
+<!-- ─────────────────────────────────────────────────────── -->
+<h2>8 · Integration with existing dashboard</h2>
+
+<pre style="color: var(--fg-dim); background: var(--bg-elev); padding: 16px; border-radius: 4px; border: 1px solid var(--border-dim);">
+┌──────────────────┬──────────────────────────────────────────────────────┐
+│ SIDEBAR          │ MAIN PANE                                             │
+│ (existing class: │ (existing class: thread-panel — swap-in)              │
+│  agent-list)     │                                                       │
+│                  │   default: thread-messages                            │
+│  swap-in:        │                                                       │
+│   - agents       │   swap-in:                                            │
+│   - templates    │     - thread-messages    <span style="color: var(--fg);">(existing)</span>                  │
+│   - approvals    │     - <span style="color: var(--accent2);">topic-detail</span>       <span style="color: var(--fg);">← new (Q9)</span>                  │
+│                  │     - <span style="color: var(--accent2);">instance-detail</span>    <span style="color: var(--fg);">← new (Q9)</span>                  │
+│                  │     - <span style="color: var(--accent2);">approval-detail</span>    <span style="color: var(--fg);">← new (Q9)</span>                  │
+│                  │     - persona / reminder / watch / files / settings   │
+└──────────────────┴──────────────────────────────────────────────────────┘
+</pre>
+
+<p>Three new web-components (~300 LOC each in vanilla TS, following <code>agent-list.ts</code> / <code>thread.ts</code> / <code>persona-editor.ts</code>). The view-toggle is one small additive component above the existing <code>agent-search</code> block.</p>
+
+</body>
+</html>
