@@ -132,11 +132,16 @@ function teamsTreeHtml(): string {
 
 function teamHtml(team: Team): string {
   const open = openTeams.has(team.id);
-  const selectedInTeam = team.members.filter((m) => state.selectedAgents.has(m)).length;
+  // Silently drop members that don't match a registered agent — the team
+  // record can hold wishful-thinking references (pre-create the team before
+  // agents land) but the sidebar only renders the actual roster.
+  const knownAgentNames = new Set(state.agents.map((a) => a.name));
+  const realMembers = team.members.filter((m) => knownAgentNames.has(m));
+  const selectedInTeam = realMembers.filter((m) => state.selectedAgents.has(m)).length;
   const isSelected = selectedInTeam > 0;
   const klass = `team ${open ? 'open' : ''} ${isSelected ? 'selected' : ''}`.trim();
 
-  const membersHtml = team.members.map((agentName) => memberHtml(agentName)).join('');
+  const membersHtml = realMembers.map((agentName) => memberHtml(agentName)).join('');
 
   return `
     <div class="${klass}" data-team-id="${team.id}">
@@ -144,7 +149,7 @@ function teamHtml(team: Team): string {
         <span class="chev" data-team-chev="${team.id}">${icons['chev']}</span>
         <span class="folder">${icons['folder']}</span>
         <span class="name">${escapeHtml(team.name)}</span>
-        <span class="ct">${team.members.length}</span>
+        <span class="ct">${realMembers.length}</span>
       </div>
       <div class="team-members">${membersHtml}</div>
     </div>
@@ -152,15 +157,13 @@ function teamHtml(team: Team): string {
 }
 
 function memberHtml(agentName: string): string {
+  // Caller (teamHtml) has already filtered orphans, so `agent` is guaranteed.
   const checked = state.selectedAgents.has(agentName) ? 'checked' : '';
-  const agent = state.agents.find((a) => a.name === agentName);
-  const orphan = !agent;
-  const status = orphan ? 'orphan' : statusClass(agent.state);
-  const stateTip = orphan
-    ? `${agentName} — not yet registered (team member, no agent)`
-    : `${agentName} — ${agent.state}`;
+  const agent = state.agents.find((a) => a.name === agentName)!;
+  const status = statusClass(agent.state);
+  const stateTip = `${agentName} — ${agent.state}`;
   return `
-    <div class="member ${checked} ${orphan ? 'orphan' : ''}" data-member="${escapeHtml(agentName)}">
+    <div class="member ${checked}" data-member="${escapeHtml(agentName)}">
       <span class="check"></span>
       <span class="status ${status}" title="${escapeHtml(stateTip)}"></span>
       <span class="nm">${escapeHtml(agentName)}</span>
