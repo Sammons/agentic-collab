@@ -153,13 +153,38 @@ function teamHtml(team: Team): string {
 
 function memberHtml(agentName: string): string {
   const checked = state.selectedAgents.has(agentName) ? 'checked' : '';
+  const agent = state.agents.find((a) => a.name === agentName);
+  const status = statusClass(agent?.state);
+  const stateTip = agent?.state ? `${agentName} — ${agent.state}` : `${agentName} — unknown`;
   return `
     <div class="member ${checked}" data-member="${escapeHtml(agentName)}">
       <span class="check"></span>
+      <span class="status ${status}" title="${escapeHtml(stateTip)}"></span>
       <span class="nm">${escapeHtml(agentName)}</span>
       <span class="eye" data-eye="${escapeHtml(agentName)}" title="Watch ${escapeHtml(agentName)}">${icons['eye']}</span>
     </div>
   `;
+}
+
+/**
+ * Map an AgentState (or undefined) to a single online/offline-style class.
+ *  - online (moss):  active, idle — alive and reachable
+ *  - busy   (clay):  spawning, resuming, suspending — in transition
+ *  - paused (plum):  suspended — paused on purpose
+ *  - failed (brick): failed — broken, needs attention
+ *  - offline (grey): void or missing — never started / not in registry
+ */
+function statusClass(state: string | undefined): string {
+  switch (state) {
+    case 'active':
+    case 'idle':       return 'online';
+    case 'spawning':
+    case 'resuming':
+    case 'suspending': return 'busy';
+    case 'suspended':  return 'paused';
+    case 'failed':     return 'failed';
+    default:           return 'offline';
+  }
 }
 
 function navBottomHtml(): string {

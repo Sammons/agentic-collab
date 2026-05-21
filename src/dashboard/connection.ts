@@ -86,41 +86,77 @@ export function connect(): void {
   });
 }
 
-async function promptForToken(): Promise<void> {
-  // Verify whether auth is actually required by hitting a known endpoint.
-  // If the orchestrator is running with no secret, auth is open and the WS
-  // close was due to something else — just reconnect.
+async function promptForToken(message?: string): Promise<void> {
+  // If the orchestrator isn't reachable at all, fall through to reconnect —
+  // don't blame the token.
   try {
     const res = await fetch('/api/orchestrator/status');
-    if (res.ok) {
-      // Server is up and reachable — but our WS closed. Try once more with
-      // a token from the user.
+    if (!res.ok && res.status !== 401) {
+      scheduleReconnect();
+      return;
     }
   } catch {
-    // Network/down. Fall through to reconnect.
     scheduleReconnect();
     return;
   }
 
-  const existing = state.token ?? '';
-  const provided = window.prompt(
-    'Orchestrator token (from ~/.config/agentic-collab/secret or env ORCHESTRATOR_SECRET):',
-    existing,
-  );
-  if (provided === null) {
-    // User cancelled — give up and try in a while.
-    scheduleReconnect();
-    return;
-  }
-  const trimmed = provided.trim();
-  if (!trimmed) {
-    scheduleReconnect();
-    return;
-  }
-  saveToken(trimmed);
-  connectionAttempts = 0;
-  reconnectDelay = 1000;
-  connect();
+  // Remove any existing overlay first.
+  document.querySelector('.auth-overlay')?.remove();
+
+  const overlay = document.createElement('div');
+  overlay.className = 'auth-overlay';
+  overlay.innerHTML = `
+    <div class="auth-box">
+      <div class="eyebrow">agentic-collab</div>
+      <h2>Sign in</h2>
+      <p class="lede">${escapeAuth(message || "Enter your orchestrator token to connect. It's saved on this device only — find it at <code>~/.config/agentic-collab/secret</code> or <code>$ORCHESTRATOR_SECRET</code>.")}</p>
+      <input type="password" class="auth-input" placeholder="Orchestrator token" autocomplete="off" spellcheck="false">
+      <div class="auth-actions">
+        <button class="btn ghost" data-skip>Dev mode (no auth)</button>
+        <button class="btn primary" data-submit>Connect</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  const input = overlay.querySelector<HTMLInputElement>('.auth-input')!;
+  const submitBtn = overlay.querySelector<HTMLButtonElement>('[data-submit]')!;
+  const skipBtn = overlay.querySelector<HTMLButtonElement>('[data-skip]')!;
+  if (state.token) input.value = state.token;
+
+  setTimeout(() => input.focus(), 30);
+
+  const submit = (tok: string) => {
+    saveToken(tok || null);
+    overlay.remove();
+    connectionAttempts = 0;
+    reconnectDelay = 1000;
+    if (socket) {
+      // Drop the old handlers so the auto-reconnect doesn't fire twice.
+      socket.onclose = null;
+      try { socket.close(); } catch {}
+      socket = null;
+    }
+    connect();
+  };
+
+  submitBtn.addEventListener('click', () => {
+    const val = input.value.trim();
+    if (!val) { input.style.borderColor = 'var(--brick)'; return; }
+    submit(val);
+  });
+  skipBtn.addEventListener('click', () => submit(''));
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      submitBtn.click();
+    }
+  });
+}
+
+function escapeAuth(s: string): string {
+  // Trust HTML inside the message (lets us bold things, render <code>).
+  return s;
 }
 
 function scheduleReconnect(): void {

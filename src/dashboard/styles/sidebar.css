@@ -220,6 +220,27 @@
   transform: rotate(-45deg);
   margin-top: -1px;
 }
+/* status dot — between checkbox and name. Color reflects agent state. */
+.member .status {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  flex: 0 0 7px;
+  background: var(--ink-4);
+  box-shadow: 0 0 0 1.5px var(--paper);
+  transition: background 140ms ease;
+}
+.member .status.online { background: var(--moss); }
+.member .status.busy {
+  background: var(--clay);
+  animation: status-pulse 1.6s ease-in-out infinite;
+}
+.member .status.paused { background: var(--plum); }
+.member .status.failed { background: var(--brick); }
+.member .status.offline { background: var(--ink-4); }
+@keyframes status-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.45; }
+}
 .member .nm { flex: 1; color: var(--ink-3); }
 .member.checked .nm { color: var(--ink); }
 .member .eye {
