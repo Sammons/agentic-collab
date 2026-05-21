@@ -237,6 +237,17 @@
 .member .status.paused { background: var(--plum); }
 .member .status.failed { background: var(--brick); }
 .member .status.offline { background: var(--ink-4); }
+/* orphan — team member name with no matching agent record */
+.member .status.orphan {
+  background: transparent;
+  border: 1px dashed var(--ink-4);
+  box-shadow: none;
+}
+.member.orphan .nm {
+  font-style: italic;
+  color: var(--ink-4);
+}
+.member.orphan:hover .nm { color: var(--ink-3); }
 @keyframes status-pulse {
   0%, 100% { opacity: 1; }
   50%      { opacity: 0.45; }

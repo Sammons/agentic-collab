@@ -154,10 +154,13 @@ function teamHtml(team: Team): string {
 function memberHtml(agentName: string): string {
   const checked = state.selectedAgents.has(agentName) ? 'checked' : '';
   const agent = state.agents.find((a) => a.name === agentName);
-  const status = statusClass(agent?.state);
-  const stateTip = agent?.state ? `${agentName} — ${agent.state}` : `${agentName} — unknown`;
+  const orphan = !agent;
+  const status = orphan ? 'orphan' : statusClass(agent.state);
+  const stateTip = orphan
+    ? `${agentName} — not yet registered (team member, no agent)`
+    : `${agentName} — ${agent.state}`;
   return `
-    <div class="member ${checked}" data-member="${escapeHtml(agentName)}">
+    <div class="member ${checked} ${orphan ? 'orphan' : ''}" data-member="${escapeHtml(agentName)}">
       <span class="check"></span>
       <span class="status ${status}" title="${escapeHtml(stateTip)}"></span>
       <span class="nm">${escapeHtml(agentName)}</span>
