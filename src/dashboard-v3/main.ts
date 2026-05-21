@@ -16,6 +16,7 @@ import { setupSidebar } from './sidebar.ts';
 import { setupChat } from './chat.ts';
 import { setupAgents } from './agents.ts';
 import { setupWatch } from './watch.ts';
+import { setupApprovals } from './approvals.ts';
 import { connect } from './connection.ts';
 
 function boot(): void {
@@ -24,6 +25,7 @@ function boot(): void {
   setupChat();
   setupAgents();
   setupWatch();
+  setupApprovals();
   setupRouter();
   setupSidebar();
   connect();
