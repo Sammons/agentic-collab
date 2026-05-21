@@ -15,6 +15,7 @@ import { setupRouter } from './routing.ts';
 import { setupSidebar } from './sidebar.ts';
 import { setupChat } from './chat.ts';
 import { setupAgents } from './agents.ts';
+import { setupWatch } from './watch.ts';
 import { connect } from './connection.ts';
 
 function boot(): void {
@@ -22,6 +23,7 @@ function boot(): void {
   // Register route renderers BEFORE setupRouter() so initial render uses them.
   setupChat();
   setupAgents();
+  setupWatch();
   setupRouter();
   setupSidebar();
   connect();
