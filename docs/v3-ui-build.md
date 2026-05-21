@@ -32,7 +32,7 @@ in `docs/v3-dashboard-design.html` (the Greenroom mock).
 | PR  | Subject                                                  | Status      | Notes                                                                |
 |-----|----------------------------------------------------------|-------------|----------------------------------------------------------------------|
 | 1   | Foundation + sidebar/routing + Teams API                 | done        | Backend Teams CRUD + DB migration + WS event + serve `/v3/`. Frontend shell, sidebar (Teams tree), hash router, placeholder routes. 26 unit tests for the Teams API; full orchestrator suite still green (pre-existing macOS persona symlink quirk unrelated). |
-| 2   | Dashboard merged chat + composer + profile popover       | pending     | Client-side merge of `state.threads{}`. @-mention. Profile popover on sender click. |
+| 2   | Dashboard merged chat + composer + profile popover       | done        | Client-side merge, dedup by id. Optimistic-send. @-mention parsing in composer. Profile popover on sender click with Watch / Filter / Copy actions. Mention + inline-code rendering. Withdrawn state visual. `tsconfig.json` excludes `src/dashboard-v3/**/*.ts` (browser code). |
 | 3   | Agents page (flat list)                                  | pending     | Greenroom flat list, hover actions, More menu, click-row → Watch.    |
 | 4   | Watch screen                                             | pending     | Wraps `/api/agents/:name/peek` + key injection. New chrome.          |
 | 5   | Approvals master-detail + Amend modal                    | pending     | Reuses `/api/approvals/*`.                                           |

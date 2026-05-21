@@ -13,10 +13,13 @@
 import { loadToken } from './state.ts';
 import { setupRouter } from './routing.ts';
 import { setupSidebar } from './sidebar.ts';
+import { setupChat } from './chat.ts';
 import { connect } from './connection.ts';
 
 function boot(): void {
   loadToken();
+  // Register route renderers BEFORE setupRouter() so initial render uses them.
+  setupChat();
   setupRouter();
   setupSidebar();
   connect();
