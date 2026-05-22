@@ -214,6 +214,13 @@ function renderDetail(a: ApprovalRow): void {
           <button class="btn danger" data-decide="rejected">Reject</button>
           <button class="btn" data-decide="amended">Amend…</button>
           <button class="btn ghost" data-withdraw>Withdraw</button>
+          <span style="margin-left:auto;display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:11.5px;color:var(--ink-3);">
+            also notify
+            <select data-notify-agent style="font-family:var(--mono);font-size:12px;background:transparent;border:1px solid var(--rule);padding:3px 8px;border-radius:3px;color:var(--ink-2);">
+              <option value="">(none)</option>
+              ${state.agents.map((ag) => `<option value="${escapeHtml(ag.name)}" ${defaultNotifyAgent(a) === ag.name ? 'selected' : ''}>${escapeHtml(ag.name)}</option>`).join('')}
+            </select>
+          </span>
         `}
       </div>
     </div>
@@ -223,13 +230,15 @@ function renderDetail(a: ApprovalRow): void {
     pane.querySelectorAll<HTMLElement>('[data-decide]').forEach((btn) => {
       btn.addEventListener('click', () => {
         const newState = btn.dataset['decide'] as 'approved' | 'rejected' | 'amended';
-        if (newState === 'amended') openAmendModal(a);
-        else void decide(a.id, newState);
+        const notifyAgent = pane.querySelector<HTMLSelectElement>('[data-notify-agent]')?.value || null;
+        if (newState === 'amended') openAmendModal(a, notifyAgent);
+        else void decide(a.id, newState, undefined, notifyAgent);
       });
     });
     pane.querySelector<HTMLElement>('[data-withdraw]')?.addEventListener('click', () => {
       if (!window.confirm('Withdraw this approval?')) return;
-      void withdraw(a.id);
+      const notifyAgent = pane.querySelector<HTMLSelectElement>('[data-notify-agent]')?.value || null;
+      void withdraw(a.id, notifyAgent);
     });
   }
 
@@ -245,7 +254,12 @@ function renderDetail(a: ApprovalRow): void {
   }
 }
 
-async function decide(id: string, newState: 'approved' | 'rejected' | 'amended', payload?: string): Promise<void> {
+async function decide(
+  id: string,
+  newState: 'approved' | 'rejected' | 'amended',
+  payload?: string,
+  notifyAgent?: string | null,
+): Promise<void> {
   try {
     const body: Record<string, unknown> = { state: newState };
     if (payload !== undefined) body['payload'] = payload;
@@ -259,13 +273,14 @@ async function decide(id: string, newState: 'approved' | 'rejected' | 'amended',
       showToast(b?.error ?? 'Decision failed', 'error');
       return;
     }
+    if (notifyAgent) await notifyAgentOfDecision(notifyAgent, id, newState);
     void loadAll();
   } catch {
     showToast('Network error', 'error');
   }
 }
 
-async function withdraw(id: string): Promise<void> {
+async function withdraw(id: string, notifyAgent?: string | null): Promise<void> {
   try {
     const res = await fetch(`/api/approvals/${encodeURIComponent(id)}/withdraw`, {
       method: 'POST',
@@ -277,15 +292,54 @@ async function withdraw(id: string): Promise<void> {
       showToast(b?.error ?? 'Withdraw failed', 'error');
       return;
     }
+    if (notifyAgent) await notifyAgentOfDecision(notifyAgent, id, 'withdrawn');
     void loadAll();
   } catch {
     showToast('Network error', 'error');
   }
 }
 
+/**
+ * Send the agent a chat message + tmux paste announcing the decision.
+ * Used when the operator picks "also notify <agent>" on the decision row,
+ * so the agent learns about state changes for approvals whose requester
+ * isn't itself.
+ */
+async function notifyAgentOfDecision(agentName: string, approvalId: string, newState: string): Promise<void> {
+  const stateLabel: Record<string, string> = {
+    approved: 'APPROVED (terminal — no further state changes)',
+    rejected: 'REJECTED (terminal — no further state changes)',
+    amended:  'APPROVED WITH AMENDMENTS (terminal — payload was modified; use the new payload, do not wait for a separate approval)',
+    withdrawn: 'WITHDRAWN by requester (terminal — no action needed)',
+  };
+  const envelope = `Approval ${approvalId} ${stateLabel[newState] ?? newState}. Run \`collab approval get ${approvalId}\` for details.`;
+  try {
+    await fetch('/api/dashboard/send', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({
+        agent: `agent:${agentName}`,
+        message: envelope,
+        topic: 'approval',
+      }),
+    });
+  } catch {
+    showToast(`Notify @${agentName} failed`, 'error');
+  }
+}
+
+/** Best guess for the default notify-agent: requester if it's a real agent. */
+function defaultNotifyAgent(a: ApprovalRow): string | null {
+  const m = a.requesterAddr.match(/^(?:agent:)?([a-zA-Z0-9_-]+)$/);
+  if (!m) return null;
+  const name = m[1]!;
+  if (name === 'dashboard' || name === 'system') return null;
+  return name;
+}
+
 /* ── amend modal ───────────────────────────────────────────────────── */
 
-function openAmendModal(a: ApprovalRow): void {
+function openAmendModal(a: ApprovalRow, notifyAgent?: string | null): void {
   const overlay = document.createElement('div');
   overlay.style.cssText = 'position:fixed;inset:0;background:rgba(22,24,28,0.18);z-index:50;display:flex;align-items:center;justify-content:center;padding:24px;';
   overlay.innerHTML = `
@@ -331,7 +385,7 @@ function openAmendModal(a: ApprovalRow): void {
       showToast('Payload required', 'error');
       return;
     }
-    await decide(a.id, 'amended', payload);
+    await decide(a.id, 'amended', payload, notifyAgent);
     close();
   });
   document.addEventListener('keydown', function esc(e) {

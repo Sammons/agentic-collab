@@ -131,11 +131,18 @@ function renderThread(): void {
   root.scrollTop = root.scrollHeight;
 }
 
+// Threads whose name isn't a registered agent but still belongs in the
+// merged feed — operator-visible system context (approval auto-notify,
+// lifecycle banners, etc.).
+const SYSTEM_THREADS = new Set(['dashboard', 'system']);
+
 function mergeMessages(): DashboardMessage[] {
   const seen = new Set<number>();
   const out: DashboardMessage[] = [];
   for (const [agentName, thread] of Object.entries(state.threads)) {
-    if (!state.selectedAgents.has(agentName)) continue;
+    const isSelected = state.selectedAgents.has(agentName);
+    const isSystemThread = SYSTEM_THREADS.has(agentName);
+    if (!isSelected && !isSystemThread) continue;
     for (const m of thread) {
       if (m.id < 0) {
         // optimistic message — always include
