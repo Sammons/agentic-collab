@@ -174,13 +174,14 @@ function msgHtml(m: DashboardMessage): string {
   const whoLabel = fromMe ? 'you' : (fromAgent ?? 'unknown');
   const toLabel = fromMe ? (toAgent ?? 'broadcast') : (toAgent ?? 'you');
 
+  const topic = m.topic || 'general';
   return `
     <div class="${cls.join(' ')}" data-msg-id="${m.id}">
       <div class="head">
         <span class="who" data-profile-for="${escapeHtml(fromAgent ?? '')}">${escapeHtml(whoLabel)}</span>
         <span class="arrow">→</span>
         <span class="to" data-profile-for="${escapeHtml(toAgent ?? '')}">${escapeHtml(toLabel)}</span>
-        ${m.topic && m.topic !== 'general' ? `<span class="to" title="topic">· ${escapeHtml(m.topic)}</span>` : ''}
+        <span class="topic ${topic === 'general' ? 'default' : ''}" title="topic">#${escapeHtml(topic)}</span>
         <span class="time">${formatTime(m.createdAt)}</span>
       </div>
       <div class="body">${m.withdrawn ? '(withdrawn)' : renderMessageBody(m.message)}</div>
@@ -333,16 +334,19 @@ function wire(root: HTMLElement): void {
     const parsed = parseComposer(input.value);
     if (parsed.agents.length > 0) {
       const list = parsed.agents.map((a) => `<span class="target">@${escapeHtml(a)}</span>`).join(', ');
+      const topicChip = parsed.topic !== 'general'
+        ? ` on <span class="target">#${escapeHtml(parsed.topic)}</span>`
+        : '';
       const messageReady = parsed.message.length > 0;
       hint.innerHTML = messageReady
-        ? `Sending to ${list}`
-        : `${list} — type a message`;
+        ? `Sending to ${list}${topicChip}`
+        : `${list}${topicChip} — type a message`;
       sendBtn.disabled = !messageReady;
       sendBtn.textContent = parsed.agents.length > 1
         ? `Send → ${parsed.agents.length}`
         : 'Send';
     } else {
-      hint.innerHTML = `No target — type <span class="target">@</span> to pick an agent.`;
+      hint.innerHTML = `No target — type <span class="target">@</span> to pick an agent, <span class="target">#</span> for a topic.`;
       sendBtn.disabled = true;
       sendBtn.textContent = 'Send';
     }
@@ -523,29 +527,41 @@ function wireClearFilter(): void {
   });
 }
 
-type Parsed = { agents: string[]; message: string };
+type Parsed = { agents: string[]; topic: string; message: string };
 
 /**
- * Parse the composer: extract every leading `@name` token, the remainder
- * is the message body. Examples:
- *   "@a hello"              → { agents: ['a'], message: 'hello' }
- *   "@a @b @c please look"  → { agents: ['a','b','c'], message: 'please look' }
- *   "@a"                    → { agents: ['a'], message: '' }   (target known, msg empty)
- *   "hello"                 → { agents: [],    message: 'hello' }
- * Mentions appearing mid-message (after non-mention words) are NOT treated
- * as targets — they're just inline references.
+ * Parse the composer: extract every leading `@name` and `#topic` token,
+ * the remainder is the message body. Examples:
+ *   "@a hello"                → agents=['a'], topic='general', msg='hello'
+ *   "@a @b please ack"        → agents=['a','b'], topic='general'
+ *   "@a #release bump it"     → agents=['a'], topic='release', msg='bump it'
+ *   "@a @b #release fix CI"   → agents=['a','b'], topic='release'
+ *   "#release @a fix CI"      → same — order doesn't matter
+ *   "@a"                      → agents=['a'], topic='general', msg=''
+ *   "hello"                   → agents=[], topic='general', msg='hello'
+ * Tokens mid-message (after non-token words) stay inline.
  */
 function parseComposer(text: string): Parsed {
   let rest = text.replace(/^\s+/, '');
   const agents: string[] = [];
+  let topic: string | null = null;
   // eslint-disable-next-line no-constant-condition
   while (true) {
-    const m = rest.match(/^@([a-zA-Z0-9_\-/]+)(\s+|$)/);
-    if (!m) break;
-    if (!agents.includes(m[1]!)) agents.push(m[1]!);
-    rest = rest.slice(m[0].length).replace(/^\s+/, '');
+    const at = rest.match(/^@([a-zA-Z0-9_\-/]+)(\s+|$)/);
+    if (at) {
+      if (!agents.includes(at[1]!)) agents.push(at[1]!);
+      rest = rest.slice(at[0].length).replace(/^\s+/, '');
+      continue;
+    }
+    const hash = rest.match(/^#([a-zA-Z0-9_\-]+)(\s+|$)/);
+    if (hash) {
+      topic = hash[1]!; // last #topic wins
+      rest = rest.slice(hash[0].length).replace(/^\s+/, '');
+      continue;
+    }
+    break;
   }
-  return { agents, message: rest.trim() };
+  return { agents, topic: topic ?? 'general', message: rest.trim() };
 }
 
 async function handleSend(input: HTMLTextAreaElement): Promise<void> {
@@ -567,7 +583,7 @@ async function handleSend(input: HTMLTextAreaElement): Promise<void> {
       direction: 'to_agent',
       sourceAgent: null,
       targetAgent: agent,
-      topic: 'general',
+      topic: parsed.topic,
       message: parsed.message,
       queueId: null,
       deliveryStatus: 'pending',
@@ -594,7 +610,7 @@ async function handleSend(input: HTMLTextAreaElement): Promise<void> {
       const res = await fetch('/api/dashboard/send', {
         method: 'POST',
         headers: authHeaders(),
-        body: JSON.stringify({ agent: target, message: parsed.message, topic: 'general' }),
+        body: JSON.stringify({ agent: target, message: parsed.message, topic: parsed.topic }),
       });
       if (!res.ok) {
         const idx = list.findIndex((m) => m.id === optimisticId);
