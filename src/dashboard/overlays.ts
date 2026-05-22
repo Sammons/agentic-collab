@@ -162,7 +162,7 @@ export function openNewAgentModal(): void {
           body: JSON.stringify({ agentName: name }),
         });
       }
-      toast(`Created agent ${name}`);
+      toast(`Created ${name} · open the ⋯ menu to Spawn`);
       close();
     } catch {
       toast('Network error', 'error');

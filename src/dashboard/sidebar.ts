@@ -22,6 +22,7 @@ const root = (): HTMLElement => document.getElementById('sidebar')!;
 
 /** Icon SVG strings — keyed by name. */
 const icons: Record<string, string> = {
+  chat:      `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H6l-3 3v-3H3a1 1 0 0 1-1-1V4z"/></svg>`,
   brain:     `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 1.98-3A2.5 2.5 0 0 1 9.5 2Z"/><path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-1.98-3A2.5 2.5 0 0 0 14.5 2Z"/></svg>`,
   search:    `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="7" r="5"/><line x1="14" y1="14" x2="10.5" y2="10.5"/></svg>`,
   approvals: `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8l3.5 3.5L13 5"/></svg>`,
@@ -67,6 +68,10 @@ function navActionsHtml(): string {
   // TODO PR 5/6: real approvals + reminders pending counts.
   return `
     <div class="nav-actions">
+      <button class="nav-action ${active('dashboard')}" data-go="dashboard">
+        <span class="ico">${icons['chat']}</span>
+        <span class="label">Chat</span>
+      </button>
       <button class="nav-action ${active('agents')}" data-go="agents">
         <span class="ico">${icons['brain']}</span>
         <span class="label">Agents</span>
@@ -114,6 +119,14 @@ function teamsTreeHtml(): string {
 
   const teamsHtml = state.teams.map((t) => teamHtml(t)).join('');
 
+  // Synthetic "no team" group — agents not in any team still need to be
+  // visible & checkable. Rendered as a non-deletable team-like row using
+  // a virtual id of -1 (won't collide with real DB ids).
+  const claimed = new Set<string>();
+  for (const t of state.teams) for (const m of t.members) claimed.add(m);
+  const orphans = state.agents.map((a) => a.name).filter((n) => !claimed.has(n));
+  const noTeamHtml = orphans.length > 0 ? noTeamGroupHtml(orphans) : '';
+
   return `
     <div class="teams">
       <div class="all-toggle ${allClass}" data-toggle-all>
@@ -122,10 +135,33 @@ function teamsTreeHtml(): string {
         <span class="ct">${allCount}</span>
       </div>
       ${teamsHtml}
+      ${noTeamHtml}
       <div class="nav-newteam" data-new-team>
         <span class="plus">+</span>
         <span>New team</span>
       </div>
+    </div>
+  `;
+}
+
+function noTeamGroupHtml(orphans: string[]): string {
+  const VIRTUAL_ID = -1;
+  const open = openTeams.has(VIRTUAL_ID);
+  const selectedCount = orphans.filter((n) => state.selectedAgents.has(n)).length;
+  const isSelected = selectedCount > 0;
+  const klass = `team ${open ? 'open' : ''} ${isSelected ? 'selected' : ''}`.trim();
+
+  const membersHtml = orphans.map((n) => memberHtml(n)).join('');
+
+  return `
+    <div class="${klass} no-team" data-team-id="${VIRTUAL_ID}">
+      <div class="team-row" data-team-toggle>
+        <span class="chev" data-team-chev="${VIRTUAL_ID}">${icons['chev']}</span>
+        <span class="folder">${icons['folder']}</span>
+        <span class="name">no team</span>
+        <span class="ct">${orphans.length}</span>
+      </div>
+      <div class="team-members">${membersHtml}</div>
     </div>
   `;
 }
@@ -211,6 +247,7 @@ function wire(r: HTMLElement): void {
     el.addEventListener('click', () => {
       const kind = el.dataset['go']!;
       switch (kind) {
+        case 'dashboard': go({ kind: 'dashboard' }); break;
         case 'agents':    go({ kind: 'agents' }); break;
         case 'search':    go({ kind: 'search' }); break;
         case 'approvals': go({ kind: 'approvals' }); break;
@@ -224,10 +261,13 @@ function wire(r: HTMLElement): void {
   r.querySelector<HTMLElement>('[data-toggle-all]')?.addEventListener('click', toggleAllAgents);
 
   // Team row: chevron toggles open; name area toggles team membership.
+  // The virtual "no team" group has id === -1; chev still works, but the
+  // row's name-area click toggles the orphan agents as a group.
   r.querySelectorAll<HTMLElement>('[data-team-id]').forEach((teamEl) => {
     const teamId = Number(teamEl.dataset['teamId']);
-    const team = state.teams.find((t) => t.id === teamId);
-    if (!team) return;
+    const isVirtual = teamId === -1;
+    const team = isVirtual ? null : state.teams.find((t) => t.id === teamId);
+    if (!isVirtual && !team) return;
 
     const chev = teamEl.querySelector<HTMLElement>('[data-team-chev]');
     chev?.addEventListener('click', (e) => {
@@ -241,7 +281,16 @@ function wire(r: HTMLElement): void {
     row?.addEventListener('click', (e) => {
       // Skip if the user clicked the chev (handled above).
       if ((e.target as HTMLElement).closest('[data-team-chev]')) return;
-      toggleTeam(team);
+      if (isVirtual) {
+        // Toggle the orphan agents as a group.
+        const claimed = new Set<string>();
+        for (const t of state.teams) for (const m of t.members) claimed.add(m);
+        const orphans = state.agents.map((a) => a.name).filter((n) => !claimed.has(n));
+        const synthetic: Team = { id: -1, name: 'no team', members: orphans, createdAt: '' };
+        toggleTeam(synthetic);
+      } else if (team) {
+        toggleTeam(team);
+      }
     });
   });
 

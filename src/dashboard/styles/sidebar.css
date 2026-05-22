@@ -185,6 +185,14 @@
 }
 .team.open .team-members { display: block; }
 
+/* synthetic "no team" group — secondary visual weight */
+.team.no-team .team-row .name {
+  color: var(--ink-4);
+  font-style: italic;
+}
+.team.no-team .team-row .folder { color: var(--ink-4); }
+.team.no-team { margin-top: 6px; }
+
 .member {
   display: flex;
   align-items: center;
