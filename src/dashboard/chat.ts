@@ -330,6 +330,13 @@ function wire(root: HTMLElement): void {
   const inputWrap = root.querySelector<HTMLElement>('.composer .input-wrap');
   if (!input || !sendBtn || !hint || !inputWrap) return;
 
+  // Restore the last sent prefix so the user picks up where they left off.
+  const savedPrefix = loadPrefix();
+  if (savedPrefix && !input.value) {
+    input.value = savedPrefix;
+    input.setSelectionRange(input.value.length, input.value.length);
+  }
+
   const updateHint = () => {
     const parsed = parseComposer(input.value);
     if (parsed.agents.length > 0) {
@@ -630,11 +637,16 @@ async function handleSend(input: HTMLTextAreaElement): Promise<void> {
     state.threads[agent] = list;
   }
   renderThread();
-  input.value = '';
-  const hint = document.querySelector<HTMLElement>('[data-target-hint]');
-  if (hint) hint.innerHTML = `No target — type <span class="target">@</span> to pick an agent, <span class="target">#</span> for a topic.`;
-  const sendBtn = document.querySelector<HTMLButtonElement>('[data-send]');
-  if (sendBtn) { sendBtn.disabled = true; sendBtn.textContent = 'Send'; }
+  // Repopulate the input with the same leading prefix so the user can
+  // keep typing in the same channel without retyping @ + #. Persist the
+  // prefix so it survives reloads.
+  const prefix = buildPrefix(parsed.agents, parsed.topics);
+  input.value = prefix;
+  savePrefix(prefix);
+  input.setSelectionRange(input.value.length, input.value.length);
+  input.focus();
+  // Refresh hint + send-button state from the new value.
+  input.dispatchEvent(new Event('input'));
 
   let okCount = 0;
   let failCount = 0;
@@ -669,6 +681,25 @@ async function handleSend(input: HTMLTextAreaElement): Promise<void> {
 }
 
 /* ── helpers ───────────────────────────────────────────────────────── */
+
+/** Reconstruct the leading prefix (no message body) for repopulation. */
+function buildPrefix(agents: string[], topics: string[]): string {
+  if (agents.length === 0) return '';
+  const ats = agents.map((a) => `@${a}`).join(' ');
+  const hashes = topics
+    .filter((t) => t !== 'general')
+    .map((t) => `#${t}`)
+    .join(' ');
+  return hashes ? `${ats} ${hashes} ` : `${ats} `;
+}
+
+const PREFIX_KEY = 'v3_composer_prefix';
+function savePrefix(prefix: string): void {
+  try { localStorage.setItem(PREFIX_KEY, prefix); } catch {}
+}
+function loadPrefix(): string {
+  try { return localStorage.getItem(PREFIX_KEY) ?? ''; } catch { return ''; }
+}
 
 /**
  * Walk the leading prefix and insert a space after each `#X` token so
