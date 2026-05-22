@@ -334,17 +334,36 @@ function wire(root: HTMLElement): void {
     const parsed = parseComposer(input.value);
     if (parsed.agents.length > 0) {
       const list = parsed.agents.map((a) => `<span class="target">@${escapeHtml(a)}</span>`).join(', ');
-      const topicChip = parsed.topic !== 'general'
-        ? ` on <span class="target">#${escapeHtml(parsed.topic)}</span>`
-        : '';
+      const topicsChip = parsed.topics.length === 1 && parsed.topics[0] === 'general'
+        ? ''
+        : ` on ${parsed.topics.map((t) => `<span class="target">#${escapeHtml(t)}</span>`).join(', ')}`;
+      const total = parsed.agents.length * parsed.topics.length;
       const messageReady = parsed.message.length > 0;
+
+      // Explosion warning: any time we'd fan out across multiple topics,
+      // give the user an explicit count + an Escape Topics shortcut.
+      const explode = parsed.topics.length > 1 && parsed.topics.some((t) => t !== 'general');
+      const escapeBtn = explode
+        ? ` <button class="escape-topics" data-escape-topics type="button">Escape Topics</button>`
+        : '';
+      const countNote = total > 1
+        ? ` <span class="explode">→ ${total} messages</span>`
+        : '';
+
       hint.innerHTML = messageReady
-        ? `Sending to ${list}${topicChip}`
-        : `${list}${topicChip} — type a message`;
+        ? `Sending to ${list}${topicsChip}${countNote}${escapeBtn}`
+        : `${list}${topicsChip}${countNote}${escapeBtn} — type a message`;
       sendBtn.disabled = !messageReady;
-      sendBtn.textContent = parsed.agents.length > 1
-        ? `Send → ${parsed.agents.length}`
-        : 'Send';
+      sendBtn.textContent = total > 1 ? `Send → ${total}` : 'Send';
+
+      // Wire the Escape Topics button (re-bound on every render).
+      hint.querySelector<HTMLElement>('[data-escape-topics]')?.addEventListener('click', () => {
+        // Insert a space after each leading `#` token so the parser stops
+        // recognising them as topics. Leaves the body text + caret intact.
+        input.value = neutralizeLeadingTopics(input.value);
+        input.focus();
+        updateHint();
+      });
     } else {
       hint.innerHTML = `No target — type <span class="target">@</span> to pick an agent, <span class="target">#</span> for a topic.`;
       sendBtn.disabled = true;
@@ -527,97 +546,112 @@ function wireClearFilter(): void {
   });
 }
 
-type Parsed = { agents: string[]; topic: string; message: string };
+type Parsed = { agents: string[]; topics: string[]; message: string };
 
 /**
- * Parse the composer: extract every leading `@name` and `#topic` token,
- * the remainder is the message body. Examples:
- *   "@a hello"                → agents=['a'], topic='general', msg='hello'
- *   "@a @b please ack"        → agents=['a','b'], topic='general'
- *   "@a #release bump it"     → agents=['a'], topic='release', msg='bump it'
- *   "@a @b #release fix CI"   → agents=['a','b'], topic='release'
- *   "#release @a fix CI"      → same — order doesn't matter
- *   "@a"                      → agents=['a'], topic='general', msg=''
- *   "hello"                   → agents=[], topic='general', msg='hello'
- * Tokens mid-message (after non-token words) stay inline.
+ * Parse the composer with paste-safety guards:
+ *   • `@X` consumes only if X is a registered agent — pasting a tweet
+ *     that starts with `@someuser` won't accidentally target anyone.
+ *   • `#Y` consumes only after at least one `@` has been consumed —
+ *     pasting "# Introduction" or "# TODO" stays inline.
+ *   • Multiple `#topic` tokens accumulate (deduped). The actual send
+ *     fans out as a Cartesian product: agents × topics.
+ *   • Tokens are only recognized in the leading prefix.
+ *
+ *   "@a hello"                  → agents=['a'], topics=['general']
+ *   "@a @b #release fix"        → agents=['a','b'], topics=['release']
+ *   "@a #x #y hi"               → 2 messages (a/x, a/y)
+ *   "@a @b #x #y hi"            → 4 messages
+ *   "@notareal hi"              → @notareal unknown → msg='@notareal hi'
+ *   "# Introduction"            → no @ → msg='# Introduction'
  */
 function parseComposer(text: string): Parsed {
+  const knownAgents = new Set(state.agents.map((a) => a.name));
   let rest = text.replace(/^\s+/, '');
   const agents: string[] = [];
-  let topic: string | null = null;
+  const topics: string[] = [];
   // eslint-disable-next-line no-constant-condition
   while (true) {
     const at = rest.match(/^@([a-zA-Z0-9_\-/]+)(\s+|$)/);
-    if (at) {
+    if (at && knownAgents.has(at[1]!)) {
       if (!agents.includes(at[1]!)) agents.push(at[1]!);
       rest = rest.slice(at[0].length).replace(/^\s+/, '');
       continue;
     }
     const hash = rest.match(/^#([a-zA-Z0-9_\-]+)(\s+|$)/);
-    if (hash) {
-      topic = hash[1]!; // last #topic wins
+    if (hash && agents.length > 0) {
+      if (!topics.includes(hash[1]!)) topics.push(hash[1]!);
       rest = rest.slice(hash[0].length).replace(/^\s+/, '');
       continue;
     }
     break;
   }
-  return { agents, topic: topic ?? 'general', message: rest.trim() };
+  return {
+    agents,
+    topics: topics.length > 0 ? topics : ['general'],
+    message: rest.trim(),
+  };
 }
 
 async function handleSend(input: HTMLTextAreaElement): Promise<void> {
   const parsed = parseComposer(input.value);
   if (parsed.agents.length === 0 || !parsed.message) return;
 
-  // Fan out — append one optimistic row per recipient, fire one POST per
-  // recipient. Each lives in its own thread so the merge view shows them
-  // as parallel entries. Failures get individual toasts; the others still
-  // go through.
+  // Cartesian fanout — one optimistic row + one POST per (agent × topic)
+  // pair. Each lives in the recipient agent's thread (independent of topic).
+  // Failures get individual toasts; the rest still go through.
   const now = new Date().toISOString();
-  const pending: Array<{ agent: string; optimisticId: number; list: DashboardMessage[] }> = [];
+  const pending: Array<{
+    agent: string;
+    topic: string;
+    optimisticId: number;
+    list: DashboardMessage[];
+  }> = [];
   let stamp = Date.now();
   for (const agent of parsed.agents) {
-    const optimisticId = -(stamp++);
-    const optimistic: DashboardMessage = {
-      id: optimisticId,
-      agent,
-      direction: 'to_agent',
-      sourceAgent: null,
-      targetAgent: agent,
-      topic: parsed.topic,
-      message: parsed.message,
-      queueId: null,
-      deliveryStatus: 'pending',
-      withdrawn: false,
-      createdAt: now,
-    };
     const list = state.threads[agent] ?? [];
-    list.push(optimistic);
+    for (const topic of parsed.topics) {
+      const optimisticId = -(stamp++);
+      list.push({
+        id: optimisticId,
+        agent,
+        direction: 'to_agent',
+        sourceAgent: null,
+        targetAgent: agent,
+        topic,
+        message: parsed.message,
+        queueId: null,
+        deliveryStatus: 'pending',
+        withdrawn: false,
+        createdAt: now,
+      });
+      pending.push({ agent, topic, optimisticId, list });
+    }
     state.threads[agent] = list;
-    pending.push({ agent, optimisticId, list });
   }
   renderThread();
   input.value = '';
   const hint = document.querySelector<HTMLElement>('[data-target-hint]');
-  if (hint) hint.innerHTML = `No target — type <span class="target">@</span> to pick an agent.`;
+  if (hint) hint.innerHTML = `No target — type <span class="target">@</span> to pick an agent, <span class="target">#</span> for a topic.`;
   const sendBtn = document.querySelector<HTMLButtonElement>('[data-send]');
   if (sendBtn) { sendBtn.disabled = true; sendBtn.textContent = 'Send'; }
 
   let okCount = 0;
   let failCount = 0;
-  await Promise.all(pending.map(async ({ agent, optimisticId, list }) => {
+  await Promise.all(pending.map(async ({ agent, topic, optimisticId, list }) => {
     try {
       const target = agent.includes(':') || agent.includes('/') ? agent : `agent:${agent}`;
       const res = await fetch('/api/dashboard/send', {
         method: 'POST',
         headers: authHeaders(),
-        body: JSON.stringify({ agent: target, message: parsed.message, topic: parsed.topic }),
+        body: JSON.stringify({ agent: target, message: parsed.message, topic }),
       });
       if (!res.ok) {
         const idx = list.findIndex((m) => m.id === optimisticId);
         if (idx >= 0) list.splice(idx, 1);
         failCount++;
         const body = await res.json().catch(() => null);
-        toast(`@${agent}: ${body?.error ?? 'send failed'}`, 'error');
+        toast(`@${agent} #${topic}: ${body?.error ?? 'send failed'}`, 'error');
       } else {
         okCount++;
       }
@@ -625,16 +659,49 @@ async function handleSend(input: HTMLTextAreaElement): Promise<void> {
       const idx = list.findIndex((m) => m.id === optimisticId);
       if (idx >= 0) list.splice(idx, 1);
       failCount++;
-      toast(`@${agent}: network error`, 'error');
+      toast(`@${agent} #${topic}: network error`, 'error');
     }
   }));
   renderThread();
   if (okCount > 1 && failCount === 0) {
-    toast(`Sent to ${okCount} agents`);
+    toast(`Sent ${okCount} messages`);
   }
 }
 
 /* ── helpers ───────────────────────────────────────────────────────── */
+
+/**
+ * Walk the leading prefix and insert a space after each `#X` token so
+ * the parser stops recognising it as a topic. Leaves `@X` tokens alone
+ * (they're recipient identity, not the source of the explosion warning).
+ *
+ *   "@a #x #y hi"  →  "@a # x # y hi"
+ *   "@a @b #x hi"  →  "@a @b # x hi"
+ */
+function neutralizeLeadingTopics(text: string): string {
+  const lead = text.match(/^\s+/)?.[0] ?? '';
+  let rest = text.slice(lead.length);
+  const known = new Set(state.agents.map((a) => a.name));
+  const out: string[] = [];
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const at = rest.match(/^@([a-zA-Z0-9_\-/]+)(\s+|$)/);
+    if (at && known.has(at[1]!)) {
+      out.push(at[0]);
+      rest = rest.slice(at[0].length);
+      continue;
+    }
+    const hash = rest.match(/^(#)([a-zA-Z0-9_\-]+)(\s+|$)/);
+    if (hash) {
+      // Insert a space after # so it no longer matches the topic regex.
+      out.push(`${hash[1]} ${hash[2]}${hash[3]}`);
+      rest = rest.slice(hash[0].length);
+      continue;
+    }
+    break;
+  }
+  return lead + out.join('') + rest;
+}
 
 function formatTime(iso: string): string {
   try {

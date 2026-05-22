@@ -255,6 +255,29 @@
   color: var(--ink-2);
   font-weight: 500;
 }
+.chat-pane .composer .ctrls .hint .explode {
+  font-family: var(--mono);
+  color: var(--clay);
+  font-weight: 600;
+  margin-left: 4px;
+}
+.chat-pane .composer .ctrls .hint .escape-topics {
+  font-family: var(--sans);
+  font-size: 11px;
+  color: var(--ink-3);
+  background: transparent;
+  border: 1px solid var(--rule);
+  padding: 1px 8px;
+  margin-left: 8px;
+  border-radius: 3px;
+  cursor: pointer;
+  letter-spacing: -0.003em;
+}
+.chat-pane .composer .ctrls .hint .escape-topics:hover {
+  color: var(--ink);
+  background: var(--paper-2);
+  border-color: var(--rule-strong);
+}
 .chat-pane .composer .ctrls .spacer { flex: 1; }
 .chat-pane .composer .ctrls kbd {
   font-family: var(--mono);
