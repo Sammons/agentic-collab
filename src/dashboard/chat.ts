@@ -190,14 +190,22 @@ function msgHtml(m: DashboardMessage): string {
 
 /** Compact one-line event row used for lifecycle / system messages. */
 function systemMsgHtml(m: DashboardMessage): string {
-  // The body already includes the agent name (per the orchestrator's
-  // broadcastLifecycleEvent change). topic="lifecycle" → use the trigger
-  // banner styling; anything else falls through to plain.
+  // Normalize the body: strip the legacy "[system] " prefix (pre-fix data)
+  // and ensure the agent name leads. Older messages stored just "Spawned"
+  // / "Resumed" / etc. without the agent name — we prepend m.agent so the
+  // user can always tell which agent the event belongs to.
+  let text = m.message.replace(/^\[system\]\s*/i, '').trim();
+  if (m.agent && !text.toLowerCase().startsWith(m.agent.toLowerCase())) {
+    text = `${m.agent} ${text.toLowerCase()}`;
+  }
   const isLifecycle = m.topic === 'lifecycle';
   const cls = `sys-event ${isLifecycle ? 'lifecycle' : ''}`;
   return `
     <div class="${cls}" data-msg-id="${m.id}">
-      <span class="body">${escapeHtml(m.message)}</span>
+      <span class="body">
+        <span class="who" data-profile-for="${escapeHtml(m.agent ?? '')}">${escapeHtml(m.agent ?? '')}</span>
+        <span class="rest">${escapeHtml(text.slice((m.agent ?? '').length).trim())}</span>
+      </span>
       <span class="time">${formatTime(m.createdAt)}</span>
     </div>
   `;

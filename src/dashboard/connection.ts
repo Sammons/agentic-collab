@@ -211,7 +211,25 @@ function handle(msg: WsEvent): void {
       const u = msg as Extract<WsEvent, { type: 'message' }>;
       const agentName = u.msg.agent;
       const list = state.threads[agentName] ?? [];
-      list.push(u.msg);
+      // Idempotent: skip if we've already seen this id (HTTP-fallback path).
+      if (list.some((m) => m.id === u.msg.id)) {
+        state.threads[agentName] = list;
+        break;
+      }
+      // Dedupe optimistic→real: when an outbound message we sent comes back
+      // from the server, replace the negative-id optimistic row in place
+      // instead of pushing a duplicate.
+      const optimisticIdx = list.findIndex((m) =>
+        m.id < 0 &&
+        m.agent === u.msg.agent &&
+        m.message === u.msg.message &&
+        m.direction === u.msg.direction,
+      );
+      if (optimisticIdx >= 0) {
+        list[optimisticIdx] = u.msg;
+      } else {
+        list.push(u.msg);
+      }
       state.threads[agentName] = list;
       emit('message', u.msg);
       break;

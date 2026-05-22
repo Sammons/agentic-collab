@@ -351,9 +351,26 @@
 }
 .chat-pane .sys-event .body {
   flex: 1;
+  font-family: var(--sans);
+  font-size: 13px;
+  color: var(--ink-3);
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.chat-pane .sys-event .body .who {
   font-family: var(--mono);
-  font-size: 12px;
-  color: var(--ink-2);
+  font-weight: 600;
+  color: var(--ink);
+  cursor: pointer;
+  border-bottom: 1px solid transparent;
+  transition: border-color 120ms ease;
+}
+.chat-pane .sys-event .body .who:hover {
+  border-bottom-color: var(--ink-3);
+}
+.chat-pane .sys-event .body .rest {
+  color: var(--ink-3);
 }
 .chat-pane .sys-event .time {
   font-family: var(--mono);
