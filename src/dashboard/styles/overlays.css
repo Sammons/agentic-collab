@@ -4,25 +4,27 @@
    One clay moment per overlay: the primary Save/Create button.
    ────────────────────────────────────────────────────────────────────── */
 .ov-backdrop {
-  position: absolute;
+  position: fixed;
   inset: 0;
-  background: rgba(22,24,28,0.18);
+  background: rgba(22,24,28,0.32);
   display: flex;
   align-items: flex-start;
   justify-content: center;
   padding: 56px 32px 32px;
-  overflow: hidden;
+  overflow: auto;
+  z-index: 50;
 }
 .ov-backdrop.center { align-items: center; padding: 24px 32px; }
 .ov-modal {
   background: var(--paper-card);
   border: 1px solid var(--rule);
   border-radius: var(--radius-lg);
-  box-shadow: 0 24px 60px -12px rgba(22,24,28,0.22);
+  box-shadow: 0 24px 60px -12px rgba(22,24,28,0.32);
   width: 100%;
   max-width: 720px;
   display: flex;
   flex-direction: column;
+  margin: auto;
 }
 .ov-modal.sm { max-width: 480px; }
 .ov-modal.lg { max-width: 880px; }
@@ -92,7 +94,8 @@
   gap: 12px;
   padding: 7px 0;
 }
-.ov-field.stack { grid-template-columns: 1fr; gap: 6px; padding: 8px 0; }
+.ov-field.stack { grid-template-columns: minmax(0, 1fr); gap: 6px; padding: 8px 0; }
+.ov-field.stack > * { min-width: 0; }
 .ov-field > label {
   font-family: var(--mono);
   font-size: 11px;
@@ -161,10 +164,17 @@
   padding: 10px 12px;
   color: var(--ink);
   outline: none;
+  display: block;
   width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
   resize: vertical;
   min-height: 120px;
   line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
   transition: border-color 140ms ease;
 }
 .ov-textarea:focus { border-color: var(--ink); background: var(--paper-card); }
