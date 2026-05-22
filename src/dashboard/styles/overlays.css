@@ -563,3 +563,102 @@
   margin: 4px 6px;
 }
 
+/* CWD picker — inline directory browser inside the New-agent modal.
+   Triggered by the Browse button next to the cwd input. */
+.ov-cwd-wrap {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+  width: 100%;
+}
+.ov-cwd-wrap .ov-input { flex: 1; }
+.ov-cwd-wrap .btn { flex: 0 0 auto; }
+
+.ov-cwd-bar {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.ov-cwd-bar .ov-input {
+  flex: 1;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  padding: 7px 10px;
+  border-radius: var(--radius);
+  border-bottom: 1px solid var(--rule);
+}
+.ov-cwd-bar .ov-input:focus {
+  border-color: var(--steel);
+  box-shadow: 0 0 0 2px var(--steel-soft);
+}
+.ov-cwd-list {
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid var(--rule-soft);
+  border-radius: var(--radius);
+  background: var(--paper);
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
+.ov-cwd-row {
+  display: grid;
+  grid-template-columns: 18px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  cursor: pointer;
+  color: var(--ink-2);
+  border-bottom: 1px solid var(--rule-soft);
+  transition: background 120ms ease;
+}
+.ov-cwd-row:last-child { border-bottom: none; }
+.ov-cwd-row:hover { background: var(--paper-2); color: var(--ink); }
+.ov-cwd-row.file {
+  color: var(--ink-4);
+  cursor: default;
+}
+.ov-cwd-row.file:hover { background: transparent; color: var(--ink-4); }
+.ov-cwd-row .ico { color: var(--ink-3); display: inline-flex; align-items: center; }
+.ov-cwd-row.up .ico { color: var(--steel); font-weight: 700; }
+.ov-cwd-row .nm { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ov-cwd-row .kind {
+  font-size: 10.5px;
+  color: var(--ink-4);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.ov-cwd-divider {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-4);
+  padding: 8px 10px 4px;
+  background: var(--paper-2);
+  border-bottom: 1px solid var(--rule-soft);
+  border-top: 1px solid var(--rule-soft);
+}
+.ov-cwd-loading,
+.ov-cwd-empty,
+.ov-cwd-err {
+  padding: 18px;
+  text-align: center;
+  font-size: 12.5px;
+  color: var(--ink-4);
+  font-style: italic;
+}
+.ov-cwd-err { color: var(--brick); }
+
+.ov-cwd-hidden {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--ink-3);
+  cursor: pointer;
+}
+.ov-cwd-hidden input { accent-color: var(--ink); }
+

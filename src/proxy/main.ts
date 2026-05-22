@@ -260,6 +260,50 @@ async function executeCommand(command: ProxyCommand): Promise<ProxyResponse> {
         tmux.clearHistory(command.sessionName);
         return { ok: true };
 
+      case 'list_dir': {
+        const { readdirSync, statSync, realpathSync } = await import('node:fs');
+        const { resolve, sep } = await import('node:path');
+        const { homedir } = await import('node:os');
+        const showHidden = command.showHidden === true;
+        // Resolve: empty → HOME; '~' → HOME; otherwise resolve absolute.
+        let raw = command.path?.trim() ?? '';
+        if (!raw || raw === '~') raw = homedir();
+        else if (raw.startsWith('~/')) raw = `${homedir()}${raw.slice(1)}`;
+        const abs = resolve(raw);
+        // Follow symlinks once so the displayed path reflects the real root.
+        let resolved: string;
+        try { resolved = realpathSync(abs); }
+        catch { resolved = abs; }
+        const st = statSync(resolved);
+        if (!st.isDirectory()) {
+          return { ok: false, error: `Not a directory: ${resolved}` };
+        }
+        const dirents = readdirSync(resolved, { withFileTypes: true });
+        const entries = dirents
+          .filter(d => showHidden || !d.name.startsWith('.'))
+          .map(d => ({
+            name: d.name,
+            kind: d.isDirectory() ? 'dir' : d.isSymbolicLink() ? 'link' : 'file',
+          }))
+          .sort((a, b) => {
+            // dirs first, then files; alpha within each.
+            if (a.kind !== b.kind) {
+              if (a.kind === 'dir') return -1;
+              if (b.kind === 'dir') return 1;
+            }
+            return a.name.localeCompare(b.name);
+          });
+        const parent = resolved === sep ? null : resolve(resolved, '..');
+        return {
+          ok: true,
+          data: {
+            path: resolved,
+            parent,
+            entries,
+          },
+        };
+      }
+
       default:
         return { ok: false, error: `Unknown action: ${(command as Record<string, unknown>).action}` };
     }

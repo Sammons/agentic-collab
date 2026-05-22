@@ -2121,6 +2121,30 @@ route('POST', '/api/reminders/swap', async (req, res, _match, ctx) => {
   json(res, 200, { ok: true });
 });
 
+// ── Host filesystem listing (proxy-backed) ──
+// Used by the v3 dashboard's CWD picker — the orchestrator lives in Docker
+// so it can't see host paths. We delegate to a proxy via list_dir.
+route('GET', '/api/proxy/list-dir', async (req, res, _match, ctx) => {
+  const url = new URL(req.url!, `http://${req.headers.host}`);
+  const path = url.searchParams.get('path') ?? '';
+  const showHidden = url.searchParams.get('hidden') === '1';
+  const explicitProxy = url.searchParams.get('proxyId') ?? undefined;
+  const proxies = ctx.db.listProxies();
+  if (proxies.length === 0) {
+    return json(res, 503, { error: 'no proxy registered' });
+  }
+  const proxyId = explicitProxy && proxies.some(p => p.proxyId === explicitProxy)
+    ? explicitProxy
+    : proxies[0]!.proxyId;
+  const result = await ctx.proxyDispatch(proxyId, {
+    action: 'list_dir',
+    path,
+    showHidden,
+  });
+  if (!result.ok) return json(res, 400, { error: result.error });
+  json(res, 200, result.data);
+});
+
 // ── Teams (v3 UI grouping) ──
 // Teams are UI-only filters in the v3 sidebar. No kernel behavior. Many-to-many
 // with agents (an agent can be in multiple teams). Membership lookups happen

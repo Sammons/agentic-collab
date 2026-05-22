@@ -80,12 +80,11 @@ export function openNewAgentModal(): void {
           </select>
         </div>
         <div class="ov-field">
-          <label>Model</label>
-          <input class="ov-input" type="text" data-model placeholder="(use engine default)">
-        </div>
-        <div class="ov-field">
           <label>cwd</label>
-          <input class="ov-input path" type="text" data-cwd placeholder="/path/to/working/dir">
+          <div class="ov-cwd-wrap">
+            <input class="ov-input path" type="text" data-cwd placeholder="Click Browse, or type a path…" readonly>
+            <button class="btn" type="button" data-browse>Browse…</button>
+          </div>
         </div>
       </div>
       <div class="group">
@@ -123,20 +122,26 @@ export function openNewAgentModal(): void {
     });
   }
 
-  // Submit
+  // Browse button → CWD picker
+  const cwdInput = overlay.querySelector<HTMLInputElement>('[data-cwd]');
+  overlay.querySelector<HTMLElement>('[data-browse]')?.addEventListener('click', () => {
+    openCwdPicker(cwdInput?.value || '', (picked) => {
+      if (cwdInput) cwdInput.value = picked;
+    });
+  });
+
+  // Submit — model field intentionally absent; model lives in the engine config.
   const submit = async () => {
     const name = overlay.querySelector<HTMLInputElement>('[data-name]')?.value.trim();
     const engine = overlay.querySelector<HTMLSelectElement>('[data-engine]')?.value as 'claude' | 'codex' | 'opencode';
-    const model = overlay.querySelector<HTMLInputElement>('[data-model]')?.value.trim();
     const cwd = overlay.querySelector<HTMLInputElement>('[data-cwd]')?.value.trim();
     const persona = overlay.querySelector<HTMLTextAreaElement>('[data-persona]')?.value;
 
     if (!name) { toast('Name is required', 'error'); return; }
-    if (!cwd)  { toast('cwd is required', 'error'); return; }
+    if (!cwd)  { toast('cwd is required — click Browse', 'error'); return; }
 
     try {
       const body: Record<string, unknown> = { name, engine, cwd };
-      if (model) body['model'] = model;
       if (persona) body['persona'] = persona;
       const res = await fetch('/api/agents', {
         method: 'POST',
@@ -169,6 +174,146 @@ export function openNewAgentModal(): void {
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') void submit();
   });
 }
+
+/* ── CWD picker ────────────────────────────────────────────────────── */
+
+type ListDirResponse = {
+  path: string;
+  parent: string | null;
+  entries: Array<{ name: string; kind: 'dir' | 'file' | 'link' }>;
+};
+
+/**
+ * In-modal directory picker. Browses host paths via the proxy
+ * (GET /api/proxy/list-dir). Closes with `onPick(absPath)` when the user
+ * confirms; closes silently on Cancel/Esc/scrim.
+ */
+function openCwdPicker(startPath: string, onPick: (absPath: string) => void): void {
+  const html = `
+    <div class="hdr">
+      <span class="ttl">Choose working directory</span>
+      <span class="sub">browses paths on the proxy host · directories only</span>
+      <button class="esc">esc</button>
+    </div>
+    <div class="body" style="padding:14px 18px;">
+      <div class="ov-cwd-bar">
+        <input class="ov-input cwd-input" type="text" data-cwd-input placeholder="/path/to/dir" autocomplete="off" spellcheck="false">
+        <button class="btn" type="button" data-cwd-go>Go</button>
+      </div>
+      <div class="ov-cwd-list" data-cwd-list>Loading…</div>
+      <label class="ov-cwd-hidden" data-cwd-hidden-label>
+        <input type="checkbox" data-cwd-hidden>
+        Show hidden (dot-files)
+      </label>
+    </div>
+    <div class="foot">
+      <span class="hint" data-cwd-hint>—</span>
+      <span class="spacer"></span>
+      <button class="btn" data-cancel>Cancel</button>
+      <button class="btn primary" data-submit disabled>Use this directory</button>
+    </div>
+  `;
+  const { overlay, close } = openModal(html, 'sm');
+
+  const input = overlay.querySelector<HTMLInputElement>('[data-cwd-input]')!;
+  const list = overlay.querySelector<HTMLElement>('[data-cwd-list]')!;
+  const hint = overlay.querySelector<HTMLElement>('[data-cwd-hint]')!;
+  const submitBtn = overlay.querySelector<HTMLButtonElement>('[data-submit]')!;
+  const hiddenChk = overlay.querySelector<HTMLInputElement>('[data-cwd-hidden]')!;
+
+  let currentResolved = '';
+  let showHidden = false;
+
+  const fetchDir = async (path: string) => {
+    list.innerHTML = '<div class="ov-cwd-loading">Loading…</div>';
+    submitBtn.disabled = true;
+    try {
+      const url = `/api/proxy/list-dir?path=${encodeURIComponent(path)}${showHidden ? '&hidden=1' : ''}`;
+      const res = await fetch(url, { headers: authHeaders() });
+      if (!res.ok) {
+        const b = await res.json().catch(() => null);
+        list.innerHTML = `<div class="ov-cwd-err">${escapeHtml(b?.error ?? 'Failed to load')}</div>`;
+        hint.textContent = path || '—';
+        return;
+      }
+      const data = await res.json() as ListDirResponse;
+      currentResolved = data.path;
+      input.value = data.path;
+      hint.textContent = data.path;
+      submitBtn.disabled = false;
+
+      const dirs = data.entries.filter(e => e.kind === 'dir');
+      const others = data.entries.filter(e => e.kind !== 'dir');
+
+      const rows: string[] = [];
+      if (data.parent) {
+        rows.push(`
+          <div class="ov-cwd-row up" data-go="${escapeHtml(data.parent)}">
+            <span class="ico">↑</span>
+            <span class="nm">..</span>
+            <span class="kind">parent</span>
+          </div>
+        `);
+      }
+      for (const e of dirs) {
+        rows.push(`
+          <div class="ov-cwd-row" data-go="${escapeHtml(joinPath(data.path, e.name))}">
+            <span class="ico">${folderIcon}</span>
+            <span class="nm">${escapeHtml(e.name)}</span>
+            <span class="kind">${e.kind === 'link' ? 'link →' : 'dir'}</span>
+          </div>
+        `);
+      }
+      if (others.length > 0) {
+        rows.push(`<div class="ov-cwd-divider">files (not selectable)</div>`);
+        for (const e of others) {
+          rows.push(`
+            <div class="ov-cwd-row file">
+              <span class="ico">${fileIcon}</span>
+              <span class="nm">${escapeHtml(e.name)}</span>
+              <span class="kind">${escapeHtml(e.kind)}</span>
+            </div>
+          `);
+        }
+      }
+      list.innerHTML = rows.join('') || '<div class="ov-cwd-empty">empty directory</div>';
+      list.querySelectorAll<HTMLElement>('[data-go]').forEach((row) => {
+        row.addEventListener('click', () => fetchDir(row.dataset['go']!));
+      });
+    } catch (err) {
+      list.innerHTML = `<div class="ov-cwd-err">Network error.</div>`;
+    }
+  };
+
+  overlay.querySelector<HTMLElement>('[data-cwd-go]')?.addEventListener('click', () => {
+    fetchDir(input.value.trim());
+  });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); fetchDir(input.value.trim()); }
+  });
+  hiddenChk.addEventListener('change', () => {
+    showHidden = hiddenChk.checked;
+    fetchDir(currentResolved || input.value.trim());
+  });
+
+  overlay.querySelector<HTMLElement>('[data-cancel]')?.addEventListener('click', close);
+  submitBtn.addEventListener('click', () => {
+    if (!currentResolved) return;
+    onPick(currentResolved);
+    close();
+  });
+
+  // Kick off with the starting path (or HOME if empty).
+  fetchDir(startPath);
+}
+
+function joinPath(base: string, name: string): string {
+  if (base.endsWith('/')) return base + name;
+  return base + '/' + name;
+}
+
+const folderIcon = `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5a1 1 0 0 1 1-1h3l2 2h5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V5z"/></svg>`;
+const fileIcon = `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2h6l3 3v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z"/><polyline points="10 2 10 5 13 5"/></svg>`;
 
 /* ── + New team ────────────────────────────────────────────────────── */
 

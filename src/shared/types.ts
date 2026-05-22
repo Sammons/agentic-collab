@@ -594,7 +594,16 @@ export type ProxyCommand =
   | { action: 'remove_codex_profile'; profileName: string }
   | { action: 'exec'; command: string; cwd?: string; timeoutMs?: number }
   | { action: 'resize_pane'; sessionName: string; width: number; height: number }
-  | { action: 'clear_history'; sessionName: string };
+  | { action: 'clear_history'; sessionName: string }
+  /**
+   * List a directory on the proxy host. `path` is the absolute path to read;
+   * if empty, the proxy interprets it as $HOME. `showHidden` includes entries
+   * starting with `.` (default false). Returns:
+   *   { path: <resolved absolute>, entries: [{ name, kind: 'dir'|'file'|'link' }] }
+   * Used by the v3 dashboard's CWD picker so agents can be created against
+   * paths that exist on the host (orchestrator is in Docker, can't read host fs).
+   */
+  | { action: 'list_dir'; path: string; showHidden?: boolean };
 
 export type ProxyResponse = {
   ok: boolean;
