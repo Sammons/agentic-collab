@@ -279,6 +279,9 @@ const approvals = new ApprovalService({
   db,
   messageDispatcher,
   onEvent: (event) => wss.broadcastEvent(event),
+  // Surface auto-notify dashboard rows over the same `message` WS event
+  // the chat surface already listens on — agent thread updates live.
+  onMessage: (msg) => wss.broadcast(JSON.stringify({ type: 'message', msg })),
 });
 
 // ── v3 Q8: Crash recovery ──

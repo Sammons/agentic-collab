@@ -394,7 +394,15 @@ function wire(root: HTMLElement): void {
       }
       if (e.key === 'Escape')    { e.preventDefault(); mention.close(); return; }
     }
-    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+    if (e.key !== 'Enter') return;
+    // Honor the Settings → Preferences "Submit mode" choice.
+    //   'enter'      → Enter sends, Shift+Enter inserts newline.
+    //   'cmd-enter'  → Cmd/Ctrl+Enter sends, Enter inserts newline (default).
+    const submitMode = readSubmitMode();
+    const wantsSend = submitMode === 'enter'
+      ? !e.shiftKey
+      : (e.metaKey || e.ctrlKey);
+    if (wantsSend) {
       e.preventDefault();
       if (!sendBtn.disabled) handleSend(input);
     }
@@ -681,6 +689,21 @@ async function handleSend(input: HTMLTextAreaElement): Promise<void> {
 }
 
 /* ── helpers ───────────────────────────────────────────────────────── */
+
+/**
+ * Read the composer submit-mode preference from localStorage. Same key
+ * the Settings page writes to (`dashboardPrefs_v3`).
+ *   'cmd-enter' (default) — Cmd/Ctrl+Enter sends, Enter is a newline.
+ *   'enter'               — Enter sends, Shift+Enter is a newline.
+ */
+function readSubmitMode(): 'cmd-enter' | 'enter' {
+  try {
+    const raw = JSON.parse(localStorage.getItem('dashboardPrefs_v3') ?? '{}');
+    return raw.submitMode === 'enter' ? 'enter' : 'cmd-enter';
+  } catch {
+    return 'cmd-enter';
+  }
+}
 
 /** Reconstruct the leading prefix (no message body) for repopulation. */
 function buildPrefix(agents: string[], topics: string[]): string {

@@ -177,6 +177,7 @@ function engineItemHtml(c: EngineConfigRecord): string {
         <span class="nm">${escapeHtml(c.name)}</span>
         <span class="kind ${escapeHtml(c.engine)}">engine: ${escapeHtml(c.engine)}</span>
         <div class="actions">
+          <button data-act="edit-engine" data-name="${escapeHtml(c.name)}">Edit</button>
           <button data-act="delete-engine" data-name="${escapeHtml(c.name)}">Delete</button>
         </div>
       </div>
@@ -351,6 +352,12 @@ function wireSections(scope: HTMLElement): void {
     btn.addEventListener('click', async () => {
       const act = btn.dataset['act'];
       switch (act) {
+        case 'edit-engine': {
+          const name = btn.dataset['name']!;
+          const cfg = configs.find((c) => c.name === name);
+          if (cfg) openEngineConfigEditor(cfg);
+          return;
+        }
         case 'delete-engine': {
           const name = btn.dataset['name']!;
           if (!window.confirm(`Delete engine config "${name}"?`)) return;
@@ -475,6 +482,144 @@ function escapeHtml(s: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+/* ── engine config editor ──────────────────────────────────────────── */
+
+/**
+ * Modal editor for a single engine config. The orchestrator stores most
+ * shape (hooks, indicators, detection, customButtons) as JSON-encoded
+ * strings; this editor surfaces simple fields as inputs and a single
+ * "Advanced JSON" textarea for everything else so the operator can fine-
+ * tune without having to remember the column names.
+ */
+function openEngineConfigEditor(cfg: EngineConfigRecord): void {
+  // Pull out the JSON-stringified fields into an "advanced" blob.
+  const advancedKeys = [
+    'hookStart', 'hookResume', 'hookCompact', 'hookExit', 'hookInterrupt',
+    'hookReload', 'hookSubmit', 'indicators', 'detection', 'customButtons',
+    'launchEnv',
+  ] as const;
+  const advanced: Record<string, unknown> = {};
+  for (const k of advancedKeys) {
+    const v = (cfg as Record<string, unknown>)[k];
+    if (v === undefined || v === null || v === '') continue;
+    // Most fields are JSON strings; launchEnv may be an object already.
+    if (typeof v === 'string') {
+      try { advanced[k] = JSON.parse(v); } catch { advanced[k] = v; }
+    } else {
+      advanced[k] = v;
+    }
+  }
+  const advancedJson = JSON.stringify(advanced, null, 2);
+
+  const overlay = document.createElement('div');
+  overlay.className = 'ov-backdrop';
+  overlay.innerHTML = `
+    <div class="ov-modal lg">
+      <div class="hdr">
+        <span class="ttl">Edit engine config</span>
+        <span class="sub">${escapeHtml(cfg.name)} · <code style="font-family:var(--mono);font-size:11px;color:var(--ink-2);">PUT /api/engine-configs/${escapeHtml(cfg.name)}</code></span>
+        <button class="esc">esc</button>
+      </div>
+      <div class="body">
+        <div class="ov-field">
+          <label>Engine</label>
+          <select class="ov-select" data-engine>
+            <option value="claude" ${cfg.engine === 'claude' ? 'selected' : ''}>claude</option>
+            <option value="codex"  ${cfg.engine === 'codex'  ? 'selected' : ''}>codex</option>
+            <option value="opencode" ${cfg.engine === 'opencode' ? 'selected' : ''}>opencode</option>
+          </select>
+        </div>
+        <div class="ov-field">
+          <label>Model</label>
+          <input class="ov-input" type="text" data-model value="${escapeHtml(cfg.model ?? '')}" placeholder="(engine default)">
+        </div>
+        <div class="ov-field">
+          <label>Thinking</label>
+          <input class="ov-input" type="text" data-thinking value="${escapeHtml(cfg.thinking ?? '')}" placeholder="(none)">
+        </div>
+        <div class="ov-field">
+          <label>Permissions</label>
+          <input class="ov-input" type="text" data-permissions value="${escapeHtml(cfg.permissions ?? '')}" placeholder="(default)">
+        </div>
+        <div class="ov-field stack">
+          <label>Advanced (JSON)</label>
+          <div class="help" style="margin-top:0;margin-bottom:6px;">hooks · indicators · detection · customButtons · launchEnv. Edit as JSON; saved with strict parse.</div>
+          <textarea class="ov-textarea" data-advanced style="min-height:280px;">${escapeHtml(advancedJson)}</textarea>
+          <div class="help" data-parse-err style="color:var(--brick);display:none;"></div>
+        </div>
+      </div>
+      <div class="foot">
+        <span class="hint"><kbd>⌘</kbd> <kbd>↵</kbd> save · <kbd>esc</kbd> cancel</span>
+        <span class="spacer"></span>
+        <button class="btn" data-cancel>Cancel</button>
+        <button class="btn primary" data-submit>Save</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  const close = () => { overlay.remove(); document.removeEventListener('keydown', esc); };
+  function esc(e: KeyboardEvent) { if (e.key === 'Escape') close(); }
+  document.addEventListener('keydown', esc);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  overlay.querySelector<HTMLElement>('.esc')?.addEventListener('click', close);
+  overlay.querySelector<HTMLElement>('[data-cancel]')?.addEventListener('click', close);
+
+  const submit = async () => {
+    const engine = overlay.querySelector<HTMLSelectElement>('[data-engine]')!.value;
+    const model = overlay.querySelector<HTMLInputElement>('[data-model]')!.value.trim();
+    const thinking = overlay.querySelector<HTMLInputElement>('[data-thinking]')!.value.trim();
+    const permissions = overlay.querySelector<HTMLInputElement>('[data-permissions]')!.value.trim();
+    const advRaw = overlay.querySelector<HTMLTextAreaElement>('[data-advanced]')!.value;
+
+    let adv: Record<string, unknown> = {};
+    try { adv = advRaw.trim() ? JSON.parse(advRaw) : {}; }
+    catch (err) {
+      const errEl = overlay.querySelector<HTMLElement>('[data-parse-err]')!;
+      errEl.style.display = 'block';
+      errEl.textContent = `JSON parse error: ${(err as Error).message}`;
+      return;
+    }
+
+    // Re-stringify the JSON-string fields the way the API expects.
+    const body: Record<string, unknown> = {
+      name: cfg.name,
+      engine,
+      model: model || null,
+      thinking: thinking || null,
+      permissions: permissions || null,
+    };
+    const stringKeys = ['hookStart','hookResume','hookCompact','hookExit','hookInterrupt','hookReload','hookSubmit','indicators','detection','customButtons'];
+    for (const k of stringKeys) {
+      body[k] = adv[k] !== undefined ? JSON.stringify(adv[k]) : null;
+    }
+    body['launchEnv'] = adv['launchEnv'] ?? null;
+
+    try {
+      const res = await fetch(`/api/engine-configs/${encodeURIComponent(cfg.name)}`, {
+        method: 'PUT',
+        headers: authHeaders(),
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const b = await res.json().catch(() => null);
+        const errEl = overlay.querySelector<HTMLElement>('[data-parse-err]')!;
+        errEl.style.display = 'block';
+        errEl.textContent = b?.error ?? 'Save failed';
+        return;
+      }
+      showToast('Saved');
+      close();
+    } catch {
+      showToast('Network error', 'error');
+    }
+  };
+  overlay.querySelector<HTMLElement>('[data-submit]')?.addEventListener('click', submit);
+  overlay.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); void submit(); }
+  });
 }
 
 function showToast(msg: string, kind: 'info' | 'error' = 'info'): void {

@@ -23,7 +23,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Database } from './database.ts';
 import type { MessageDispatcher } from './message-dispatcher.ts';
-import type { ApprovalRow, ApprovalState, WsApprovalChangedEvent } from '../shared/types.ts';
+import type { ApprovalRow, ApprovalState, DashboardMessage, WsApprovalChangedEvent } from '../shared/types.ts';
 import { parseAddress, NAME_RE } from '../shared/address.ts';
 
 export type ApprovalServiceOptions = {
@@ -31,6 +31,14 @@ export type ApprovalServiceOptions = {
   messageDispatcher: MessageDispatcher;
   /** WS sink — receives `WsApprovalChangedEvent` shapes for broadcast. */
   onEvent?: (event: WsApprovalChangedEvent) => void;
+  /**
+   * Optional WS sink for the dashboard-visible side of auto-notify. The
+   * service writes a `dashboard_messages` row in the requester agent's
+   * thread (so the chat surface shows the state change) and calls this
+   * once with the created row. Wire to `wss.broadcast({ type: 'message',
+   * msg })` in production.
+   */
+  onMessage?: (msg: DashboardMessage) => void;
 };
 
 /** Concise outcome surfaces so routes/CLI can map cleanly to HTTP codes. */
@@ -54,11 +62,13 @@ export class ApprovalService {
   private readonly db: Database;
   private readonly messageDispatcher: MessageDispatcher;
   private readonly onEvent: (event: WsApprovalChangedEvent) => void;
+  private readonly onMessage: (msg: DashboardMessage) => void;
 
   constructor(opts: ApprovalServiceOptions) {
     this.db = opts.db;
     this.messageDispatcher = opts.messageDispatcher;
     this.onEvent = opts.onEvent ?? (() => {});
+    this.onMessage = opts.onMessage ?? (() => {});
   }
 
   /**
@@ -197,7 +207,7 @@ export class ApprovalService {
    */
   private async notifyRequester(row: ApprovalRow): Promise<void> {
     const addr = parseAddress(row.requesterAddr);
-    const envelope = `Approval ${row.id} updated: ${row.state}. Run "collab approval get ${row.id}" for details.`;
+    const envelope = approvalEnvelope(row);
     if (addr.class === 'agent') {
       try {
         this.db.enqueueMessage({
@@ -207,6 +217,22 @@ export class ApprovalService {
         });
         // Fire-and-forget — the dispatcher manages retries on its own.
         this.messageDispatcher.tryDeliver(addr.name).catch(() => { /* swallowed */ });
+        // Also surface the notification in the dashboard chat thread so
+        // the operator sees it live, regardless of whether the agent is
+        // currently running. The enqueue path above paste-delivers to
+        // tmux; this writes the same envelope to dashboard_messages.
+        // No dupe — the dispatcher's success path doesn't add dashboard
+        // rows (only its failure auto-reply does).
+        try {
+          const msg = this.db.addDashboardMessage(addr.name, 'from_agent', envelope, {
+            topic: 'approval',
+            sourceAgent: 'system',
+            targetAgent: addr.name,
+          });
+          this.onMessage(msg);
+        } catch (err) {
+          console.warn(`[approvals] dashboard-message failed for ${row.id}: ${(err as Error).message}`);
+        }
       } catch (err) {
         console.warn(`[approvals] notify enqueue failed for ${row.id}: ${(err as Error).message}`);
       }
@@ -230,4 +256,29 @@ export class ApprovalService {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Build the auto-notify envelope. Each terminal state has explicit
+ * "(terminal)" wording so agents don't misread `amended` as still-pending
+ * waiting for an approve/reject decision — amended IS the decision (approved
+ * with payload changes). Withdrawn is the requester's own cancellation.
+ */
+function approvalEnvelope(row: ApprovalRow): string {
+  const base = `Approval ${row.id}`;
+  const cli = `Run \`collab approval get ${row.id}\` for details.`;
+  switch (row.state) {
+    case 'pending':
+      return `${base} created (awaiting decision). ${cli}`;
+    case 'approved':
+      return `${base} APPROVED (terminal — no further state changes). ${cli}`;
+    case 'rejected':
+      return `${base} REJECTED (terminal — no further state changes). ${cli}`;
+    case 'amended':
+      return `${base} APPROVED WITH AMENDMENTS (terminal — payload was modified by the reviewer; use the new payload, do not wait for a separate approval). ${cli}`;
+    case 'withdrawn':
+      return `${base} WITHDRAWN by requester (terminal — no action needed). ${cli}`;
+    default:
+      return `${base} state changed to ${row.state}. ${cli}`;
+  }
 }
