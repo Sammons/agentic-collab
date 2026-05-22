@@ -408,8 +408,12 @@ function wire(root: HTMLElement): void {
     }
   });
   input.addEventListener('blur', () => {
-    // Delay so a click on a popover item still registers.
-    setTimeout(() => mention.close(), 120);
+    // Touch on mobile: blur fires before the synthesized click/pointerdown
+    // on the popover item. Skip the close if a pop interaction is in flight.
+    if (mention.isInteracting()) return;
+    setTimeout(() => {
+      if (!mention.isInteracting()) mention.close();
+    }, 200);
   });
   sendBtn.addEventListener('click', () => handleSend(input));
   updateHint();
@@ -419,6 +423,7 @@ function wire(root: HTMLElement): void {
 
 type MentionApi = {
   isOpen: () => boolean;
+  isInteracting: () => boolean;
   refresh: () => void;
   move: (dir: 1 | -1) => void;
   pick: () => void;
@@ -434,6 +439,10 @@ function setupMentionAutocomplete(
   let matches: string[] = [];
   let selectedIdx = 0;
   let activeRange: { start: number; end: number } | null = null;
+  // Set briefly when a pointer (touch or mouse) lands on a popover item;
+  // the textarea's blur handler reads it to avoid closing the popover
+  // mid-tap on mobile, where the synthesized click arrives AFTER blur.
+  let interactingWithPopover = false;
 
   const close = () => {
     if (pop) { pop.remove(); pop = null; }
@@ -484,10 +493,15 @@ function setupMentionAutocomplete(
       `;
     }).join('');
     pop.querySelectorAll<HTMLElement>('[data-idx]').forEach((el) => {
-      el.addEventListener('mousedown', (e) => {
-        e.preventDefault(); // don't blur the textarea
+      // pointerdown covers both touch and mouse. preventDefault keeps the
+      // textarea focused so the blur-close doesn't race the tap on mobile.
+      el.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        interactingWithPopover = true;
         selectedIdx = Number(el.dataset['idx']);
         pick();
+        // Release the guard after pick() runs.
+        setTimeout(() => { interactingWithPopover = false; }, 50);
       });
       el.addEventListener('mouseenter', () => {
         selectedIdx = Number(el.dataset['idx']);
@@ -534,6 +548,7 @@ function setupMentionAutocomplete(
 
   return {
     isOpen: () => pop !== null,
+    isInteracting: () => interactingWithPopover,
     refresh,
     move,
     pick,
