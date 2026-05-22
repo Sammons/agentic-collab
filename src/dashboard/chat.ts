@@ -297,7 +297,8 @@ function wire(root: HTMLElement): void {
   const input = root.querySelector<HTMLTextAreaElement>('[data-composer-input]');
   const sendBtn = root.querySelector<HTMLButtonElement>('[data-send]');
   const hint = root.querySelector<HTMLElement>('[data-target-hint]');
-  if (!input || !sendBtn || !hint) return;
+  const inputWrap = root.querySelector<HTMLElement>('.composer .input-wrap');
+  if (!input || !sendBtn || !hint || !inputWrap) return;
 
   const updateHint = () => {
     const parsed = parseComposer(input.value);
@@ -305,20 +306,177 @@ function wire(root: HTMLElement): void {
       hint.innerHTML = `Sending to <span class="target">@${escapeHtml(parsed.agent)}</span>`;
       sendBtn.disabled = !parsed.message;
     } else {
-      hint.innerHTML = `No target — start with <span class="target">@agent</span> to send.`;
+      hint.innerHTML = `No target — type <span class="target">@</span> to pick an agent.`;
       sendBtn.disabled = true;
     }
   };
 
-  input.addEventListener('input', updateHint);
+  const mention = setupMentionAutocomplete(input, inputWrap, updateHint);
+
+  input.addEventListener('input', () => {
+    mention.refresh();
+    updateHint();
+  });
   input.addEventListener('keydown', (e) => {
+    // Mention popover gets first crack at navigation keys.
+    if (mention.isOpen()) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); mention.move(1); return; }
+      if (e.key === 'ArrowUp')   { e.preventDefault(); mention.move(-1); return; }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault(); mention.pick(); return;
+      }
+      if (e.key === 'Escape')    { e.preventDefault(); mention.close(); return; }
+    }
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
       e.preventDefault();
       if (!sendBtn.disabled) handleSend(input);
     }
   });
+  input.addEventListener('blur', () => {
+    // Delay so a click on a popover item still registers.
+    setTimeout(() => mention.close(), 120);
+  });
   sendBtn.addEventListener('click', () => handleSend(input));
   updateHint();
+}
+
+/* ── @-mention autocomplete ────────────────────────────────────────── */
+
+type MentionApi = {
+  isOpen: () => boolean;
+  refresh: () => void;
+  move: (dir: 1 | -1) => void;
+  pick: () => void;
+  close: () => void;
+};
+
+function setupMentionAutocomplete(
+  input: HTMLTextAreaElement,
+  anchor: HTMLElement,
+  afterSelect: () => void,
+): MentionApi {
+  let pop: HTMLElement | null = null;
+  let matches: string[] = [];
+  let selectedIdx = 0;
+  let activeRange: { start: number; end: number } | null = null;
+
+  const close = () => {
+    if (pop) { pop.remove(); pop = null; }
+    matches = [];
+    activeRange = null;
+  };
+
+  const detectToken = (): { partial: string; start: number; end: number } | null => {
+    const pos = input.selectionStart ?? 0;
+    const before = input.value.slice(0, pos);
+    // Match an @-token: `@` not preceded by alphanumeric, followed by zero+
+    // [a-zA-Z0-9_\-/] chars, anchored to the caret.
+    const m = before.match(/(?:^|\s)(@[a-zA-Z0-9_\-/]*)$/);
+    if (!m) return null;
+    const start = pos - m[1]!.length;
+    return { partial: m[1]!.slice(1), start, end: pos };
+  };
+
+  const computeMatches = (partial: string): string[] => {
+    const lower = partial.toLowerCase();
+    const all = state.agents.map((a) => a.name);
+    if (!lower) return all.slice(0, 8);
+    const starts: string[] = [];
+    const contains: string[] = [];
+    for (const n of all) {
+      const ln = n.toLowerCase();
+      if (ln.startsWith(lower)) starts.push(n);
+      else if (ln.includes(lower)) contains.push(n);
+    }
+    return [...starts, ...contains].slice(0, 8);
+  };
+
+  const render = () => {
+    if (!pop) return;
+    if (matches.length === 0) {
+      pop.innerHTML = `<div class="mention-empty">no agents match</div>`;
+      return;
+    }
+    pop.innerHTML = matches.map((name, i) => {
+      const agent = state.agents.find((a) => a.name === name);
+      const dot = agent ? statusClass(agent.state) : 'offline';
+      return `
+        <div class="mention-item ${i === selectedIdx ? 'sel' : ''}" data-idx="${i}">
+          <span class="status ${dot}"></span>
+          <span class="nm">${escapeHtml(name)}</span>
+          ${agent ? `<span class="meta">${escapeHtml(agent.state ?? '')}</span>` : ''}
+        </div>
+      `;
+    }).join('');
+    pop.querySelectorAll<HTMLElement>('[data-idx]').forEach((el) => {
+      el.addEventListener('mousedown', (e) => {
+        e.preventDefault(); // don't blur the textarea
+        selectedIdx = Number(el.dataset['idx']);
+        pick();
+      });
+      el.addEventListener('mouseenter', () => {
+        selectedIdx = Number(el.dataset['idx']);
+        render();
+      });
+    });
+  };
+
+  const refresh = () => {
+    const tok = detectToken();
+    if (!tok) { close(); return; }
+    matches = computeMatches(tok.partial);
+    activeRange = { start: tok.start, end: tok.end };
+    if (matches.length === 0 && tok.partial === '') { close(); return; }
+    if (!pop) {
+      pop = document.createElement('div');
+      pop.className = 'mention-popover';
+      anchor.appendChild(pop);
+    }
+    selectedIdx = Math.min(selectedIdx, Math.max(0, matches.length - 1));
+    render();
+  };
+
+  const pick = () => {
+    if (!activeRange) { close(); return; }
+    const name = matches[selectedIdx];
+    if (!name) { close(); return; }
+    const before = input.value.slice(0, activeRange.start);
+    const after = input.value.slice(activeRange.end);
+    const replacement = `@${name} `;
+    input.value = before + replacement + after;
+    const caret = before.length + replacement.length;
+    input.setSelectionRange(caret, caret);
+    close();
+    input.focus();
+    afterSelect();
+  };
+
+  const move = (dir: 1 | -1) => {
+    if (matches.length === 0) return;
+    selectedIdx = (selectedIdx + dir + matches.length) % matches.length;
+    render();
+  };
+
+  return {
+    isOpen: () => pop !== null,
+    refresh,
+    move,
+    pick,
+    close,
+  };
+}
+
+function statusClass(state: string | undefined): string {
+  switch (state) {
+    case 'active':
+    case 'idle':       return 'online';
+    case 'spawning':
+    case 'resuming':
+    case 'suspending': return 'busy';
+    case 'suspended':  return 'paused';
+    case 'failed':     return 'failed';
+    default:           return 'offline';
+  }
 }
 
 function wireClearFilter(): void {
