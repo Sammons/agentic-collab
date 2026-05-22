@@ -331,6 +331,37 @@
 }
 .chat-toast.error { background: var(--brick); }
 
+/* system / lifecycle events — compact one-line row, not a bubble */
+.chat-pane .sys-event {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 7px 18px;
+  font-size: 12.5px;
+  color: var(--ink-3);
+  line-height: 1.55;
+  margin: 6px 0;
+}
+.chat-pane .sys-event.lifecycle::before {
+  content: "→";
+  color: var(--steel);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+}
+.chat-pane .sys-event .body {
+  flex: 1;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink-2);
+}
+.chat-pane .sys-event .time {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink-4);
+  margin-left: auto;
+}
+
 /* @-mention autocomplete — anchored to the composer input-wrap */
 .chat-pane .composer .input-wrap { position: relative; }
 .mention-popover {

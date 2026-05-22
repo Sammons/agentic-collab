@@ -155,6 +155,12 @@ function mergeMessages(): DashboardMessage[] {
 }
 
 function msgHtml(m: DashboardMessage): string {
+  // System lifecycle events render as a distinct compact row, not a
+  // chat bubble — see mock §01 .trigger-banner / .exit-banner.
+  if (m.sourceAgent === 'system') {
+    return systemMsgHtml(m);
+  }
+
   const fromMe = m.sourceAgent === null || m.sourceAgent === 'dashboard';
   const fromAgent = fromMe ? null : m.sourceAgent;
   const toAgent = m.targetAgent;
@@ -178,6 +184,21 @@ function msgHtml(m: DashboardMessage): string {
         <span class="time">${formatTime(m.createdAt)}</span>
       </div>
       <div class="body">${m.withdrawn ? '(withdrawn)' : renderMessageBody(m.message)}</div>
+    </div>
+  `;
+}
+
+/** Compact one-line event row used for lifecycle / system messages. */
+function systemMsgHtml(m: DashboardMessage): string {
+  // The body already includes the agent name (per the orchestrator's
+  // broadcastLifecycleEvent change). topic="lifecycle" → use the trigger
+  // banner styling; anything else falls through to plain.
+  const isLifecycle = m.topic === 'lifecycle';
+  const cls = `sys-event ${isLifecycle ? 'lifecycle' : ''}`;
+  return `
+    <div class="${cls}" data-msg-id="${m.id}">
+      <span class="body">${escapeHtml(m.message)}</span>
+      <span class="time">${formatTime(m.createdAt)}</span>
     </div>
   `;
 }
@@ -302,12 +323,20 @@ function wire(root: HTMLElement): void {
 
   const updateHint = () => {
     const parsed = parseComposer(input.value);
-    if (parsed.agent) {
-      hint.innerHTML = `Sending to <span class="target">@${escapeHtml(parsed.agent)}</span>`;
-      sendBtn.disabled = !parsed.message;
+    if (parsed.agents.length > 0) {
+      const list = parsed.agents.map((a) => `<span class="target">@${escapeHtml(a)}</span>`).join(', ');
+      const messageReady = parsed.message.length > 0;
+      hint.innerHTML = messageReady
+        ? `Sending to ${list}`
+        : `${list} — type a message`;
+      sendBtn.disabled = !messageReady;
+      sendBtn.textContent = parsed.agents.length > 1
+        ? `Send → ${parsed.agents.length}`
+        : 'Send';
     } else {
       hint.innerHTML = `No target — type <span class="target">@</span> to pick an agent.`;
       sendBtn.disabled = true;
+      sendBtn.textContent = 'Send';
     }
   };
 
@@ -486,67 +515,98 @@ function wireClearFilter(): void {
   });
 }
 
-type Parsed = { agent: string | null; message: string };
+type Parsed = { agents: string[]; message: string };
+
+/**
+ * Parse the composer: extract every leading `@name` token, the remainder
+ * is the message body. Examples:
+ *   "@a hello"              → { agents: ['a'], message: 'hello' }
+ *   "@a @b @c please look"  → { agents: ['a','b','c'], message: 'please look' }
+ *   "@a"                    → { agents: ['a'], message: '' }   (target known, msg empty)
+ *   "hello"                 → { agents: [],    message: 'hello' }
+ * Mentions appearing mid-message (after non-mention words) are NOT treated
+ * as targets — they're just inline references.
+ */
 function parseComposer(text: string): Parsed {
-  const trimmed = text.trim();
-  if (!trimmed.startsWith('@')) return { agent: null, message: trimmed };
-  const m = trimmed.match(/^@([a-zA-Z0-9_\-/]+)\s+([\s\S]+)$/);
-  if (!m) return { agent: null, message: trimmed };
-  return { agent: m[1]!, message: m[2]!.trim() };
+  let rest = text.replace(/^\s+/, '');
+  const agents: string[] = [];
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const m = rest.match(/^@([a-zA-Z0-9_\-/]+)(\s+|$)/);
+    if (!m) break;
+    if (!agents.includes(m[1]!)) agents.push(m[1]!);
+    rest = rest.slice(m[0].length).replace(/^\s+/, '');
+  }
+  return { agents, message: rest.trim() };
 }
 
 async function handleSend(input: HTMLTextAreaElement): Promise<void> {
   const parsed = parseComposer(input.value);
-  if (!parsed.agent || !parsed.message) return;
+  if (parsed.agents.length === 0 || !parsed.message) return;
 
-  // Optimistic message — appears immediately, replaced when WS broadcast arrives.
-  const optimisticId = -Date.now();
+  // Fan out — append one optimistic row per recipient, fire one POST per
+  // recipient. Each lives in its own thread so the merge view shows them
+  // as parallel entries. Failures get individual toasts; the others still
+  // go through.
   const now = new Date().toISOString();
-  const optimistic: DashboardMessage = {
-    id: optimisticId,
-    agent: parsed.agent,
-    direction: 'to_agent',
-    sourceAgent: null,
-    targetAgent: parsed.agent,
-    topic: 'general',
-    message: parsed.message,
-    queueId: null,
-    deliveryStatus: 'pending',
-    withdrawn: false,
-    createdAt: now,
-  };
-  const list = state.threads[parsed.agent] ?? [];
-  list.push(optimistic);
-  state.threads[parsed.agent] = list;
+  const pending: Array<{ agent: string; optimisticId: number; list: DashboardMessage[] }> = [];
+  let stamp = Date.now();
+  for (const agent of parsed.agents) {
+    const optimisticId = -(stamp++);
+    const optimistic: DashboardMessage = {
+      id: optimisticId,
+      agent,
+      direction: 'to_agent',
+      sourceAgent: null,
+      targetAgent: agent,
+      topic: 'general',
+      message: parsed.message,
+      queueId: null,
+      deliveryStatus: 'pending',
+      withdrawn: false,
+      createdAt: now,
+    };
+    const list = state.threads[agent] ?? [];
+    list.push(optimistic);
+    state.threads[agent] = list;
+    pending.push({ agent, optimisticId, list });
+  }
   renderThread();
   input.value = '';
   const hint = document.querySelector<HTMLElement>('[data-target-hint]');
-  if (hint) hint.innerHTML = `No target — start with <span class="target">@agent</span> to send.`;
+  if (hint) hint.innerHTML = `No target — type <span class="target">@</span> to pick an agent.`;
   const sendBtn = document.querySelector<HTMLButtonElement>('[data-send]');
-  if (sendBtn) sendBtn.disabled = true;
+  if (sendBtn) { sendBtn.disabled = true; sendBtn.textContent = 'Send'; }
 
-  try {
-    const target = parsed.agent.includes(':') || parsed.agent.includes('/')
-      ? parsed.agent
-      : `agent:${parsed.agent}`;
-    const res = await fetch('/api/dashboard/send', {
-      method: 'POST',
-      headers: authHeaders(),
-      body: JSON.stringify({ agent: target, message: parsed.message, topic: 'general' }),
-    });
-    if (!res.ok) {
-      // remove optimistic on failure
+  let okCount = 0;
+  let failCount = 0;
+  await Promise.all(pending.map(async ({ agent, optimisticId, list }) => {
+    try {
+      const target = agent.includes(':') || agent.includes('/') ? agent : `agent:${agent}`;
+      const res = await fetch('/api/dashboard/send', {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({ agent: target, message: parsed.message, topic: 'general' }),
+      });
+      if (!res.ok) {
+        const idx = list.findIndex((m) => m.id === optimisticId);
+        if (idx >= 0) list.splice(idx, 1);
+        failCount++;
+        const body = await res.json().catch(() => null);
+        toast(`@${agent}: ${body?.error ?? 'send failed'}`, 'error');
+      } else {
+        okCount++;
+      }
+    } catch {
       const idx = list.findIndex((m) => m.id === optimisticId);
       if (idx >= 0) list.splice(idx, 1);
-      renderThread();
-      const body = await res.json().catch(() => null);
-      toast(body?.error ?? 'Send failed', 'error');
+      failCount++;
+      toast(`@${agent}: network error`, 'error');
     }
-  } catch (err) {
-    const idx = list.findIndex((m) => m.id === optimisticId);
-    if (idx >= 0) list.splice(idx, 1);
-    renderThread();
-    toast('Network error', 'error');
+  }));
+  renderThread();
+  if (okCount > 1 && failCount === 0) {
+    toast(`Sent to ${okCount} agents`);
   }
 }
 

@@ -2448,9 +2448,12 @@ function broadcastAgentUpdate(ctx: RouteContext, agentName: string): void {
 
 /** Insert a lifecycle event as a system message in the agent's chat thread and broadcast it. */
 function broadcastLifecycleEvent(ctx: RouteContext, agentName: string, label: string): void {
-  const msg = ctx.db.addDashboardMessage(agentName, 'from_agent', `[system] ${label}`, {
+  // Include the agent name in the body so the dashboard can render it
+  // even outside the agent's own thread (e.g. in the merged chat view).
+  const msg = ctx.db.addDashboardMessage(agentName, 'from_agent', `${agentName} ${label.toLowerCase()}`, {
     topic: 'lifecycle',
     sourceAgent: 'system',
+    targetAgent: agentName,
   });
   ctx.wss.broadcast(JSON.stringify({ type: 'message', msg }));
 }
