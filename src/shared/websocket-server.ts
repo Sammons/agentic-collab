@@ -29,6 +29,8 @@ export type WsClient = {
   alive: boolean;
   /** Negotiated permessage-deflate; outbound payloads ≥ threshold compress. */
   compress: boolean;
+  /** Per-connection attributes the caller stashed at handshake time. */
+  attrs: Record<string, unknown>;
 };
 
 export class WebSocketServer {
@@ -58,7 +60,7 @@ export class WebSocketServer {
   /**
    * Handle an HTTP upgrade request. Call this from the server's 'upgrade' event.
    */
-  handleUpgrade(req: IncomingMessage, socket: Duplex, _head: Buffer): boolean {
+  handleUpgrade(req: IncomingMessage, socket: Duplex, _head: Buffer, attrs: Record<string, unknown> = {}): boolean {
     const key = req.headers['sec-websocket-key'];
     if (!key) {
       socket.destroy();
@@ -88,6 +90,7 @@ export class WebSocketServer {
       socket,
       alive: true,
       compress: !!deflate,
+      attrs,
     };
 
     this.clients.set(client.id, client);

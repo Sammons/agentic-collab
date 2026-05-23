@@ -56,6 +56,57 @@ export const state: DashboardState = {
   token: null,
 };
 
+/* ── threads cache (ETag-style delta init) ─────────────────────────── */
+
+const THREADS_CACHE_KEY = 'orchestrator_threads_v3';
+const THREADS_WATERMARK_KEY = 'orchestrator_threads_max_id_v3';
+const CACHE_PER_AGENT_CAP = 200;
+
+/**
+ * Best-effort restore of cached threads + max-seen message id from
+ * localStorage so the chat can render immediately on cold reload and the
+ * server can return just the deltas since `sinceMessageId`. On any
+ * read/parse error we silently fall back to an empty cache.
+ */
+export function loadCachedThreads(): { threads: Record<string, DashboardMessage[]>; sinceMessageId: number } {
+  try {
+    const raw = localStorage.getItem(THREADS_CACHE_KEY);
+    const wm = parseInt(localStorage.getItem(THREADS_WATERMARK_KEY) ?? '0', 10) || 0;
+    if (!raw) return { threads: {}, sinceMessageId: 0 };
+    const parsed = JSON.parse(raw) as Record<string, DashboardMessage[]>;
+    return { threads: parsed, sinceMessageId: wm };
+  } catch {
+    return { threads: {}, sinceMessageId: 0 };
+  }
+}
+
+/**
+ * Persist threads + watermark to localStorage. We cap each agent's thread
+ * to the most recent CACHE_PER_AGENT_CAP entries so the serialized blob
+ * stays under the ~5 MB localStorage quota even with many agents. On
+ * QuotaExceededError we drop the cache rather than throw.
+ */
+export function persistCachedThreads(): void {
+  try {
+    const capped: Record<string, DashboardMessage[]> = {};
+    let maxId = 0;
+    for (const [agent, msgs] of Object.entries(state.threads)) {
+      const positive = msgs.filter((m) => m.id > 0);
+      capped[agent] = positive.slice(-CACHE_PER_AGENT_CAP);
+      for (const m of capped[agent]!) if (m.id > maxId) maxId = m.id;
+    }
+    localStorage.setItem(THREADS_CACHE_KEY, JSON.stringify(capped));
+    localStorage.setItem(THREADS_WATERMARK_KEY, String(maxId));
+  } catch {
+    // Quota exceeded or storage unavailable — clear so we don't carry a
+    // partially-written blob.
+    try {
+      localStorage.removeItem(THREADS_CACHE_KEY);
+      localStorage.removeItem(THREADS_WATERMARK_KEY);
+    } catch {}
+  }
+}
+
 /* ── pub/sub event bus ─────────────────────────────────────────────── */
 
 type Listener = (detail?: unknown) => void;

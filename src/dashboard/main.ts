@@ -10,7 +10,7 @@
  * The sidebar re-renders automatically on init/agents-changed/teams-changed
  * /selection-changed/route-changed events via state.ts's pub/sub bus.
  */
-import { loadToken } from './state.ts';
+import { loadToken, loadCachedThreads, state } from './state.ts';
 import { setupRouter } from './routing.ts';
 import { setupSidebar } from './sidebar.ts';
 import { setupChat } from './chat.ts';
@@ -24,6 +24,12 @@ import { connect } from './connection.ts';
 
 function boot(): void {
   loadToken();
+  // Restore cached threads BEFORE wiring routes so the merged feed has
+  // something to render against immediately on cold reload, even before
+  // the WS delta init lands. The selection restore below intersects with
+  // the *cached* agent names too so the user lands on their last view.
+  const cached = loadCachedThreads();
+  state.threads = cached.threads;
   // Register route renderers BEFORE setupRouter() so initial render uses them.
   setupChat();
   setupAgents();

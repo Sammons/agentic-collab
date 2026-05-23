@@ -385,7 +385,11 @@ server.on('upgrade', (req, socket, head) => {
       socket.destroy();
       return;
     }
-    wss.handleUpgrade(req, socket, head);
+    // Delta init: client passes its max-seen dashboard_messages.id so we
+    // only send the new rows since last sync. 0/missing → cold init.
+    const sinceRaw = url.searchParams.get('sinceMessageId');
+    const sinceMessageId = sinceRaw !== null ? Math.max(0, parseInt(sinceRaw, 10) || 0) : 0;
+    wss.handleUpgrade(req, socket, head, { sinceMessageId });
   } else if (url.pathname === '/ws/voice') {
     if (!checkAuth()) {
       socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
@@ -406,7 +410,17 @@ server.on('upgrade', (req, socket, head) => {
 // On WS connect, send init event
 wss.onConnect((client) => {
   const agents = db.listAgents();
-  const threads = db.getDashboardThreads();
+  // Delta init: the client may pass its max-seen message id via
+  // ?sinceMessageId=N. If present and non-zero, we ship just the rows
+  // that have appeared since (typically tiny). Otherwise we cold-load
+  // with the standard 200-per-agent window.
+  const sinceMessageId = typeof client.attrs['sinceMessageId'] === 'number'
+    ? client.attrs['sinceMessageId'] as number
+    : 0;
+  const threads = sinceMessageId > 0
+    ? db.getDashboardThreadsSince(sinceMessageId)
+    : db.getDashboardThreads();
+  const maxMessageId = db.getMaxDashboardMessageId();
   const rawProxies = db.listProxies();
   const unreadCounts = db.getUnreadCounts();
   // Enrich proxies with version match status
@@ -440,6 +454,11 @@ wss.onConnect((client) => {
     stores,
     destinations,
     teams,
+    // Watermark the client echoes back as ?sinceMessageId=N on next reload.
+    maxMessageId,
+    // Signal whether `threads` is a full window (cold init) or just deltas
+    // since the client's sinceMessageId. The dashboard merges accordingly.
+    threadsAreDelta: sinceMessageId > 0,
   }));
 });
 
