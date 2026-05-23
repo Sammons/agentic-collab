@@ -13,6 +13,7 @@
 import type { AgentRecord, DashboardMessage, Reminder, ApprovalRow, PageRecord } from '../shared/types.ts';
 import { state, on, authHeaders } from './state.ts';
 import { registerRoute, go } from './routing.ts';
+import { focusMessage } from './chat.ts';
 
 type Hit =
   | { kind: 'agent';     score: number; matched: string[]; record: AgentRecord }
@@ -291,7 +292,7 @@ function resultHtml(h: Hit): string {
       const who = m.sourceAgent ?? 'you';
       const to = m.targetAgent ?? '—';
       return `
-        <div class="sr-result message" data-kind="message">
+        <div class="sr-result message" data-kind="message" data-msg-id="${m.id}" data-msg-agent="${escapeHtml(m.agent)}">
           <span class="dot"></span>
           <div class="body">
             <div class="hdr">
@@ -362,6 +363,21 @@ function wireResults(scope: HTMLElement): void {
     el.addEventListener('click', () => {
       const name = el.dataset['go']!;
       go({ kind: 'watch', agentName: name });
+    });
+  });
+  scope.querySelectorAll<HTMLElement>('.sr-result.message').forEach((el) => {
+    el.addEventListener('click', () => {
+      const id = Number(el.dataset['msgId']);
+      const agentName = el.dataset['msgAgent'];
+      if (!Number.isFinite(id)) return;
+      // Make sure the thread is in the merged feed: add the agent to the
+      // sidebar selection if it isn't already. Chat re-reads state on
+      // route entry, no emit needed.
+      if (agentName && !state.selectedAgents.has(agentName)) {
+        state.selectedAgents.add(agentName);
+      }
+      focusMessage(id);
+      go({ kind: 'dashboard' });
     });
   });
   scope.querySelectorAll<HTMLElement>('.sr-result.approval').forEach((el) => {

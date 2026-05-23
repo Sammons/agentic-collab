@@ -148,6 +148,17 @@
   opacity: 0.45;
   font-style: italic;
 }
+/* Transient highlight when a search result jumps to a specific message. */
+.chat-pane .msg.focus-flash {
+  background: var(--clay-soft);
+  border-radius: 4px;
+  animation: msg-focus-flash 1.6s ease-out;
+}
+@keyframes msg-focus-flash {
+  0%   { background: rgba(184,90,58,0.20); }
+  60%  { background: rgba(184,90,58,0.12); }
+  100% { background: transparent; }
+}
 
 .chat-pane .msg .body .mention {
   color: var(--steel);

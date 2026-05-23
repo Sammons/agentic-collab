@@ -127,8 +127,32 @@ function renderThread(): void {
   root.innerHTML = merged.map((m) => msgHtml(m)).join('');
   wireProfileTriggers(root);
 
-  // Scroll to bottom on render (newest at bottom).
-  root.scrollTop = root.scrollHeight;
+  // If a search result asked us to focus a specific message, scroll to it
+  // and add a transient highlight class. Otherwise default to bottom.
+  if (pendingFocusId !== null) {
+    const target = root.querySelector<HTMLElement>(`[data-msg-id="${pendingFocusId}"]`);
+    if (target) {
+      target.scrollIntoView({ block: 'center', behavior: 'auto' });
+      target.classList.add('focus-flash');
+      setTimeout(() => target.classList.remove('focus-flash'), 1800);
+    } else {
+      // Not in the rendered set — fall back to bottom.
+      root.scrollTop = root.scrollHeight;
+    }
+    pendingFocusId = null;
+  } else {
+    root.scrollTop = root.scrollHeight;
+  }
+}
+
+let pendingFocusId: number | null = null;
+
+/**
+ * Request that the next chat render scrolls to + highlights a specific
+ * message id. Called by search.ts when the user clicks a message result.
+ */
+export function focusMessage(id: number): void {
+  pendingFocusId = id;
 }
 
 // Threads whose name isn't a registered agent but still belongs in the
