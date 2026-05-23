@@ -36,6 +36,8 @@ export type DashboardState = {
   teams: Team[];
   /** Threads keyed by agent name. v3 merges these for the chat view. */
   threads: Record<string, DashboardMessage[]>;
+  /** O(1) lookup for message dedup — avoids O(n) scans on every WS message. */
+  seenMessageIds: Set<number>;
   /** Which agent names are currently "on" in the sidebar filter. */
   selectedAgents: Set<string>;
   /** WebSocket connection health. */
@@ -50,6 +52,7 @@ export const state: DashboardState = {
   agents: [],
   teams: [],
   threads: {},
+  seenMessageIds: new Set<number>(),
   selectedAgents: new Set<string>(),
   connected: 'connecting',
   route: { kind: 'dashboard' },

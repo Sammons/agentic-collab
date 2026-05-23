@@ -213,6 +213,13 @@ function handle(msg: WsEvent): void {
       } else {
         state.threads = incoming;
       }
+      // Rebuild seenMessageIds for O(1) dedup on incoming messages
+      state.seenMessageIds.clear();
+      for (const msgs of Object.values(state.threads)) {
+        for (const m of msgs) {
+          if (m.id > 0) state.seenMessageIds.add(m.id);
+        }
+      }
       persistCachedThreads();
       restoreSelectionOnInit();
       emit('init');
@@ -250,27 +257,31 @@ function handle(msg: WsEvent): void {
     }
     case 'message': {
       const u = msg as Extract<WsEvent, { type: 'message' }>;
-      const agentName = u.msg.agent;
-      const list = state.threads[agentName] ?? [];
-      // Idempotent: skip if we've already seen this id (HTTP-fallback path).
-      if (list.some((m) => m.id === u.msg.id)) {
-        state.threads[agentName] = list;
+      const msgId = u.msg.id;
+      // O(1) idempotent check — skip if we've already seen this id
+      if (msgId > 0 && state.seenMessageIds.has(msgId)) {
         break;
       }
+      const agentName = u.msg.agent;
+      const list = state.threads[agentName] ?? [];
       // Dedupe optimistic→real: when an outbound message we sent comes back
-      // from the server, replace the negative-id optimistic row in place
-      // instead of pushing a duplicate.
-      const optimisticIdx = list.findIndex((m) =>
-        m.id < 0 &&
-        m.agent === u.msg.agent &&
-        m.message === u.msg.message &&
-        m.direction === u.msg.direction,
-      );
-      if (optimisticIdx >= 0) {
-        list[optimisticIdx] = u.msg;
-      } else {
+      // from the server, replace the negative-id optimistic row in place.
+      // Optimistic messages have negative IDs so they're few — linear scan is fine.
+      let replaced = false;
+      if (msgId > 0) {
+        for (let i = list.length - 1; i >= 0 && i >= list.length - 10; i--) {
+          const m = list[i];
+          if (m.id < 0 && m.agent === u.msg.agent && m.message === u.msg.message && m.direction === u.msg.direction) {
+            list[i] = u.msg;
+            replaced = true;
+            break;
+          }
+        }
+      }
+      if (!replaced) {
         list.push(u.msg);
       }
+      if (msgId > 0) state.seenMessageIds.add(msgId);
       state.threads[agentName] = list;
       schedulePersist();
       emit('message', u.msg);
