@@ -304,15 +304,33 @@ function msgHtml(m: DashboardMessage): string {
   return `
     <div class="${cls.join(' ')}" data-msg-id="${m.id}">
       <div class="head">
-        <span class="who" data-profile-for="${escapeHtml(fromAgent ?? '')}">${escapeHtml(whoLabel)}</span>
+        <span class="who" data-profile-for="${escapeHtml(fromAgent ?? '')}">${statusDot(fromAgent)}${escapeHtml(whoLabel)}</span>
         <span class="arrow">→</span>
-        <span class="to" data-profile-for="${escapeHtml(toAgent ?? '')}">${escapeHtml(toLabel)}</span>
+        <span class="to" data-profile-for="${escapeHtml(toAgent ?? '')}">${statusDot(toAgent)}${escapeHtml(toLabel)}</span>
         <span class="topic ${topic === 'general' ? 'default' : ''}" title="topic">#${escapeHtml(topic)}</span>
         <span class="time">${formatTime(m.createdAt)}</span>
       </div>
       <div class="body">${m.withdrawn ? '(withdrawn)' : renderMessageBody(m.message)}</div>
     </div>
   `;
+}
+
+/**
+ * Spawn-status dot rendered before an agent name in a chat head. Green for
+ * running (active/idle/spawning/resuming), grey amber for transient, red for
+ * suspended/failed. Returns '' for non-agent participants ("you", "dashboard",
+ * "system", ephemeral instance addresses) so the head stays clean.
+ */
+function statusDot(agentName: string | null | undefined): string {
+  if (!agentName) return '';
+  if (agentName === 'dashboard' || agentName === 'system') return '';
+  const a = state.agents.find((x) => x.name === agentName);
+  if (!a) return ''; // ephemeral / unknown — no dot
+  let cls = 'void';
+  if (['active', 'idle', 'spawning', 'resuming'].includes(a.state)) cls = 'on';
+  else if (['suspending'].includes(a.state)) cls = 'transient';
+  else if (['suspended', 'failed'].includes(a.state)) cls = 'off';
+  return `<span class="status-dot ${cls}" title="${escapeHtml(a.state)}"></span>`;
 }
 
 /** Compact one-line event row used for lifecycle / system messages. */
@@ -330,7 +348,7 @@ function systemMsgHtml(m: DashboardMessage): string {
   return `
     <div class="${cls}" data-msg-id="${m.id}">
       <span class="body">
-        <span class="who" data-profile-for="${escapeHtml(m.agent ?? '')}">${escapeHtml(m.agent ?? '')}</span>
+        <span class="who" data-profile-for="${escapeHtml(m.agent ?? '')}">${statusDot(m.agent)}${escapeHtml(m.agent ?? '')}</span>
         <span class="rest">${escapeHtml(text.slice((m.agent ?? '').length).trim())}</span>
       </span>
       <span class="time">${formatTime(m.createdAt)}</span>
@@ -391,32 +409,81 @@ function openProfilePopover(anchor: HTMLElement, agentName: string): void {
   const pop = document.createElement('div');
   pop.className = 'profile-pop';
   const kindClass = kindOf(agentName) === 'per' ? 'per' : '';
+
+  // Stat shape:
+  //  - message count is from the live cache (cap-200 per agent today),
+  //    so it's "messages currently visible" rather than lifetime — close
+  //    enough for a quick scan.
+  //  - lastActivity comes from the heartbeat path; null when never spawned.
+  //  - createdAt is the row creation; "started" is approximated as the
+  //    most recent of those two so the popover shows when the agent was
+  //    last brought up.
+  const msgCount = (state.threads[agentName] ?? []).filter((m) => m.id > 0).length;
+  const lastActive = agent.lastActivity ? relativeTime(agent.lastActivity) : 'never';
+  const startedRaw = agent.lastActivity ?? agent.createdAt;
+  const started = startedRaw ? relativeTime(startedRaw) : '—';
+  const proxy = agent.proxyId ?? 'none';
+  const cwd = agent.cwd ?? '—';
+
+  // Action availability — keyed by current state. Suspending/resuming are
+  // transient: hide both controls so the user doesn't issue conflicting
+  // requests against an in-flight transition.
+  const isRunning = ['active', 'idle', 'spawning'].includes(agent.state);
+  const isTransient = ['suspending', 'resuming'].includes(agent.state);
+  const canStart = !isRunning && !isTransient;
+  const canKill = isRunning;
+  // Suspended state takes the /resume endpoint; everything else uses /spawn.
+  const startVerb = agent.state === 'suspended' ? 'Resume' : 'Start';
+  const startAction = agent.state === 'suspended' ? 'resume' : 'spawn';
+
   pop.innerHTML = `
     <div class="ph">
-      <div class="kind ${kindClass}">${agent.engine ?? 'persistent'} · ${agent.state ?? 'unknown'}</div>
+      <div class="kind ${kindClass}">${escapeHtml(agent.engine ?? 'persistent')} · ${escapeHtml(agent.state ?? 'unknown')}</div>
       <h2 class="nm">${escapeHtml(agent.name)}</h2>
     </div>
     <div class="meta">
       <span class="k">Address</span><span class="v mono">agent:${escapeHtml(agent.name)}</span>
-      <span class="k">CWD</span><span class="v mono">${escapeHtml(agent.cwd ?? '—')}</span>
+      <span class="k">CWD</span><span class="v mono trunc" title="${escapeHtml(cwd)}">${escapeHtml(cwd)}</span>
       <span class="k">Engine</span><span class="v">${escapeHtml(agent.engine ?? '—')}${agent.model ? ` · ${escapeHtml(agent.model)}` : ''}</span>
-      <span class="k">State</span><span class="v">${escapeHtml(agent.state)}</span>
+      <span class="k">Proxy</span><span class="v mono">${escapeHtml(proxy)}</span>
+      <span class="k">Messages</span><span class="v">${msgCount.toLocaleString()}</span>
+      <span class="k">Last active</span><span class="v">${escapeHtml(lastActive)}</span>
+      <span class="k">Started</span><span class="v">${escapeHtml(started)}</span>
+      ${agent.spawnCount > 0 ? `<span class="k">Spawns</span><span class="v">${agent.spawnCount}×</span>` : ''}
     </div>
-    <div class="pa">
+    <div class="pa primary">
+      ${canStart ? `<button class="btn primary" data-pop-start>${startVerb}</button>` : ''}
+      ${canKill  ? `<button class="btn" data-pop-kill>Kill</button>` : ''}
       <button class="btn ghost" data-pop-watch>Watch</button>
+      <button class="btn ghost" data-pop-persona>Persona</button>
+    </div>
+    <div class="pa secondary">
       <button class="btn ghost" data-pop-filter>Filter chat</button>
       <button class="btn ghost" data-pop-copy>Copy address</button>
     </div>
   `;
 
-  // Position near anchor.
-  const rect = anchor.getBoundingClientRect();
-  pop.style.position = 'fixed';
-  pop.style.top = `${Math.max(rect.bottom + 6, 12)}px`;
-  pop.style.left = `${Math.max(rect.left - 8, 12)}px`;
-
+  // Position near anchor. Append first so we can measure, then clamp to
+  // viewport so an anchor near the right edge doesn't push the popover
+  // off-screen now that we're 360px wide. On narrow viewports the CSS
+  // @media rule overrides this to pin the popover as a bottom sheet.
   document.body.appendChild(pop);
   activePop = pop;
+  pop.style.position = 'fixed';
+  const rect = anchor.getBoundingClientRect();
+  const popRect = pop.getBoundingClientRect();
+  const margin = 12;
+  let top = rect.bottom + 6;
+  let left = rect.left - 8;
+  // Flip above the anchor if there's not enough room below.
+  if (top + popRect.height > window.innerHeight - margin && rect.top - popRect.height - 6 > margin) {
+    top = rect.top - popRect.height - 6;
+  }
+  // Clamp horizontally so the right edge stays inside the viewport.
+  left = Math.min(left, window.innerWidth - popRect.width - margin);
+  left = Math.max(left, margin);
+  pop.style.top = `${top}px`;
+  pop.style.left = `${left}px`;
 
   pop.addEventListener('click', (e) => e.stopPropagation());
   pop.querySelector<HTMLElement>('[data-pop-watch]')?.addEventListener('click', () => {
@@ -436,6 +503,55 @@ function openProfilePopover(anchor: HTMLElement, agentName: string): void {
     toast('Address copied');
     closeProfilePopover();
   });
+  pop.querySelector<HTMLElement>('[data-pop-start]')?.addEventListener('click', () => {
+    void lifecycleAction(agentName, startAction, startVerb.toLowerCase() + 'ing');
+    closeProfilePopover();
+  });
+  pop.querySelector<HTMLElement>('[data-pop-kill]')?.addEventListener('click', () => {
+    void lifecycleAction(agentName, 'kill', 'killing');
+    closeProfilePopover();
+  });
+  pop.querySelector<HTMLElement>('[data-pop-persona]')?.addEventListener('click', async () => {
+    closeProfilePopover();
+    const { openEditPersonaModal } = await import('./overlays.ts');
+    openEditPersonaModal(agentName);
+  });
+}
+
+async function lifecycleAction(name: string, action: string, gerund: string): Promise<void> {
+  try {
+    const res = await fetch(`/api/agents/${encodeURIComponent(name)}/${action}`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({}),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => null);
+      toast(`${gerund} failed: ${body?.error ?? res.status}`);
+      return;
+    }
+    toast(`${name} ${gerund}…`);
+  } catch {
+    toast('Network error');
+  }
+}
+
+function relativeTime(iso: string): string {
+  try {
+    const t = Date.parse(iso);
+    if (!Number.isFinite(t)) return '—';
+    const dt = Date.now() - t;
+    if (dt < 0) return 'just now';
+    const sec = Math.floor(dt / 1000);
+    if (sec < 60) return `${sec}s ago`;
+    const min = Math.floor(sec / 60);
+    if (min < 60) return `${min}m ago`;
+    const hr = Math.floor(min / 60);
+    if (hr < 24) return `${hr}h ago`;
+    const day = Math.floor(hr / 24);
+    if (day < 14) return `${day}d ago`;
+    return new Date(t).toLocaleDateString();
+  } catch { return '—'; }
 }
 
 function closeProfilePopover(): void {
