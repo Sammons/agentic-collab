@@ -84,10 +84,20 @@ export function emit(event: string, detail?: unknown): void {
 
 /* ── selection helpers ─────────────────────────────────────────────── */
 
+const SELECTION_KEY = 'orchestrator_selection_v3';
+
+/** Persist the current selection so reloads land on the same view. */
+function persistSelection(): void {
+  try {
+    localStorage.setItem(SELECTION_KEY, JSON.stringify([...state.selectedAgents]));
+  } catch {}
+}
+
 /** Toggle a single agent in the sidebar selection. */
 export function toggleAgentSelected(name: string): void {
   if (state.selectedAgents.has(name)) state.selectedAgents.delete(name);
   else state.selectedAgents.add(name);
+  persistSelection();
   emit('selection-changed');
 }
 
@@ -99,6 +109,7 @@ export function toggleTeam(team: Team): void {
   } else {
     for (const m of team.members) state.selectedAgents.add(m);
   }
+  persistSelection();
   emit('selection-changed');
 }
 
@@ -109,12 +120,25 @@ export function toggleAllAgents(): void {
   } else {
     for (const a of state.agents) state.selectedAgents.add(a.name);
   }
+  persistSelection();
   emit('selection-changed');
 }
 
-/** Mark all agents as initially selected (called on init). */
-export function selectAllAgentsInitial(): void {
-  state.selectedAgents = new Set(state.agents.map((a) => a.name));
+/**
+ * Restore the user's last selection from localStorage (intersected with the
+ * currently-known agents so we drop names that no longer exist). If nothing
+ * was previously persisted we leave the selection empty — the user picks an
+ * agent or team to view, mirroring v2's "one-selected-thread" feel and
+ * keeping the merged-feed DOM tractable even with many agents.
+ */
+export function restoreSelectionOnInit(): void {
+  let stored: string[] = [];
+  try {
+    const raw = localStorage.getItem(SELECTION_KEY);
+    if (raw) stored = JSON.parse(raw) as string[];
+  } catch {}
+  const known = new Set(state.agents.map((a) => a.name));
+  state.selectedAgents = new Set(stored.filter((n) => known.has(n)));
   emit('selection-changed');
 }
 
