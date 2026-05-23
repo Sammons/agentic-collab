@@ -18,7 +18,8 @@ import type {
   DestinationRecord,
 } from '../shared/types.ts';
 import { on, authHeaders } from './state.ts';
-import { registerRoute } from './routing.ts';
+import { registerRoute, go } from './routing.ts';
+import type { Route } from './state.ts';
 
 let configs: EngineConfigRecord[] = [];
 let pages: PageRecord[] = [];
@@ -28,6 +29,7 @@ const detachers: Array<() => void> = [];
 
 export function setupSettings(): void {
   registerRoute('settings', render);
+  registerRoute('edit-engine', renderEditEngine);
 }
 
 function render(root: HTMLElement): void {
@@ -354,8 +356,9 @@ function wireSections(scope: HTMLElement): void {
       switch (act) {
         case 'edit-engine': {
           const name = btn.dataset['name']!;
-          const cfg = configs.find((c) => c.name === name);
-          if (cfg) openEngineConfigEditor(cfg);
+          // Navigate to the dedicated editor page (more room than a modal).
+          const { go } = await import('./routing.ts');
+          go({ kind: 'edit-engine', name });
           return;
         }
         case 'delete-engine': {
@@ -493,18 +496,69 @@ function escapeHtml(s: string): string {
  * "Advanced JSON" textarea for everything else so the operator can fine-
  * tune without having to remember the column names.
  */
-function openEngineConfigEditor(cfg: EngineConfigRecord): void {
-  // Pull out the JSON-stringified fields into an "advanced" blob.
-  const advancedKeys = [
-    'hookStart', 'hookResume', 'hookCompact', 'hookExit', 'hookInterrupt',
-    'hookReload', 'hookSubmit', 'indicators', 'detection', 'customButtons',
-    'launchEnv',
-  ] as const;
+/* ── Edit engine — full-page editor ─────────────────────────────────── */
+
+const ADVANCED_KEYS = [
+  'hookStart', 'hookResume', 'hookCompact', 'hookExit', 'hookInterrupt',
+  'hookReload', 'hookSubmit', 'indicators', 'detection', 'customButtons',
+  'launchEnv',
+] as const;
+const STRING_ADVANCED_KEYS = [
+  'hookStart','hookResume','hookCompact','hookExit','hookInterrupt',
+  'hookReload','hookSubmit','indicators','detection','customButtons',
+];
+
+function renderEditEngine(root: HTMLElement, route: Route): void {
+  if (route.kind !== 'edit-engine') return;
+  const name = route.name;
+
+  root.innerHTML = `
+    <div class="ee-page">
+      <div class="ee-hdr">
+        <button class="back" data-back>← Back to settings</button>
+        <div class="title-block">
+          <div class="super"><span>Settings</span> <span class="crumb-arrow">/</span> <span>Engine configs</span></div>
+          <h1 class="title">${escapeHtml(name)}</h1>
+          <code class="api-hint">PUT /api/engine-configs/${escapeHtml(name)}</code>
+        </div>
+        <div class="right">
+          <button class="btn" data-cancel>Cancel</button>
+          <button class="btn primary" data-submit>Save changes</button>
+        </div>
+      </div>
+      <div class="ee-body" data-body>
+        <div class="ee-loading">Loading…</div>
+      </div>
+    </div>
+  `;
+
+  root.querySelector<HTMLElement>('[data-back]')?.addEventListener('click', () => go({ kind: 'settings' }));
+  root.querySelector<HTMLElement>('[data-cancel]')?.addEventListener('click', () => go({ kind: 'settings' }));
+
+  void hydrateEditEngine(root, name);
+}
+
+async function hydrateEditEngine(root: HTMLElement, name: string): Promise<void> {
+  const body = root.querySelector<HTMLElement>('[data-body]');
+  if (!body) return;
+  let cfg: EngineConfigRecord;
+  try {
+    const res = await fetch(`/api/engine-configs/${encodeURIComponent(name)}`, { headers: authHeaders() });
+    if (!res.ok) {
+      body.innerHTML = `<div class="ee-error">Could not load <code>${escapeHtml(name)}</code> (${res.status}).</div>`;
+      return;
+    }
+    cfg = await res.json() as EngineConfigRecord;
+  } catch {
+    body.innerHTML = `<div class="ee-error">Network error loading <code>${escapeHtml(name)}</code>.</div>`;
+    return;
+  }
+
+  // Split the persisted JSON-string fields back into a single editable blob.
   const advanced: Record<string, unknown> = {};
-  for (const k of advancedKeys) {
+  for (const k of ADVANCED_KEYS) {
     const v = (cfg as Record<string, unknown>)[k];
     if (v === undefined || v === null || v === '') continue;
-    // Most fields are JSON strings; launchEnv may be an object already.
     if (typeof v === 'string') {
       try { advanced[k] = JSON.parse(v); } catch { advanced[k] = v; }
     } else {
@@ -513,111 +567,91 @@ function openEngineConfigEditor(cfg: EngineConfigRecord): void {
   }
   const advancedJson = JSON.stringify(advanced, null, 2);
 
-  const overlay = document.createElement('div');
-  overlay.className = 'ov-backdrop';
-  overlay.innerHTML = `
-    <div class="ov-modal lg">
-      <div class="hdr">
-        <span class="ttl">Edit engine config</span>
-        <span class="sub">${escapeHtml(cfg.name)} · <code style="font-family:var(--mono);font-size:11px;color:var(--ink-2);">PUT /api/engine-configs/${escapeHtml(cfg.name)}</code></span>
-        <button class="esc">esc</button>
+  body.innerHTML = `
+    <div class="ee-grid">
+      <div class="ee-field">
+        <label>Engine</label>
+        <select class="ov-select" data-engine>
+          <option value="claude" ${cfg.engine === 'claude' ? 'selected' : ''}>claude</option>
+          <option value="codex"  ${cfg.engine === 'codex'  ? 'selected' : ''}>codex</option>
+          <option value="opencode" ${cfg.engine === 'opencode' ? 'selected' : ''}>opencode</option>
+        </select>
       </div>
-      <div class="body">
-        <div class="ov-field">
-          <label>Engine</label>
-          <select class="ov-select" data-engine>
-            <option value="claude" ${cfg.engine === 'claude' ? 'selected' : ''}>claude</option>
-            <option value="codex"  ${cfg.engine === 'codex'  ? 'selected' : ''}>codex</option>
-            <option value="opencode" ${cfg.engine === 'opencode' ? 'selected' : ''}>opencode</option>
-          </select>
-        </div>
-        <div class="ov-field">
-          <label>Model</label>
-          <input class="ov-input" type="text" data-model value="${escapeHtml(cfg.model ?? '')}" placeholder="(engine default)">
-        </div>
-        <div class="ov-field">
-          <label>Thinking</label>
-          <input class="ov-input" type="text" data-thinking value="${escapeHtml(cfg.thinking ?? '')}" placeholder="(none)">
-        </div>
-        <div class="ov-field">
-          <label>Permissions</label>
-          <input class="ov-input" type="text" data-permissions value="${escapeHtml(cfg.permissions ?? '')}" placeholder="(default)">
-        </div>
-        <div class="ov-field stack">
-          <label>Advanced (JSON)</label>
-          <div class="help" style="margin-top:0;margin-bottom:6px;">hooks · indicators · detection · customButtons · launchEnv. Edit as JSON; saved with strict parse.</div>
-          <textarea class="ov-textarea" data-advanced style="min-height:280px;">${escapeHtml(advancedJson)}</textarea>
-          <div class="help" data-parse-err style="color:var(--brick);display:none;"></div>
-        </div>
+      <div class="ee-field">
+        <label>Model</label>
+        <input class="ov-input" type="text" data-model value="${escapeHtml(cfg.model ?? '')}" placeholder="(engine default)">
       </div>
-      <div class="foot">
-        <span class="hint"><kbd>⌘</kbd> <kbd>↵</kbd> save · <kbd>esc</kbd> cancel</span>
-        <span class="spacer"></span>
-        <button class="btn" data-cancel>Cancel</button>
-        <button class="btn primary" data-submit>Save</button>
+      <div class="ee-field">
+        <label>Thinking</label>
+        <input class="ov-input" type="text" data-thinking value="${escapeHtml(cfg.thinking ?? '')}" placeholder="(none)">
+      </div>
+      <div class="ee-field">
+        <label>Permissions</label>
+        <input class="ov-input" type="text" data-permissions value="${escapeHtml(cfg.permissions ?? '')}" placeholder="(default)">
       </div>
     </div>
+    <div class="ee-advanced">
+      <label>Advanced (JSON)</label>
+      <div class="help">hooks · indicators · detection · customButtons · launchEnv. Edit as JSON; strictly parsed on save.</div>
+      <textarea class="ov-textarea" data-advanced spellcheck="false">${escapeHtml(advancedJson)}</textarea>
+      <div class="help" data-parse-err></div>
+    </div>
+    <div class="ee-foot">
+      <span class="hint"><kbd>⌘</kbd> <kbd>↵</kbd> save</span>
+    </div>
   `;
-  document.body.appendChild(overlay);
 
-  const close = () => { overlay.remove(); document.removeEventListener('keydown', esc); };
-  function esc(e: KeyboardEvent) { if (e.key === 'Escape') close(); }
-  document.addEventListener('keydown', esc);
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
-  overlay.querySelector<HTMLElement>('.esc')?.addEventListener('click', close);
-  overlay.querySelector<HTMLElement>('[data-cancel]')?.addEventListener('click', close);
-
-  const submit = async () => {
-    const engine = overlay.querySelector<HTMLSelectElement>('[data-engine]')!.value;
-    const model = overlay.querySelector<HTMLInputElement>('[data-model]')!.value.trim();
-    const thinking = overlay.querySelector<HTMLInputElement>('[data-thinking]')!.value.trim();
-    const permissions = overlay.querySelector<HTMLInputElement>('[data-permissions]')!.value.trim();
-    const advRaw = overlay.querySelector<HTMLTextAreaElement>('[data-advanced]')!.value;
+  const submit = async (): Promise<void> => {
+    const engine = body.querySelector<HTMLSelectElement>('[data-engine]')!.value;
+    const model = body.querySelector<HTMLInputElement>('[data-model]')!.value.trim();
+    const thinking = body.querySelector<HTMLInputElement>('[data-thinking]')!.value.trim();
+    const permissions = body.querySelector<HTMLInputElement>('[data-permissions]')!.value.trim();
+    const advRaw = body.querySelector<HTMLTextAreaElement>('[data-advanced]')!.value;
+    const errEl = body.querySelector<HTMLElement>('[data-parse-err]')!;
+    errEl.textContent = '';
+    errEl.classList.remove('shown');
 
     let adv: Record<string, unknown> = {};
     try { adv = advRaw.trim() ? JSON.parse(advRaw) : {}; }
     catch (err) {
-      const errEl = overlay.querySelector<HTMLElement>('[data-parse-err]')!;
-      errEl.style.display = 'block';
       errEl.textContent = `JSON parse error: ${(err as Error).message}`;
+      errEl.classList.add('shown');
       return;
     }
 
-    // Re-stringify the JSON-string fields the way the API expects.
-    const body: Record<string, unknown> = {
-      name: cfg.name,
+    const payload: Record<string, unknown> = {
+      name,
       engine,
       model: model || null,
       thinking: thinking || null,
       permissions: permissions || null,
     };
-    const stringKeys = ['hookStart','hookResume','hookCompact','hookExit','hookInterrupt','hookReload','hookSubmit','indicators','detection','customButtons'];
-    for (const k of stringKeys) {
-      body[k] = adv[k] !== undefined ? JSON.stringify(adv[k]) : null;
+    for (const k of STRING_ADVANCED_KEYS) {
+      payload[k] = adv[k] !== undefined ? JSON.stringify(adv[k]) : null;
     }
-    body['launchEnv'] = adv['launchEnv'] ?? null;
+    payload['launchEnv'] = adv['launchEnv'] ?? null;
 
     try {
-      const res = await fetch(`/api/engine-configs/${encodeURIComponent(cfg.name)}`, {
+      const res = await fetch(`/api/engine-configs/${encodeURIComponent(name)}`, {
         method: 'PUT',
         headers: authHeaders(),
-        body: JSON.stringify(body),
+        body: JSON.stringify(payload),
       });
       if (!res.ok) {
         const b = await res.json().catch(() => null);
-        const errEl = overlay.querySelector<HTMLElement>('[data-parse-err]')!;
-        errEl.style.display = 'block';
         errEl.textContent = b?.error ?? 'Save failed';
+        errEl.classList.add('shown');
         return;
       }
       showToast('Saved');
-      close();
+      go({ kind: 'settings' });
     } catch {
       showToast('Network error', 'error');
     }
   };
-  overlay.querySelector<HTMLElement>('[data-submit]')?.addEventListener('click', submit);
-  overlay.addEventListener('keydown', (e) => {
+
+  root.querySelector<HTMLElement>('[data-submit]')?.addEventListener('click', () => void submit());
+  body.querySelector<HTMLTextAreaElement>('[data-advanced]')?.addEventListener('keydown', (e) => {
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); void submit(); }
   });
 }
