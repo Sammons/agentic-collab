@@ -26,7 +26,7 @@ const STATE_PRIORITY: Record<AgentState, number> = {
   void:       5,
 };
 
-type Filter = 'all' | 'running' | 'failed' | 'no-team';
+type Filter = 'all' | 'working' | 'idle' | 'failed' | 'no-team';
 let activeFilter: Filter = 'all';
 
 export function setupAgents(): void {
@@ -108,24 +108,31 @@ function rerender(): void {
 
 function statsHtml(): string {
   const all = state.agents;
-  const running = all.filter((a) => a.state === 'active' || a.state === 'spawning' || a.state === 'resuming').length;
+  // "Working" = actively running a task. Spawning/resuming are transitional
+  // but still "working" toward becoming responsive, so we group them here.
+  const working = all.filter((a) => a.state === 'active' || a.state === 'spawning' || a.state === 'resuming').length;
+  const idle = all.filter((a) => a.state === 'idle').length;
   const failed = all.filter((a) => a.state === 'failed').length;
   return `
     <span class="num">${all.length}</span> total
     <span class="sep">·</span>
-    <span class="running">${running} running</span>
+    <span class="running">${working} working</span>
+    <span class="sep">·</span>
+    <span>${idle} idle</span>
     ${failed > 0 ? `<span class="sep">·</span><span class="urgent">${failed} failed</span>` : ''}
   `;
 }
 
 function chipsHtml(): string {
   const all = state.agents;
-  const running = all.filter((a) => a.state === 'active').length;
+  const working = all.filter((a) => a.state === 'active').length;
+  const idle = all.filter((a) => a.state === 'idle').length;
   const failed = all.filter((a) => a.state === 'failed').length;
   const noTeam = all.filter((a) => agentTeams(a.name).length === 0).length;
   return `
     <span class="chip ${activeFilter === 'all' ? 'on' : ''}" data-filter="all">All <span class="ct">${all.length}</span></span>
-    <span class="chip ${activeFilter === 'running' ? 'on' : ''}" data-filter="running">Running <span class="ct">${running}</span></span>
+    <span class="chip ${activeFilter === 'working' ? 'on' : ''}" data-filter="working">Working <span class="ct">${working}</span></span>
+    <span class="chip ${activeFilter === 'idle' ? 'on' : ''}" data-filter="idle">Idle <span class="ct">${idle}</span></span>
     <span class="chip ${activeFilter === 'failed' ? 'on' : ''}" data-filter="failed">Failed <span class="ct">${failed}</span></span>
     <span class="chip ${activeFilter === 'no-team' ? 'on' : ''}" data-filter="no-team">No team <span class="ct">${noTeam}</span></span>
   `;
@@ -136,7 +143,8 @@ function chipsHtml(): string {
 function sortedAgents(): AgentRecord[] {
   let list = state.agents.slice();
   switch (activeFilter) {
-    case 'running': list = list.filter((a) => a.state === 'active'); break;
+    case 'working': list = list.filter((a) => a.state === 'active'); break;
+    case 'idle':    list = list.filter((a) => a.state === 'idle'); break;
     case 'failed':  list = list.filter((a) => a.state === 'failed'); break;
     case 'no-team': list = list.filter((a) => agentTeams(a.name).length === 0); break;
   }
