@@ -454,11 +454,11 @@
   white-space: nowrap;
 }
 .profile-pop .pa .btn.primary {
-  background: var(--ink);
-  color: var(--paper);
-  border: 1px solid var(--ink);
+  background: var(--pill-on-bg);
+  color: var(--pill-on-fg);
+  border: 1px solid var(--pill-on-bg);
 }
-.profile-pop .pa .btn.primary:hover { background: var(--ink-2); }
+.profile-pop .pa .btn.primary:hover { filter: brightness(1.08); }
 
 /* Mobile — pin to bottom of viewport as a sheet so the popover never
    slides off-screen near the right edge. The JS still computes top/left

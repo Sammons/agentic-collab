@@ -37,6 +37,13 @@
   --clay-soft:    #b85a3a14;
   --clay-strong:  #a14d31;   /* hover/pressed */
 
+  /* Selected-pill (filter chip in "on" state). Light mode flips to ink-
+     on-cream for a stamped feel; in dark mode the inversion would land
+     on near-white, so we use a softer raised-surface instead. */
+  --pill-on-bg:       #0e0f12;
+  --pill-on-fg:       #fdf6f3;
+  --pill-on-fg-muted: #fdf6f3aa;
+
   /* working colors */
   --steel:        #345d78;
   --steel-soft:   #345d7814;
@@ -85,6 +92,12 @@
     --clay:         #c97049;
     --clay-soft:    #c970491f;
     --clay-strong:  #db8260;
+
+    /* Dark: use a raised paper surface rather than near-white ink so
+       selected chips don't blast brightness over the dark background. */
+    --pill-on-bg:       #2e3038;
+    --pill-on-fg:       #ececea;
+    --pill-on-fg-muted: #ececea99;
 
     --steel:        #7aa4c4;
     --steel-soft:   #7aa4c41f;

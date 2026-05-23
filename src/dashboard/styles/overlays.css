@@ -263,12 +263,12 @@
 }
 .ov-chip:hover { color: var(--ink); border-color: var(--rule-strong); }
 .ov-chip.on {
-  background: var(--ink);
-  color: var(--paper-card);
-  border-color: var(--ink);
+  background: var(--pill-on-bg);
+  color: var(--pill-on-fg);
+  border-color: var(--pill-on-bg);
 }
 .ov-chip .ct { color: var(--ink-4); font-size: 10.5px; }
-.ov-chip.on .ct { color: #fdf6f3aa; }
+.ov-chip.on .ct { color: var(--pill-on-fg-muted); }
 
 /* Tag list (topics) */
 .ov-tags {
@@ -337,8 +337,9 @@
   flex: 0 0 12px;
 }
 .ov-member.on .box {
-  background: var(--ink);
-  border-color: var(--ink);
+  background: var(--pill-on-bg);
+  border-color: var(--pill-on-bg);
+  color: var(--pill-on-fg);
 }
 .ov-member.on { color: var(--ink); }
 .ov-member .kind {
@@ -421,8 +422,9 @@
   color: var(--paper-card);
 }
 .ov-modal .foot .secondary-check.on .box {
-  background: var(--ink);
-  border-color: var(--ink);
+  background: var(--pill-on-bg);
+  border-color: var(--pill-on-bg);
+  color: var(--pill-on-fg);
 }
 .ov-modal .foot .secondary-check.on { color: var(--ink-2); }
 

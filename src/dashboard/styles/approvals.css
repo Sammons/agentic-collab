@@ -53,14 +53,14 @@
 }
 .ap-chips .chip:hover { color: var(--ink); border-color: var(--rule-strong); }
 .ap-chips .chip.on {
-  background: var(--ink);
-  color: var(--paper-card);
-  border-color: var(--ink);
+  background: var(--pill-on-bg);
+  color: var(--pill-on-fg);
+  border-color: var(--pill-on-bg);
 }
 .ap-chips .chip.on.urgent {
   background: var(--clay);
   border-color: var(--clay);
-  color: #fdf6f3;
+  color: var(--pill-on-fg);
 }
 .ap-chips .chip .ct {
   font-family: var(--mono);
@@ -68,7 +68,7 @@
   margin-left: 4px;
   font-weight: 400;
 }
-.ap-chips .chip.on .ct { color: rgba(253,246,243,0.65); }
+.ap-chips .chip.on .ct { color: var(--pill-on-fg-muted); }
 .ap-chips .row-label {
   font-size: 10px;
   letter-spacing: 0.12em;

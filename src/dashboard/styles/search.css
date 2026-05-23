@@ -102,15 +102,15 @@
 }
 .sr-scope-chips .chip:hover { color: var(--ink); border-color: var(--rule-strong); }
 .sr-scope-chips .chip.on {
-  background: var(--ink);
-  color: var(--paper-card);
-  border-color: var(--ink);
+  background: var(--pill-on-bg);
+  color: var(--pill-on-fg);
+  border-color: var(--pill-on-bg);
 }
 .sr-scope-chips .chip .ct {
   font-size: 10.5px;
   color: var(--ink-4);
 }
-.sr-scope-chips .chip.on .ct { color: #fdf6f3aa; }
+.sr-scope-chips .chip.on .ct { color: var(--pill-on-fg-muted); }
 
 .sr-section {
   padding: 22px 32px 4px;
