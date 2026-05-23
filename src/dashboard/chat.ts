@@ -18,7 +18,7 @@ import type { AgentRecord, DashboardMessage } from '../shared/types.ts';
 import { state, on, authHeaders } from './state.ts';
 import { registerRoute, go } from './routing.ts';
 import { openEditPersonaModal } from './overlays.ts';
-import { renderMarkdown } from './markdown.ts';
+import { renderMarkdown } from '../shared/markdown.ts';
 import { initVoice, voiceState, clearUsedFlag } from './voice.ts';
 
 // Threads whose name isn't a registered agent but still belongs in the
@@ -764,7 +764,9 @@ function wire(root: HTMLElement): void {
   const voiceBtn = root.querySelector<HTMLElement>('[data-voice-btn]');
   const voiceStatus = root.querySelector<HTMLElement>('[data-voice-status]');
   if (voiceToggle && voiceBtn && voiceStatus) {
-    void initVoice(input, voiceStatus, voiceToggle, voiceBtn);
+    initVoice(input, voiceStatus, voiceToggle, voiceBtn).then((cleanup) => {
+      detachers.push(cleanup);
+    });
   }
 }
 
@@ -1071,6 +1073,8 @@ async function handleSend(input: HTMLTextAreaElement): Promise<void> {
   if (okCount > 1 && failCount === 0) {
     toast(`Sent ${okCount} messages`);
   }
+  // Reset voice "used since send" flag so next voice session starts fresh
+  clearUsedFlag();
 }
 
 /* ── helpers ───────────────────────────────────────────────────────── */

@@ -31,13 +31,14 @@ let statusEl: HTMLElement | null = null;
  * @param status - element to show partial transcripts / status
  * @param toggleContainer - container with mode toggle buttons
  * @param pttButton - the push-to-talk button
+ * @returns cleanup function to remove event listeners
  */
 export async function initVoice(
   input: HTMLTextAreaElement,
   status: HTMLElement,
   toggleContainer: HTMLElement,
   pttButton: HTMLElement,
-): Promise<void> {
+): Promise<() => void> {
   targetInput = input;
   statusEl = status;
 
@@ -50,7 +51,7 @@ export async function initVoice(
     toggleContainer.title = window.isSecureContext
       ? 'Voice unavailable — browser does not support getUserMedia'
       : 'Voice requires HTTPS — connect via https:// or localhost';
-    return;
+    return () => {};
   }
 
   // Check server support
@@ -65,25 +66,28 @@ export async function initVoice(
         b.style.opacity = '0.4';
       });
       toggleContainer.title = 'Voice unavailable — ELEVENLABS_API_KEY not configured';
-      return;
+      return () => {};
     }
   } catch {
     // Server unreachable — hide controls
     toggleContainer.style.display = 'none';
-    return;
+    return () => {};
   }
 
   // Wire mode toggle
-  toggleContainer.addEventListener('mousedown', (e) => e.preventDefault());
-  pttButton.addEventListener('mousedown', (e) => e.preventDefault());
+  const toggleMousedown = (e: Event) => e.preventDefault();
+  const pttMousedown = (e: Event) => e.preventDefault();
+  toggleContainer.addEventListener('mousedown', toggleMousedown);
+  pttButton.addEventListener('mousedown', pttMousedown);
 
-  toggleContainer.addEventListener('click', (e) => {
+  const toggleClick = (e: Event) => {
     const b = (e.target as HTMLElement).closest('button[data-mode]') as HTMLButtonElement | null;
     if (!b || b.classList.contains('active')) return;
     const mode = b.dataset['mode'] as 'off' | 'ptt';
     setVoiceMode(mode, toggleContainer, pttButton);
     input.focus();
-  });
+  };
+  toggleContainer.addEventListener('click', toggleClick);
 
   // PTT button handlers
   const pttDown = (e: Event) => {
@@ -98,6 +102,7 @@ export async function initVoice(
     if (voiceState.mode !== 'ptt' || !voiceState.recording) return;
     commitAndStopPtt();
   };
+  const pttContextmenu = (e: Event) => e.preventDefault();
 
   pttButton.addEventListener('pointerdown', pttDown);
   pttButton.addEventListener('pointerup', pttUp);
@@ -105,25 +110,48 @@ export async function initVoice(
   pttButton.addEventListener('touchstart', pttDown, { passive: false });
   pttButton.addEventListener('touchend', pttUp);
   pttButton.addEventListener('touchcancel', pttUp);
-  pttButton.addEventListener('contextmenu', (e) => e.preventDefault());
+  pttButton.addEventListener('contextmenu', pttContextmenu);
 
   // Spacebar PTT when not in an input
-  document.addEventListener('keydown', (e) => {
+  const keydownHandler = (e: KeyboardEvent) => {
     if (e.code !== 'Space' || e.repeat || voiceState.mode !== 'ptt') return;
     const tag = (document.activeElement as HTMLElement)?.tagName;
     if (tag === 'TEXTAREA' || tag === 'INPUT' || tag === 'SELECT') return;
     if (voiceState.recording) return;
     e.preventDefault();
     startVoice();
-  });
-  document.addEventListener('keyup', (e) => {
+  };
+  const keyupHandler = (e: KeyboardEvent) => {
     if (e.code !== 'Space' || voiceState.mode !== 'ptt') return;
     const tag = (document.activeElement as HTMLElement)?.tagName;
     if (tag === 'TEXTAREA' || tag === 'INPUT' || tag === 'SELECT') return;
     if (!voiceState.recording) return;
     e.preventDefault();
     commitAndStopPtt();
-  });
+  };
+  document.addEventListener('keydown', keydownHandler);
+  document.addEventListener('keyup', keyupHandler);
+
+  // Return cleanup function
+  return () => {
+    stopVoice();
+    toggleContainer.removeEventListener('mousedown', toggleMousedown);
+    toggleContainer.removeEventListener('click', toggleClick);
+    pttButton.removeEventListener('mousedown', pttMousedown);
+    pttButton.removeEventListener('pointerdown', pttDown);
+    pttButton.removeEventListener('pointerup', pttUp);
+    pttButton.removeEventListener('pointerleave', pttUp);
+    pttButton.removeEventListener('touchstart', pttDown);
+    pttButton.removeEventListener('touchend', pttUp);
+    pttButton.removeEventListener('touchcancel', pttUp);
+    pttButton.removeEventListener('contextmenu', pttContextmenu);
+    document.removeEventListener('keydown', keydownHandler);
+    document.removeEventListener('keyup', keyupHandler);
+    if (voiceState.audioCtx) {
+      voiceState.audioCtx.close().catch(() => {});
+      voiceState.audioCtx = null;
+    }
+  };
 }
 
 async function setVoiceMode(
