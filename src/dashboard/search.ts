@@ -191,9 +191,10 @@ function search(q: string): Hit[] {
   const scoped = state.selectedAgents;
   const inScope = (name: string) => scoped.size === 0 || scoped.has(name);
 
-  // Agents
+  // Agents — always search all agents regardless of sidebar selection.
+  // Users expect exact name matches to always work; scope filtering is for
+  // messages (contextual view), not the agent catalog.
   for (const a of state.agents) {
-    if (!inScope(a.name)) continue;
     const matched: string[] = [];
     if (a.name.toLowerCase().includes(needle)) matched.push('name');
     if (a.cwd?.toLowerCase().includes(needle)) matched.push('cwd');
