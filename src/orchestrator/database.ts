@@ -1299,17 +1299,56 @@ export class Database {
     return mapDashboardMessageRow(row);
   }
 
-  getDashboardThreads(agentName?: string): Record<string, DashboardMessage[]> {
+  /**
+   * Most recent N messages per agent. Default 200/agent caps the dashboard
+   * init payload — older history is fetched on demand via getOlderMessages().
+   * Pass `limitPerAgent: 0` to disable the cap (returns everything; only used
+   * by tests and admin tooling).
+   */
+  getDashboardThreads(
+    agentName?: string,
+    limitPerAgent: number = 200,
+  ): Record<string, DashboardMessage[]> {
+    if (limitPerAgent <= 0) {
+      const query = `
+        SELECT dm.*, pm.status AS delivery_status
+        FROM dashboard_messages dm
+        LEFT JOIN pending_messages pm ON dm.queue_id = pm.id
+        ${agentName ? 'WHERE dm.agent = ?' : ''}
+        ORDER BY dm.created_at ASC
+      `;
+      const rows = agentName
+        ? this.db.prepare(query).all(agentName) as Array<Record<string, unknown>>
+        : this.db.prepare(query).all() as Array<Record<string, unknown>>;
+      const out: Record<string, DashboardMessage[]> = {};
+      for (const row of rows) {
+        const msg = mapDashboardMessageRow(row);
+        if (!out[msg.agent]) out[msg.agent] = [];
+        out[msg.agent]!.push(msg);
+      }
+      return out;
+    }
+
+    // SQLite ≥3.25 window function — keeps the last N per agent without
+    // pulling the whole table into memory.
     const query = `
-      SELECT dm.*, pm.status AS delivery_status
-      FROM dashboard_messages dm
-      LEFT JOIN pending_messages pm ON dm.queue_id = pm.id
-      WHERE 1=1${agentName ? ' AND dm.agent = ?' : ''}
-      ORDER BY dm.created_at ASC
+      WITH ranked AS (
+        SELECT dm.*, pm.status AS delivery_status,
+               ROW_NUMBER() OVER (
+                 PARTITION BY dm.agent
+                 ORDER BY dm.created_at DESC, dm.id DESC
+               ) AS rn
+        FROM dashboard_messages dm
+        LEFT JOIN pending_messages pm ON dm.queue_id = pm.id
+        ${agentName ? 'WHERE dm.agent = ?' : ''}
+      )
+      SELECT * FROM ranked
+      WHERE rn <= ?
+      ORDER BY agent, created_at ASC, id ASC
     `;
     const rows = agentName
-      ? this.db.prepare(query).all(agentName) as Array<Record<string, unknown>>
-      : this.db.prepare(query).all() as Array<Record<string, unknown>>;
+      ? this.db.prepare(query).all(agentName, limitPerAgent) as Array<Record<string, unknown>>
+      : this.db.prepare(query).all(limitPerAgent) as Array<Record<string, unknown>>;
 
     const threads: Record<string, DashboardMessage[]> = {};
     for (const row of rows) {
@@ -1318,6 +1357,33 @@ export class Database {
       threads[msg.agent]!.push(msg);
     }
     return threads;
+  }
+
+  /**
+   * Page older messages for a single agent — used by the dashboard's
+   * "Load older" affordance. Returns rows older than `beforeId` (or the
+   * latest if omitted), most-recent first, capped at `limit`.
+   */
+  getOlderMessages(
+    agentName: string,
+    beforeId: number | null,
+    limit: number = 200,
+  ): DashboardMessage[] {
+    const sql = `
+      SELECT dm.*, pm.status AS delivery_status
+      FROM dashboard_messages dm
+      LEFT JOIN pending_messages pm ON dm.queue_id = pm.id
+      WHERE dm.agent = ?
+        ${beforeId !== null ? 'AND dm.id < ?' : ''}
+      ORDER BY dm.id DESC
+      LIMIT ?
+    `;
+    const params: unknown[] = [agentName];
+    if (beforeId !== null) params.push(beforeId);
+    params.push(limit);
+    const rows = this.db.prepare(sql).all(...params) as Array<Record<string, unknown>>;
+    // Return chronological (asc) so the client can prepend in place.
+    return rows.map(mapDashboardMessageRow).reverse();
   }
 
   searchMessages(query: string, agent?: string): DashboardMessage[] {

@@ -8,7 +8,7 @@ import { readFileSync, mkdirSync, readdirSync, statSync, existsSync } from 'node
 import { join, dirname } from 'node:path';
 import { timingSafeEqual } from 'node:crypto';
 import { Database } from './database.ts';
-import { createRouter, startTelegramPolling, type RouteContext } from './routes.ts';
+import { createRouter, startTelegramPolling, warmDashboardAssets, type RouteContext } from './routes.ts';
 import { TelegramDispatcher } from './telegram.ts';
 import { WebSocketServer } from '../shared/websocket-server.ts';
 import { LockManager } from '../shared/lock.ts';
@@ -344,6 +344,11 @@ const routeCtx: RouteContext = {
     };
   },
 };
+
+// Pre-strip and cache all dashboard TS/JS/CSS assets at boot so the first
+// page load doesn't pay the stripTypeScriptTypes cost. Runs synchronously —
+// completes before the HTTP server starts listening.
+warmDashboardAssets();
 
 const router = createRouter(routeCtx);
 

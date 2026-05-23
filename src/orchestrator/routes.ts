@@ -166,6 +166,68 @@ type Route = {
   handler: RouteHandler;
 };
 
+// ── Dashboard asset cache (module scope so we can warm at startup) ──
+
+const ASSET_TYPES: Record<string, string> = {
+  '.js': 'application/javascript; charset=utf-8',
+  '.ts': 'application/javascript; charset=utf-8', // browser-native type stripping
+  '.css': 'text/css; charset=utf-8',
+};
+
+type AssetCacheEntry = { mtimeMs: number; body: string; etag: string; contentType: string };
+const assetCache = new Map<string, AssetCacheEntry>();
+
+function loadAssetEntry(fullPath: string, ext: string, contentType: string): AssetCacheEntry {
+  const stat = statSync(fullPath);
+  const existing = assetCache.get(fullPath);
+  if (existing && existing.mtimeMs === stat.mtimeMs) return existing;
+  let body = readFileSync(fullPath, 'utf-8');
+  if (ext === '.ts') body = stripTypeScriptTypes(body);
+  const entry: AssetCacheEntry = {
+    mtimeMs: stat.mtimeMs,
+    body,
+    etag: `W/"${stat.mtimeMs}-${stat.size}"`,
+    contentType,
+  };
+  assetCache.set(fullPath, entry);
+  return entry;
+}
+
+/**
+ * Pre-load + type-strip every dashboard asset at startup so the first browser
+ * request never pays the strip cost. Walks src/dashboard recursively and
+ * primes the cache for any file with a supported extension.
+ *
+ * Safe to call multiple times — entries are skipped when mtime is unchanged.
+ * Errors on individual files are logged but don't abort the walk.
+ */
+export function warmDashboardAssets(): void {
+  const dashboardDir = join(import.meta.dirname!, '..', 'dashboard');
+  const t0 = Date.now();
+  let count = 0;
+  const walk = (dir: string): void => {
+    let entries: { name: string; isDirectory: () => boolean; isFile: () => boolean }[];
+    try { entries = readdirSync(dir, { withFileTypes: true }); }
+    catch { return; }
+    for (const ent of entries) {
+      const full = join(dir, ent.name);
+      if (ent.isDirectory()) { walk(full); continue; }
+      if (!ent.isFile()) continue;
+      const ext = ent.name.slice(ent.name.lastIndexOf('.'));
+      const contentType = ASSET_TYPES[ext];
+      if (!contentType) continue;
+      try {
+        loadAssetEntry(full, ext, contentType);
+        count++;
+      } catch (err) {
+        console.warn(`[warm-assets] skip ${full}: ${(err as Error).message}`);
+      }
+    }
+  };
+  walk(dashboardDir);
+  console.log(`[warm-assets] cached ${count} dashboard files in ${Date.now() - t0}ms`);
+}
+
 function buildRoutes(): Route[] {
   const routes: Route[] = [];
   const route = (method: string, pathname: string, handler: RouteHandler) => {
@@ -188,13 +250,6 @@ route('GET', '/dashboard', async (_req, res, _match, ctx) => {
   res.end(ctx.getDashboardHtml());
 });
 
-// Serve dashboard ES module assets (*.js files under src/dashboard/)
-const ASSET_TYPES: Record<string, string> = {
-  '.js': 'application/javascript; charset=utf-8',
-  '.ts': 'application/javascript; charset=utf-8', // browser-native type stripping
-  '.css': 'text/css; charset=utf-8',
-};
-
 route('GET', '/dashboard/assets/:path+', async (req, res, match) => {
   const filePath = match.pathname.groups['path'] ?? '';
   const ext = filePath.slice(filePath.lastIndexOf('.'));
@@ -204,15 +259,24 @@ route('GET', '/dashboard/assets/:path+', async (req, res, match) => {
   }
   try {
     const fullPath = join(import.meta.dirname!, '..', 'dashboard', filePath);
-    let content = readFileSync(fullPath, 'utf-8');
-    // .ts → strip type annotations so the browser can parse as JS.
-    // Node 24's stripTypeScriptTypes() preserves line/column for source maps.
-    if (ext === '.ts') content = stripTypeScriptTypes(content);
+    const entry = loadAssetEntry(fullPath, ext, contentType);
+
+    // Conditional GET — return 304 if the browser already has this version.
+    if (req.headers['if-none-match'] === entry.etag) {
+      res.writeHead(304, {
+        'etag': entry.etag,
+        // Tell intermediaries to revalidate but allow the browser to cache.
+        'cache-control': 'no-cache',
+      });
+      res.end();
+      return;
+    }
     res.writeHead(200, {
       'content-type': contentType,
-      'cache-control': 'no-cache, no-store, must-revalidate',
+      'etag': entry.etag,
+      'cache-control': 'no-cache',
     });
-    res.end(content);
+    res.end(entry.body);
   } catch {
     res.writeHead(404); res.end('Not found');
   }
@@ -825,8 +889,26 @@ route('POST', '/api/dashboard/reply', async (req, res, _match, ctx) => {
 route('GET', '/api/dashboard/threads', async (req, res, _match, ctx) => {
   const url = new URL(req.url!, `http://${req.headers.host}`);
   const agent = url.searchParams.get('agent') ?? undefined;
-  const threads = ctx.db.getDashboardThreads(agent);
+  // Optional limit per agent; default matches init payload cap.
+  const limitParam = url.searchParams.get('limit');
+  const limit = limitParam !== null ? Math.max(0, parseInt(limitParam, 10) || 0) : 200;
+  const threads = ctx.db.getDashboardThreads(agent, limit);
   json(res, 200, threads);
+});
+
+// Pagination for the dashboard chat "Load older" affordance. Returns up to
+// `limit` messages for `agent` strictly older than `beforeId` (exclusive),
+// in chronological order so the client can prepend them in place.
+route('GET', '/api/dashboard/threads/:agent/older', async (req, res, match, ctx) => {
+  const agent = decodeURIComponent(match.pathname.groups['agent'] ?? '');
+  if (!agent) return json(res, 400, { error: 'agent required' });
+  const url = new URL(req.url!, `http://${req.headers.host}`);
+  const beforeId = url.searchParams.get('beforeId');
+  const before = beforeId !== null && beforeId !== '' ? parseInt(beforeId, 10) : null;
+  const limitParam = url.searchParams.get('limit');
+  const limit = Math.min(500, Math.max(1, limitParam ? parseInt(limitParam, 10) : 200));
+  const msgs = ctx.db.getOlderMessages(agent, Number.isFinite(before as number) ? before : null, limit);
+  json(res, 200, { messages: msgs, agent });
 });
 
 route('GET', '/api/dashboard/messages/search', async (req, res, _match, ctx) => {
