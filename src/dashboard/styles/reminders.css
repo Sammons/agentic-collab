@@ -412,3 +412,90 @@
 }
 .rm-foot .show-more:hover { color: var(--ink); text-decoration: underline; }
 
+/* quickadd inline popovers — agent picker + cadence picker */
+.rm-qa-pop {
+  z-index: 60;
+  background: var(--paper-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 16px 40px -10px rgba(22,24,28,0.22);
+  width: 260px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 4px;
+}
+.rm-qa-pop.cadence { width: 220px; }
+.rm-qa-pop .rm-qa-item {
+  display: grid;
+  grid-template-columns: 10px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  cursor: pointer;
+  border-radius: 3px;
+  font-family: var(--sans);
+  font-size: 13px;
+  color: var(--ink-2);
+}
+.rm-qa-pop.cadence .rm-qa-item {
+  grid-template-columns: 1fr;
+}
+.rm-qa-pop .rm-qa-item:hover,
+.rm-qa-pop .rm-qa-item.sel {
+  background: var(--paper-2);
+  color: var(--ink);
+}
+.rm-qa-pop .rm-qa-item .status {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--ink-4);
+}
+.rm-qa-pop .rm-qa-item .status.online { background: var(--moss); }
+.rm-qa-pop .rm-qa-item .status.busy { background: var(--clay); }
+.rm-qa-pop .rm-qa-item .status.paused { background: var(--plum); }
+.rm-qa-pop .rm-qa-item .status.failed { background: var(--brick); }
+.rm-qa-pop .rm-qa-item .nm { font-family: var(--mono); font-weight: 500; }
+.rm-qa-pop .rm-qa-item .meta {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink-4);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.rm-qa-pop .rm-qa-divider {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--ink-4);
+  padding: 8px 10px 4px;
+  border-top: 1px solid var(--rule-soft);
+  margin-top: 4px;
+}
+.rm-qa-pop .rm-qa-custom {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px 8px;
+}
+.rm-qa-pop .rm-qa-custom input {
+  flex: 1;
+  font-family: var(--mono);
+  font-size: 13px;
+  border: 1px solid var(--rule);
+  background: var(--paper);
+  padding: 5px 8px;
+  border-radius: 3px;
+  color: var(--ink);
+  outline: none;
+  min-width: 0;
+}
+.rm-qa-pop .rm-qa-custom input:focus {
+  border-color: var(--ink);
+}
+.rm-qa-pop .rm-qa-custom .suffix {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-4);
+}
+.rm-qa-pop .rm-qa-custom .btn { font-size: 11.5px; padding: 4px 10px; }
+

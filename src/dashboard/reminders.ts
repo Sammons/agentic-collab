@@ -257,29 +257,25 @@ function wireQuickadd(root: HTMLElement): void {
   const addBtn = root.querySelector<HTMLButtonElement>('[data-qa-add]');
   const promptIn = root.querySelector<HTMLInputElement>('[data-qa-prompt]');
 
-  agentPick?.addEventListener('click', () => {
-    const choices = state.agents.map((a) => a.name);
-    if (choices.length === 0) {
-      showToast('No agents available');
+  agentPick?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (state.agents.length === 0) {
+      showToast('No agents — create one from the Agents page first.');
       return;
     }
-    const name = window.prompt(`Agent name (one of: ${choices.join(', ')})`);
-    if (!name) return;
-    qaAgentName = name;
-    agentPick.classList.remove('empty');
-    agentPick.innerHTML = `${escapeHtml(name)} <span class="caret">▾</span>`;
+    openAgentMenu(agentPick, state.agents.map((a) => a.name), (picked) => {
+      qaAgentName = picked;
+      agentPick.classList.remove('empty');
+      agentPick.innerHTML = `${escapeHtml(picked)} <span class="caret">▾</span>`;
+    });
   });
 
-  cadence?.addEventListener('click', () => {
-    const input = window.prompt('Cadence in minutes (min 5)', String(qaCadence));
-    if (!input) return;
-    const n = parseInt(input, 10);
-    if (!Number.isFinite(n) || n < 5) {
-      showToast('Cadence must be >= 5 minutes', 'error');
-      return;
-    }
-    qaCadence = n;
-    cadence.innerHTML = `every ${formatCadence(n)} <span class="caret">▾</span>`;
+  cadence?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    openCadenceMenu(cadence, qaCadence, (picked) => {
+      qaCadence = picked;
+      cadence.innerHTML = `every ${formatCadence(picked)} <span class="caret">▾</span>`;
+    });
   });
 
   skip?.addEventListener('click', () => {
@@ -311,6 +307,113 @@ function wireQuickadd(root: HTMLElement): void {
       void loadAll();
     } catch { showToast('Network error', 'error'); }
   });
+}
+
+/* ── inline popovers (agent picker + cadence picker) ────────────────── */
+
+let openPopover: HTMLElement | null = null;
+function closePopover(): void {
+  if (openPopover) { openPopover.remove(); openPopover = null; }
+  document.removeEventListener('click', closePopover);
+}
+
+function openAgentMenu(anchor: HTMLElement, names: string[], onPick: (name: string) => void): void {
+  closePopover();
+  const pop = document.createElement('div');
+  pop.className = 'rm-qa-pop';
+  pop.innerHTML = names.map((n) => {
+    const agent = state.agents.find((a) => a.name === n);
+    const dot = statusDot(agent?.state);
+    return `
+      <div class="rm-qa-item" data-name="${escapeHtml(n)}">
+        <span class="status ${dot}"></span>
+        <span class="nm">${escapeHtml(n)}</span>
+        ${agent ? `<span class="meta">${escapeHtml(agent.state)}</span>` : ''}
+      </div>
+    `;
+  }).join('');
+  document.body.appendChild(pop);
+  positionBelow(pop, anchor);
+  pop.querySelectorAll<HTMLElement>('[data-name]').forEach((el) => {
+    el.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      onPick(el.dataset['name']!);
+      closePopover();
+    });
+  });
+  openPopover = pop;
+  // Close on next outside click — schedule so the trigger click doesn't dismiss.
+  setTimeout(() => document.addEventListener('click', closePopover), 0);
+  pop.addEventListener('click', (e) => e.stopPropagation());
+}
+
+const CADENCE_PRESETS = [5, 10, 15, 30, 60, 120, 360, 720, 1440];
+
+function openCadenceMenu(anchor: HTMLElement, current: number, onPick: (min: number) => void): void {
+  closePopover();
+  const pop = document.createElement('div');
+  pop.className = 'rm-qa-pop cadence';
+  const presetRows = CADENCE_PRESETS.map((n) => `
+    <div class="rm-qa-item ${n === current ? 'sel' : ''}" data-min="${n}">
+      <span class="nm">every ${formatCadence(n)}</span>
+    </div>
+  `).join('');
+  pop.innerHTML = `
+    ${presetRows}
+    <div class="rm-qa-divider">custom</div>
+    <div class="rm-qa-custom">
+      <input type="number" min="5" step="1" value="${current}" data-custom-min>
+      <span class="suffix">min</span>
+      <button class="btn primary" type="button" data-custom-set>Set</button>
+    </div>
+  `;
+  document.body.appendChild(pop);
+  positionBelow(pop, anchor);
+  pop.querySelectorAll<HTMLElement>('[data-min]').forEach((el) => {
+    el.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      onPick(Number(el.dataset['min']));
+      closePopover();
+    });
+  });
+  const customInput = pop.querySelector<HTMLInputElement>('[data-custom-min]')!;
+  const customBtn = pop.querySelector<HTMLButtonElement>('[data-custom-set]')!;
+  const commitCustom = () => {
+    const n = parseInt(customInput.value, 10);
+    if (!Number.isFinite(n) || n < 5) {
+      showToast('Cadence must be ≥ 5 minutes', 'error');
+      return;
+    }
+    onPick(n);
+    closePopover();
+  };
+  customBtn.addEventListener('pointerdown', (e) => { e.preventDefault(); commitCustom(); });
+  customInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); commitCustom(); }
+  });
+  openPopover = pop;
+  setTimeout(() => document.addEventListener('click', closePopover), 0);
+  pop.addEventListener('click', (e) => e.stopPropagation());
+}
+
+function positionBelow(pop: HTMLElement, anchor: HTMLElement): void {
+  const r = anchor.getBoundingClientRect();
+  pop.style.position = 'fixed';
+  pop.style.top = `${r.bottom + 4}px`;
+  pop.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - 280))}px`;
+}
+
+function statusDot(state: string | undefined): string {
+  switch (state) {
+    case 'active':
+    case 'idle':       return 'online';
+    case 'spawning':
+    case 'resuming':
+    case 'suspending': return 'busy';
+    case 'suspended':  return 'paused';
+    case 'failed':     return 'failed';
+    default:           return 'offline';
+  }
 }
 
 /* ── helpers ───────────────────────────────────────────────────────── */
