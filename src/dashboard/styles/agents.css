@@ -58,9 +58,9 @@
 }
 .pg-chips .chip:hover { color: var(--ink); border-color: var(--rule-strong); }
 .pg-chips .chip.on {
-  background: var(--ink);
-  color: #fdf6f3;
-  border-color: var(--ink);
+  background: var(--pill-on-bg);
+  color: var(--pill-on-fg);
+  border-color: var(--pill-on-bg);
 }
 .pg-chips .chip .ct {
   font-family: var(--mono);
@@ -68,7 +68,7 @@
   margin-left: 5px;
   font-weight: 400;
 }
-.pg-chips .chip.on .ct { color: #fdf6f399; }
+.pg-chips .chip.on .ct { color: var(--pill-on-fg-muted); }
 
 .pg-list {
   flex: 1; min-height: 0;
