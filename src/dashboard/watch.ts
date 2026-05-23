@@ -40,7 +40,7 @@ function render(root: HTMLElement, route: Route): void {
   root.innerHTML = `
     <div class="watch-page">
       <div class="watch-hdr">
-        <button class="back" data-back>← Back to agents</button>
+        <button class="back" data-back>← Back to chat</button>
         <div class="title-block">
           <div class="super"><span>Watching</span> <span class="crumb-arrow">/</span> <span class="name">${escapeHtml(name)}</span></div>
           <h1 class="title">
@@ -183,8 +183,18 @@ function updateAgo(): void {
 /* ── wiring ────────────────────────────────────────────────────────── */
 
 function wire(root: HTMLElement, name: string): void {
-  root.querySelector<HTMLElement>('[data-back]')?.addEventListener('click', () => go({ kind: 'agents' }));
-  root.querySelector<HTMLElement>('[data-stop]')?.addEventListener('click', () => go({ kind: 'agents' }));
+  // Back from watch lands on chat (filtered to this agent) rather than
+  // the agents grid — closer to the v2 "thread for the agent I was just
+  // looking at" mental model. Stop watching does the same.
+  const backToChat = async () => {
+    state.selectedAgents.clear();
+    state.selectedAgents.add(name);
+    const s = await import('./state.ts');
+    s.emit('selection-changed');
+    go({ kind: 'dashboard' });
+  };
+  root.querySelector<HTMLElement>('[data-back]')?.addEventListener('click', () => void backToChat());
+  root.querySelector<HTMLElement>('[data-stop]')?.addEventListener('click', () => void backToChat());
   root.querySelector<HTMLElement>('[data-open-tmux]')?.addEventListener('click', async () => {
     const a = state.agents.find((x) => x.name === name);
     const session = a?.tmuxSession ?? `agent-${name}`;
