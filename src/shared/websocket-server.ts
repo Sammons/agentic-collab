@@ -7,9 +7,13 @@ import { createHash } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
 import type { WsEvent } from './types.ts';
+import { negotiate as negotiateDeflate, compressFrame, decompressFrame } from './ws-deflate.ts';
 
 const MAGIC_STRING = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 const MAX_FRAME_BYTES = 1_048_576; // 1 MB — reject frames larger than this
+// Don't compress messages smaller than this — the deflate overhead would
+// usually grow the payload, and small chat events don't matter anyway.
+const COMPRESS_THRESHOLD = 256;
 
 // Opcodes
 const OPCODE_CONTINUATION = 0x0;
@@ -23,6 +27,8 @@ export type WsClient = {
   id: string;
   socket: Duplex;
   alive: boolean;
+  /** Negotiated permessage-deflate; outbound payloads ≥ threshold compress. */
+  compress: boolean;
 };
 
 export class WebSocketServer {
@@ -63,18 +69,25 @@ export class WebSocketServer {
       .update(key + MAGIC_STRING)
       .digest('base64');
 
-    socket.write(
-      'HTTP/1.1 101 Switching Protocols\r\n' +
-      'Upgrade: websocket\r\n' +
-      'Connection: Upgrade\r\n' +
-      `Sec-WebSocket-Accept: ${accept}\r\n` +
-      '\r\n'
-    );
+    // Negotiate permessage-deflate if the client offered it. Browsers all do.
+    const offered = req.headers['sec-websocket-extensions'];
+    const offeredStr = Array.isArray(offered) ? offered.join(', ') : offered;
+    const deflate = negotiateDeflate(offeredStr);
+
+    const lines = [
+      'HTTP/1.1 101 Switching Protocols',
+      'Upgrade: websocket',
+      'Connection: Upgrade',
+      `Sec-WebSocket-Accept: ${accept}`,
+    ];
+    if (deflate) lines.push(`Sec-WebSocket-Extensions: ${deflate.responseHeader}`);
+    socket.write(lines.join('\r\n') + '\r\n\r\n');
 
     const client: WsClient = {
       id: `ws-${this.nextId++}`,
       socket,
       alive: true,
+      compress: !!deflate,
     };
 
     this.clients.set(client.id, client);
@@ -95,7 +108,7 @@ export class WebSocketServer {
         if (!result) break; // Need more data
 
         buffer = buffer.subarray(result.totalLength);
-        this.handleFrame(client, result.opcode, result.payload);
+        this.handleFrame(client, result.opcode, result.payload, result.compressed);
       }
     });
 
@@ -130,22 +143,42 @@ export class WebSocketServer {
    * Send a text message to a specific client.
    */
   send(client: WsClient, data: string): void {
-    if (client.socket.writable) {
-      const frame = this.encodeFrame(OPCODE_TEXT, Buffer.from(data, 'utf-8'));
-      client.socket.write(frame);
-    }
+    if (!client.socket.writable) return;
+    client.socket.write(this.frameForClient(client, data));
   }
 
   /**
-   * Broadcast a text message to all connected clients.
+   * Broadcast a text message to all connected clients. Caches a single
+   * uncompressed frame for legacy clients and lazily compresses per-message
+   * for permessage-deflate clients (separate per-client deflate context).
    */
   broadcast(data: string): void {
-    const frame = this.encodeFrame(OPCODE_TEXT, Buffer.from(data, 'utf-8'));
+    const raw = Buffer.from(data, 'utf-8');
+    let uncompressedFrame: Buffer | null = null;
+    let compressedFrame: Buffer | null = null;
+    const wantsCompress = raw.length >= COMPRESS_THRESHOLD;
     for (const client of this.clients.values()) {
-      if (client.socket.writable) {
-        client.socket.write(frame);
+      if (!client.socket.writable) continue;
+      if (client.compress && wantsCompress) {
+        if (compressedFrame === null) {
+          compressedFrame = this.encodeFrame(OPCODE_TEXT, compressFrame(raw), true);
+        }
+        client.socket.write(compressedFrame);
+      } else {
+        if (uncompressedFrame === null) {
+          uncompressedFrame = this.encodeFrame(OPCODE_TEXT, raw, false);
+        }
+        client.socket.write(uncompressedFrame);
       }
     }
+  }
+
+  private frameForClient(client: WsClient, data: string): Buffer {
+    const raw = Buffer.from(data, 'utf-8');
+    if (client.compress && raw.length >= COMPRESS_THRESHOLD) {
+      return this.encodeFrame(OPCODE_TEXT, compressFrame(raw), true);
+    }
+    return this.encodeFrame(OPCODE_TEXT, raw, false);
   }
 
   /**
@@ -182,13 +215,14 @@ export class WebSocketServer {
 
   // ── Private ──
 
-  private parseFrame(buffer: Buffer): { opcode: number; payload: Buffer; totalLength: number } | null {
+  private parseFrame(buffer: Buffer): { opcode: number; payload: Buffer; totalLength: number; compressed: boolean } | null {
     if (buffer.length < 2) return null;
 
     const firstByte = buffer[0]!;
     const secondByte = buffer[1]!;
 
     const opcode = firstByte & 0x0F;
+    const compressed = (firstByte & 0x40) !== 0; // RSV1 bit = permessage-deflate
     const masked = (secondByte & 0x80) !== 0;
     let payloadLength = secondByte & 0x7F;
     let offset = 2;
@@ -218,15 +252,27 @@ export class WebSocketServer {
       payload[i] = buffer[offset + 4 + i]! ^ maskKey[i % 4]!;
     }
 
-    return { opcode, payload, totalLength };
+    return { opcode, payload, totalLength, compressed };
   }
 
-  private handleFrame(client: WsClient, opcode: number, payload: Buffer): void {
+  private handleFrame(client: WsClient, opcode: number, payload: Buffer, compressed: boolean): void {
     switch (opcode) {
-      case OPCODE_TEXT:
+      case OPCODE_TEXT: {
         client.alive = true;
-        this.onMessageCb?.(client, payload.toString('utf-8'));
+        let text: string;
+        if (compressed) {
+          try {
+            text = decompressFrame(payload).toString('utf-8');
+          } catch (err) {
+            console.warn('[ws] inflate failed, dropping frame:', (err as Error).message);
+            return;
+          }
+        } else {
+          text = payload.toString('utf-8');
+        }
+        this.onMessageCb?.(client, text);
         break;
+      }
 
       case OPCODE_PING:
         client.alive = true;
@@ -249,26 +295,28 @@ export class WebSocketServer {
     }
   }
 
-  private encodeFrame(opcode: number, payload: Buffer): Buffer {
+  private encodeFrame(opcode: number, payload: Buffer, rsv1: boolean = false): Buffer {
     const length = payload.length;
     let headerLength: number;
     let header: Buffer;
+    // FIN (0x80) + RSV1 (0x40 if permessage-deflate) + opcode (low nibble).
+    const firstByte = 0x80 | (rsv1 ? 0x40 : 0x00) | opcode;
 
     if (length < 126) {
       headerLength = 2;
       header = Buffer.alloc(headerLength);
-      header[0] = 0x80 | opcode; // FIN + opcode
+      header[0] = firstByte;
       header[1] = length;
     } else if (length < 65536) {
       headerLength = 4;
       header = Buffer.alloc(headerLength);
-      header[0] = 0x80 | opcode;
+      header[0] = firstByte;
       header[1] = 126;
       header.writeUInt16BE(length, 2);
     } else {
       headerLength = 10;
       header = Buffer.alloc(headerLength);
-      header[0] = 0x80 | opcode;
+      header[0] = firstByte;
       header[1] = 127;
       header.writeBigUInt64BE(BigInt(length), 2);
     }
