@@ -36,8 +36,8 @@
   border-color: var(--clay);
 }
 .btn.primary:hover {
-  background: #a14d31;
-  border-color: #a14d31;
+  background: var(--clay-strong);
+  border-color: var(--clay-strong);
   color: var(--paper-card);
 }
 
