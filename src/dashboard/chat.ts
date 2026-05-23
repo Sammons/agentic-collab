@@ -17,6 +17,7 @@
 import type { AgentRecord, DashboardMessage } from '../shared/types.ts';
 import { state, on, authHeaders } from './state.ts';
 import { registerRoute, go } from './routing.ts';
+import { openEditPersonaModal } from './overlays.ts';
 
 export function setupChat(): void {
   registerRoute('dashboard', render);
@@ -515,10 +516,9 @@ function openProfilePopover(anchor: HTMLElement, agentName: string): void {
     void lifecycleAction(agentName, 'kill', 'killing');
     closeProfilePopover();
   });
-  pop.querySelector<HTMLElement>('[data-pop-persona]')?.addEventListener('click', async () => {
+  pop.querySelector<HTMLElement>('[data-pop-persona]')?.addEventListener('click', () => {
     closeProfilePopover();
-    const { openEditPersonaModal } = await import('./overlays.ts');
-    openEditPersonaModal(agentName);
+    void openEditPersonaModal(agentName);
   });
 }
 
