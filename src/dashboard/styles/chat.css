@@ -107,24 +107,76 @@
   border-bottom-color: var(--ink-3);
 }
 
-/* Spawn-status dot rendered inline before an agent name in chat heads.
-   Sized so it visually balances the 13.5px label without crowding it. */
+/* Spawn-status indicator before an agent name. Designed to be readable
+   for red-green colorblind users: each state uses BOTH a colorblind-safe
+   hue (steel blue vs clay orange vs muted brick) AND a distinct shape
+   (filled disc vs hollow ring vs ringed-with-glyph) so the meaning
+   survives pure monochrome viewing. Hover reveals the literal state name. */
 .status-dot {
   display: inline-block;
-  width: 7px;
-  height: 7px;
+  width: 9px;
+  height: 9px;
   border-radius: 50%;
   margin-right: 6px;
-  vertical-align: 1px;
-  background: var(--ink-4);
-  box-shadow: 0 0 0 0 rgba(0,0,0,0);
+  vertical-align: 0px;
+  position: relative;
+  box-sizing: border-box;
 }
-.status-dot.on        { background: var(--moss); box-shadow: 0 0 0 2px var(--moss-bg); }
-.status-dot.transient { background: var(--clay); }
-.status-dot.off       { background: var(--brick); box-shadow: 0 0 0 2px var(--brick-bg); }
-.status-dot.void      { background: var(--ink-4); }
-/* In system-event rows the body font is smaller — match the dot. */
-.sys-event .status-dot { width: 6px; height: 6px; margin-right: 5px; vertical-align: 1px; }
+
+/* Running — solid steel blue (colorblind-safe vs orange/red) with a
+   subtle paper-color inset ring so it reads as "lit". */
+.status-dot.on {
+  background: var(--steel);
+  box-shadow: inset 0 0 0 1.5px var(--paper-card),
+              0 0 0 1.5px var(--steel);
+}
+
+/* Transient (suspending/resuming) — solid clay orange. Distinct from
+   blue at any colorblind-vision profile. */
+.status-dot.transient {
+  background: var(--clay);
+  box-shadow: inset 0 0 0 1.5px var(--paper-card),
+              0 0 0 1.5px var(--clay);
+}
+
+/* Suspended — hollow ring in muted brick. The ring shape alone (no fill)
+   conveys "not running" independent of color. */
+.status-dot.off {
+  background: transparent;
+  border: 1.5px solid var(--brick);
+}
+
+/* Failed — solid brick disc with a glyph × overlay drawn via two
+   crossed pseudo-elements. The × is the only state with a glyph, so
+   "failed" reads correctly even in grayscale. */
+.status-dot.failed {
+  background: var(--brick);
+}
+.status-dot.failed::before,
+.status-dot.failed::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 7px;
+  height: 1.5px;
+  background: var(--paper-card);
+  border-radius: 1px;
+}
+.status-dot.failed::before { transform: translate(-50%, -50%) rotate(45deg); }
+.status-dot.failed::after  { transform: translate(-50%, -50%) rotate(-45deg); }
+
+/* Void / never-started — hollow ring in light grey. Same shape as
+   "off" but lighter color; the tooltip disambiguates. */
+.status-dot.void {
+  background: transparent;
+  border: 1.5px solid var(--ink-4);
+}
+
+/* In system-event rows the body font is smaller — scale the dot down. */
+.sys-event .status-dot { width: 8px; height: 8px; margin-right: 5px; }
+.sys-event .status-dot.failed::before,
+.sys-event .status-dot.failed::after { width: 6px; }
 .chat-pane .msg.from-eph .head .who { color: var(--steel); }
 .chat-pane .msg.from-per .head .who { color: var(--plum); }
 .chat-pane .msg.from-me  .head .who { color: var(--ink); }
