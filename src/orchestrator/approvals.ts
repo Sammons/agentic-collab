@@ -209,30 +209,26 @@ export class ApprovalService {
     const addr = parseAddress(row.requesterAddr);
     const envelope = approvalEnvelope(row);
     if (addr.class === 'agent') {
+      // Identical pipeline to /api/dashboard/send so the chat row reads as
+      // a normal user-to-agent message (you → <agent>) with full delivery
+      // linkage. Mirrors enqueueAndDeliver() in routes.ts: addDashboardMessage
+      // → enqueueMessage → linkDashboardMessageToQueue → broadcast → tryDeliver.
       try {
-        this.db.enqueueMessage({
+        const msg = this.db.addDashboardMessage(addr.name, 'to_agent', envelope, {
+          topic: 'approval',
+          sourceAgent: 'dashboard',
+          targetAgent: addr.name,
+        });
+        const pending = this.db.enqueueMessage({
           sourceAgent: null,
           targetAgent: addr.name,
           envelope,
         });
+        this.db.linkDashboardMessageToQueue(msg.id, pending.id);
+        const linkedMsg = { ...msg, queueId: pending.id, deliveryStatus: 'pending' as const };
+        this.onMessage(linkedMsg);
         // Fire-and-forget — the dispatcher manages retries on its own.
         this.messageDispatcher.tryDeliver(addr.name).catch(() => { /* swallowed */ });
-        // Also surface the notification in the dashboard chat thread so
-        // the operator sees it live, regardless of whether the agent is
-        // currently running. The enqueue path above paste-delivers to
-        // tmux; this writes the same envelope to dashboard_messages.
-        // No dupe — the dispatcher's success path doesn't add dashboard
-        // rows (only its failure auto-reply does).
-        try {
-          const msg = this.db.addDashboardMessage(addr.name, 'from_agent', envelope, {
-            topic: 'approval',
-            sourceAgent: 'system',
-            targetAgent: addr.name,
-          });
-          this.onMessage(msg);
-        } catch (err) {
-          console.warn(`[approvals] dashboard-message failed for ${row.id}: ${(err as Error).message}`);
-        }
       } catch (err) {
         console.warn(`[approvals] notify enqueue failed for ${row.id}: ${(err as Error).message}`);
       }
