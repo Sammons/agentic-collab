@@ -69,6 +69,11 @@ function render(): void {
     return;
   }
 
+  // Preserve the teams-tree scroll position across re-renders. Every click
+  // that toggles selection / expands a team triggers a full innerHTML
+  // rewrite, which would otherwise snap the scroll back to 0 mid-interaction.
+  const prevScroll = r.querySelector<HTMLElement>('.teams')?.scrollTop ?? 0;
+
   r.innerHTML = `
     <div class="sidebar-inner">
       ${navActionsHtml()}
@@ -78,6 +83,9 @@ function render(): void {
     </div>
   `;
   wire(r);
+
+  const teams = r.querySelector<HTMLElement>('.teams');
+  if (teams && prevScroll > 0) teams.scrollTop = prevScroll;
 }
 
 function navActionsHtml(): string {
