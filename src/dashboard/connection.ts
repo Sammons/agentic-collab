@@ -10,7 +10,7 @@
  * (per-event broadcasts).
  */
 import type { AgentRecord, DashboardMessage, Team } from '../shared/types.ts';
-import { state, emit, restoreSelectionOnInit, saveToken } from './state.ts';
+import { state, emit, restoreSelectionOnInit, saveToken, loadCachedThreads, persistCachedThreads } from './state.ts';
 
 type WsEvent =
   | { type: 'init'; agents: AgentRecord[]; threads: Record<string, DashboardMessage[]>; teams?: Team[] }
@@ -28,10 +28,28 @@ const MAX_RECONNECT_DELAY = 30000;
 let didOpenOnce = false;
 let connectionAttempts = 0;
 
+// Persisting threads to localStorage on every WS message would thrash on
+// busy streams. Coalesce writes to one per 500ms.
+let persistTimer: ReturnType<typeof setTimeout> | null = null;
+function schedulePersist(): void {
+  if (persistTimer !== null) return;
+  persistTimer = setTimeout(() => {
+    persistTimer = null;
+    persistCachedThreads();
+  }, 500);
+}
+
 function wsUrl(): string {
   const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const tok = state.token ? `?token=${encodeURIComponent(state.token)}` : '';
-  return `${proto}//${window.location.host}/ws${tok}`;
+  const params: string[] = [];
+  if (state.token) params.push(`token=${encodeURIComponent(state.token)}`);
+  // Tell the server the highest dashboard_messages.id we already have in
+  // cache so it can return just the deltas. Cold load (no cache) sends 0
+  // and the server falls back to the standard 200-per-agent window.
+  const { sinceMessageId } = loadCachedThreads();
+  if (sinceMessageId > 0) params.push(`sinceMessageId=${sinceMessageId}`);
+  const qs = params.length ? `?${params.join('&')}` : '';
+  return `${proto}//${window.location.host}/ws${qs}`;
 }
 
 export function connect(): void {
@@ -169,10 +187,33 @@ function scheduleReconnect(): void {
 function handle(msg: WsEvent): void {
   switch (msg.type) {
     case 'init': {
-      const initMsg = msg as Extract<WsEvent, { type: 'init' }>;
+      const initMsg = msg as Extract<WsEvent, { type: 'init' }> & {
+        threadsAreDelta?: boolean;
+        maxMessageId?: number;
+      };
       state.agents = initMsg.agents ?? [];
-      state.threads = initMsg.threads ?? {};
       state.teams = initMsg.teams ?? [];
+      // Delta init: server only sent rows newer than our cached watermark.
+      // Merge them into the cached threads we restored at boot. Cold init
+      // (threadsAreDelta=false): replace wholesale.
+      const incoming = initMsg.threads ?? {};
+      if (initMsg.threadsAreDelta) {
+        for (const [agent, msgs] of Object.entries(incoming)) {
+          const existing = state.threads[agent] ?? [];
+          const seen = new Set(existing.filter((m) => m.id > 0).map((m) => m.id));
+          for (const m of msgs) {
+            if (!seen.has(m.id)) existing.push(m);
+          }
+          // Defensive sort: deltas arrive ASC by id, but the cached suffix
+          // may have re-ordered timestamps from clock skew or backfills.
+          existing.sort((a, b) =>
+            a.createdAt === b.createdAt ? a.id - b.id : (a.createdAt < b.createdAt ? -1 : 1));
+          state.threads[agent] = existing;
+        }
+      } else {
+        state.threads = incoming;
+      }
+      persistCachedThreads();
       restoreSelectionOnInit();
       emit('init');
       emit('agents-changed');
@@ -231,6 +272,7 @@ function handle(msg: WsEvent): void {
         list.push(u.msg);
       }
       state.threads[agentName] = list;
+      schedulePersist();
       emit('message', u.msg);
       break;
     }

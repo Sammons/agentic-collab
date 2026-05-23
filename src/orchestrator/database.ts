@@ -1300,6 +1300,39 @@ export class Database {
   }
 
   /**
+   * Max `dashboard_messages.id` (or 0 when empty). Used as the watermark
+   * the dashboard echoes back as `?sinceMessageId=` for delta init.
+   */
+  getMaxDashboardMessageId(): number {
+    const row = this.db.prepare('SELECT MAX(id) AS m FROM dashboard_messages').get() as { m: number | null } | undefined;
+    return row?.m ?? 0;
+  }
+
+  /**
+   * Messages with id > sinceId, grouped by agent. Used for the dashboard's
+   * delta init path: the client caches threads in localStorage, sends its
+   * max-seen id on reconnect, and the server returns only what's new. No
+   * per-agent cap on the delta — message ids monotonically increase, so a
+   * "since" window is naturally bounded by elapsed time since last sync.
+   */
+  getDashboardThreadsSince(sinceId: number): Record<string, DashboardMessage[]> {
+    const rows = this.db.prepare(`
+      SELECT dm.*, pm.status AS delivery_status
+      FROM dashboard_messages dm
+      LEFT JOIN pending_messages pm ON dm.queue_id = pm.id
+      WHERE dm.id > ?
+      ORDER BY dm.id ASC
+    `).all(sinceId) as Array<Record<string, unknown>>;
+    const threads: Record<string, DashboardMessage[]> = {};
+    for (const row of rows) {
+      const msg = mapDashboardMessageRow(row);
+      if (!threads[msg.agent]) threads[msg.agent] = [];
+      threads[msg.agent]!.push(msg);
+    }
+    return threads;
+  }
+
+  /**
    * Most recent N messages per agent. Default 200/agent caps the dashboard
    * init payload — older history is fetched on demand via getOlderMessages().
    * Pass `limitPerAgent: 0` to disable the cap (returns everything; only used
