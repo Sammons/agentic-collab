@@ -282,6 +282,30 @@ route('GET', '/dashboard/assets/:path+', async (req, res, match) => {
   }
 });
 
+// Serve shared/ for dashboard imports that reference ../shared/
+// Browser resolves ../shared/ from /dashboard/assets/ to /dashboard/shared/
+route('GET', '/dashboard/shared/:path+', async (req, res, match) => {
+  const filePath = match.pathname.groups['path'] ?? '';
+  const ext = filePath.slice(filePath.lastIndexOf('.'));
+  const contentType = ASSET_TYPES[ext];
+  if (filePath.includes('..') || !contentType) {
+    res.writeHead(400); res.end('Bad request'); return;
+  }
+  try {
+    const fullPath = join(import.meta.dirname!, '..', 'shared', filePath);
+    const entry = loadAssetEntry(fullPath, ext, contentType);
+    if (req.headers['if-none-match'] === entry.etag) {
+      res.writeHead(304, { 'etag': entry.etag, 'cache-control': 'no-cache' });
+      res.end();
+      return;
+    }
+    res.writeHead(200, { 'content-type': contentType, 'etag': entry.etag, 'cache-control': 'no-cache' });
+    res.end(entry.body);
+  } catch {
+    res.writeHead(404); res.end('Not found');
+  }
+});
+
 // ── Docs ──
 
 const DOCS_DIR = join(import.meta.dirname!, '..', 'docs');
