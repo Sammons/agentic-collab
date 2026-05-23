@@ -1636,6 +1636,22 @@ route('POST', '/api/agents/:name/spawn', async (req, res, match, ctx) => {
     const agent = ctx.db.getAgent(name);
     if (!agent) return json(res, 404, { error: 'Agent not found' });
 
+    // Universal "start" verb: if the agent is suspended, treat /spawn as
+    // /resume. UI surfaces (kebab menus, profile popover, etc.) all call
+    // Spawn without having to switch endpoints by state.
+    if (agent.state === 'suspended') {
+      const proxyId = resolveProxyId(ctx, agent, body.proxyId as string | undefined);
+      if (proxyId && !agent.proxyId) {
+        ctx.db.updateAgentState(name, agent.state, agent.version, { proxyId });
+      }
+      const result = await resumeAgent(lifecycleCtx, name, {
+        task: body.task as string | undefined,
+      });
+      broadcastAgentUpdate(ctx, name);
+      broadcastLifecycleEvent(ctx, name, 'Resumed');
+      return json(res, 200, result);
+    }
+
     const result = await spawnAgent(lifecycleCtx, {
       name,
       engine: agent.engine,
