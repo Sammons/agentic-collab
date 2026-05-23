@@ -30,6 +30,10 @@ const renderers: Record<Route['kind'], RouteRenderer> = {
   approvals: (root) => placeholder(root, 'Approvals', 'Master-detail review. Implemented in PR 5.'),
   reminders: (root) => placeholder(root, 'Reminders', 'Per-agent recurring nudges. Implemented in PR 6.'),
   settings:  (root) => placeholder(root, 'Settings',  'Engine configs, prefs, pages, stores, destinations. Implemented in PR 7.'),
+  'edit-engine': (root, r) => {
+    const name = r.kind === 'edit-engine' ? r.name : '(unknown)';
+    placeholder(root, `Edit engine config — ${name}`, 'Loading…');
+  },
   search:    (root) => placeholder(root, 'Search',    'Global multi-type search. Implemented in PR 8.'),
 };
 
@@ -56,6 +60,10 @@ export function parseHash(hash: string): Route {
     const name = h.slice('watch/'.length);
     if (name) return { kind: 'watch', agentName: name };
   }
+  if (h.startsWith('edit-engine/')) {
+    const name = decodeURIComponent(h.slice('edit-engine/'.length));
+    if (name) return { kind: 'edit-engine', name };
+  }
   // Unknown — fall back to dashboard.
   return { kind: 'dashboard' };
 }
@@ -69,6 +77,7 @@ export function go(route: Route): void {
     case 'approvals': hash = '#/approvals'; break;
     case 'reminders': hash = '#/reminders'; break;
     case 'settings':  hash = '#/settings'; break;
+    case 'edit-engine': hash = `#/edit-engine/${encodeURIComponent(route.name)}`; break;
     case 'search':    hash = '#/search'; break;
   }
   if (location.hash !== hash) location.hash = hash;

@@ -24,6 +24,7 @@ export type Route =
   | { kind: 'approvals' }
   | { kind: 'reminders' }
   | { kind: 'settings' }
+  | { kind: 'edit-engine'; name: string }
   | { kind: 'search' };
 
 export type ConnectionStatus = 'connecting' | 'connected' | 'disconnected';
