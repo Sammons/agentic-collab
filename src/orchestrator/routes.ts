@@ -9,6 +9,7 @@ import { pipeline } from 'node:stream/promises';
 import { timingSafeEqual } from 'node:crypto';
 import { readdirSync, readFileSync, writeFileSync, mkdirSync, unlinkSync, existsSync, rmSync, statSync, createWriteStream } from 'node:fs';
 import { join } from 'node:path';
+import { stripTypeScriptTypes } from 'node:module';
 import { DatabaseSync } from 'node:sqlite';
 import { renderMarkdown, wrapInHtml, DOC_PAGES } from '../docs/render.ts';
 import { hostname } from 'node:os';
@@ -173,6 +174,12 @@ function buildRoutes(): Route[] {
 
 // ── Dashboard ──
 
+// Apex redirect — bare host hits /dashboard.
+route('GET', '/', async (_req, res) => {
+  res.writeHead(302, { location: '/dashboard' });
+  res.end();
+});
+
 route('GET', '/dashboard', async (_req, res, _match, ctx) => {
   res.writeHead(200, {
     'content-type': 'text/html; charset=utf-8',
@@ -197,7 +204,10 @@ route('GET', '/dashboard/assets/:path+', async (req, res, match) => {
   }
   try {
     const fullPath = join(import.meta.dirname!, '..', 'dashboard', filePath);
-    const content = readFileSync(fullPath, 'utf-8');
+    let content = readFileSync(fullPath, 'utf-8');
+    // .ts → strip type annotations so the browser can parse as JS.
+    // Node 24's stripTypeScriptTypes() preserves line/column for source maps.
+    if (ext === '.ts') content = stripTypeScriptTypes(content);
     res.writeHead(200, {
       'content-type': contentType,
       'cache-control': 'no-cache, no-store, must-revalidate',
@@ -2117,6 +2127,118 @@ route('POST', '/api/reminders/swap', async (req, res, _match, ctx) => {
   json(res, 200, { ok: true });
 });
 
+// ── Host filesystem listing (proxy-backed) ──
+// Used by the v3 dashboard's CWD picker — the orchestrator lives in Docker
+// so it can't see host paths. We delegate to a proxy via list_dir.
+route('GET', '/api/proxy/list-dir', async (req, res, _match, ctx) => {
+  const url = new URL(req.url!, `http://${req.headers.host}`);
+  const path = url.searchParams.get('path') ?? '';
+  const showHidden = url.searchParams.get('hidden') === '1';
+  const explicitProxy = url.searchParams.get('proxyId') ?? undefined;
+  const proxies = ctx.db.listProxies();
+  if (proxies.length === 0) {
+    return json(res, 503, { error: 'no proxy registered' });
+  }
+  const proxyId = explicitProxy && proxies.some(p => p.proxyId === explicitProxy)
+    ? explicitProxy
+    : proxies[0]!.proxyId;
+  const result = await ctx.proxyDispatch(proxyId, {
+    action: 'list_dir',
+    path,
+    showHidden,
+  });
+  if (!result.ok) return json(res, 400, { error: result.error });
+  json(res, 200, result.data);
+});
+
+// ── Teams (v3 UI grouping) ──
+// Teams are UI-only filters in the v3 sidebar. No kernel behavior. Many-to-many
+// with agents (an agent can be in multiple teams). Membership lookups happen
+// client-side from the listing endpoint; we don't expose per-agent team lookup
+// because the sidebar already has the full list.
+
+function broadcastTeamsUpdate(ctx: RouteContext): void {
+  ctx.wss.broadcast(JSON.stringify({ type: 'teams_update', teams: ctx.db.listTeams() }));
+}
+
+route('GET', '/api/teams', async (_req, res, _match, ctx) => {
+  json(res, 200, ctx.db.listTeams());
+});
+
+route('POST', '/api/teams', async (req, res, _match, ctx) => {
+  const body = await readJson(req);
+  const name = typeof body['name'] === 'string' ? body['name'] : '';
+  if (!name.trim()) return json(res, 400, { error: 'name is required' });
+  const members = Array.isArray(body['members'])
+    ? (body['members'] as unknown[]).filter((m): m is string => typeof m === 'string')
+    : [];
+  try {
+    const team = ctx.db.createTeam(name, members);
+    broadcastTeamsUpdate(ctx);
+    json(res, 201, team);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'create failed';
+    // SQLite unique-constraint violation → 409
+    if (/UNIQUE constraint failed/.test(msg)) {
+      return json(res, 409, { error: 'A team with that name already exists' });
+    }
+    json(res, 400, { error: msg });
+  }
+});
+
+route('PATCH', '/api/teams/:id', async (req, res, match, ctx) => {
+  const id = Number(match.pathname.groups['id']);
+  if (!Number.isFinite(id)) return json(res, 400, { error: 'invalid id' });
+  const body = await readJson(req);
+  const name = typeof body['name'] === 'string' ? body['name'] : '';
+  if (!name.trim()) return json(res, 400, { error: 'name is required' });
+  try {
+    const team = ctx.db.updateTeamName(id, name);
+    if (!team) return json(res, 404, { error: 'team not found' });
+    broadcastTeamsUpdate(ctx);
+    json(res, 200, team);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'update failed';
+    if (/UNIQUE constraint failed/.test(msg)) {
+      return json(res, 409, { error: 'A team with that name already exists' });
+    }
+    json(res, 400, { error: msg });
+  }
+});
+
+route('DELETE', '/api/teams/:id', async (_req, res, match, ctx) => {
+  const id = Number(match.pathname.groups['id']);
+  if (!Number.isFinite(id)) return json(res, 400, { error: 'invalid id' });
+  const ok = ctx.db.deleteTeam(id);
+  if (!ok) return json(res, 404, { error: 'team not found' });
+  broadcastTeamsUpdate(ctx);
+  res.writeHead(204);
+  res.end();
+});
+
+route('POST', '/api/teams/:id/members', async (req, res, match, ctx) => {
+  const id = Number(match.pathname.groups['id']);
+  if (!Number.isFinite(id)) return json(res, 400, { error: 'invalid id' });
+  const body = await readJson(req);
+  const agentName = typeof body['agentName'] === 'string' ? body['agentName'] : '';
+  if (!agentName.trim()) return json(res, 400, { error: 'agentName is required' });
+  const team = ctx.db.addTeamMember(id, agentName);
+  if (!team) return json(res, 404, { error: 'team not found' });
+  broadcastTeamsUpdate(ctx);
+  json(res, 200, team);
+});
+
+route('DELETE', '/api/teams/:id/members/:agentName', async (_req, res, match, ctx) => {
+  const id = Number(match.pathname.groups['id']);
+  const agentName = match.pathname.groups['agentName'] ?? '';
+  if (!Number.isFinite(id)) return json(res, 400, { error: 'invalid id' });
+  if (!agentName) return json(res, 400, { error: 'agentName is required' });
+  const team = ctx.db.removeTeamMember(id, agentName);
+  if (!team) return json(res, 404, { error: 'team not found' });
+  broadcastTeamsUpdate(ctx);
+  json(res, 200, team);
+});
+
 // ── Accounts ──
 
 route('GET', '/api/accounts', async (_req, res, _match, ctx) => {
@@ -2332,9 +2454,12 @@ function broadcastAgentUpdate(ctx: RouteContext, agentName: string): void {
 
 /** Insert a lifecycle event as a system message in the agent's chat thread and broadcast it. */
 function broadcastLifecycleEvent(ctx: RouteContext, agentName: string, label: string): void {
-  const msg = ctx.db.addDashboardMessage(agentName, 'from_agent', `[system] ${label}`, {
+  // Include the agent name in the body so the dashboard can render it
+  // even outside the agent's own thread (e.g. in the merged chat view).
+  const msg = ctx.db.addDashboardMessage(agentName, 'from_agent', `${agentName} ${label.toLowerCase()}`, {
     topic: 'lifecycle',
     sourceAgent: 'system',
+    targetAgent: agentName,
   });
   ctx.wss.broadcast(JSON.stringify({ type: 'message', msg }));
 }

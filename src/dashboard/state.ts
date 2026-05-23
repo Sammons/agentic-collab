@@ -1,84 +1,147 @@
 /**
- * Dashboard shared state and event bus.
- * Single source of truth for all dashboard components.
- * Import via: import { state, on, emit } from '/dashboard/assets/state.ts';
+ * v3 dashboard — single source of truth.
+ *
+ * Owns the data the surfaces render from: agents, teams, threads, messages,
+ * sidebar selection set (which agents are "on" in the filter), connection
+ * health, and the active route. Components subscribe to events via `on()`
+ * and re-render when relevant state changes.
+ *
+ * This is intentionally a plain JS object with a pub/sub event bus — no
+ * framework, no observable wrapper. Mirror the v2 `src/dashboard/state.ts`
+ * pattern; we'll grow it as PR 2+ surfaces need more.
  */
+import type {
+  AgentRecord,
+  DashboardMessage,
+  Team,
+} from '../shared/types.ts';
 
-// ── State ──
+/** Where the user is in the app. */
+export type Route =
+  | { kind: 'dashboard' }
+  | { kind: 'agents' }
+  | { kind: 'watch'; agentName: string }
+  | { kind: 'approvals' }
+  | { kind: 'reminders' }
+  | { kind: 'settings' }
+  | { kind: 'search' };
 
-export const state = {
-  agents: [],
-  threads: {},
-  selected: null,
-  connected: false,
-  unread: {},
-  threadView: 'messages',
-  watchTimer: null,
-  personaCache: {},
-  searchFilter: '',
-  quickFilter: null,
-  engineUsage: {},
-  proxies: [],
-  accounts: [],
-  engineConfigs: [],
-  emptyGroups: [],
-  drafts: {},
-  topicPerAgent: {},
-  editingPersona: false,
-  indicators: {},
-  pages: [],
-  stores: [],
-  destinations: [],
-  // Internal tracking for progressive message loading
-  _threadRenderedFrom: 0,
-  _renderedAgent: null,
+export type ConnectionStatus = 'connecting' | 'connected' | 'disconnected';
+
+export type DashboardState = {
+  /** All agents known to the orchestrator. */
+  agents: AgentRecord[];
+  /** Teams as UI-only grouping. Empty array until init arrives. */
+  teams: Team[];
+  /** Threads keyed by agent name. v3 merges these for the chat view. */
+  threads: Record<string, DashboardMessage[]>;
+  /** Which agent names are currently "on" in the sidebar filter. */
+  selectedAgents: Set<string>;
+  /** WebSocket connection health. */
+  connected: ConnectionStatus;
+  /** Current route. */
+  route: Route;
+  /** Auth token for /api/* requests. */
+  token: string | null;
 };
 
-// ── Event Bus ──
-// Lightweight pub/sub for cross-component communication.
-// Events are strings; listeners receive an optional detail object.
-//
-// Standard events:
-//   'agents-changed'      — agent list structurally changed (add/remove)
-//   'agent-updated'       — single agent data changed { name }
-//   'agent-selected'      — selected agent changed { name }
-//   'message-added'       — new message appended { agent, message }
-//   'message-withdrawn'   — message withdrawn { agent, id }
-//   'thread-changed'      — thread needs re-render (tab switch)
-//   'connection-changed'  — WebSocket connected/disconnected
-//   'unread-changed'      — unread counts changed { agent }
-//   'indicators-changed'  — agent indicators changed { agent }
-//   'proxies-changed'     — proxy list changed
-//   'filter-changed'      — search or quick filter changed
+export const state: DashboardState = {
+  agents: [],
+  teams: [],
+  threads: {},
+  selectedAgents: new Set<string>(),
+  connected: 'connecting',
+  route: { kind: 'dashboard' },
+  token: null,
+};
 
-const listeners = new Map();
+/* ── pub/sub event bus ─────────────────────────────────────────────── */
 
-export function on(event, fn) {
-  if (!listeners.has(event)) listeners.set(event, new Set());
-  listeners.get(event).add(fn);
-  return () => listeners.get(event)?.delete(fn);
+type Listener = (detail?: unknown) => void;
+const listeners: Map<string, Set<Listener>> = new Map();
+
+/** Subscribe to a state-change event. Returns an unsubscribe function. */
+export function on(event: string, fn: Listener): () => void {
+  let set = listeners.get(event);
+  if (!set) {
+    set = new Set();
+    listeners.set(event, set);
+  }
+  set.add(fn);
+  return () => set!.delete(fn);
 }
 
-export function emit(event, detail) {
-  const fns = listeners.get(event);
-  if (!fns) return;
-  for (const fn of fns) {
-    try { fn(detail); } catch (e) { console.error(`[state] Event "${event}" listener error:`, e); }
+/** Emit a state-change event. */
+export function emit(event: string, detail?: unknown): void {
+  const set = listeners.get(event);
+  if (!set) return;
+  for (const fn of set) {
+    try { fn(detail); }
+    catch (err) { console.error(`[state] listener for ${event} threw:`, err); }
   }
 }
 
-// ── Token Management ──
+/* ── selection helpers ─────────────────────────────────────────────── */
 
-export function getToken() {
-  return localStorage.getItem('orchestrator_token') || '';
+/** Toggle a single agent in the sidebar selection. */
+export function toggleAgentSelected(name: string): void {
+  if (state.selectedAgents.has(name)) state.selectedAgents.delete(name);
+  else state.selectedAgents.add(name);
+  emit('selection-changed');
 }
 
-export function setToken(token) {
-  if (token) localStorage.setItem('orchestrator_token', token);
-  else localStorage.removeItem('orchestrator_token');
+/** Toggle every member of a team on/off based on the team's current state. */
+export function toggleTeam(team: Team): void {
+  const allSelected = team.members.every((m) => state.selectedAgents.has(m));
+  if (allSelected) {
+    for (const m of team.members) state.selectedAgents.delete(m);
+  } else {
+    for (const m of team.members) state.selectedAgents.add(m);
+  }
+  emit('selection-changed');
 }
 
-export function authHeaders() {
-  const t = getToken();
-  return t ? { 'authorization': `Bearer ${t}`, 'content-type': 'application/json' } : { 'content-type': 'application/json' };
+/** Master toggle: select all agents, or clear if any are selected. */
+export function toggleAllAgents(): void {
+  if (state.selectedAgents.size > 0) {
+    state.selectedAgents.clear();
+  } else {
+    for (const a of state.agents) state.selectedAgents.add(a.name);
+  }
+  emit('selection-changed');
+}
+
+/** Mark all agents as initially selected (called on init). */
+export function selectAllAgentsInitial(): void {
+  state.selectedAgents = new Set(state.agents.map((a) => a.name));
+  emit('selection-changed');
+}
+
+/* ── token ─────────────────────────────────────────────────────────── */
+
+const TOKEN_KEY = 'orchestrator_token_v3';
+
+export function loadToken(): string | null {
+  try {
+    const t = localStorage.getItem(TOKEN_KEY);
+    state.token = t;
+    return t;
+  } catch {
+    return null;
+  }
+}
+
+export function saveToken(t: string | null): void {
+  state.token = t;
+  try {
+    if (t) localStorage.setItem(TOKEN_KEY, t);
+    else localStorage.removeItem(TOKEN_KEY);
+  } catch {}
+}
+
+/** Headers for authenticated fetches. */
+export function authHeaders(): Record<string, string> {
+  const h: Record<string, string> = { 'content-type': 'application/json' };
+  if (state.token) h['authorization'] = `Bearer ${state.token}`;
+  return h;
 }

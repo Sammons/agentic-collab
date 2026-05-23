@@ -1,292 +1,253 @@
 /**
- * Connection module.
- * WebSocket lifecycle, auth prompts, engine usage polling.
+ * v3 WebSocket connection.
  *
- * Exports:
- *   setup({ renderAgents, renderThread, updatePageTitle, updateAgent,
- *           addMessage, handleMessageWithdrawn, handleQueueUpdate,
- *           patchAgentCard })                           -- wire deps
- *   handleAuthError()                                   -- clear token + prompt
- *   connect()                                           -- open/reconnect WS
- *   fetchEngineUsage()                                  -- poll /api/engines/status
+ * Connects to the orchestrator WS, applies incoming events to `state`, and
+ * emits high-level events for the surfaces to subscribe to. Reconnects on
+ * drop with exponential backoff (1s → 30s cap).
+ *
+ * Event types are shared with the v2 dashboard server. See
+ * src/orchestrator/main.ts (init payload) and src/orchestrator/routes.ts
+ * (per-event broadcasts).
  */
+import type { AgentRecord, DashboardMessage, Team } from '../shared/types.ts';
+import { state, emit, selectAllAgentsInitial, saveToken } from './state.ts';
 
-import { state, getToken, setToken } from '/dashboard/assets/state.ts';
-import { esc } from '/dashboard/assets/utils.ts';
+type WsEvent =
+  | { type: 'init'; agents: AgentRecord[]; threads: Record<string, DashboardMessage[]>; teams?: Team[] }
+  | { type: 'agents_update'; agents: AgentRecord[] }
+  | { type: 'agent_update'; agent: AgentRecord }
+  | { type: 'agent_destroyed'; name: string }
+  | { type: 'message'; msg: DashboardMessage }
+  | { type: 'teams_update'; teams: Team[] }
+  | { type: 'message_withdrawn'; msg: DashboardMessage }
+  | { type: string; [k: string]: unknown };
 
-// ── Dependencies injected via setup() ──
-let _renderAgents = () => {};
-let _renderThread = () => {};
-let _updatePageTitle = () => {};
-let _updateAgent = () => {};
-let _addMessage = () => {};
-let _handleMessageWithdrawn = () => {};
-let _handleQueueUpdate = () => {};
-let _patchAgentCard = () => {};
-
-let _onInit = () => {};
-
-export function setup({ renderAgents, renderThread, updatePageTitle, updateAgent,
-                         addMessage, handleMessageWithdrawn, handleQueueUpdate,
-                         patchAgentCard, onInit }) {
-  _renderAgents = renderAgents;
-  _renderThread = renderThread;
-  _updatePageTitle = updatePageTitle;
-  _updateAgent = updateAgent;
-  _addMessage = addMessage;
-  _handleMessageWithdrawn = handleMessageWithdrawn;
-  _handleQueueUpdate = handleQueueUpdate;
-  _patchAgentCard = patchAgentCard;
-  if (onInit) _onInit = onInit;
-}
-
-// ── Module-scoped connection state ──
-let ws = null;
-let reconnectTimer = null;
+let socket: WebSocket | null = null;
 let reconnectDelay = 1000;
-let hasEverConnected = false;
+const MAX_RECONNECT_DELAY = 30000;
+let didOpenOnce = false;
+let connectionAttempts = 0;
 
-// ── Auth ──
-
-export function handleAuthError() {
-  setToken('');
-  promptForToken('Authentication failed. Please re-enter your token.');
+function wsUrl(): string {
+  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const tok = state.token ? `?token=${encodeURIComponent(state.token)}` : '';
+  return `${proto}//${window.location.host}/ws${tok}`;
 }
 
-function promptForToken(message) {
-  // Remove existing overlay if present
-  const existing = document.querySelector('.auth-overlay');
-  if (existing) existing.remove();
+export function connect(): void {
+  state.connected = 'connecting';
+  emit('connection-changed');
+  connectionAttempts++;
+
+  try {
+    socket = new WebSocket(wsUrl());
+  } catch (err) {
+    console.error('[v3] WebSocket construction failed:', err);
+    scheduleReconnect();
+    return;
+  }
+
+  let openedThisAttempt = false;
+
+  socket.addEventListener('open', () => {
+    openedThisAttempt = true;
+    didOpenOnce = true;
+    state.connected = 'connected';
+    reconnectDelay = 1000;
+    connectionAttempts = 0;
+    emit('connection-changed');
+    console.log('[v3] WebSocket connected');
+  });
+
+  socket.addEventListener('message', (event) => {
+    let msg: WsEvent;
+    try {
+      msg = JSON.parse(String(event.data));
+    } catch {
+      return;
+    }
+    handle(msg);
+  });
+
+  socket.addEventListener('close', () => {
+    state.connected = 'disconnected';
+    emit('connection-changed');
+    // Auth detection: WS closes before opening + we never had a working
+    // session = the server probably 401'd us. Prompt for a token.
+    if (!openedThisAttempt && !didOpenOnce && connectionAttempts >= 1) {
+      void promptForToken();
+      return;
+    }
+    scheduleReconnect();
+  });
+
+  socket.addEventListener('error', () => {
+    // 'close' will follow; reconnect is handled there.
+  });
+}
+
+async function promptForToken(message?: string): Promise<void> {
+  // If the orchestrator isn't reachable at all, fall through to reconnect —
+  // don't blame the token.
+  try {
+    const res = await fetch('/api/orchestrator/status');
+    if (!res.ok && res.status !== 401) {
+      scheduleReconnect();
+      return;
+    }
+  } catch {
+    scheduleReconnect();
+    return;
+  }
+
+  // Remove any existing overlay first.
+  document.querySelector('.auth-overlay')?.remove();
 
   const overlay = document.createElement('div');
   overlay.className = 'auth-overlay';
   overlay.innerHTML = `
     <div class="auth-box">
-      <h2>Agentic Collab</h2>
-      <p>${esc(message || 'Enter your orchestrator token to connect, or skip for dev mode (no auth).')}</p>
-      <input type="password" id="authTokenInput" placeholder="Orchestrator token" autocomplete="off" />
+      <div class="eyebrow">agentic-collab</div>
+      <h2>Sign in</h2>
+      <p class="lede">${escapeAuth(message || "Enter your orchestrator token to connect. It's saved on this device only — find it at <code>~/.config/agentic-collab/secret</code> or <code>$ORCHESTRATOR_SECRET</code>.")}</p>
+      <input type="password" class="auth-input" placeholder="Orchestrator token" autocomplete="off" spellcheck="false">
       <div class="auth-actions">
-        <button class="secondary" id="authSkipBtn">Dev Mode</button>
-        <button class="primary" id="authConnectBtn">Connect</button>
+        <button class="btn ghost" data-skip>Dev mode (no auth)</button>
+        <button class="btn primary" data-submit>Connect</button>
       </div>
     </div>
   `;
-
-  function submit(token) {
-    setToken(token);
-    overlay.remove();
-    // Reconnect with new token
-    if (ws) { ws.onclose = null; ws.close(); }
-    connect();
-  }
-
-  overlay.querySelector('#authConnectBtn').onclick = () => {
-    const val = document.getElementById('authTokenInput').value.trim();
-    if (!val) { document.getElementById('authTokenInput').style.borderColor = 'var(--red)'; return; }
-    submit(val);
-  };
-  overlay.querySelector('#authSkipBtn').onclick = () => submit('');
-  overlay.querySelector('#authTokenInput').onkeydown = (e) => {
-    if (e.key === 'Enter') overlay.querySelector('#authConnectBtn').click();
-  };
-
   document.body.appendChild(overlay);
-  setTimeout(() => document.getElementById('authTokenInput')?.focus(), 50);
-}
 
-// ── WebSocket ──
+  const input = overlay.querySelector<HTMLInputElement>('.auth-input')!;
+  const submitBtn = overlay.querySelector<HTMLButtonElement>('[data-submit]')!;
+  const skipBtn = overlay.querySelector<HTMLButtonElement>('[data-skip]')!;
+  if (state.token) input.value = state.token;
 
-export function connect() {
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const token = getToken();
-  const tokenParam = token ? `?token=${encodeURIComponent(token)}` : '';
-  let opened = false;
-  ws = new WebSocket(`${proto}://${location.host}/ws${tokenParam}`);
+  setTimeout(() => input.focus(), 30);
 
-  ws.onopen = () => {
-    opened = true;
-    hasEverConnected = true;
-    state.connected = true;
+  const submit = (tok: string) => {
+    saveToken(tok || null);
+    overlay.remove();
+    connectionAttempts = 0;
     reconnectDelay = 1000;
-    updateConnStatus();
-    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+    if (socket) {
+      // Drop the old handlers so the auto-reconnect doesn't fire twice.
+      socket.onclose = null;
+      try { socket.close(); } catch {}
+      socket = null;
+    }
+    connect();
   };
 
-  ws.onclose = () => {
-    state.connected = false;
-    updateConnStatus();
-    if (!opened) {
-      if (!hasEverConnected) {
-        // First connect attempt failed -- likely auth failure (401 on upgrade)
-        setToken('');
-        promptForToken('Connection rejected -- enter your orchestrator token.');
-        return;
-      }
-      // Previously connected but reconnect failed -- network issue, keep retrying
-    }
-    const jitter = Math.random() * 1000;
-    reconnectTimer = setTimeout(connect, reconnectDelay + jitter);
-    reconnectDelay = Math.min(reconnectDelay * 2, 30000);
-  };
-
-  ws.onerror = () => ws.close();
-
-  ws.onmessage = (evt) => {
-    let data;
-    try {
-      data = JSON.parse(evt.data);
-    } catch (err) {
-      console.warn('Malformed WebSocket frame:', err);
-      return;
-    }
-    switch (data.type) {
-      case 'init':
-        state.agents = data.agents;
-        state.threads = data.threads;
-        state.proxies = data.proxies || [];
-        state.accounts = data.accounts || [];
-        state.engineConfigs = data.engineConfigs || [];
-        state.indicators = data.indicators || {};
-        state.pages = data.pages || [];
-        state.stores = data.stores || [];
-        state.destinations = data.destinations || [];
-        // Restore unread counts from server, preserving any live increments
-        if (data.unreadCounts) {
-          for (const [agent, count] of Object.entries(data.unreadCounts)) {
-            // Only set if not already tracked (preserves counts from messages received this session)
-            if (state.unread[agent] === undefined) {
-              state.unread[agent] = count;
-            }
-          }
-        }
-        _renderAgents();
-        _renderThread();
-        _updatePageTitle();
-        _onInit();
-        break;
-      case 'agents_update':
-        state.agents = data.agents;
-        if (data.engineConfigs) state.engineConfigs = data.engineConfigs;
-        _renderAgents();
-        break;
-      case 'agent_update':
-        _updateAgent(data.agent);
-        break;
-      case 'message':
-        _addMessage(data.msg);
-        break;
-      case 'queue_update':
-        _handleQueueUpdate(data.message);
-        break;
-      case 'message_withdrawn':
-        _handleMessageWithdrawn(data.msg);
-        break;
-      case 'proxy_update':
-        if (data.proxies) {
-          state.proxies = data.proxies;
-          // Patch only agents that have a proxyId -- no full rebuild
-          for (const agent of state.agents) {
-            if (!agent.proxyId) continue;
-            const card = document.querySelector(`[data-agent="${agent.name}"]`);
-            if (card) _patchAgentCard(card, agent);
-          }
-        }
-        break;
-      case 'agent_destroyed':
-        state.agents = state.agents.filter(a => a.name !== data.name);
-        delete state.threads[data.name];
-        delete state.unread[data.name];
-        if (state.selected === data.name) {
-          state.selected = null;
-          _renderThread();
-        }
-        _renderAgents();
-        break;
-      case 'indicator_update':
-        state.indicators[data.agentName] = data.indicators;
-        { const card = document.querySelector(`[data-agent="${data.agentName}"]`);
-          const agent = state.agents.find(a => a.name === data.agentName);
-          if (card && agent) _patchAgentCard(card, agent);
-          else _renderAgents(); }
-        break;
-      case 'engine_config_update': {
-        const idx = state.engineConfigs.findIndex(c => c.name === data.config.name);
-        if (idx >= 0) state.engineConfigs[idx] = data.config;
-        else state.engineConfigs.push(data.config);
-        break;
-      }
-      case 'engine_config_deleted':
-        state.engineConfigs = state.engineConfigs.filter(c => c.name !== data.name);
-        break;
-      case 'pages_update':
-        state.pages = data.pages || [];
-        { const sp = document.getElementById('settingsPanel');
-          if (sp && sp.style.display !== 'none' && sp.render) sp.render(); }
-        break;
-      case 'stores_update':
-        state.stores = data.stores || [];
-        break;
-      case 'destinations_update':
-        state.destinations = data.destinations || [];
-        { const sp = document.getElementById('settingsPanel');
-          if (sp && sp.style.display !== 'none' && sp.render) sp.render(); }
-        break;
-      case 'reminder_update':
-        if (state.threadView === 'reminders') {
-          const rp = document.getElementById('reminderPanel');
-          if (rp && rp.load && state.selected) rp.load(state.selected);
-        }
-        break;
-      case 'notification':
-        if (document.hidden && 'Notification' in window && Notification.permission === 'granted') {
-          const title = data.agent ? `[${data.agent}]` : 'Agentic Collab';
-          new Notification(title, { body: data.message, tag: 'collab-notify' });
-        } else if ('Notification' in window && Notification.permission === 'default') {
-          Notification.requestPermission();
-        }
-        break;
-    }
-  };
-}
-
-// ── Connection Status ──
-
-function updateConnStatus() {
-  const dot = document.getElementById('connDot');
-  const label = document.getElementById('connLabel');
-  dot.classList.toggle('connected', state.connected);
-  label.textContent = state.connected ? 'Connected' : 'Disconnected';
-}
-
-// ── Engine Usage ──
-
-export async function fetchEngineUsage() {
-  try {
-    const resp = await fetch('/api/engines/status', {
-      headers: getToken() ? { 'Authorization': `Bearer ${getToken()}` } : {},
-    });
-    if (!resp.ok) return;
-    const data = await resp.json();
-    if (data.usage) {
-      state.engineUsage = data.usage;
-      _renderAgents();
-    }
-  } catch { /* ignore */ }
-}
-
-/**
- * Trigger a fresh usage poll (may recycle tmux sessions).
- * Shows loading state during the operation.
- */
-export async function pollEngineUsage() {
-  const resp = await fetch('/api/engines/poll', {
-    method: 'POST',
-    headers: getToken() ? { 'Authorization': `Bearer ${getToken()}` } : {},
+  submitBtn.addEventListener('click', () => {
+    const val = input.value.trim();
+    if (!val) { input.style.borderColor = 'var(--brick)'; return; }
+    submit(val);
   });
-  if (!resp.ok) throw new Error(`Poll failed: ${resp.status}`);
-  const data = await resp.json();
-  if (data.usage) {
-    state.engineUsage = data.usage;
-    _renderAgents();
+  skipBtn.addEventListener('click', () => submit(''));
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      submitBtn.click();
+    }
+  });
+}
+
+function escapeAuth(s: string): string {
+  // Trust HTML inside the message (lets us bold things, render <code>).
+  return s;
+}
+
+function scheduleReconnect(): void {
+  setTimeout(() => {
+    if (state.connected !== 'connected') connect();
+  }, reconnectDelay);
+  reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY);
+}
+
+function handle(msg: WsEvent): void {
+  switch (msg.type) {
+    case 'init': {
+      const initMsg = msg as Extract<WsEvent, { type: 'init' }>;
+      state.agents = initMsg.agents ?? [];
+      state.threads = initMsg.threads ?? {};
+      state.teams = initMsg.teams ?? [];
+      selectAllAgentsInitial();
+      emit('init');
+      emit('agents-changed');
+      emit('teams-changed');
+      break;
+    }
+    case 'agents_update': {
+      const u = msg as Extract<WsEvent, { type: 'agents_update' }>;
+      state.agents = u.agents ?? [];
+      emit('agents-changed');
+      break;
+    }
+    case 'agent_update': {
+      const u = msg as Extract<WsEvent, { type: 'agent_update' }>;
+      const idx = state.agents.findIndex((a) => a.name === u.agent.name);
+      if (idx >= 0) state.agents[idx] = u.agent;
+      else state.agents.push(u.agent);
+      emit('agents-changed');
+      break;
+    }
+    case 'agent_destroyed': {
+      const u = msg as Extract<WsEvent, { type: 'agent_destroyed' }>;
+      state.agents = state.agents.filter((a) => a.name !== u.name);
+      state.selectedAgents.delete(u.name);
+      delete state.threads[u.name];
+      emit('agents-changed');
+      break;
+    }
+    case 'teams_update': {
+      const u = msg as Extract<WsEvent, { type: 'teams_update' }>;
+      state.teams = u.teams ?? [];
+      emit('teams-changed');
+      break;
+    }
+    case 'message': {
+      const u = msg as Extract<WsEvent, { type: 'message' }>;
+      const agentName = u.msg.agent;
+      const list = state.threads[agentName] ?? [];
+      // Idempotent: skip if we've already seen this id (HTTP-fallback path).
+      if (list.some((m) => m.id === u.msg.id)) {
+        state.threads[agentName] = list;
+        break;
+      }
+      // Dedupe optimistic→real: when an outbound message we sent comes back
+      // from the server, replace the negative-id optimistic row in place
+      // instead of pushing a duplicate.
+      const optimisticIdx = list.findIndex((m) =>
+        m.id < 0 &&
+        m.agent === u.msg.agent &&
+        m.message === u.msg.message &&
+        m.direction === u.msg.direction,
+      );
+      if (optimisticIdx >= 0) {
+        list[optimisticIdx] = u.msg;
+      } else {
+        list.push(u.msg);
+      }
+      state.threads[agentName] = list;
+      emit('message', u.msg);
+      break;
+    }
+    case 'message_withdrawn': {
+      const u = msg as Extract<WsEvent, { type: 'message_withdrawn' }>;
+      const list = state.threads[u.msg.agent];
+      if (list) {
+        const i = list.findIndex((m) => m.id === u.msg.id);
+        if (i >= 0) list[i] = u.msg;
+      }
+      emit('message-withdrawn', u.msg);
+      break;
+    }
+    default:
+      // Other event types (queue_update, indicator_update, etc.) — passed
+      // through for surface-specific handlers in later PRs.
+      emit(`ws:${msg.type}`, msg);
+      break;
   }
 }

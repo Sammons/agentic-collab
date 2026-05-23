@@ -1,0 +1,303 @@
+/* ──────────────────────────────────────────────────────────────────────
+   Sidebar — nav actions + Teams checkbox tree
+   See ../sidebar.ts for the <v3-sidebar> web component.
+   ────────────────────────────────────────────────────────────────────── */
+
+.sidebar-inner {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 18px 0 12px;
+}
+
+.nav-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 0 10px 14px;
+  border-bottom: 1px solid var(--rule-soft);
+}
+
+.nav-action {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: 3px;
+  font-family: var(--sans);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink-2);
+  cursor: pointer;
+  background: transparent;
+  border: none;
+  text-align: left;
+  transition: background 140ms ease, color 140ms ease;
+}
+.nav-action:hover { background: var(--paper-2); color: var(--ink); }
+.nav-action.active {
+  background: var(--ink);
+  color: var(--paper-card);
+}
+.nav-action.active .ico { color: var(--paper-card); }
+.nav-action .ico {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-3);
+  width: 16px;
+  flex: 0 0 16px;
+}
+.nav-action:hover .ico { color: var(--ink); }
+.nav-action .label { flex: 1; }
+.nav-action .badge {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  background: var(--clay);
+  color: var(--paper-card);
+  padding: 1px 6px;
+  border-radius: 8px;
+  font-weight: 600;
+}
+.nav-action.active .badge {
+  background: var(--paper-card);
+  color: var(--ink);
+}
+
+.nav-section-label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 14px 18px 6px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--ink-4);
+}
+.nav-section-label .ct {
+  color: var(--ink-4);
+}
+
+/* Teams tree */
+.teams {
+  flex: 1;
+  padding: 0 10px;
+  overflow-y: auto;
+}
+
+.all-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border-radius: 3px;
+  font-family: var(--sans);
+  font-size: 13px;
+  color: var(--ink-2);
+  cursor: pointer;
+  transition: background 140ms ease;
+}
+.all-toggle:hover { background: var(--paper-hover); }
+.all-toggle .check {
+  width: 13px; height: 13px;
+  border: 1.5px solid var(--rule-strong);
+  border-radius: 2px;
+  position: relative;
+  flex: 0 0 13px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--paper-card);
+}
+.all-toggle.checked .check {
+  background: var(--ink);
+  border-color: var(--ink);
+}
+.all-toggle.checked .check::after {
+  content: "";
+  width: 5px; height: 3px;
+  border-left: 1.5px solid var(--paper-card);
+  border-bottom: 1.5px solid var(--paper-card);
+  transform: rotate(-45deg);
+  margin-top: -2px;
+}
+.all-toggle.indeterminate .check {
+  background: var(--ink);
+  border-color: var(--ink);
+}
+.all-toggle.indeterminate .check::after {
+  content: "";
+  width: 7px; height: 1.5px;
+  background: var(--paper-card);
+}
+.all-toggle .nm { flex: 1; font-weight: 500; }
+.all-toggle .ct {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink-3);
+}
+
+.team {
+  margin-top: 2px;
+}
+.team-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border-radius: 3px;
+  font-family: var(--sans);
+  font-size: 12.5px;
+  color: var(--ink-2);
+  cursor: pointer;
+  transition: background 140ms ease;
+}
+.team-row:hover { background: var(--paper-hover); }
+.team.selected .team-row { background: var(--paper-sel); }
+.team-row .chev {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 10px;
+  color: var(--ink-3);
+  transition: transform 140ms ease;
+  flex: 0 0 10px;
+}
+.team:not(.open) .team-row .chev { transform: rotate(-90deg); }
+.team-row .folder {
+  display: inline-flex;
+  align-items: center;
+  color: var(--ink-3);
+  width: 14px;
+  flex: 0 0 14px;
+}
+.team-row .name { flex: 1; }
+.team-row .ct {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink-3);
+}
+
+.team-members {
+  display: none;
+  padding: 2px 0 4px 28px;
+}
+.team.open .team-members { display: block; }
+
+/* synthetic "no team" group — secondary visual weight */
+.team.no-team .team-row .name {
+  color: var(--ink-4);
+  font-style: italic;
+}
+.team.no-team .team-row .folder { color: var(--ink-4); }
+.team.no-team { margin-top: 6px; }
+
+.member {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border-radius: 3px;
+  font-family: var(--sans);
+  font-size: 12.5px;
+  color: var(--ink-2);
+  cursor: pointer;
+  transition: background 140ms ease;
+}
+.member:hover { background: var(--paper-hover); }
+.member .check {
+  width: 12px; height: 12px;
+  border: 1.5px solid var(--rule-strong);
+  border-radius: 2px;
+  flex: 0 0 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--paper-card);
+}
+.member.checked .check {
+  background: var(--ink);
+  border-color: var(--ink);
+}
+.member.checked .check::after {
+  content: "";
+  width: 4px; height: 2px;
+  border-left: 1.5px solid var(--paper-card);
+  border-bottom: 1.5px solid var(--paper-card);
+  transform: rotate(-45deg);
+  margin-top: -1px;
+}
+/* status dot — between checkbox and name. Color reflects agent state. */
+.member .status {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  flex: 0 0 7px;
+  background: var(--ink-4);
+  box-shadow: 0 0 0 1.5px var(--paper);
+  transition: background 140ms ease;
+}
+.member .status.online { background: var(--moss); }
+.member .status.busy {
+  background: var(--clay);
+  animation: status-pulse 1.6s ease-in-out infinite;
+}
+.member .status.paused { background: var(--plum); }
+.member .status.failed { background: var(--brick); }
+.member .status.offline { background: var(--ink-4); }
+@keyframes status-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.45; }
+}
+.member .nm { flex: 1; color: var(--ink-3); }
+.member.checked .nm { color: var(--ink); }
+.member .eye {
+  color: var(--ink-4);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  flex: 0 0 14px;
+  opacity: 0;
+  transition: opacity 140ms ease, color 140ms ease;
+}
+.member:hover .eye { opacity: 1; }
+.member.watching .eye {
+  opacity: 1;
+  color: var(--clay);
+}
+
+.nav-newteam {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  margin-top: 8px;
+  color: var(--steel);
+  font-size: 12.5px;
+  cursor: pointer;
+  border-radius: 3px;
+  border: 1px dashed transparent;
+  transition: border-color 140ms ease, color 140ms ease;
+}
+.nav-newteam:hover {
+  color: var(--ink);
+  border-color: var(--rule);
+}
+.nav-newteam .plus {
+  font-size: 14px;
+  line-height: 1;
+}
+
+.nav-bottom {
+  padding: 12px 10px 0;
+  border-top: 1px solid var(--rule-soft);
+}
+
+/* loading state shown before init payload arrives */
+.sidebar-loading {
+  padding: 20px 18px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--ink-4);
+}

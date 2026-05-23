@@ -1,0 +1,177 @@
+  /* ── Responsive ── */
+  @media (max-width: 768px) {
+    html, body { overflow-x: hidden; }
+    .layout { grid-template-columns: 1fr; grid-template-rows: 1fr; }
+    .agent-list {
+      border-right: none;
+      height: calc(100vh - 49px);
+      height: calc(100dvh - 49px);
+      max-height: none;
+    }
+    .thread-panel { height: calc(100vh - 49px); height: calc(100dvh - 49px); }
+    .layout.mobile-thread .agent-sidebar { display: none; }
+    .layout.mobile-thread .thread-panel { display: flex; }
+    .layout:not(.mobile-thread) .thread-panel { display: none; }
+    .layout:not(.mobile-thread) .agent-sidebar { display: flex; }
+    .mobile-back { display: block; }
+    .msg { max-width: 85%; }
+    .thread-input {
+      padding: 8px 10px;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .thread-input textarea {
+      font-size: 16px; /* prevent iOS zoom */
+      flex: 0 0 100%;
+    }
+    /* Controls row: prevent wrapping, let items shrink to fit */
+    .thread-input .upload-wrap,
+    .thread-input .voice-controls,
+    .thread-input button {
+      flex-shrink: 1;
+    }
+    .thread-input button {
+      min-width: 0;
+      padding: 8px 10px;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    .voice-toggle button {
+      font-size: 16px; /* prevent iOS zoom */
+      padding: 6px 8px;
+    }
+    .voice-controls.voice-enabled .voice-btn {
+      display: none;
+    }
+    .voice-partial { display: none; }
+    header h1 { font-size: 14px; }
+    header { padding: 10px 12px; }
+    .hotkey-hints { display: none; }
+    .agent-card { padding: 10px; }
+    .agent-card[draggable] { cursor: pointer; }
+    .drag-handle {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: absolute;
+      right: 8px;
+      top: 50%;
+      transform: translateY(-50%);
+      font-size: 22px;
+      color: var(--text-dim);
+      cursor: grab;
+      padding: 8px 4px;
+      touch-action: none;
+      -webkit-touch-callout: none;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    .drag-handle:active { color: var(--accent); }
+    .filtered .drag-handle { display: none; }
+    .filtered .agent-card { padding-right: 10px; }
+    .agent-card { position: relative; padding-right: 40px; }
+    .agent-header { flex-wrap: wrap; gap: 4px; }
+    .agent-name {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: calc(100vw - 140px);
+    }
+    .agent-meta {
+      flex-wrap: wrap;
+      gap: 6px 10px;
+    }
+    .agent-meta span {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: calc(100vw - 60px);
+    }
+    .agent-actions { gap: 4px; }
+    .agent-actions button { padding: 4px 8px; font-size: 11px; }
+    .agent-search { padding: 8px; }
+    .filter-chips { padding: 0 8px 6px; }
+    .agent-search .search-icon { left: 18px; }
+    .agent-search .search-clear { right: 14px; }
+    .agent-list { padding: 8px; overflow-x: hidden; }
+    .create-form-body input,
+    .create-form-body select,
+    .create-form-body textarea { font-size: 16px; } /* prevent iOS zoom */
+    .thread-header {
+      padding: 10px 12px;
+      gap: 6px;
+    }
+    .thread-header-top {
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .thread-header-top > span {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 45vw;
+    }
+    .thread-tabs {
+      width: 100%;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: none;
+    }
+    .thread-tabs::-webkit-scrollbar { display: none; }
+    .thread-tabs button {
+      flex: 1 0 auto;
+      text-align: center;
+      min-width: 0;
+    }
+    .thread-actions {
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+      flex-wrap: nowrap;
+    }
+    .thread-messages { padding: 12px 10px; }
+    .msg-header {
+      gap: 4px;
+    }
+    .persona-panel { padding: 14px 10px; }
+    .reminder-panel { padding: 14px 10px; }
+    .watch-panel { padding: 10px 8px; font-size: 11px; }
+
+    /* Mobile mic toggle button */
+    .mobile-mic-btn {
+      display: none; /* hidden until PTT mode active */
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      border: 2px solid var(--border);
+      background: var(--surface);
+      color: var(--text-dim);
+      cursor: pointer;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      flex-shrink: 0;
+      transition: all 0.15s;
+      touch-action: manipulation;
+      -webkit-touch-callout: none;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    .mobile-mic-btn.ptt-active {
+      display: flex;
+    }
+    .mobile-mic-btn.loading {
+      border-color: var(--accent);
+      opacity: 0.5;
+      pointer-events: none;
+    }
+    .mobile-mic-btn.recording {
+      border-color: #e74c3c;
+      background: #e74c3c;
+      color: #fff;
+      animation: mobile-mic-pulse 1.5s ease-in-out infinite;
+    }
+    @keyframes mobile-mic-pulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(231, 76, 60, 0.4); }
+      50% { box-shadow: 0 0 0 8px rgba(231, 76, 60, 0); }
+    }
+  }

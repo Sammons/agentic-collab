@@ -10,3 +10,4 @@ src/test/ui/snapshots/
 .DS_Store
 *.log
 .build-version
+.claude/worktrees/

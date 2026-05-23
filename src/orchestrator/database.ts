@@ -27,6 +27,7 @@ import type {
   PageRecord,
   DataStoreRecord,
   DestinationRecord,
+  Team,
   TopicQueueRow,
   TopicQueueStatus,
   TopicRow,
@@ -404,6 +405,27 @@ export class Database {
         updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
       )
     `);
+
+    // Teams (v3 UI grouping) — many-to-many with agents, no kernel behavior.
+    // Used as a filter source in the v3 dashboard sidebar.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS teams (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        name       TEXT NOT NULL UNIQUE,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+      )
+    `);
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS team_members (
+        team_id    INTEGER NOT NULL,
+        agent_name TEXT NOT NULL,
+        added_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        PRIMARY KEY (team_id, agent_name),
+        FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE
+      )
+    `);
+    // Enable FK enforcement (off by default in SQLite). Idempotent.
+    this.db.exec('PRAGMA foreign_keys = ON');
   }
 
   /** Expose raw handle for LockManager (shares same DB connection). */
@@ -1867,6 +1889,106 @@ export class Database {
   deleteDestination(name: string): boolean {
     const result = this.db.prepare('DELETE FROM destinations WHERE name = ?').run(name);
     return result.changes > 0;
+  }
+
+  // ── Teams (v3 UI grouping) ──
+
+  listTeams(): Team[] {
+    const teamRows = this.db.prepare('SELECT * FROM teams ORDER BY name ASC').all() as Array<Record<string, unknown>>;
+    if (teamRows.length === 0) return [];
+    const memberRows = this.db.prepare(
+      'SELECT team_id, agent_name FROM team_members ORDER BY agent_name ASC'
+    ).all() as Array<Record<string, unknown>>;
+    const byTeam = new Map<number, string[]>();
+    for (const m of memberRows) {
+      const tid = m['team_id'] as number;
+      const arr = byTeam.get(tid) ?? [];
+      arr.push(m['agent_name'] as string);
+      byTeam.set(tid, arr);
+    }
+    return teamRows.map((r) => ({
+      id: r['id'] as number,
+      name: r['name'] as string,
+      members: byTeam.get(r['id'] as number) ?? [],
+      createdAt: r['created_at'] as string,
+    }));
+  }
+
+  getTeam(id: number): Team | undefined {
+    const row = this.db.prepare('SELECT * FROM teams WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+    if (!row) return undefined;
+    const members = (this.db.prepare(
+      'SELECT agent_name FROM team_members WHERE team_id = ? ORDER BY agent_name ASC'
+    ).all(id) as Array<Record<string, unknown>>).map((m) => m['agent_name'] as string);
+    return {
+      id: row['id'] as number,
+      name: row['name'] as string,
+      members,
+      createdAt: row['created_at'] as string,
+    };
+  }
+
+  /**
+   * Create a team. Throws if `name` is empty, malformed, or already exists.
+   * Optional `members` are inserted in the same transaction; unknown agent
+   * names are accepted (teams are UI-only and an agent may exist later).
+   */
+  createTeam(name: string, members: string[] = []): Team {
+    const trimmed = name.trim();
+    if (!trimmed) throw new Error('Team name is required');
+    if (trimmed.length > 64) throw new Error('Team name must be 64 characters or fewer');
+
+    const tx = this.db.prepare('INSERT INTO teams (name) VALUES (?)');
+    const result = tx.run(trimmed);
+    const id = Number(result.lastInsertRowid);
+    if (members.length > 0) {
+      const insertMember = this.db.prepare(
+        'INSERT OR IGNORE INTO team_members (team_id, agent_name) VALUES (?, ?)'
+      );
+      for (const m of new Set(members)) {
+        const trimmedMember = m.trim();
+        if (trimmedMember) insertMember.run(id, trimmedMember);
+      }
+    }
+    return this.getTeam(id)!;
+  }
+
+  updateTeamName(id: number, name: string): Team | undefined {
+    const trimmed = name.trim();
+    if (!trimmed) throw new Error('Team name is required');
+    if (trimmed.length > 64) throw new Error('Team name must be 64 characters or fewer');
+    const result = this.db.prepare('UPDATE teams SET name = ? WHERE id = ?').run(trimmed, id);
+    if (result.changes === 0) return undefined;
+    return this.getTeam(id);
+  }
+
+  deleteTeam(id: number): boolean {
+    // ON DELETE CASCADE removes team_members rows.
+    const result = this.db.prepare('DELETE FROM teams WHERE id = ?').run(id);
+    return result.changes > 0;
+  }
+
+  /**
+   * Add a member. Returns the refreshed team, or undefined if the team is gone.
+   * Idempotent — re-adding an existing member is a no-op (PK conflict ignored).
+   */
+  addTeamMember(teamId: number, agentName: string): Team | undefined {
+    const trimmed = agentName.trim();
+    if (!trimmed) throw new Error('agentName is required');
+    if (!this.getTeam(teamId)) return undefined;
+    this.db.prepare(
+      'INSERT OR IGNORE INTO team_members (team_id, agent_name) VALUES (?, ?)'
+    ).run(teamId, trimmed);
+    return this.getTeam(teamId);
+  }
+
+  /** Remove a member. Returns the refreshed team, or undefined if the team is gone. */
+  removeTeamMember(teamId: number, agentName: string): Team | undefined {
+    if (!this.getTeam(teamId)) return undefined;
+    this.db.prepare(
+      'DELETE FROM team_members WHERE team_id = ? AND agent_name = ?'
+    ).run(teamId, agentName);
+    return this.getTeam(teamId);
   }
 }
 

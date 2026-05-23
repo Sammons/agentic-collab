@@ -261,6 +261,26 @@ export type Reminder = {
   createdAt: string;
 };
 
+// ── Teams (v3 UI grouping) ──
+
+/**
+ * A team is a UI-only grouping of agents used as a filter source in the v3
+ * dashboard sidebar. Teams have no behavioral effect on the kernel — they
+ * only shape what the operator sees in chat, reminders, and search. An
+ * agent can belong to multiple teams (many-to-many).
+ *
+ * Schema lives in two tables:
+ *   teams(id, name UNIQUE, created_at)
+ *   team_members(team_id, agent_name, added_at, PK(team_id, agent_name))
+ * Deleting a team cascades to its membership rows.
+ */
+export type Team = {
+  id: number;
+  name: string;
+  members: string[]; // agent names (sorted)
+  createdAt: string;
+};
+
 // ── Proxy Registration ──
 
 export type ProxyRegistration = {
@@ -574,7 +594,16 @@ export type ProxyCommand =
   | { action: 'remove_codex_profile'; profileName: string }
   | { action: 'exec'; command: string; cwd?: string; timeoutMs?: number }
   | { action: 'resize_pane'; sessionName: string; width: number; height: number }
-  | { action: 'clear_history'; sessionName: string };
+  | { action: 'clear_history'; sessionName: string }
+  /**
+   * List a directory on the proxy host. `path` is the absolute path to read;
+   * if empty, the proxy interprets it as $HOME. `showHidden` includes entries
+   * starting with `.` (default false). Returns:
+   *   { path: <resolved absolute>, entries: [{ name, kind: 'dir'|'file'|'link' }] }
+   * Used by the v3 dashboard's CWD picker so agents can be created against
+   * paths that exist on the host (orchestrator is in Docker, can't read host fs).
+   */
+  | { action: 'list_dir'; path: string; showHidden?: boolean };
 
 export type ProxyResponse = {
   ok: boolean;

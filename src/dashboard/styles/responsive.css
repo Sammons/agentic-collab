@@ -1,177 +1,373 @@
-  /* ── Responsive ── */
-  @media (max-width: 768px) {
-    html, body { overflow-x: hidden; }
-    .layout { grid-template-columns: 1fr; grid-template-rows: 1fr; }
-    .agent-list {
-      border-right: none;
-      height: calc(100vh - 49px);
-      height: calc(100dvh - 49px);
-      max-height: none;
-    }
-    .thread-panel { height: calc(100vh - 49px); height: calc(100dvh - 49px); }
-    .layout.mobile-thread .agent-sidebar { display: none; }
-    .layout.mobile-thread .thread-panel { display: flex; }
-    .layout:not(.mobile-thread) .thread-panel { display: none; }
-    .layout:not(.mobile-thread) .agent-sidebar { display: flex; }
-    .mobile-back { display: block; }
-    .msg { max-width: 85%; }
-    .thread-input {
-      padding: 8px 10px;
-      gap: 6px;
-      flex-wrap: wrap;
-    }
-    .thread-input textarea {
-      font-size: 16px; /* prevent iOS zoom */
-      flex: 0 0 100%;
-    }
-    /* Controls row: prevent wrapping, let items shrink to fit */
-    .thread-input .upload-wrap,
-    .thread-input .voice-controls,
-    .thread-input button {
-      flex-shrink: 1;
-    }
-    .thread-input button {
-      min-width: 0;
-      padding: 8px 10px;
-      font-size: 12px;
-      white-space: nowrap;
-    }
-    .voice-toggle button {
-      font-size: 16px; /* prevent iOS zoom */
-      padding: 6px 8px;
-    }
-    .voice-controls.voice-enabled .voice-btn {
-      display: none;
-    }
-    .voice-partial { display: none; }
-    header h1 { font-size: 14px; }
-    header { padding: 10px 12px; }
-    .hotkey-hints { display: none; }
-    .agent-card { padding: 10px; }
-    .agent-card[draggable] { cursor: pointer; }
-    .drag-handle {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      position: absolute;
-      right: 8px;
-      top: 50%;
-      transform: translateY(-50%);
-      font-size: 22px;
-      color: var(--text-dim);
-      cursor: grab;
-      padding: 8px 4px;
-      touch-action: none;
-      -webkit-touch-callout: none;
-      -webkit-user-select: none;
-      user-select: none;
-    }
-    .drag-handle:active { color: var(--accent); }
-    .filtered .drag-handle { display: none; }
-    .filtered .agent-card { padding-right: 10px; }
-    .agent-card { position: relative; padding-right: 40px; }
-    .agent-header { flex-wrap: wrap; gap: 4px; }
-    .agent-name {
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      max-width: calc(100vw - 140px);
-    }
-    .agent-meta {
-      flex-wrap: wrap;
-      gap: 6px 10px;
-    }
-    .agent-meta span {
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      max-width: calc(100vw - 60px);
-    }
-    .agent-actions { gap: 4px; }
-    .agent-actions button { padding: 4px 8px; font-size: 11px; }
-    .agent-search { padding: 8px; }
-    .filter-chips { padding: 0 8px 6px; }
-    .agent-search .search-icon { left: 18px; }
-    .agent-search .search-clear { right: 14px; }
-    .agent-list { padding: 8px; overflow-x: hidden; }
-    .create-form-body input,
-    .create-form-body select,
-    .create-form-body textarea { font-size: 16px; } /* prevent iOS zoom */
-    .thread-header {
-      padding: 10px 12px;
-      gap: 6px;
-    }
-    .thread-header-top {
-      flex-wrap: wrap;
-      gap: 6px;
-    }
-    .thread-header-top > span {
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      max-width: 45vw;
-    }
-    .thread-tabs {
-      width: 100%;
-      overflow-x: auto;
-      -webkit-overflow-scrolling: touch;
-      scrollbar-width: none;
-    }
-    .thread-tabs::-webkit-scrollbar { display: none; }
-    .thread-tabs button {
-      flex: 1 0 auto;
-      text-align: center;
-      min-width: 0;
-    }
-    .thread-actions {
-      overflow-x: auto;
-      -webkit-overflow-scrolling: touch;
-      flex-wrap: nowrap;
-    }
-    .thread-messages { padding: 12px 10px; }
-    .msg-header {
-      gap: 4px;
-    }
-    .persona-panel { padding: 14px 10px; }
-    .reminder-panel { padding: 14px 10px; }
-    .watch-panel { padding: 10px 8px; font-size: 11px; }
+/* ──────────────────────────────────────────────────────────────────────
+   Responsive — mobile-first overrides
+   The base styles target desktop (sidebar + main). Below 768px:
+     • Sidebar becomes a slide-in drawer (left edge), reachable via the
+       hamburger button at top-left.
+     • Page headers stack vertically. Filter chip rows scroll horizontally.
+     • Master-detail (Approvals) becomes a navigable stack — show master
+       first; selecting an item swaps in the detail with a back button.
+     • Modal overlays become near-full-screen.
+     • Touch targets bump to ≥40px tall.
+   ────────────────────────────────────────────────────────────────────── */
 
-    /* Mobile mic toggle button */
-    .mobile-mic-btn {
-      display: none; /* hidden until PTT mode active */
-      width: 40px;
-      height: 40px;
-      border-radius: 50%;
-      border: 2px solid var(--border);
-      background: var(--surface);
-      color: var(--text-dim);
-      cursor: pointer;
-      align-items: center;
-      justify-content: center;
-      padding: 0;
-      flex-shrink: 0;
-      transition: all 0.15s;
-      touch-action: manipulation;
-      -webkit-touch-callout: none;
-      -webkit-user-select: none;
-      user-select: none;
-    }
-    .mobile-mic-btn.ptt-active {
-      display: flex;
-    }
-    .mobile-mic-btn.loading {
-      border-color: var(--accent);
-      opacity: 0.5;
-      pointer-events: none;
-    }
-    .mobile-mic-btn.recording {
-      border-color: #e74c3c;
-      background: #e74c3c;
-      color: #fff;
-      animation: mobile-mic-pulse 1.5s ease-in-out infinite;
-    }
-    @keyframes mobile-mic-pulse {
-      0%, 100% { box-shadow: 0 0 0 0 rgba(231, 76, 60, 0.4); }
-      50% { box-shadow: 0 0 0 8px rgba(231, 76, 60, 0); }
-    }
+/* hamburger + scrim — both display:none on desktop */
+.mobile-menu {
+  display: none;
+  position: fixed;
+  top: 10px;
+  left: 10px;
+  z-index: 50;
+  width: 40px;
+  height: 40px;
+  background: var(--paper-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  color: var(--ink-2);
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 2px 6px -2px rgba(22,24,28,0.12);
+}
+.mobile-menu:hover { color: var(--ink); }
+
+.sidebar-scrim {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(22,24,28,0.32);
+  z-index: 39;
+  opacity: 0;
+  transition: opacity 200ms ease;
+}
+.sidebar-scrim.is-visible { opacity: 1; }
+
+/* ── narrow ── */
+@media (max-width: 768px) {
+  /* Single-column layout — sidebar floats over main as a drawer. */
+  body {
+    grid-template-columns: 1fr;
   }
+
+  .mobile-menu { display: inline-flex; }
+  .sidebar-scrim.is-visible { display: block; }
+
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 86%;
+    max-width: 320px;
+    height: 100vh;
+    transform: translateX(-100%);
+    transition: transform 220ms ease;
+    z-index: 40;
+    border-right: 1px solid var(--rule);
+    box-shadow: 0 16px 40px -8px rgba(22,24,28,0);
+  }
+  .sidebar.is-open {
+    transform: translateX(0);
+    box-shadow: 0 16px 40px -8px rgba(22,24,28,0.28);
+  }
+
+  .main {
+    width: 100%;
+    min-height: 100vh;
+    padding-top: 56px; /* leave room for the fixed hamburger */
+  }
+
+  /* lock body scroll while drawer is open */
+  body.drawer-open {
+    overflow: hidden;
+  }
+
+  /* ── headers / hero ── */
+
+  .pg-hdr,
+  .rm-hdr,
+  .st-hdr,
+  .ap-master-hdr,
+  .pane-hdr,
+  .watch-hdr {
+    grid-template-columns: 1fr !important;
+    padding: 18px 18px 14px !important;
+    gap: 10px !important;
+    align-items: flex-start !important;
+  }
+  .pg-hdr .right,
+  .rm-hdr .right,
+  .pane-hdr .right,
+  .watch-hdr .right {
+    width: 100%;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .pg-title,
+  .filter-summary,
+  .auth-box h2 { font-size: 22px !important; }
+  .filter-summary .sub { font-size: 12.5px !important; margin-left: 0 !important; display: block; margin-top: 2px; }
+
+  /* watch header — back button on its own line above title */
+  .watch-hdr {
+    grid-template-columns: 1fr !important;
+  }
+  .watch-hdr .back { width: fit-content; }
+  .watch-hdr .title { font-size: 22px !important; }
+
+  /* chip rows scroll horizontally if they overflow */
+  .pg-chips,
+  .ap-chips,
+  .st-subnav,
+  .sr-scope-chips,
+  .rm-page-chips {
+    overflow-x: auto;
+    flex-wrap: nowrap !important;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 12px !important;
+  }
+  .pg-chips .chip,
+  .ap-chips .chip,
+  .st-subnav .jump,
+  .sr-scope-chips .chip { flex: 0 0 auto; }
+
+  /* ── chat ── */
+
+  .chat-pane .pane-hdr {
+    grid-template-columns: 1fr !important;
+  }
+  .chat-pane .thread {
+    padding: 12px 18px 18px;
+  }
+  .chat-pane .msg .body {
+    font-size: 14px;
+    padding-left: 14px;
+  }
+  .chat-pane .msg .head { padding-left: 14px; gap: 6px; }
+  .chat-pane .composer {
+    padding: 10px 18px 16px;
+    position: sticky;
+    bottom: 0;
+    background: var(--paper-card);
+  }
+  .chat-pane .composer textarea {
+    min-height: 48px;
+    font-size: 16px; /* iOS won't zoom on focus when >= 16px */
+  }
+  .chat-pane .composer .ctrls .hint { font-size: 10.5px; }
+
+  /* profile popover — go full width near the bottom */
+  .profile-pop {
+    width: calc(100% - 32px) !important;
+    left: 16px !important;
+    right: 16px !important;
+    bottom: 16px !important;
+    top: auto !important;
+  }
+
+  /* ── agents ── */
+
+  .pg-row {
+    grid-template-columns: 1fr auto !important;
+    grid-template-rows: auto auto;
+    gap: 4px 12px !important;
+    padding: 14px 18px !important;
+  }
+  .pg-row .nm     { grid-column: 1; grid-row: 1; }
+  .pg-row .state  { grid-column: 2; grid-row: 1; justify-self: end; }
+  .pg-row .kind   { grid-column: 1; grid-row: 2; font-size: 11px; color: var(--ink-3); }
+  .pg-row .teams  { grid-column: 1 / span 2; grid-row: 3; padding-top: 4px; }
+  .pg-row .actions {
+    grid-column: 1 / span 2;
+    grid-row: 4;
+    justify-self: stretch;
+    padding-top: 6px;
+    border-top: 1px solid var(--rule-soft);
+    margin-top: 4px;
+    gap: 6px;
+  }
+  .pg-row .actions button {
+    flex: 1;
+    height: 36px;
+    border: 1px solid var(--rule-soft);
+  }
+
+  /* ── watch ── */
+
+  .watch-pane { padding: 14px 16px; font-size: 12px; }
+  .watch-keys { padding: 10px 14px; gap: 4px; overflow-x: auto; flex-wrap: nowrap; }
+  .watch-keys .k {
+    height: 38px;
+    min-width: 38px;
+    font-size: 12px;
+    flex: 0 0 auto;
+  }
+  .watch-type { padding: 10px 14px 16px; flex-wrap: wrap; }
+  .watch-type .input-wrap { min-width: 100%; flex: 1 0 100%; order: 1; }
+  .watch-type .send { order: 2; flex: 1; }
+  .watch-type input { font-size: 16px; }
+
+  /* ── approvals master/detail → stacked ── */
+
+  .ap-page {
+    display: block !important;
+    grid-template-columns: none !important;
+  }
+  .ap-master { width: 100%; border-right: none; }
+  .ap-detail { width: 100%; min-height: 100vh; }
+
+  /* When body has .ap-show-detail (set by approvals.ts), hide master and
+     show detail; back button in detail returns to master. */
+  body.ap-show-detail .ap-master { display: none; }
+  body:not(.ap-show-detail) .ap-detail { display: none; }
+
+  .ap-detail-hdr {
+    padding: 14px 18px !important;
+  }
+  .ap-detail-hdr .id-row { flex-wrap: wrap; gap: 6px; }
+  .ap-detail-body { padding: 14px 18px; }
+  .ap-detail-back {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: transparent;
+    border: 0;
+    color: var(--ink-3);
+    font-size: 12.5px;
+    font-weight: 500;
+    cursor: pointer;
+    padding: 6px 0 10px;
+  }
+  .ap-detail-back:hover { color: var(--ink); }
+  .ap-actions { flex-wrap: wrap; gap: 6px; }
+  .ap-actions .btn { flex: 1 0 calc(50% - 3px); min-height: 38px; }
+  .ap-payload { font-size: 11px; }
+
+  /* ── reminders ── */
+
+  .rm-quickadd {
+    grid-template-columns: 1fr !important;
+    gap: 8px;
+    margin: 14px 18px !important;
+  }
+  .rm-quickadd .agent-pick,
+  .rm-quickadd .prompt-in,
+  .rm-quickadd .pill,
+  .rm-quickadd .skip,
+  .rm-quickadd .btn { width: 100%; }
+  .rm-quickadd .prompt-in { font-size: 16px; }
+  .rm-rem {
+    grid-template-columns: 14px 1fr !important;
+    grid-template-rows: auto auto auto;
+    gap: 8px;
+  }
+  .rm-rem .row-actions {
+    grid-column: 2;
+    grid-row: 3;
+    margin-top: 4px;
+    opacity: 1 !important;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .rm-rem .row-actions button {
+    flex: 1 1 calc(50% - 3px);
+    height: 36px;
+    border: 1px solid var(--rule-soft);
+  }
+  .rm-rem .meta { font-size: 11px; }
+
+  /* ── settings ── */
+
+  .st-section { padding: 22px 18px 4px; }
+  .st-item-hdr {
+    flex-wrap: wrap;
+    gap: 6px 10px;
+  }
+  .st-item .actions {
+    opacity: 1 !important;
+    margin-left: 0;
+    margin-top: 6px;
+    width: 100%;
+  }
+  .st-item .actions button {
+    flex: 1;
+    min-height: 36px;
+  }
+  .st-pref {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+  .st-pref .lbl { min-width: 0; }
+  .st-yaml { font-size: 11px; }
+
+  /* ── search ── */
+
+  .sr-input { font-size: 22px !important; }
+  .sr-hdr { padding: 22px 18px 14px; }
+  .sr-section { padding: 20px 18px 4px; }
+  .sr-result { grid-template-columns: 14px 1fr; }
+  .sr-result .row-actions {
+    grid-column: 2;
+    margin-top: 6px;
+    opacity: 1;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .sr-foot { margin: 0 18px; flex-direction: column; align-items: flex-start; gap: 6px; }
+
+  /* ── overlay modals — full-width with safe insets ── */
+
+  .ov-backdrop,
+  .ov-backdrop.center {
+    padding: 16px;
+    align-items: stretch;
+  }
+  .ov-modal,
+  .ov-modal.sm,
+  .ov-modal.lg {
+    max-width: 100%;
+    width: 100%;
+    max-height: 100%;
+    border-radius: var(--radius);
+    margin: 0;
+  }
+  .ov-modal .body { max-height: calc(100vh - 200px); }
+  .ov-field {
+    grid-template-columns: 1fr !important;
+    gap: 4px !important;
+  }
+  .ov-field > label {
+    padding-top: 0;
+  }
+  .ov-input,
+  .ov-select,
+  .ov-textarea { font-size: 16px; }
+  .ov-radios { grid-template-columns: 1fr !important; }
+  .ov-persona-grid { grid-template-columns: 1fr !important; }
+  .ov-persona-col .ov-textarea { min-height: 180px; }
+  .ov-member-grid { grid-template-columns: 1fr !important; }
+  .ov-modal .foot { flex-wrap: wrap; gap: 8px; }
+  .ov-modal .foot .hint { font-size: 10.5px; }
+
+  /* ── auth box ── */
+  .auth-box {
+    padding: 22px 20px;
+  }
+  .auth-input { font-size: 16px; }
+}
+
+/* very narrow phones */
+@media (max-width: 380px) {
+  .pg-title, .filter-summary, .auth-box h2 { font-size: 20px !important; }
+  .sr-input { font-size: 20px !important; }
+  .watch-keys .k { min-width: 34px; }
+}
+
+/* prefers-reduced-motion — kill the pulse + transitions */
+@media (prefers-reduced-motion: reduce) {
+  .member .status.busy,
+  .watch-ctrls .live .pulse { animation: none !important; }
+  *, *::before, *::after {
+    transition-duration: 0ms !important;
+    animation-duration: 0ms !important;
+  }
+}

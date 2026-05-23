@@ -279,6 +279,9 @@ const approvals = new ApprovalService({
   db,
   messageDispatcher,
   onEvent: (event) => wss.broadcastEvent(event),
+  // Surface auto-notify dashboard rows over the same `message` WS event
+  // the chat surface already listens on — agent thread updates live.
+  onMessage: (msg) => wss.broadcast(JSON.stringify({ type: 'message', msg })),
 });
 
 // ── v3 Q8: Crash recovery ──
@@ -418,6 +421,7 @@ wss.onConnect((client) => {
   const pages = db.listPages();
   const stores = db.listStores();
   const destinations = db.listDestinations();
+  const teams = db.listTeams();
   wss.send(client, JSON.stringify({
     type: 'init',
     agents,
@@ -430,6 +434,7 @@ wss.onConnect((client) => {
     pages,
     stores,
     destinations,
+    teams,
   }));
 });
 

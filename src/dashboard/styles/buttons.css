@@ -1,0 +1,73 @@
+/* ──────────────────────────────────────────────────────────────────────
+   Buttons — default, primary (clay), danger, ghost
+   The PRIMARY clay button is the only clay moment in most surfaces.
+   ────────────────────────────────────────────────────────────────────── */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: 1px solid var(--rule);
+  color: var(--ink-2);
+  font-family: var(--sans);
+  font-size: 13px;
+  font-weight: 500;
+  padding: 5px 12px;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease, border-color 140ms ease;
+  white-space: nowrap;
+}
+.btn:hover {
+  background: var(--paper-2);
+  color: var(--ink);
+  border-color: var(--rule-strong);
+}
+.btn:active { transform: translateY(1px); }
+.btn:disabled, .btn[aria-disabled="true"] {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.btn.primary {
+  background: var(--clay);
+  color: var(--paper-card);
+  border-color: var(--clay);
+}
+.btn.primary:hover {
+  background: #a14d31;
+  border-color: #a14d31;
+  color: var(--paper-card);
+}
+
+.btn.danger {
+  color: var(--brick);
+  border-color: var(--rule);
+}
+.btn.danger:hover {
+  background: var(--brick-bg);
+  border-color: var(--brick);
+  color: var(--brick);
+}
+
+.btn.ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--ink-3);
+}
+.btn.ghost:hover {
+  color: var(--ink);
+  background: var(--paper-hover);
+}
+
+/* small kbd hint inside buttons */
+.btn kbd {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  background: rgba(0,0,0,0.06);
+  padding: 0 4px;
+  border-radius: 2px;
+  color: inherit;
+  opacity: 0.7;
+}

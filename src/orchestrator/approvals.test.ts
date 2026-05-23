@@ -191,7 +191,7 @@ describe('ApprovalService (Q5)', () => {
     // Invariant 2 — at least one paste reached the right tmux session,
     // proving the dispatcher resolved the bare name and pasted the body.
     const pastes = proxyCommands.filter(c => c.action === 'paste') as Array<{ action: 'paste'; sessionName: string; text: string }>;
-    const matching = pastes.find(p => p.text.includes(`Approval ${id} updated: rejected`));
+    const matching = pastes.find(p => p.text.includes(`Approval ${id} REJECTED (terminal`));
     assert.ok(matching, `expected a paste containing the notice for ${id}; pastes=${JSON.stringify(pastes)}`);
     assert.equal(matching!.sessionName, 'agent-foo');
   });
@@ -310,12 +310,12 @@ describe('ApprovalService (Q5)', () => {
     assert.equal(deliverCalls.length, 1, `expected one deliverToInstance call; got ${deliverCalls.length}`);
     assert.equal(deliverCalls[0]!.instanceId, 'inst-1');
     assert.notEqual(deliverCalls[0]!.instanceId, 'agent:tmpl-a/inst-1');
-    assert.match(deliverCalls[0]!.envelope, new RegExp(`Approval ${id} updated: approved`));
+    assert.match(deliverCalls[0]!.envelope, new RegExp(`Approval ${id} APPROVED \\(terminal`));
 
     const pastes = proxyCommands.filter(c => c.action === 'paste');
     assert.ok(pastes.length >= 1, 'expected at least one paste from deliverToInstance');
     const text = (pastes[0]! as { text: string }).text;
-    assert.match(text, new RegExp(`Approval ${id} updated: approved`));
+    assert.match(text, new RegExp(`Approval ${id} APPROVED \\(terminal`));
   });
 
   it('await() returns at terminal state', async () => {
