@@ -73,6 +73,16 @@
   font-style: italic;
 }
 
+.chat-pane .thread .load-older-wrap {
+  display: flex;
+  justify-content: center;
+  padding: 8px 0 14px;
+}
+.chat-pane .thread .load-older-wrap .btn[disabled] {
+  opacity: 0.6;
+  cursor: progress;
+}
+
 .chat-pane .msg {
   margin: 14px 0;
 }

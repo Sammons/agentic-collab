@@ -124,8 +124,16 @@ function renderThread(): void {
     return;
   }
 
-  root.innerHTML = merged.map((m) => msgHtml(m)).join('');
+  // "Load older" affordance — shown when at least one selected agent's thread
+  // could plausibly have older history (i.e. it isn't known-exhausted).
+  const hasMoreAvailable = anyAgentMayHaveOlder();
+  const loadOlderHtml = hasMoreAvailable
+    ? `<div class="load-older-wrap"><button class="btn ghost" data-load-older>Load older messages</button></div>`
+    : '';
+
+  root.innerHTML = loadOlderHtml + merged.map((m) => msgHtml(m)).join('');
   wireProfileTriggers(root);
+  wireLoadOlder(root);
 
   // If a search result asked us to focus a specific message, scroll to it
   // and add a transient highlight class. Otherwise default to bottom.
@@ -142,6 +150,93 @@ function renderThread(): void {
     pendingFocusId = null;
   } else {
     root.scrollTop = root.scrollHeight;
+  }
+}
+
+// Track which agents we know are exhausted (the server returned 0 older rows
+// in response to a paginated request). Lets us hide the button once we've
+// scrolled all the way back. Reset on init (full reconnect).
+const exhaustedAgents = new Set<string>();
+
+// init from connection.ts repopulates threads — clear pagination state so we
+// re-offer "Load older" against the fresh window.
+on('init', () => exhaustedAgents.clear());
+
+function anyAgentMayHaveOlder(): boolean {
+  for (const agentName of Object.keys(state.threads)) {
+    if (exhaustedAgents.has(agentName)) continue;
+    const isSelected = state.selectedAgents.has(agentName);
+    const isSystemThread = SYSTEM_THREADS.has(agentName);
+    if (!isSelected && !isSystemThread) continue;
+    // The init cap is 200/agent; threads that started below that are short
+    // enough that we don't need to bother offering a "Load older" button.
+    if ((state.threads[agentName]?.length ?? 0) >= INIT_THREAD_CAP) return true;
+  }
+  return false;
+}
+
+const INIT_THREAD_CAP = 200;
+
+function wireLoadOlder(scope: HTMLElement): void {
+  const btn = scope.querySelector<HTMLButtonElement>('[data-load-older]');
+  if (!btn) return;
+  btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    btn.textContent = 'Loading…';
+    // Anchor the scroll to the message currently at the top of the window
+    // so the user's reading position doesn't snap to the bottom after we
+    // prepend older content.
+    const anchorId = firstVisibleMessageId();
+    await loadOlderForVisibleAgents();
+    if (anchorId !== null) pendingFocusId = anchorId;
+    renderThread();
+  });
+}
+
+function firstVisibleMessageId(): number | null {
+  const thread = document.getElementById('chat-thread');
+  if (!thread) return null;
+  const rows = thread.querySelectorAll<HTMLElement>('[data-msg-id]');
+  for (const row of rows) {
+    if (row.offsetTop + row.offsetHeight >= thread.scrollTop) {
+      const id = parseInt(row.dataset['msgId'] ?? '', 10);
+      return Number.isFinite(id) ? id : null;
+    }
+  }
+  return null;
+}
+
+async function loadOlderForVisibleAgents(): Promise<void> {
+  const candidates: string[] = [];
+  for (const agentName of Object.keys(state.threads)) {
+    if (exhaustedAgents.has(agentName)) continue;
+    const isSelected = state.selectedAgents.has(agentName);
+    const isSystemThread = SYSTEM_THREADS.has(agentName);
+    if (!isSelected && !isSystemThread) continue;
+    if ((state.threads[agentName]?.length ?? 0) >= INIT_THREAD_CAP) candidates.push(agentName);
+  }
+  await Promise.all(candidates.map(loadOlderForAgent));
+}
+
+async function loadOlderForAgent(agentName: string): Promise<void> {
+  const thread = state.threads[agentName] ?? [];
+  // Lowest positive id is the oldest server-known message in the window.
+  const oldest = thread.find((m) => m.id > 0);
+  const beforeId = oldest?.id ?? null;
+  try {
+    const url = `/api/dashboard/threads/${encodeURIComponent(agentName)}/older${beforeId !== null ? `?beforeId=${beforeId}` : ''}`;
+    const res = await fetch(url, { headers: authHeaders() });
+    if (!res.ok) return;
+    const body = await res.json() as { messages: DashboardMessage[] };
+    if (!body.messages || body.messages.length === 0) {
+      exhaustedAgents.add(agentName);
+      return;
+    }
+    // Prepend chronologically — server already returned ASC order.
+    state.threads[agentName] = [...body.messages, ...thread];
+    if (body.messages.length < INIT_THREAD_CAP) exhaustedAgents.add(agentName);
+  } catch {
+    // Network error — leave the button visible so the user can retry.
   }
 }
 
