@@ -228,4 +228,4 @@
   color: #fdf6f3;
   border-color: var(--clay);
 }
-.watch-type .send.primary:hover { background: #a14d31; border-color: #a14d31; }
+.watch-type .send.primary:hover { background: var(--clay-strong); border-color: var(--clay-strong); }
