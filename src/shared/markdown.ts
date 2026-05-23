@@ -30,8 +30,14 @@ export function renderMarkdown(escaped: string): string {
   text = text.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
   // Italic (single asterisk, not inside words)
   text = text.replace(/(?<!\w)\*(.+?)\*(?!\w)/g, '<em>$1</em>');
-  // Links (markdown-style)
-  text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" style="color:var(--accent)">$1</a>');
+  // Links (markdown-style) — validate URL scheme to prevent javascript: XSS
+  text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_m: string, label: string, url: string) => {
+    const scheme = url.split(':')[0]?.toLowerCase() ?? '';
+    if (['http', 'https', 'mailto', 'tel'].includes(scheme) || url.startsWith('/') || url.startsWith('#')) {
+      return `<a href="${url}" target="_blank" rel="noopener" style="color:var(--accent)">${label}</a>`;
+    }
+    return `${label} (${url})`;
+  });
   // Auto-link bare URLs (not already inside an <a> tag, strip trailing punctuation)
   text = text.replace(/(?<!href="|">)(https?:\/\/[^\s<)]+[^\s<).,;:!?])/g, '<a href="$1" target="_blank" style="color:var(--accent)">$1</a>');
   // Lists, tables, and paragraphs: line-based parser for proper nesting

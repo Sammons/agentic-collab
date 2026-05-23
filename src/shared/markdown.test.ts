@@ -116,6 +116,30 @@ describe('renderMarkdown', () => {
       has(out, '<a href="https://example.com"');
       has(out, '</a>,');
     });
+
+    it('blocks javascript: URLs (XSS prevention)', () => {
+      const out = renderMarkdown('[click](javascript:alert(1))');
+      notHas(out, '<a href="javascript:');
+      notHas(out, 'href="javascript');
+      has(out, 'click');
+    });
+
+    it('blocks data: URLs', () => {
+      const out = renderMarkdown('[click](data:text/html,<script>alert(1)</script>)');
+      notHas(out, '<a href="data:');
+    });
+
+    it('allows relative URLs', () => {
+      has(renderMarkdown('[docs](/api/docs)'), '<a href="/api/docs"');
+    });
+
+    it('allows anchor URLs', () => {
+      has(renderMarkdown('[section](#top)'), '<a href="#top"');
+    });
+
+    it('allows mailto: URLs', () => {
+      has(renderMarkdown('[email](mailto:test@example.com)'), '<a href="mailto:test@example.com"');
+    });
   });
 
   // ── Unordered lists ──

@@ -18,6 +18,13 @@ import type { AgentRecord, DashboardMessage } from '../shared/types.ts';
 import { state, on, authHeaders } from './state.ts';
 import { registerRoute, go } from './routing.ts';
 import { openEditPersonaModal } from './overlays.ts';
+import { renderMarkdown } from '../shared/markdown.ts';
+import { initVoice, voiceState, clearUsedFlag } from './voice.ts';
+
+// Threads whose name isn't a registered agent but still belongs in the
+// merged feed — operator-visible system context (approval auto-notify,
+// lifecycle banners, etc.).
+const SYSTEM_THREADS = new Set(['dashboard', 'system']);
 
 export function setupChat(): void {
   registerRoute('dashboard', render);
@@ -35,9 +42,17 @@ function render(root: HTMLElement): void {
         <div class="input-wrap">
           <textarea data-composer-input placeholder="Message — start with @agent-name to target an agent…"></textarea>
         </div>
+        <div class="voice-status" data-voice-status style="display:none"></div>
         <div class="ctrls">
           <span class="hint" data-target-hint>No target — start with <span class="target">@agent</span> to send.</span>
           <span class="spacer"></span>
+          <div class="voice-ctrls" data-voice-toggle>
+            <button data-mode="off" class="active" title="Voice off">Off</button>
+            <button data-mode="ptt" title="Push-to-talk">PTT</button>
+          </div>
+          <button class="voice-btn inactive" data-voice-btn title="Hold to speak">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg>
+          </button>
           <span class="hint"><kbd>⌘</kbd> <kbd>↵</kbd> send</span>
           <button class="btn primary" data-send disabled>Send</button>
         </div>
@@ -49,15 +64,21 @@ function render(root: HTMLElement): void {
   wire(root);
 
   // Subscribe to state changes that should re-render the thread.
-  detachers.push(on('message', () => renderThread()));
-  detachers.push(on('message-withdrawn', () => renderThread()));
+  // Filter message events: only re-render if the message affects the current view.
+  detachers.push(on('message', (msg) => {
+    const m = msg as DashboardMessage;
+    if (state.selectedAgents.has(m.agent) || SYSTEM_THREADS.has(m.agent)) {
+      scheduleRender();
+    }
+  }));
+  detachers.push(on('message-withdrawn', () => scheduleRender()));
   detachers.push(on('selection-changed', () => {
     updateFilterSummary();
-    renderThread();
+    renderThread(true); // force scroll to bottom on selection change
   }));
   detachers.push(on('agents-changed', () => {
     updateFilterSummary();
-    renderThread();
+    scheduleRender();
   }));
   detachers.push(on('route-changed', (r) => {
     if ((r as { kind?: string })?.kind !== 'dashboard') teardown();
@@ -70,6 +91,33 @@ function teardown(): void {
     const fn = detachers.pop();
     try { fn?.(); } catch {}
   }
+  // Clear any pending debounced render
+  if (renderTimer !== null) {
+    clearTimeout(renderTimer);
+    renderTimer = null;
+  }
+}
+
+// Debounce rapid-fire message events to reduce DOM thrash and keystroke lag.
+// Chunked rendering yields to browser between batches so keyboard events process.
+let renderTimer: ReturnType<typeof setTimeout> | null = null;
+let renderInProgress = false;
+let renderGeneration = 0; // increments on each render request to abort stale renders
+const RENDER_DEBOUNCE_MS = 100;
+const RENDER_CHUNK_SIZE = 40;
+
+function scheduleRender(): void {
+  if (renderTimer !== null) return; // already scheduled
+  renderTimer = setTimeout(() => {
+    renderTimer = null;
+    void renderThreadChunked();
+  }, RENDER_DEBOUNCE_MS);
+}
+
+function yieldToMain(): Promise<void> {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(resolve));
+  });
 }
 
 /* ── header ────────────────────────────────────────────────────────── */
@@ -109,9 +157,27 @@ function updateFilterSummary(): void {
 
 /* ── thread render ─────────────────────────────────────────────────── */
 
-function renderThread(): void {
+/**
+ * Re-render the chat thread with chunked processing to avoid blocking input.
+ * Yields to the browser between chunks so keyboard events can process.
+ * @param forceScrollBottom - if true, scroll to bottom regardless of current position
+ */
+async function renderThreadChunked(forceScrollBottom = false): Promise<void> {
+  // Abort if another render is in progress — the newer one will pick up current state
+  if (renderInProgress) return;
+  renderInProgress = true;
+  const thisGeneration = ++renderGeneration;
+
   const root = document.getElementById('chat-thread');
-  if (!root) return;
+  if (!root) {
+    renderInProgress = false;
+    return;
+  }
+
+  // Capture scroll state BEFORE rebuilding DOM — if user was near bottom,
+  // we'll follow new messages; otherwise preserve their reading position.
+  const scrollGap = root.scrollHeight - root.scrollTop - root.clientHeight;
+  const wasAtBottom = scrollGap < 60;
 
   const merged = mergeMessages();
   if (merged.length === 0) {
@@ -122,22 +188,60 @@ function renderThread(): void {
           : 'No messages yet. Start one with <code class="inl">@agent-name</code> below.'}
       </div>
     `;
+    renderInProgress = false;
     return;
   }
 
-  // "Load older" affordance — shown when at least one selected agent's thread
-  // could plausibly have older history (i.e. it isn't known-exhausted).
-  const hasMoreAvailable = anyAgentMayHaveOlder();
-  const loadOlderHtml = hasMoreAvailable
-    ? `<div class="load-older-wrap"><button class="btn ghost" data-load-older>Load older messages</button></div>`
-    : '';
+  // Build DOM in a fragment to minimize reflows
+  const fragment = document.createDocumentFragment();
 
-  root.innerHTML = loadOlderHtml + merged.map((m) => msgHtml(m)).join('');
+  // "Load older" affordance
+  const hasMoreAvailable = anyAgentMayHaveOlder();
+  if (hasMoreAvailable) {
+    const loadOlderWrap = document.createElement('div');
+    loadOlderWrap.className = 'load-older-wrap';
+    loadOlderWrap.innerHTML = '<button class="btn ghost" data-load-older>Load older messages</button>';
+    fragment.appendChild(loadOlderWrap);
+  }
+
+  // Render messages in chunks, yielding to browser between chunks
+  for (let i = 0; i < merged.length; i += RENDER_CHUNK_SIZE) {
+    // Abort if a newer render was requested
+    if (renderGeneration !== thisGeneration) {
+      renderInProgress = false;
+      return;
+    }
+
+    const chunk = merged.slice(i, i + RENDER_CHUNK_SIZE);
+    for (const m of chunk) {
+      const wrapper = document.createElement('div');
+      wrapper.innerHTML = msgHtml(m);
+      const el = wrapper.firstElementChild;
+      if (el) fragment.appendChild(el);
+    }
+
+    // Yield to browser after each chunk (except the last) to let input events process
+    if (i + RENDER_CHUNK_SIZE < merged.length) {
+      await yieldToMain();
+    }
+  }
+
+  // Final abort check before DOM mutation
+  if (renderGeneration !== thisGeneration) {
+    renderInProgress = false;
+    return;
+  }
+
+  // Single DOM mutation: replace all children at once
+  root.replaceChildren(fragment);
   wireProfileTriggers(root);
   wireLoadOlder(root);
 
-  // If a search result asked us to focus a specific message, scroll to it
-  // and add a transient highlight class. Otherwise default to bottom.
+  // Scroll handling:
+  // 1. pendingFocusId (from search) → scroll to that message
+  // 2. forceScrollBottom (selection change) → scroll to bottom
+  // 3. wasAtBottom → follow new messages
+  // 4. otherwise → preserve reading position (no scroll change)
   if (pendingFocusId !== null) {
     const target = root.querySelector<HTMLElement>(`[data-msg-id="${pendingFocusId}"]`);
     if (target) {
@@ -145,13 +249,20 @@ function renderThread(): void {
       target.classList.add('focus-flash');
       setTimeout(() => target.classList.remove('focus-flash'), 1800);
     } else {
-      // Not in the rendered set — fall back to bottom.
       root.scrollTop = root.scrollHeight;
     }
     pendingFocusId = null;
-  } else {
+  } else if (forceScrollBottom || wasAtBottom) {
     root.scrollTop = root.scrollHeight;
   }
+  // else: preserve current scroll position
+
+  renderInProgress = false;
+}
+
+/** Synchronous render for immediate updates (send, selection change). */
+function renderThread(forceScrollBottom = false): void {
+  void renderThreadChunked(forceScrollBottom);
 }
 
 // Track which agents we know are exhausted (the server returned 0 older rows
@@ -251,11 +362,6 @@ export function focusMessage(id: number): void {
   pendingFocusId = id;
 }
 
-// Threads whose name isn't a registered agent but still belongs in the
-// merged feed — operator-visible system context (approval auto-notify,
-// lifecycle banners, etc.).
-const SYSTEM_THREADS = new Set(['dashboard', 'system']);
-
 function mergeMessages(): DashboardMessage[] {
   const seen = new Set<number>();
   const out: DashboardMessage[] = [];
@@ -311,7 +417,7 @@ function msgHtml(m: DashboardMessage): string {
         <span class="topic ${topic === 'general' ? 'default' : ''}" title="topic">#${escapeHtml(topic)}</span>
         <span class="time">${formatTime(m.createdAt)}</span>
       </div>
-      <div class="body">${m.withdrawn ? '(withdrawn)' : renderMessageBody(m.message)}</div>
+      <div class="body">${m.withdrawn ? '(withdrawn)' : renderMessageBody(m.message, m.id)}</div>
     </div>
   `;
 }
@@ -376,15 +482,34 @@ function kindOf(agentName: string): 'eph' | 'per' | 'me' {
   return 'per';
 }
 
-function renderMessageBody(text: string): string {
-  // Escape, then inline simple things:
-  //   `code` → <code class="inl">
-  //   @mention → highlighted span
+// Markdown cache: avoid re-parsing unchanged messages on every render.
+// Key: message ID + content length (fast proxy for content identity).
+const markdownCache = new Map<string, string>();
+const MARKDOWN_CACHE_MAX = 2000;
+
+function renderMessageBody(text: string, msgId?: number): string {
+  const cacheKey = msgId !== undefined ? `${msgId}:${text.length}` : null;
+  if (cacheKey) {
+    const cached = markdownCache.get(cacheKey);
+    if (cached) return cached;
+  }
+
+  // Escape first, then apply markdown rendering
   let html = escapeHtml(text);
-  html = html.replace(/`([^`]+)`/g, '<code class="inl">$1</code>');
-  html = html.replace(/(^|\s)(@[a-zA-Z0-9_\-/]+)/g, (_, lead, mention) => {
+  html = renderMarkdown(html);
+  // Highlight @mentions (after markdown so they don't interfere with link syntax)
+  html = html.replace(/(^|[\s>])(@[a-zA-Z0-9_\-/]+)/g, (_, lead, mention) => {
     return `${lead}<span class="mention">${mention}</span>`;
   });
+
+  if (cacheKey) {
+    // Evict oldest entries if cache is full
+    if (markdownCache.size >= MARKDOWN_CACHE_MAX) {
+      const first = markdownCache.keys().next().value;
+      if (first) markdownCache.delete(first);
+    }
+    markdownCache.set(cacheKey, html);
+  }
   return html;
 }
 
@@ -662,7 +787,68 @@ function wire(root: HTMLElement): void {
     }, 200);
   });
   sendBtn.addEventListener('click', () => handleSend(input));
+
+  // Drag-and-drop file upload on the chat pane
+  const chatPane = root.querySelector<HTMLElement>('.chat-pane');
+  if (chatPane) {
+    chatPane.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      chatPane.classList.add('drag-over');
+    });
+    chatPane.addEventListener('dragleave', (e) => {
+      // Only remove highlight when leaving the pane entirely, not child elements
+      if (!chatPane.contains(e.relatedTarget as Node)) {
+        chatPane.classList.remove('drag-over');
+      }
+    });
+    chatPane.addEventListener('drop', (e) => {
+      e.preventDefault();
+      chatPane.classList.remove('drag-over');
+      const files = e.dataTransfer?.files;
+      if (files && files.length > 0) {
+        const parsed = parseComposer(input.value);
+        if (parsed.agents.length === 0) {
+          toast('Drop target missing — start with @agent-name to specify where to upload', 'error');
+          return;
+        }
+        handleFileUpload(Array.from(files), parsed.agents[0], input.value.trim());
+      }
+    });
+  }
+
+  // Paste file from clipboard
+  input.addEventListener('paste', (e) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    const files: File[] = [];
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.kind === 'file') {
+        const file = item.getAsFile();
+        if (file) files.push(file);
+      }
+    }
+    if (files.length === 0) return;
+    e.preventDefault();
+    const parsed = parseComposer(input.value);
+    if (parsed.agents.length === 0) {
+      toast('Paste target missing — start with @agent-name to specify where to upload', 'error');
+      return;
+    }
+    handleFileUpload(files, parsed.agents[0], input.value.trim());
+  });
+
   updateHint();
+
+  // Initialize voice controls
+  const voiceToggle = root.querySelector<HTMLElement>('[data-voice-toggle]');
+  const voiceBtn = root.querySelector<HTMLElement>('[data-voice-btn]');
+  const voiceStatus = root.querySelector<HTMLElement>('[data-voice-status]');
+  if (voiceToggle && voiceBtn && voiceStatus) {
+    initVoice(input, voiceStatus, voiceToggle, voiceBtn).then((cleanup) => {
+      detachers.push(cleanup);
+    });
+  }
 }
 
 /* ── @-mention autocomplete ────────────────────────────────────────── */
@@ -968,6 +1154,8 @@ async function handleSend(input: HTMLTextAreaElement): Promise<void> {
   if (okCount > 1 && failCount === 0) {
     toast(`Sent ${okCount} messages`);
   }
+  // Reset voice "used since send" flag so next voice session starts fresh
+  clearUsedFlag();
 }
 
 /* ── helpers ───────────────────────────────────────────────────────── */
@@ -1061,4 +1249,63 @@ function toast(msg: string, kind: 'info' | 'error' = 'info'): void {
   el.textContent = msg;
   document.body.appendChild(el);
   setTimeout(() => el.remove(), 3000);
+}
+
+/* ── file upload ───────────────────────────────────────────────────── */
+
+const LARGE_FILE_THRESHOLD = 100 * 1024 * 1024; // 100 MB
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+async function uploadFile(file: File, agent: string, message: string): Promise<{ file: string; ok: boolean; error?: string }> {
+  let url = `/api/dashboard/upload?agent=${encodeURIComponent(agent)}&filename=${encodeURIComponent(file.name)}`;
+  if (message) url += `&message=${encodeURIComponent(message)}`;
+
+  const headers: Record<string, string> = { 'content-type': 'application/octet-stream' };
+  if (state.token) headers['authorization'] = `Bearer ${state.token}`;
+
+  const res = await fetch(url, { method: 'POST', headers, body: file });
+  const body = await res.json().catch(() => ({})) as Record<string, unknown>;
+  return { file: file.name, ok: res.ok, error: body.error as string | undefined };
+}
+
+async function handleFileUpload(files: File[], agent: string, message: string): Promise<void> {
+  if (files.length === 0 || !agent) return;
+
+  // Warn about large files
+  const largeFiles = files.filter(f => f.size >= LARGE_FILE_THRESHOLD);
+  if (largeFiles.length > 0) {
+    const totalSize = files.reduce((sum, f) => sum + f.size, 0);
+    const confirmed = window.confirm(
+      `${largeFiles.length} file${largeFiles.length > 1 ? 's are' : ' is'} large (total ${formatFileSize(totalSize)}). Upload may take a while. Continue?`
+    );
+    if (!confirmed) return;
+  }
+
+  const fileNames = files.map(f => `${f.name} (${formatFileSize(f.size)})`).join(', ');
+  toast(`Uploading ${files.length} file${files.length > 1 ? 's' : ''} to @${agent}…`);
+
+  try {
+    const results = await Promise.allSettled(
+      files.map((f, i) => uploadFile(f, agent, i === 0 ? message : ''))
+    );
+    const succeeded = results.filter(r => r.status === 'fulfilled' && (r.value as { ok: boolean }).ok).length;
+    const failed = results.length - succeeded;
+
+    if (failed === 0) {
+      toast(`Uploaded ${succeeded} file${succeeded > 1 ? 's' : ''}`);
+    } else {
+      const firstError = (results.find(r => r.status === 'fulfilled' && !(r.value as { ok: boolean }).ok) as PromiseFulfilledResult<{ error?: string }> | undefined)?.value?.error
+        ?? (results.find(r => r.status === 'rejected') as PromiseRejectedResult | undefined)?.reason?.message
+        ?? 'unknown error';
+      toast(`${failed} upload${failed > 1 ? 's' : ''} failed: ${firstError}`, 'error');
+    }
+  } catch {
+    toast('Upload failed', 'error');
+  }
 }
