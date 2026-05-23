@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { deflateRawSync, constants } from 'node:zlib';
 import { compressFrame, decompressFrame, negotiate } from './ws-deflate.ts';
 
 test('compressFrame → decompressFrame round-trips arbitrary text', () => {
@@ -20,6 +21,18 @@ test('compressFrame strips the 00 00 ff ff tail', () => {
   const last4 = compressed.subarray(compressed.length - 4);
   const isTail = last4[0] === 0x00 && last4[1] === 0x00 && last4[2] === 0xff && last4[3] === 0xff;
   assert.equal(isTail, false, 'compressed payload still has the 00 00 ff ff tail');
+});
+
+test('compressFrame uses Z_SYNC_FLUSH (no BFINAL) — raw output ends in 00 00 ff ff', () => {
+  // The pre-strip output of our compressor must end with the sync marker.
+  // Browsers desync if the stream ends with BFINAL=1 instead.
+  const payload = Buffer.from('the quick brown fox jumps over the lazy dog', 'utf-8');
+  const raw = deflateRawSync(payload, { level: 6, finishFlush: constants.Z_SYNC_FLUSH });
+  const last4 = raw.subarray(raw.length - 4);
+  assert.equal(last4[0], 0x00);
+  assert.equal(last4[1], 0x00);
+  assert.equal(last4[2], 0xff);
+  assert.equal(last4[3], 0xff);
 });
 
 test('negotiate accepts a permessage-deflate offer', () => {
