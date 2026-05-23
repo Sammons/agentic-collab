@@ -1488,13 +1488,20 @@ export class Database {
     beforeId?: number,
     afterId?: number,
   ): { messages: DashboardMessage[]; hasMore: boolean; hasNewer: boolean } {
+    // Match messages where any of the selected agents is involved:
+    // - agent field (thread owner)
+    // - source_agent (sender)
+    // - target_agent (recipient)
+    // This ensures filtering by "brain-hygiene" shows both messages TO and FROM that agent.
+    const agentPlaceholders = agents.map(() => '?').join(',');
     const agentFilter = agents.length > 0
-      ? `dm.agent IN (${agents.map(() => '?').join(',')})`
+      ? `(dm.agent IN (${agentPlaceholders}) OR dm.source_agent IN (${agentPlaceholders}) OR dm.target_agent IN (${agentPlaceholders}))`
       : '1=1';
 
     // Build cursor condition
     let cursorCondition = '';
-    const params: unknown[] = [...agents];
+    // Each agent set is used 3x in the filter (agent, source_agent, target_agent)
+    const params: unknown[] = agents.length > 0 ? [...agents, ...agents, ...agents] : [];
 
     if (beforeId !== undefined) {
       cursorCondition = 'AND dm.id < ?';
@@ -1531,11 +1538,13 @@ export class Database {
     // for beforeId queries, do a quick existence check)
     let hasNewer = false;
     if (beforeId !== undefined && messages.length > 0) {
+      // Use same 3x agent params for the filter
+      const newerParams = agents.length > 0 ? [...agents, ...agents, ...agents] : [];
       const newerCheck = this.db.prepare(`
         SELECT 1 FROM dashboard_messages dm
         WHERE ${agentFilter} AND dm.id > ?
         LIMIT 1
-      `).get(...agents, messages[messages.length - 1]!.id);
+      `).get(...newerParams, messages[messages.length - 1]!.id);
       hasNewer = newerCheck !== undefined;
     }
 
@@ -1550,8 +1559,9 @@ export class Database {
       const row = this.db.prepare('SELECT COUNT(*) as cnt FROM dashboard_messages').get() as { cnt: number };
       return row.cnt;
     }
-    const sql = `SELECT COUNT(*) as cnt FROM dashboard_messages WHERE agent IN (${agents.map(() => '?').join(',')})`;
-    const row = this.db.prepare(sql).get(...agents) as { cnt: number };
+    const placeholders = agents.map(() => '?').join(',');
+    const sql = `SELECT COUNT(*) as cnt FROM dashboard_messages dm WHERE dm.agent IN (${placeholders}) OR dm.source_agent IN (${placeholders}) OR dm.target_agent IN (${placeholders})`;
+    const row = this.db.prepare(sql).get(...agents, ...agents, ...agents) as { cnt: number };
     return row.cnt;
   }
 
