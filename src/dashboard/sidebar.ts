@@ -294,11 +294,24 @@ function wire(r: HTMLElement): void {
     });
   });
 
-  // Member checkbox
+  // Member checkbox. If the user is on a non-chat surface (watch, settings,
+  // approvals, etc.) and taps an agent here, treat it as "take me to chat
+  // and filter to this agent" — the implicit intent is almost never just
+  // to flip a checkbox they can't see. On the chat surface itself we keep
+  // the v2-style toggle so they can compose multi-agent selections.
   r.querySelectorAll<HTMLElement>('[data-member]').forEach((el) => {
     el.addEventListener('click', (e) => {
       if ((e.target as HTMLElement).closest('[data-eye]')) return;
       const name = el.dataset['member']!;
+      if (state.route.kind !== 'dashboard') {
+        state.selectedAgents.clear();
+        state.selectedAgents.add(name);
+        // emit selection-changed so the chat re-renders with the filter
+        // applied, then route to it.
+        import('./state.ts').then((s) => s.emit('selection-changed'));
+        go({ kind: 'dashboard' });
+        return;
+      }
       toggleAgentSelected(name);
     });
   });
