@@ -312,24 +312,50 @@ function wire(r: HTMLElement): void {
     });
   });
 
-  // Member checkbox. If the user is on a non-chat surface (watch, settings,
-  // approvals, etc.) and taps an agent here, treat it as "take me to chat
-  // and filter to this agent" — the implicit intent is almost never just
-  // to flip a checkbox they can't see. On the chat surface itself we keep
-  // the v2-style toggle so they can compose multi-agent selections.
+  // Member-row click handler.
+  //
+  //   eye icon      → watch route (handled by a separate listener below)
+  //   checkbox      → toggle selection
+  //   name (when the agent is already checked AND composer is empty)
+  //                 → inject "@<agent> " into the composer + focus.
+  //                   Saves the user from re-typing the mention they just
+  //                   confirmed in the sidebar.
+  //   anywhere else → toggle selection (the friendly fallback)
+  //
+  // Off-dashboard: any non-eye tap replaces the selection with this agent
+  // and routes to chat.
   r.querySelectorAll<HTMLElement>('[data-member]').forEach((el) => {
     el.addEventListener('click', (e) => {
-      if ((e.target as HTMLElement).closest('[data-eye]')) return;
+      const target = e.target as HTMLElement;
+      if (target.closest('[data-eye]')) return;
       const name = el.dataset['member']!;
+
       if (state.route.kind !== 'dashboard') {
         state.selectedAgents.clear();
         state.selectedAgents.add(name);
-        // emit selection-changed so the chat re-renders with the filter
-        // applied, then route to it.
         import('./state.ts').then((s) => s.emit('selection-changed'));
         go({ kind: 'dashboard' });
         return;
       }
+
+      // On dashboard:
+      const clickedCheckbox = !!target.closest('.check');
+      const isSelected = state.selectedAgents.has(name);
+
+      if (!clickedCheckbox && isSelected) {
+        // Try the "inject @mention" shortcut when the composer is empty.
+        const composer = document.querySelector<HTMLTextAreaElement>('[data-composer-input]');
+        if (composer && composer.value.trim() === '') {
+          composer.value = `@${name} `;
+          composer.focus();
+          composer.setSelectionRange(composer.value.length, composer.value.length);
+          // Triggers the hint update in chat.ts.
+          composer.dispatchEvent(new Event('input', { bubbles: true }));
+          return;
+        }
+      }
+
+      // Default: toggle.
       toggleAgentSelected(name);
     });
   });
