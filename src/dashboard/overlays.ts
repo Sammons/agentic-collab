@@ -396,6 +396,127 @@ export function openNewTeamModal(): void {
   overlay.querySelector<HTMLElement>('[data-cancel]')?.addEventListener('click', close);
 }
 
+/* ── Edit team — rename + manage membership + delete ──────────────── */
+
+export function openEditTeamModal(team: Team): void {
+  const original = new Set(team.members);
+  const selected = new Set(original);
+  const check = '<svg width="8" height="8" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="2 6 5 9 10 3"/></svg>';
+
+  const html = `
+    <div class="hdr">
+      <span class="ttl">Edit team</span>
+      <span class="sub"><code style="font-family:var(--mono);font-size:11px;color:var(--ink-2);">${escapeHtml(team.name)}</code></span>
+      <button class="esc">esc</button>
+    </div>
+    <div class="body">
+      <div class="ov-field">
+        <label>Name</label>
+        <input class="ov-input" type="text" data-name value="${escapeHtml(team.name)}">
+      </div>
+      <div class="ov-field stack">
+        <label>Members</label>
+        <div class="help" style="margin-top:0;margin-bottom:4px;">Check agents to include in this team.</div>
+        <div class="ov-member-grid" data-members></div>
+      </div>
+    </div>
+    <div class="foot">
+      <button class="btn" data-delete style="color:var(--brick);border-color:var(--brick);">Delete team</button>
+      <span class="hint" data-count><span style="font-family:var(--mono);">${selected.size} selected</span></span>
+      <span class="spacer"></span>
+      <button class="btn" data-cancel>Cancel</button>
+      <button class="btn primary" data-submit>Save changes</button>
+    </div>
+  `;
+  const { overlay, close } = openModal(html, 'sm');
+
+  const grid = overlay.querySelector<HTMLElement>('[data-members]');
+  if (grid) {
+    if (state.agents.length === 0) {
+      grid.innerHTML = '<div style="font-size:12px;color:var(--ink-4);font-style:italic;padding:8px 0;">No agents to add.</div>';
+    } else {
+      grid.innerHTML = state.agents.map((a) => {
+        const on = selected.has(a.name);
+        return `
+          <div class="ov-member${on ? ' on' : ''}" data-name="${escapeHtml(a.name)}">
+            <span class="box">${on ? check : ''}</span>
+            <span>${escapeHtml(a.name)}</span>
+            <span class="kind per">per</span>
+          </div>
+        `;
+      }).join('');
+      grid.querySelectorAll<HTMLElement>('[data-name]').forEach((el) => {
+        el.addEventListener('click', () => {
+          const name = el.dataset['name']!;
+          if (selected.has(name)) selected.delete(name);
+          else selected.add(name);
+          el.classList.toggle('on');
+          const box = el.querySelector<HTMLElement>('.box');
+          if (box) box.innerHTML = selected.has(name) ? check : '';
+          const countEl = overlay.querySelector<HTMLElement>('[data-count]');
+          if (countEl) countEl.innerHTML = `<span style="font-family:var(--mono);">${selected.size} selected</span>`;
+        });
+      });
+    }
+  }
+
+  const submit = async () => {
+    const newName = (overlay.querySelector<HTMLInputElement>('[data-name]')?.value ?? team.name).trim();
+    if (!newName) { toast('Name is required', 'error'); return; }
+    try {
+      // Rename first if changed (small body via PATCH).
+      if (newName !== team.name) {
+        const res = await fetch(`/api/teams/${team.id}`, {
+          method: 'PATCH', headers: authHeaders(),
+          body: JSON.stringify({ name: newName }),
+        });
+        if (!res.ok) {
+          const b = await res.json().catch(() => null);
+          toast(b?.error ?? 'Rename failed', 'error');
+          return;
+        }
+      }
+      // Membership diff. The orchestrator broadcasts teams_update on each
+      // call so the sidebar re-renders even before the modal closes.
+      const toAdd = [...selected].filter((n) => !original.has(n));
+      const toRemove = [...original].filter((n) => !selected.has(n));
+      for (const n of toAdd) {
+        await fetch(`/api/teams/${team.id}/members`, {
+          method: 'POST', headers: authHeaders(),
+          body: JSON.stringify({ agentName: n }),
+        });
+      }
+      for (const n of toRemove) {
+        await fetch(`/api/teams/${team.id}/members/${encodeURIComponent(n)}`, {
+          method: 'DELETE', headers: authHeaders(),
+        });
+      }
+      toast(`Saved team ${newName}`);
+      close();
+    } catch { toast('Network error', 'error'); }
+  };
+
+  const remove = async () => {
+    if (!window.confirm(`Delete team "${team.name}"? Members remain — only the team grouping is removed.`)) return;
+    try {
+      const res = await fetch(`/api/teams/${team.id}`, {
+        method: 'DELETE', headers: authHeaders(),
+      });
+      if (!res.ok) {
+        const b = await res.json().catch(() => null);
+        toast(b?.error ?? 'Delete failed', 'error');
+        return;
+      }
+      toast(`Deleted team ${team.name}`);
+      close();
+    } catch { toast('Network error', 'error'); }
+  };
+
+  overlay.querySelector<HTMLElement>('[data-submit]')?.addEventListener('click', submit);
+  overlay.querySelector<HTMLElement>('[data-cancel]')?.addEventListener('click', close);
+  overlay.querySelector<HTMLElement>('[data-delete]')?.addEventListener('click', remove);
+}
+
 /* ── Edit persona ──────────────────────────────────────────────────── */
 
 export async function openEditPersonaModal(agentName: string): Promise<void> {

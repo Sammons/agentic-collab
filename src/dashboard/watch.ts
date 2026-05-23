@@ -223,7 +223,13 @@ function wire(root: HTMLElement, name: string): void {
     void lifecycleAction(name, 'kill', 'killing');
   });
   root.querySelector<HTMLElement>('[data-persona]')?.addEventListener('click', () => {
-    void openEditPersonaModal(name);
+    // Wrap so any unhandled rejection lands as a toast instead of a
+    // silent no-op (the earlier popover-persona bug). console.error keeps
+    // the stack in DevTools for diagnosis.
+    openEditPersonaModal(name).catch((err) => {
+      console.error('[watch] openEditPersonaModal failed', err);
+      showToast(`Persona open failed: ${(err as Error).message}`, 'error');
+    });
   });
 
   root.querySelector<HTMLElement>('[data-pause]')?.addEventListener('click', () => {
