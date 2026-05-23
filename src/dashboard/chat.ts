@@ -795,6 +795,14 @@ function setupMentionAutocomplete(
     input.setSelectionRange(caret, caret);
     close();
     input.focus();
+    // Mirror the autocomplete into the sidebar: add the agent to the
+    // selection (additive — composer can target multiple) and expand
+    // every team containing them so the row is visible in the tree.
+    if (!state.selectedAgents.has(name)) {
+      state.selectedAgents.add(name);
+      void import('./state.ts').then((s) => s.emit('selection-changed'));
+    }
+    void import('./sidebar.ts').then((s) => s.ensureAgentVisible(name));
     afterSelect();
   };
 

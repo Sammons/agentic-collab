@@ -36,6 +36,23 @@ const icons: Record<string, string> = {
 /** Track expanded teams locally — sidebar state, not app state. */
 const openTeams = new Set<number>();
 
+/**
+ * Expand every team that contains `agentName` so the agent is visible in
+ * the sidebar tree without the user having to click a chevron. Called
+ * after @-mention autocompletion. Triggers a render via the same
+ * selection-changed event the sidebar already listens to.
+ */
+export function ensureAgentVisible(agentName: string): void {
+  let changed = false;
+  for (const team of state.teams) {
+    if (team.members.includes(agentName) && !openTeams.has(team.id)) {
+      openTeams.add(team.id);
+      changed = true;
+    }
+  }
+  if (changed) render();
+}
+
 export function setupSidebar(): void {
   on('init', render);
   on('agents-changed', render);
