@@ -15,7 +15,7 @@
  */
 import { state, on, toggleAgentSelected, toggleTeam, toggleAllAgents } from './state.ts';
 import { go } from './routing.ts';
-import { openNewTeamModal } from './overlays.ts';
+import { openNewTeamModal, openEditTeamModal } from './overlays.ts';
 import type { Team } from '../shared/types.ts';
 
 const root = (): HTMLElement => document.getElementById('sidebar')!;
@@ -31,6 +31,7 @@ const icons: Record<string, string> = {
   chev:      `<svg width="9" height="9" viewBox="0 0 10 10" fill="currentColor"><path d="M2 3 L8 3 L5 7 z"/></svg>`,
   folder:    `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5a1 1 0 0 1 1-1h3l2 2h5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V5z"/></svg>`,
   eye:       `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1 8s2.5-4.5 7-4.5S15 8 15 8s-2.5 4.5-7 4.5S1 8 1 8z"/><circle cx="8" cy="8" r="2"/></svg>`,
+  edit:      `<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11 1.5l3.5 3.5L5 14.5H1.5V11L11 1.5z"/></svg>`,
 };
 
 /** Track expanded teams locally — sidebar state, not app state. */
@@ -211,6 +212,7 @@ function teamHtml(team: Team): string {
         <span class="folder">${icons['folder']}</span>
         <span class="name">${escapeHtml(team.name)}</span>
         <span class="ct">${realMembers.length}</span>
+        <span class="team-edit" data-team-edit="${team.id}" title="Edit team — add/remove agents, rename, delete">${icons['edit']}</span>
       </div>
       <div class="team-members">${membersHtml}</div>
     </div>
@@ -303,10 +305,21 @@ function wire(r: HTMLElement): void {
       render();
     });
 
+    // Pencil edit icon (real teams only) — opens the edit-team modal so
+    // the user can add/remove agents, rename, or delete the team.
+    if (!isVirtual && team) {
+      const edit = teamEl.querySelector<HTMLElement>('[data-team-edit]');
+      edit?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openEditTeamModal(team);
+      });
+    }
+
     const row = teamEl.querySelector<HTMLElement>('[data-team-toggle]');
     row?.addEventListener('click', (e) => {
-      // Skip if the user clicked the chev (handled above).
-      if ((e.target as HTMLElement).closest('[data-team-chev]')) return;
+      // Skip if the user clicked the chev or pencil (handled above).
+      const t = e.target as HTMLElement;
+      if (t.closest('[data-team-chev]') || t.closest('[data-team-edit]')) return;
       if (isVirtual) {
         // Toggle the orphan agents as a group.
         const claimed = new Set<string>();

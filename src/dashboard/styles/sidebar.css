@@ -178,6 +178,23 @@
   font-size: 10.5px;
   color: var(--ink-3);
 }
+/* Pencil edit icon — appears on row hover so it doesn't clutter the
+   tree at rest. Click opens the Edit-team modal (add/remove members,
+   rename, delete). */
+.team-row .team-edit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin-left: 6px;
+  color: var(--ink-3);
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity 120ms ease, color 120ms ease;
+}
+.team-row:hover .team-edit { opacity: 0.7; }
+.team-row .team-edit:hover { opacity: 1; color: var(--clay); }
 
 .team-members {
   display: none;
