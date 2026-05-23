@@ -36,10 +36,10 @@
 }
 .nav-action:hover { background: var(--paper-2); color: var(--ink); }
 .nav-action.active {
-  background: var(--ink);
-  color: var(--paper-card);
+  background: var(--pill-on-bg);
+  color: var(--pill-on-fg);
 }
-.nav-action.active .ico { color: var(--paper-card); }
+.nav-action.active .ico { color: var(--pill-on-fg); }
 .nav-action .ico {
   display: inline-flex;
   align-items: center;
@@ -60,8 +60,8 @@
   font-weight: 600;
 }
 .nav-action.active .badge {
-  background: var(--paper-card);
-  color: var(--ink);
+  background: var(--pill-on-fg);
+  color: var(--pill-on-bg);
 }
 
 .nav-section-label {
