@@ -11,7 +11,7 @@
  * stripped on send; the receiver appends them back before inflate.
  */
 
-import { deflateRawSync, inflateRawSync } from 'node:zlib';
+import { deflateRawSync, inflateRawSync, constants } from 'node:zlib';
 
 const TAIL = Buffer.from([0x00, 0x00, 0xff, 0xff]);
 
@@ -49,9 +49,16 @@ export function negotiate(extHeader: string | undefined): DeflateNegotiation | n
  * tiny strings), the caller should fall back to uncompressed.
  */
 export function compressFrame(payload: Buffer): Buffer {
-  const compressed = deflateRawSync(payload, { level: 6 });
-  // The trailing empty block 00 00 ff ff is always present with raw-deflate
-  // flush; strip it per RFC 7692 §7.2.1.
+  // CRITICAL: finishFlush must be Z_SYNC_FLUSH, not the default Z_FINISH.
+  // Z_FINISH sets BFINAL=1 and ends the deflate stream; browsers then see
+  // end-of-stream before consuming the appended 00 00 ff ff tail and the
+  // next compressed message desyncs ("Invalid frame header").
+  // Z_SYNC_FLUSH terminates with the literal 00 00 ff ff stored-block,
+  // which we strip per RFC 7692 §7.2.1 — the receiver re-appends it.
+  const compressed = deflateRawSync(payload, {
+    level: 6,
+    finishFlush: constants.Z_SYNC_FLUSH,
+  });
   if (
     compressed.length >= 4 &&
     compressed[compressed.length - 4] === 0x00 &&
@@ -69,6 +76,9 @@ export function compressFrame(payload: Buffer): Buffer {
  * verified the frame's RSV1 bit was set; otherwise the bytes are raw.
  */
 export function decompressFrame(payload: Buffer): Buffer {
+  // Mirror the compressor: the stream is sync-flush terminated, NOT BFINAL.
+  // Without Z_SYNC_FLUSH here the inflater complains (Z_BUF_ERROR) because
+  // it expects a final block.
   const withTail = Buffer.concat([payload, TAIL]);
-  return inflateRawSync(withTail);
+  return inflateRawSync(withTail, { finishFlush: constants.Z_SYNC_FLUSH });
 }
