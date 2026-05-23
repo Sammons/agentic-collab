@@ -426,6 +426,41 @@ export class Database {
     `);
     // Enable FK enforcement (off by default in SQLite). Idempotent.
     this.db.exec('PRAGMA foreign_keys = ON');
+
+    // ── one-shot data migrations (gated by PRAGMA user_version) ──
+    const verRow = this.db.prepare('PRAGMA user_version').get() as { user_version: number } | undefined;
+    const userVersion = verRow?.user_version ?? 0;
+
+    // v1: backfill teams from agents.agent_group.
+    // In v2 each agent had a single `agent_group` text column. v3 introduced
+    // teams + team_members but didn't carry the existing grouping forward,
+    // so users upgrading saw their sidebar groups disappear. This derives
+    // one team per distinct non-empty agent_group and adds the matching
+    // agents as members. Safe to run on fresh DBs (no agent_group → no-op).
+    if (userVersion < 1) {
+      const groupRows = this.db.prepare(`
+        SELECT DISTINCT agent_group AS g FROM agents
+        WHERE agent_group IS NOT NULL AND TRIM(agent_group) != ''
+      `).all() as Array<{ g: string }>;
+      let created = 0, membered = 0;
+      for (const { g } of groupRows) {
+        const name = g.trim();
+        if (!name) continue;
+        this.db.prepare('INSERT OR IGNORE INTO teams (name) VALUES (?)').run(name);
+        const tid = (this.db.prepare('SELECT id FROM teams WHERE name = ?').get(name) as { id: number } | undefined)?.id;
+        if (!tid) continue;
+        created++;
+        const members = this.db.prepare(
+          'SELECT name FROM agents WHERE TRIM(COALESCE(agent_group, \'\')) = ?',
+        ).all(name) as Array<{ name: string }>;
+        const ins = this.db.prepare('INSERT OR IGNORE INTO team_members (team_id, agent_name) VALUES (?, ?)');
+        for (const m of members) { ins.run(tid, m.name); membered++; }
+      }
+      if (created > 0 || membered > 0) {
+        console.log(`[migrate v1] Backfilled ${created} team(s) from agent_group → ${membered} membership(s)`);
+      }
+      this.db.exec('PRAGMA user_version = 1');
+    }
   }
 
   /** Expose raw handle for LockManager (shares same DB connection). */

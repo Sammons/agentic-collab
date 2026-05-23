@@ -1032,4 +1032,63 @@ describe('Database', () => {
       assert.ok(ids.indexOf('aaa') < ids.indexOf('zzz'));
     });
   });
+
+  // Carries v2 `agents.agent_group` values forward to the v3 teams schema.
+  // Pre-existing groups got stranded because the v3 cutover added the new
+  // tables but never seeded them from the old column.
+  describe('v1 user-version migration — agent_group → teams', () => {
+    it('backfills teams + memberships from existing agent_group values', () => {
+      const mdir = mkdtempSync(join(tmpdir(), 'agentic-collab-mig-'));
+      const path = join(mdir, 'mig.db');
+      // Hand-write a "pre-migration" DB: ensure user_version is 0 and the
+      // agent_group column already exists. We let Database() build the
+      // schema, then we rewind user_version to 0 and insert raw rows.
+      let db = new Database(path);
+      db.rawDb.exec('DELETE FROM team_members; DELETE FROM teams;');
+      db.rawDb.exec('PRAGMA user_version = 0');
+      db.rawDb.prepare(
+        "INSERT INTO agents (name, engine, cwd, agent_group, state) VALUES (?, 'claude', '/tmp', ?, 'idle')",
+      ).run('alice', 'Research');
+      db.rawDb.prepare(
+        "INSERT INTO agents (name, engine, cwd, agent_group, state) VALUES (?, 'claude', '/tmp', ?, 'idle')",
+      ).run('bob', 'Research');
+      db.rawDb.prepare(
+        "INSERT INTO agents (name, engine, cwd, agent_group, state) VALUES (?, 'claude', '/tmp', ?, 'idle')",
+      ).run('carol', 'Ops');
+      db.rawDb.prepare(
+        "INSERT INTO agents (name, engine, cwd, state) VALUES (?, 'claude', '/tmp', 'idle')",
+      ).run('dave'); // no group → should not show up as a member
+      db.close();
+
+      // Re-open: migrate() runs and v1 backfill should fire.
+      db = new Database(path);
+      const teams = db.listTeams();
+      const teamNames = teams.map((t) => t.name).sort();
+      assert.deepEqual(teamNames, ['Ops', 'Research']);
+      const research = teams.find((t) => t.name === 'Research')!;
+      const ops = teams.find((t) => t.name === 'Ops')!;
+      assert.deepEqual([...research.members].sort(), ['alice', 'bob']);
+      assert.deepEqual([...ops.members].sort(), ['carol']);
+
+      // Idempotent: re-opening must NOT duplicate teams or members.
+      db.close();
+      db = new Database(path);
+      const teams2 = db.listTeams();
+      assert.equal(teams2.length, 2);
+      const research2 = teams2.find((t) => t.name === 'Research')!;
+      assert.deepEqual([...research2.members].sort(), ['alice', 'bob']);
+      db.close();
+      rmSync(mdir, { recursive: true, force: true });
+    });
+
+    it('no-op on a fresh DB with no agents', () => {
+      const mdir = mkdtempSync(join(tmpdir(), 'agentic-collab-mig-fresh-'));
+      const db = new Database(join(mdir, 'fresh.db'));
+      assert.deepEqual(db.listTeams(), []);
+      const v = db.rawDb.prepare('PRAGMA user_version').get() as { user_version: number };
+      assert.equal(v.user_version, 1);
+      db.close();
+      rmSync(mdir, { recursive: true, force: true });
+    });
+  });
 });
