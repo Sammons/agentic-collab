@@ -10,7 +10,7 @@
  * (per-event broadcasts).
  */
 import type { AgentRecord, DashboardMessage, Team } from '../shared/types.ts';
-import { state, emit, selectAllAgentsInitial, saveToken } from './state.ts';
+import { state, emit, restoreSelectionOnInit, saveToken } from './state.ts';
 
 type WsEvent =
   | { type: 'init'; agents: AgentRecord[]; threads: Record<string, DashboardMessage[]>; teams?: Team[] }
@@ -173,7 +173,7 @@ function handle(msg: WsEvent): void {
       state.agents = initMsg.agents ?? [];
       state.threads = initMsg.threads ?? {};
       state.teams = initMsg.teams ?? [];
-      selectAllAgentsInitial();
+      restoreSelectionOnInit();
       emit('init');
       emit('agents-changed');
       emit('teams-changed');
