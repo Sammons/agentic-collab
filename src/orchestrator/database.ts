@@ -1488,20 +1488,17 @@ export class Database {
     beforeId?: number,
     afterId?: number,
   ): { messages: DashboardMessage[]; hasMore: boolean; hasNewer: boolean } {
-    // Match messages where any of the selected agents is involved:
-    // - agent field (thread owner)
-    // - source_agent (sender)
-    // - target_agent (recipient)
-    // This ensures filtering by "brain-hygiene" shows both messages TO and FROM that agent.
+    // Filter by thread owner (agent field) only - this determines which agent's
+    // chat feed the message belongs to. source_agent/target_agent track routing
+    // metadata but shouldn't affect feed membership.
     const agentPlaceholders = agents.map(() => '?').join(',');
     const agentFilter = agents.length > 0
-      ? `(dm.agent IN (${agentPlaceholders}) OR dm.source_agent IN (${agentPlaceholders}) OR dm.target_agent IN (${agentPlaceholders}))`
+      ? `dm.agent IN (${agentPlaceholders})`
       : '1=1';
 
     // Build cursor condition
     let cursorCondition = '';
-    // Each agent set is used 3x in the filter (agent, source_agent, target_agent)
-    const params: unknown[] = agents.length > 0 ? [...agents, ...agents, ...agents] : [];
+    const params: unknown[] = agents.length > 0 ? [...agents] : [];
 
     if (beforeId !== undefined) {
       cursorCondition = 'AND dm.id < ?';
@@ -1538,8 +1535,7 @@ export class Database {
     // for beforeId queries, do a quick existence check)
     let hasNewer = false;
     if (beforeId !== undefined && messages.length > 0) {
-      // Use same 3x agent params for the filter
-      const newerParams = agents.length > 0 ? [...agents, ...agents, ...agents] : [];
+      const newerParams = agents.length > 0 ? [...agents] : [];
       const newerCheck = this.db.prepare(`
         SELECT 1 FROM dashboard_messages dm
         WHERE ${agentFilter} AND dm.id > ?
@@ -1560,8 +1556,8 @@ export class Database {
       return row.cnt;
     }
     const placeholders = agents.map(() => '?').join(',');
-    const sql = `SELECT COUNT(*) as cnt FROM dashboard_messages dm WHERE dm.agent IN (${placeholders}) OR dm.source_agent IN (${placeholders}) OR dm.target_agent IN (${placeholders})`;
-    const row = this.db.prepare(sql).get(...agents, ...agents, ...agents) as { cnt: number };
+    const sql = `SELECT COUNT(*) as cnt FROM dashboard_messages dm WHERE dm.agent IN (${placeholders})`;
+    const row = this.db.prepare(sql).get(...agents) as { cnt: number };
     return row.cnt;
   }
 
