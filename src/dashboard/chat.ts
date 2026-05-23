@@ -685,6 +685,7 @@ function setupMentionAutocomplete(
   let matches: string[] = [];
   let selectedIdx = 0;
   let activeRange: { start: number; end: number } | null = null;
+  let lastPartial: string | null = null;
   // Set briefly when a pointer (touch or mouse) lands on a popover item;
   // the textarea's blur handler reads it to avoid closing the popover
   // mid-tap on mobile, where the synthesized click arrives AFTER blur.
@@ -694,6 +695,8 @@ function setupMentionAutocomplete(
     if (pop) { pop.remove(); pop = null; }
     matches = [];
     activeRange = null;
+    lastPartial = null;
+    selectedIdx = 0;
   };
 
   const detectToken = (): { partial: string; start: number; end: number } | null => {
@@ -767,7 +770,16 @@ function setupMentionAutocomplete(
       pop.className = 'mention-popover';
       anchor.appendChild(pop);
     }
-    selectedIdx = Math.min(selectedIdx, Math.max(0, matches.length - 1));
+    // Reset highlight to the top match whenever the typed partial changes
+    // (typing "@brain" should land you on brain-hygiene, not whatever index
+    // your mouse last hovered over). Hover/arrow within the same partial
+    // still preserves selectedIdx because lastPartial hasn't changed.
+    if (tok.partial !== lastPartial) {
+      selectedIdx = 0;
+      lastPartial = tok.partial;
+    } else {
+      selectedIdx = Math.min(selectedIdx, Math.max(0, matches.length - 1));
+    }
     render();
   };
 
