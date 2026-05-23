@@ -99,15 +99,25 @@ function teardown(): void {
 }
 
 // Debounce rapid-fire message events to reduce DOM thrash and keystroke lag.
+// Chunked rendering yields to browser between batches so keyboard events process.
 let renderTimer: ReturnType<typeof setTimeout> | null = null;
-const RENDER_DEBOUNCE_MS = 150;
+let renderInProgress = false;
+let renderGeneration = 0; // increments on each render request to abort stale renders
+const RENDER_DEBOUNCE_MS = 100;
+const RENDER_CHUNK_SIZE = 40;
 
 function scheduleRender(): void {
   if (renderTimer !== null) return; // already scheduled
   renderTimer = setTimeout(() => {
     renderTimer = null;
-    renderThread();
+    void renderThreadChunked();
   }, RENDER_DEBOUNCE_MS);
+}
+
+function yieldToMain(): Promise<void> {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(resolve));
+  });
 }
 
 /* ── header ────────────────────────────────────────────────────────── */
@@ -148,12 +158,21 @@ function updateFilterSummary(): void {
 /* ── thread render ─────────────────────────────────────────────────── */
 
 /**
- * Re-render the chat thread.
+ * Re-render the chat thread with chunked processing to avoid blocking input.
+ * Yields to the browser between chunks so keyboard events can process.
  * @param forceScrollBottom - if true, scroll to bottom regardless of current position
  */
-function renderThread(forceScrollBottom = false): void {
+async function renderThreadChunked(forceScrollBottom = false): Promise<void> {
+  // Abort if another render is in progress — the newer one will pick up current state
+  if (renderInProgress) return;
+  renderInProgress = true;
+  const thisGeneration = ++renderGeneration;
+
   const root = document.getElementById('chat-thread');
-  if (!root) return;
+  if (!root) {
+    renderInProgress = false;
+    return;
+  }
 
   // Capture scroll state BEFORE rebuilding DOM — if user was near bottom,
   // we'll follow new messages; otherwise preserve their reading position.
@@ -169,17 +188,52 @@ function renderThread(forceScrollBottom = false): void {
           : 'No messages yet. Start one with <code class="inl">@agent-name</code> below.'}
       </div>
     `;
+    renderInProgress = false;
     return;
   }
 
-  // "Load older" affordance — shown when at least one selected agent's thread
-  // could plausibly have older history (i.e. it isn't known-exhausted).
-  const hasMoreAvailable = anyAgentMayHaveOlder();
-  const loadOlderHtml = hasMoreAvailable
-    ? `<div class="load-older-wrap"><button class="btn ghost" data-load-older>Load older messages</button></div>`
-    : '';
+  // Build DOM in a fragment to minimize reflows
+  const fragment = document.createDocumentFragment();
 
-  root.innerHTML = loadOlderHtml + merged.map((m) => msgHtml(m)).join('');
+  // "Load older" affordance
+  const hasMoreAvailable = anyAgentMayHaveOlder();
+  if (hasMoreAvailable) {
+    const loadOlderWrap = document.createElement('div');
+    loadOlderWrap.className = 'load-older-wrap';
+    loadOlderWrap.innerHTML = '<button class="btn ghost" data-load-older>Load older messages</button>';
+    fragment.appendChild(loadOlderWrap);
+  }
+
+  // Render messages in chunks, yielding to browser between chunks
+  for (let i = 0; i < merged.length; i += RENDER_CHUNK_SIZE) {
+    // Abort if a newer render was requested
+    if (renderGeneration !== thisGeneration) {
+      renderInProgress = false;
+      return;
+    }
+
+    const chunk = merged.slice(i, i + RENDER_CHUNK_SIZE);
+    for (const m of chunk) {
+      const wrapper = document.createElement('div');
+      wrapper.innerHTML = msgHtml(m);
+      const el = wrapper.firstElementChild;
+      if (el) fragment.appendChild(el);
+    }
+
+    // Yield to browser after each chunk (except the last) to let input events process
+    if (i + RENDER_CHUNK_SIZE < merged.length) {
+      await yieldToMain();
+    }
+  }
+
+  // Final abort check before DOM mutation
+  if (renderGeneration !== thisGeneration) {
+    renderInProgress = false;
+    return;
+  }
+
+  // Single DOM mutation: replace all children at once
+  root.replaceChildren(fragment);
   wireProfileTriggers(root);
   wireLoadOlder(root);
 
@@ -202,6 +256,13 @@ function renderThread(forceScrollBottom = false): void {
     root.scrollTop = root.scrollHeight;
   }
   // else: preserve current scroll position
+
+  renderInProgress = false;
+}
+
+/** Synchronous render for immediate updates (send, selection change). */
+function renderThread(forceScrollBottom = false): void {
+  void renderThreadChunked(forceScrollBottom);
 }
 
 // Track which agents we know are exhausted (the server returned 0 older rows
@@ -356,7 +417,7 @@ function msgHtml(m: DashboardMessage): string {
         <span class="topic ${topic === 'general' ? 'default' : ''}" title="topic">#${escapeHtml(topic)}</span>
         <span class="time">${formatTime(m.createdAt)}</span>
       </div>
-      <div class="body">${m.withdrawn ? '(withdrawn)' : renderMessageBody(m.message)}</div>
+      <div class="body">${m.withdrawn ? '(withdrawn)' : renderMessageBody(m.message, m.id)}</div>
     </div>
   `;
 }
@@ -421,7 +482,18 @@ function kindOf(agentName: string): 'eph' | 'per' | 'me' {
   return 'per';
 }
 
-function renderMessageBody(text: string): string {
+// Markdown cache: avoid re-parsing unchanged messages on every render.
+// Key: message ID + content length (fast proxy for content identity).
+const markdownCache = new Map<string, string>();
+const MARKDOWN_CACHE_MAX = 2000;
+
+function renderMessageBody(text: string, msgId?: number): string {
+  const cacheKey = msgId !== undefined ? `${msgId}:${text.length}` : null;
+  if (cacheKey) {
+    const cached = markdownCache.get(cacheKey);
+    if (cached) return cached;
+  }
+
   // Escape first, then apply markdown rendering
   let html = escapeHtml(text);
   html = renderMarkdown(html);
@@ -429,6 +501,15 @@ function renderMessageBody(text: string): string {
   html = html.replace(/(^|[\s>])(@[a-zA-Z0-9_\-/]+)/g, (_, lead, mention) => {
     return `${lead}<span class="mention">${mention}</span>`;
   });
+
+  if (cacheKey) {
+    // Evict oldest entries if cache is full
+    if (markdownCache.size >= MARKDOWN_CACHE_MAX) {
+      const first = markdownCache.keys().next().value;
+      if (first) markdownCache.delete(first);
+    }
+    markdownCache.set(cacheKey, html);
+  }
   return html;
 }
 
