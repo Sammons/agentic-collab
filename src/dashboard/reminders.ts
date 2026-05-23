@@ -410,7 +410,8 @@ function statusDot(state: string | undefined): string {
     case 'spawning':
     case 'resuming':
     case 'suspending': return 'busy';
-    case 'suspended':  return 'paused';
+    // suspended + failed → same "down" indicator
+    case 'suspended':
     case 'failed':     return 'failed';
     default:           return 'offline';
   }

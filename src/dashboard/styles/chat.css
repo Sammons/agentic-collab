@@ -586,9 +586,12 @@
   background: var(--ink-4);
   flex: 0 0 7px;
 }
-.mention-item .status.online { background: var(--moss); }
+.mention-item .status.online { background: var(--steel); }
 .mention-item .status.busy { background: var(--clay); }
-.mention-item .status.paused { background: var(--plum); }
+/* paused is now equivalent to failed (statusClass unifies them); keep the
+   selector for back-compat in case stale markup is cached, but route to
+   the same color. */
+.mention-item .status.paused,
 .mention-item .status.failed { background: var(--brick); }
 .mention-item .status.offline { background: var(--ink-4); }
 .mention-item .nm {

@@ -62,9 +62,9 @@
   background: var(--moss-bg);
   color: var(--moss);
 }
-.watch-hdr .title .state-pill.failed { background: var(--brick-bg); color: var(--brick); }
+.watch-hdr .title .state-pill.failed,
+.watch-hdr .title .state-pill.suspended { background: var(--brick-bg); color: var(--brick); }
 .watch-hdr .title .state-pill.idle { background: var(--paper-2); color: var(--ink-3); }
-.watch-hdr .title .state-pill.suspended { background: var(--plum-bg); color: var(--plum); }
 .watch-hdr .right { display: flex; align-items: center; gap: 6px; }
 
 /* live status bar */

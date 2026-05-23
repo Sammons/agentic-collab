@@ -327,13 +327,13 @@ function statusDot(agentName: string | null | undefined): string {
   const a = state.agents.find((x) => x.name === agentName);
   if (!a) return ''; // ephemeral / unknown — no dot
   // Map to a CSS class that owns its own shape *and* color so colorblind
-  // users can still distinguish states. Failed gets a glyph; suspended is
-  // a hollow ring; void is a lighter ring; running is filled steel-blue.
+  // users can still distinguish states. suspended and failed collapse to
+  // the same "down" indicator (solid brick disc with × glyph) — in
+  // practice both mean "not running, won't come back on its own".
   let cls = 'void';
   if (['active', 'idle', 'spawning', 'resuming'].includes(a.state)) cls = 'on';
   else if (a.state === 'suspending') cls = 'transient';
-  else if (a.state === 'suspended') cls = 'off';
-  else if (a.state === 'failed') cls = 'failed';
+  else if (a.state === 'suspended' || a.state === 'failed') cls = 'failed';
   return `<span class="status-dot ${cls}" title="${escapeHtml(a.state)}"></span>`;
 }
 
@@ -829,7 +829,8 @@ function statusClass(state: string | undefined): string {
     case 'spawning':
     case 'resuming':
     case 'suspending': return 'busy';
-    case 'suspended':  return 'paused';
+    // suspended + failed → same "down" indicator
+    case 'suspended':
     case 'failed':     return 'failed';
     default:           return 'offline';
   }
