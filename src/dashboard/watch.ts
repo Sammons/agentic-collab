@@ -17,6 +17,7 @@
 import type { AgentRecord } from '../shared/types.ts';
 import { state, on, authHeaders } from './state.ts';
 import { registerRoute, go, type Route } from './routing.ts';
+import { openEditPersonaModal } from './overlays.ts';
 
 const POLL_INTERVAL_MS = 3000;
 const PEEK_LINES = 200;
@@ -36,6 +37,12 @@ function render(root: HTMLElement, route: Route): void {
   const name = route.agentName;
   currentAgent = name;
   const agent = state.agents.find((a) => a.name === name);
+  // State-aware lifecycle button (matches the profile popover behavior):
+  // suspended/void/failed → Start (server folds to resume when suspended);
+  // active/idle/spawning  → Kill. Transient states hide the button entirely.
+  const isRunning = agent ? ['active', 'idle', 'spawning'].includes(agent.state) : false;
+  const isTransient = agent ? ['suspending', 'resuming'].includes(agent.state) : false;
+  const startLabel = agent?.state === 'suspended' ? 'Resume' : 'Start';
 
   root.innerHTML = `
     <div class="watch-page">
@@ -49,6 +56,9 @@ function render(root: HTMLElement, route: Route): void {
           </h1>
         </div>
         <div class="right">
+          ${!isTransient && !isRunning ? `<button class="btn primary" data-start>${startLabel}</button>` : ''}
+          ${isRunning ? `<button class="btn" data-kill>Kill</button>` : ''}
+          <button class="btn ghost" data-persona>Persona</button>
           <button class="btn ghost" data-open-tmux>↗ Open in tmux</button>
           <button class="btn" data-stop>Stop watching</button>
         </div>
@@ -203,6 +213,19 @@ function wire(root: HTMLElement, name: string): void {
     showToast(`Copied: ${cmd}`);
   });
 
+  // Lifecycle (Start/Resume/Kill) — same handler as the profile popover.
+  // /spawn folds to /resume server-side when state=suspended, so we always
+  // POST to /spawn here regardless of which verb is showing.
+  root.querySelector<HTMLElement>('[data-start]')?.addEventListener('click', () => {
+    void lifecycleAction(name, 'spawn', 'starting');
+  });
+  root.querySelector<HTMLElement>('[data-kill]')?.addEventListener('click', () => {
+    void lifecycleAction(name, 'kill', 'killing');
+  });
+  root.querySelector<HTMLElement>('[data-persona]')?.addEventListener('click', () => {
+    void openEditPersonaModal(name);
+  });
+
   root.querySelector<HTMLElement>('[data-pause]')?.addEventListener('click', () => {
     paused = !paused;
     document.querySelector<HTMLElement>('[data-pause]')!.textContent = paused ? '▶ Resume' : '⏸ Pause';
@@ -283,4 +306,22 @@ function showToast(msg: string, kind: 'info' | 'error' = 'info'): void {
   el.textContent = msg;
   document.body.appendChild(el);
   setTimeout(() => el.remove(), 3000);
+}
+
+async function lifecycleAction(agentName: string, action: string, gerund: string): Promise<void> {
+  try {
+    const res = await fetch(`/api/agents/${encodeURIComponent(agentName)}/${action}`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({}),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => null);
+      showToast(`${gerund} failed: ${body?.error ?? res.status}`, 'error');
+      return;
+    }
+    showToast(`${agentName} ${gerund}…`);
+  } catch {
+    showToast('Network error', 'error');
+  }
 }
