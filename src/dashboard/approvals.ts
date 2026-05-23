@@ -13,7 +13,7 @@
  * reflect on both master and detail panes.
  */
 import type { ApprovalRow, ApprovalState } from '../shared/types.ts';
-import { on, authHeaders } from './state.ts';
+import { state, on, authHeaders } from './state.ts';
 import { registerRoute } from './routing.ts';
 
 let approvals: ApprovalRow[] = [];
