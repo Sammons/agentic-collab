@@ -174,6 +174,12 @@ function buildRoutes(): Route[] {
 
 // ── Dashboard ──
 
+// Apex redirect — bare host hits /dashboard.
+route('GET', '/', async (_req, res) => {
+  res.writeHead(302, { location: '/dashboard' });
+  res.end();
+});
+
 route('GET', '/dashboard', async (_req, res, _match, ctx) => {
   res.writeHead(200, {
     'content-type': 'text/html; charset=utf-8',
