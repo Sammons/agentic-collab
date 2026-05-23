@@ -13,7 +13,7 @@
  * Selection is purely a filter signal; it never navigates. Nav actions and
  * the Watch eye icon DO navigate (via routing.ts).
  */
-import { state, on, toggleAgentSelected, toggleTeam, toggleAllAgents } from './state.ts';
+import { state, on, toggleAgentSelected, toggleTeam, toggleAllAgents, agentsByName } from './state.ts';
 import { go } from './routing.ts';
 import { openNewTeamModal, openEditTeamModal } from './overlays.ts';
 import type { Team } from '../shared/types.ts';
@@ -54,12 +54,25 @@ export function ensureAgentVisible(agentName: string): void {
   if (changed) render();
 }
 
+// Debounce sidebar renders to avoid thrashing on rapid agent_update events.
+// Health monitor updates can fire many agent_update messages in quick succession.
+let sidebarRenderTimer: ReturnType<typeof setTimeout> | null = null;
+const SIDEBAR_DEBOUNCE_MS = 100;
+
+function scheduleRender(): void {
+  if (sidebarRenderTimer !== null) return;
+  sidebarRenderTimer = setTimeout(() => {
+    sidebarRenderTimer = null;
+    render();
+  }, SIDEBAR_DEBOUNCE_MS);
+}
+
 export function setupSidebar(): void {
-  on('init', render);
-  on('agents-changed', render);
-  on('teams-changed', render);
-  on('selection-changed', render);
-  on('route-changed', render);
+  on('init', render); // init renders immediately
+  on('agents-changed', scheduleRender);
+  on('teams-changed', scheduleRender);
+  on('selection-changed', render); // selection changes render immediately for responsiveness
+  on('route-changed', render); // route changes render immediately
   render();
 }
 
@@ -222,7 +235,7 @@ function teamHtml(team: Team): string {
 function memberHtml(agentName: string): string {
   // Caller (teamHtml) has already filtered orphans, so `agent` is guaranteed.
   const checked = state.selectedAgents.has(agentName) ? 'checked' : '';
-  const agent = state.agents.find((a) => a.name === agentName)!;
+  const agent = agentsByName.get(agentName)!;
   const status = statusClass(agent.state);
   const stateTip = `${agentName} — ${agent.state}`;
   return `

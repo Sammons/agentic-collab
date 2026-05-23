@@ -11,7 +11,7 @@
  * link.
  */
 import type { AgentRecord, AgentState, Team } from '../shared/types.ts';
-import { state, on, authHeaders, emit } from './state.ts';
+import { state, on, authHeaders, emit, agentsByName, teamsByAgent } from './state.ts';
 import { registerRoute, go } from './routing.ts';
 import { openNewAgentModal, openEditPersonaModal } from './overlays.ts';
 
@@ -180,7 +180,7 @@ function rowHtml(a: AgentRecord): string {
 }
 
 function agentTeams(agentName: string): Team[] {
-  return state.teams.filter((t) => t.members.includes(agentName));
+  return teamsByAgent.get(agentName) ?? [];
 }
 
 /* ── row wiring ────────────────────────────────────────────────────── */

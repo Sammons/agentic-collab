@@ -15,7 +15,7 @@
  * Profile popover opens on sender-name click. Click outside closes it.
  */
 import type { AgentRecord, DashboardMessage } from '../shared/types.ts';
-import { state, on, authHeaders } from './state.ts';
+import { state, on, authHeaders, agentsByName } from './state.ts';
 import { registerRoute, go } from './routing.ts';
 import { openEditPersonaModal } from './overlays.ts';
 import { renderMarkdown } from '../shared/markdown.ts';
@@ -63,22 +63,35 @@ function render(root: HTMLElement): void {
   renderThread();
   wire(root);
 
-  // Subscribe to state changes that should re-render the thread.
-  // Filter message events: only re-render if the message affects the current view.
+  // Subscribe to state changes.
+  // For new messages: append to feed if it's for a selected agent
   detachers.push(on('message', (msg) => {
     const m = msg as DashboardMessage;
     if (state.selectedAgents.has(m.agent) || SYSTEM_THREADS.has(m.agent)) {
+      // Append new message to feed (optimistic — server will confirm via WS)
+      const isDupe = feedState.messages.some((x) => x.id === m.id);
+      if (!isDupe) {
+        feedState.messages.push(m);
+        scheduleRender();
+      }
+    }
+  }));
+  detachers.push(on('message-withdrawn', (msg) => {
+    const m = msg as DashboardMessage;
+    const idx = feedState.messages.findIndex((x) => x.id === m.id);
+    if (idx >= 0) {
+      feedState.messages[idx] = m;
       scheduleRender();
     }
   }));
-  detachers.push(on('message-withdrawn', () => scheduleRender()));
   detachers.push(on('selection-changed', () => {
     updateFilterSummary();
-    renderThread(true); // force scroll to bottom on selection change
+    // Selection changed — need fresh fetch from server
+    void loadInitialFeed();
   }));
   detachers.push(on('agents-changed', () => {
     updateFilterSummary();
-    scheduleRender();
+    // Don't re-fetch on agent status changes, just update UI
   }));
   detachers.push(on('route-changed', (r) => {
     if ((r as { kind?: string })?.kind !== 'dashboard') teardown();
@@ -98,26 +111,98 @@ function teardown(): void {
   }
 }
 
-// Debounce rapid-fire message events to reduce DOM thrash and keystroke lag.
-// Chunked rendering yields to browser between batches so keyboard events process.
+// ── Virtual scroll state ──────────────────────────────────────────────────
+// Instead of loading all messages into the DOM, we fetch pages from the server
+// and only render what's visible + a buffer. This keeps DOM size ~50-100 nodes.
+
+const PAGE_SIZE = 50;
+const SCROLL_BUFFER = 20; // extra messages above/below viewport
+
+type FeedState = {
+  messages: DashboardMessage[];
+  hasMore: boolean;      // older messages available
+  hasNewer: boolean;     // newer messages available (when scrolled up)
+  loading: boolean;
+  lastAgentsKey: string; // to detect selection changes
+  totalCount: number;
+};
+
+const feedState: FeedState = {
+  messages: [],
+  hasMore: false,
+  hasNewer: false,
+  loading: false,
+  lastAgentsKey: '',
+  totalCount: 0,
+};
+
+// Render state
 let renderTimer: ReturnType<typeof setTimeout> | null = null;
-let renderInProgress = false;
-let renderGeneration = 0; // increments on each render request to abort stale renders
-const RENDER_DEBOUNCE_MS = 100;
-const RENDER_CHUNK_SIZE = 40;
+const RENDER_DEBOUNCE_MS = 50;
 
 function scheduleRender(): void {
-  if (renderTimer !== null) return; // already scheduled
+  if (renderTimer !== null) return;
   renderTimer = setTimeout(() => {
     renderTimer = null;
-    void renderThreadChunked();
+    void renderFeed();
   }, RENDER_DEBOUNCE_MS);
 }
 
-function yieldToMain(): Promise<void> {
-  return new Promise((resolve) => {
-    requestAnimationFrame(() => requestAnimationFrame(resolve));
-  });
+function getAgentsKey(): string {
+  return [...state.selectedAgents].sort().join(',');
+}
+
+async function fetchFeed(before?: number, after?: number): Promise<void> {
+  if (feedState.loading) return;
+  feedState.loading = true;
+
+  const agents = [...state.selectedAgents, ...SYSTEM_THREADS];
+  const params = new URLSearchParams();
+  params.set('agents', agents.join(','));
+  params.set('limit', String(PAGE_SIZE));
+  if (before !== undefined) params.set('before', String(before));
+  if (after !== undefined) params.set('after', String(after));
+
+  try {
+    const res = await fetch(`/api/dashboard/messages/feed?${params}`, {
+      headers: authHeaders(),
+    });
+    if (!res.ok) return;
+
+    const data = await res.json() as {
+      messages: DashboardMessage[];
+      hasMore: boolean;
+      hasNewer: boolean;
+      totalCount: number;
+    };
+
+    if (before !== undefined) {
+      // Prepend older messages
+      feedState.messages = [...data.messages, ...feedState.messages];
+      feedState.hasMore = data.hasMore;
+    } else if (after !== undefined) {
+      // Append newer messages
+      feedState.messages = [...feedState.messages, ...data.messages];
+      feedState.hasNewer = data.hasNewer;
+    } else {
+      // Initial load
+      feedState.messages = data.messages;
+      feedState.hasMore = data.hasMore;
+      feedState.hasNewer = data.hasNewer;
+    }
+    feedState.totalCount = data.totalCount;
+  } finally {
+    feedState.loading = false;
+  }
+}
+
+async function loadInitialFeed(): Promise<void> {
+  feedState.messages = [];
+  feedState.hasMore = false;
+  feedState.hasNewer = false;
+  feedState.lastAgentsKey = getAgentsKey();
+  await fetchFeed();
+  scheduleRender();
 }
 
 /* ── header ────────────────────────────────────────────────────────── */
@@ -158,29 +243,26 @@ function updateFilterSummary(): void {
 /* ── thread render ─────────────────────────────────────────────────── */
 
 /**
- * Re-render the chat thread with chunked processing to avoid blocking input.
- * Yields to the browser between chunks so keyboard events can process.
- * @param forceScrollBottom - if true, scroll to bottom regardless of current position
+ * Render the chat feed using backend-paginated messages.
+ * Only renders messages currently in feedState — scroll handlers trigger
+ * additional fetches as needed.
  */
-async function renderThreadChunked(forceScrollBottom = false): Promise<void> {
-  // Abort if another render is in progress — the newer one will pick up current state
-  if (renderInProgress) return;
-  renderInProgress = true;
-  const thisGeneration = ++renderGeneration;
-
+async function renderFeed(forceScrollBottom = false): Promise<void> {
   const root = document.getElementById('chat-thread');
-  if (!root) {
-    renderInProgress = false;
-    return;
+  if (!root) return;
+
+  // Check if agent selection changed — need fresh fetch
+  const currentKey = getAgentsKey();
+  if (currentKey !== feedState.lastAgentsKey) {
+    await loadInitialFeed();
+    return; // loadInitialFeed calls scheduleRender
   }
 
-  // Capture scroll state BEFORE rebuilding DOM — if user was near bottom,
-  // we'll follow new messages; otherwise preserve their reading position.
+  // Capture scroll state before DOM update
   const scrollGap = root.scrollHeight - root.scrollTop - root.clientHeight;
   const wasAtBottom = scrollGap < 60;
 
-  const merged = mergeMessages();
-  if (merged.length === 0) {
+  if (feedState.messages.length === 0 && !feedState.loading) {
     root.innerHTML = `
       <div class="empty">
         ${state.selectedAgents.size === 0
@@ -188,60 +270,38 @@ async function renderThreadChunked(forceScrollBottom = false): Promise<void> {
           : 'No messages yet. Start one with <code class="inl">@agent-name</code> below.'}
       </div>
     `;
-    renderInProgress = false;
     return;
   }
 
-  // Build DOM in a fragment to minimize reflows
+  // Build DOM
   const fragment = document.createDocumentFragment();
 
-  // "Load older" affordance
-  const hasMoreAvailable = anyAgentMayHaveOlder();
-  if (hasMoreAvailable) {
-    const loadOlderWrap = document.createElement('div');
-    loadOlderWrap.className = 'load-older-wrap';
-    loadOlderWrap.innerHTML = '<button class="btn ghost" data-load-older>Load older messages</button>';
-    fragment.appendChild(loadOlderWrap);
+  // "Load older" button
+  if (feedState.hasMore && !feedState.loading) {
+    const wrap = document.createElement('div');
+    wrap.className = 'load-older-wrap';
+    wrap.innerHTML = '<button class="btn ghost" data-load-older>Load older messages</button>';
+    fragment.appendChild(wrap);
+  } else if (feedState.loading) {
+    const wrap = document.createElement('div');
+    wrap.className = 'load-older-wrap';
+    wrap.innerHTML = '<span class="loading">Loading...</span>';
+    fragment.appendChild(wrap);
   }
 
-  // Render messages in chunks, yielding to browser between chunks
-  for (let i = 0; i < merged.length; i += RENDER_CHUNK_SIZE) {
-    // Abort if a newer render was requested
-    if (renderGeneration !== thisGeneration) {
-      renderInProgress = false;
-      return;
-    }
-
-    const chunk = merged.slice(i, i + RENDER_CHUNK_SIZE);
-    for (const m of chunk) {
-      const wrapper = document.createElement('div');
-      wrapper.innerHTML = msgHtml(m);
-      const el = wrapper.firstElementChild;
-      if (el) fragment.appendChild(el);
-    }
-
-    // Yield to browser after each chunk (except the last) to let input events process
-    if (i + RENDER_CHUNK_SIZE < merged.length) {
-      await yieldToMain();
-    }
+  // Render messages
+  for (const m of feedState.messages) {
+    const wrapper = document.createElement('div');
+    wrapper.innerHTML = msgHtml(m);
+    const el = wrapper.firstElementChild;
+    if (el) fragment.appendChild(el);
   }
 
-  // Final abort check before DOM mutation
-  if (renderGeneration !== thisGeneration) {
-    renderInProgress = false;
-    return;
-  }
-
-  // Single DOM mutation: replace all children at once
   root.replaceChildren(fragment);
   wireProfileTriggers(root);
-  wireLoadOlder(root);
+  wireFeedControls(root);
 
-  // Scroll handling:
-  // 1. pendingFocusId (from search) → scroll to that message
-  // 2. forceScrollBottom (selection change) → scroll to bottom
-  // 3. wasAtBottom → follow new messages
-  // 4. otherwise → preserve reading position (no scroll change)
+  // Scroll handling
   if (pendingFocusId !== null) {
     const target = root.querySelector<HTMLElement>(`[data-msg-id="${pendingFocusId}"]`);
     if (target) {
@@ -255,102 +315,36 @@ async function renderThreadChunked(forceScrollBottom = false): Promise<void> {
   } else if (forceScrollBottom || wasAtBottom) {
     root.scrollTop = root.scrollHeight;
   }
-  // else: preserve current scroll position
-
-  renderInProgress = false;
 }
 
-/** Synchronous render for immediate updates (send, selection change). */
+function wireFeedControls(root: HTMLElement): void {
+  const loadOlderBtn = root.querySelector<HTMLButtonElement>('[data-load-older]');
+  if (loadOlderBtn) {
+    loadOlderBtn.addEventListener('click', async () => {
+      if (feedState.messages.length === 0) return;
+      const oldestId = feedState.messages[0]!.id;
+      await fetchFeed(oldestId);
+      scheduleRender();
+    });
+  }
+}
+
+/** Trigger initial feed load or re-render. */
 function renderThread(forceScrollBottom = false): void {
-  void renderThreadChunked(forceScrollBottom);
-}
-
-// Track which agents we know are exhausted (the server returned 0 older rows
-// in response to a paginated request). Lets us hide the button once we've
-// scrolled all the way back. Reset on init (full reconnect).
-const exhaustedAgents = new Set<string>();
-
-// init from connection.ts repopulates threads — clear pagination state so we
-// re-offer "Load older" against the fresh window.
-on('init', () => exhaustedAgents.clear());
-
-function anyAgentMayHaveOlder(): boolean {
-  for (const agentName of Object.keys(state.threads)) {
-    if (exhaustedAgents.has(agentName)) continue;
-    const isSelected = state.selectedAgents.has(agentName);
-    const isSystemThread = SYSTEM_THREADS.has(agentName);
-    if (!isSelected && !isSystemThread) continue;
-    // The init cap is 200/agent; threads that started below that are short
-    // enough that we don't need to bother offering a "Load older" button.
-    if ((state.threads[agentName]?.length ?? 0) >= INIT_THREAD_CAP) return true;
-  }
-  return false;
-}
-
-const INIT_THREAD_CAP = 200;
-
-function wireLoadOlder(scope: HTMLElement): void {
-  const btn = scope.querySelector<HTMLButtonElement>('[data-load-older]');
-  if (!btn) return;
-  btn.addEventListener('click', async () => {
-    btn.disabled = true;
-    btn.textContent = 'Loading…';
-    // Anchor the scroll to the message currently at the top of the window
-    // so the user's reading position doesn't snap to the bottom after we
-    // prepend older content.
-    const anchorId = firstVisibleMessageId();
-    await loadOlderForVisibleAgents();
-    if (anchorId !== null) pendingFocusId = anchorId;
-    renderThread();
-  });
-}
-
-function firstVisibleMessageId(): number | null {
-  const thread = document.getElementById('chat-thread');
-  if (!thread) return null;
-  const rows = thread.querySelectorAll<HTMLElement>('[data-msg-id]');
-  for (const row of rows) {
-    if (row.offsetTop + row.offsetHeight >= thread.scrollTop) {
-      const id = parseInt(row.dataset['msgId'] ?? '', 10);
-      return Number.isFinite(id) ? id : null;
-    }
-  }
-  return null;
-}
-
-async function loadOlderForVisibleAgents(): Promise<void> {
-  const candidates: string[] = [];
-  for (const agentName of Object.keys(state.threads)) {
-    if (exhaustedAgents.has(agentName)) continue;
-    const isSelected = state.selectedAgents.has(agentName);
-    const isSystemThread = SYSTEM_THREADS.has(agentName);
-    if (!isSelected && !isSystemThread) continue;
-    if ((state.threads[agentName]?.length ?? 0) >= INIT_THREAD_CAP) candidates.push(agentName);
-  }
-  await Promise.all(candidates.map(loadOlderForAgent));
-}
-
-async function loadOlderForAgent(agentName: string): Promise<void> {
-  const thread = state.threads[agentName] ?? [];
-  // Lowest positive id is the oldest server-known message in the window.
-  const oldest = thread.find((m) => m.id > 0);
-  const beforeId = oldest?.id ?? null;
-  try {
-    const url = `/api/dashboard/threads/${encodeURIComponent(agentName)}/older${beforeId !== null ? `?beforeId=${beforeId}` : ''}`;
-    const res = await fetch(url, { headers: authHeaders() });
-    if (!res.ok) return;
-    const body = await res.json() as { messages: DashboardMessage[] };
-    if (!body.messages || body.messages.length === 0) {
-      exhaustedAgents.add(agentName);
-      return;
-    }
-    // Prepend chronologically — server already returned ASC order.
-    state.threads[agentName] = [...body.messages, ...thread];
-    if (body.messages.length < INIT_THREAD_CAP) exhaustedAgents.add(agentName);
-  } catch {
-    // Network error — leave the button visible so the user can retry.
+  if (feedState.lastAgentsKey !== getAgentsKey()) {
+    void loadInitialFeed();
+  } else {
+    void renderFeed(forceScrollBottom);
   }
 }
+
+// Reset feed state on init (reconnect)
+on('init', () => {
+  feedState.messages = [];
+  feedState.hasMore = false;
+  feedState.hasNewer = false;
+  feedState.lastAgentsKey = '';
+});
 
 let pendingFocusId: number | null = null;
 
@@ -360,31 +354,6 @@ let pendingFocusId: number | null = null;
  */
 export function focusMessage(id: number): void {
   pendingFocusId = id;
-}
-
-function mergeMessages(): DashboardMessage[] {
-  const seen = new Set<number>();
-  const out: DashboardMessage[] = [];
-  for (const [agentName, thread] of Object.entries(state.threads)) {
-    const isSelected = state.selectedAgents.has(agentName);
-    const isSystemThread = SYSTEM_THREADS.has(agentName);
-    if (!isSelected && !isSystemThread) continue;
-    for (const m of thread) {
-      if (m.id < 0) {
-        // optimistic message — always include
-        out.push(m);
-        continue;
-      }
-      if (seen.has(m.id)) continue;
-      seen.add(m.id);
-      out.push(m);
-    }
-  }
-  out.sort((a, b) => {
-    if (a.createdAt === b.createdAt) return a.id - b.id;
-    return a.createdAt < b.createdAt ? -1 : 1;
-  });
-  return out;
 }
 
 function msgHtml(m: DashboardMessage): string {
@@ -431,7 +400,7 @@ function msgHtml(m: DashboardMessage): string {
 function statusDot(agentName: string | null | undefined): string {
   if (!agentName) return '';
   if (agentName === 'dashboard' || agentName === 'system') return '';
-  const a = state.agents.find((x) => x.name === agentName);
+  const a = agentsByName.get(agentName);
   if (!a) return ''; // ephemeral / unknown — no dot
   // Map to a CSS class that owns its own shape *and* color so colorblind
   // users can still distinguish states. suspended and failed collapse to
@@ -470,7 +439,7 @@ function systemMsgHtml(m: DashboardMessage): string {
 function kindOf(agentName: string): 'eph' | 'per' | 'me' {
   // Ephemeral addresses look like `agent-instance:<hash>` or contain @ paths;
   // for in-thread display we treat by AgentRecord.engine null as eph.
-  const a = state.agents.find((x) => x.name === agentName);
+  const a = agentsByName.get(agentName);
   if (!a) {
     // Could be an instance address — treat as ephemeral for color.
     return agentName.includes(':') || agentName.includes('@') ? 'eph' : 'me';
@@ -533,7 +502,7 @@ function wireProfileTriggers(scope: HTMLElement): void {
 
 function openProfilePopover(anchor: HTMLElement, agentName: string): void {
   closeProfilePopover();
-  const agent = state.agents.find((a) => a.name === agentName);
+  const agent = agentsByName.get(agentName);
   if (!agent) return;
 
   const pop = document.createElement('div');
@@ -917,7 +886,7 @@ function setupMentionAutocomplete(
       return;
     }
     pop.innerHTML = matches.map((name, i) => {
-      const agent = state.agents.find((a) => a.name === name);
+      const agent = agentsByName.get(name);
       const dot = agent ? statusClass(agent.state) : 'offline';
       return `
         <div class="mention-item ${i === selectedIdx ? 'sel' : ''}" data-idx="${i}">

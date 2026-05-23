@@ -944,6 +944,38 @@ route('GET', '/api/dashboard/messages/search', async (req, res, _match, ctx) => 
   json(res, 200, results);
 });
 
+// Paginated merged message feed for v3 dashboard virtual scrolling.
+// Server handles merge/sort across agents; client renders visible window only.
+route('GET', '/api/dashboard/messages/feed', async (req, res, _match, ctx) => {
+  const url = new URL(req.url!, `http://${req.headers.host}`);
+
+  // agents: comma-separated list of agent names (empty = all)
+  const agentsParam = url.searchParams.get('agents') ?? '';
+  const agents = agentsParam ? agentsParam.split(',').filter(Boolean) : [];
+
+  // limit: max messages to return (default 50, max 200)
+  const limitParam = url.searchParams.get('limit');
+  const limit = Math.min(200, Math.max(1, limitParam ? parseInt(limitParam, 10) : 50));
+
+  // Pagination cursors (mutually exclusive)
+  const beforeParam = url.searchParams.get('before');
+  const afterParam = url.searchParams.get('after');
+  const beforeId = beforeParam ? parseInt(beforeParam, 10) : undefined;
+  const afterId = afterParam ? parseInt(afterParam, 10) : undefined;
+
+  const result = ctx.db.getMergedMessages(agents, limit, beforeId, afterId);
+
+  // Include total count for scroll bar sizing (cached, cheap query)
+  const totalCount = ctx.db.getMessageCount(agents);
+
+  json(res, 200, {
+    messages: result.messages,
+    hasMore: result.hasMore,
+    hasNewer: result.hasNewer,
+    totalCount,
+  });
+});
+
 route('PUT', '/api/dashboard/read-cursor', async (req, res, _match, ctx) => {
   const body = await readJson(req);
   if (!body.agent || typeof body.agent !== 'string') {

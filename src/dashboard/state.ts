@@ -59,6 +59,32 @@ export const state: DashboardState = {
   token: null,
 };
 
+/** O(1) agent lookup by name. Rebuilt on init/agents_update/agent_destroyed. */
+export const agentsByName = new Map<string, AgentRecord>();
+
+/** O(1) team membership lookup. Maps agent name → array of teams containing that agent. */
+export const teamsByAgent = new Map<string, Team[]>();
+
+/** Rebuild the agentsByName index from the current agents array. */
+export function rebuildAgentIndex(): void {
+  agentsByName.clear();
+  for (const a of state.agents) {
+    agentsByName.set(a.name, a);
+  }
+}
+
+/** Rebuild the teamsByAgent index from the current teams array. */
+export function rebuildTeamIndex(): void {
+  teamsByAgent.clear();
+  for (const team of state.teams) {
+    for (const member of team.members) {
+      const existing = teamsByAgent.get(member);
+      if (existing) existing.push(team);
+      else teamsByAgent.set(member, [team]);
+    }
+  }
+}
+
 /* ── threads cache (ETag-style delta init) ─────────────────────────── */
 
 const THREADS_CACHE_KEY = 'orchestrator_threads_v3';

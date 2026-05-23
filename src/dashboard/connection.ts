@@ -10,7 +10,7 @@
  * (per-event broadcasts).
  */
 import type { AgentRecord, DashboardMessage, Team } from '../shared/types.ts';
-import { state, emit, restoreSelectionOnInit, saveToken, loadCachedThreads, persistCachedThreads } from './state.ts';
+import { state, emit, restoreSelectionOnInit, saveToken, loadCachedThreads, persistCachedThreads, agentsByName, rebuildAgentIndex, rebuildTeamIndex } from './state.ts';
 
 type WsEvent =
   | { type: 'init'; agents: AgentRecord[]; threads: Record<string, DashboardMessage[]>; teams?: Team[] }
@@ -221,6 +221,8 @@ function handle(msg: WsEvent): void {
         }
       }
       persistCachedThreads();
+      rebuildAgentIndex();
+      rebuildTeamIndex();
       restoreSelectionOnInit();
       emit('init');
       emit('agents-changed');
@@ -230,19 +232,27 @@ function handle(msg: WsEvent): void {
     case 'agents_update': {
       const u = msg as Extract<WsEvent, { type: 'agents_update' }>;
       state.agents = u.agents ?? [];
+      rebuildAgentIndex();
       emit('agents-changed');
       break;
     }
     case 'agent_update': {
       const u = msg as Extract<WsEvent, { type: 'agent_update' }>;
-      const idx = state.agents.findIndex((a) => a.name === u.agent.name);
-      if (idx >= 0) state.agents[idx] = u.agent;
-      else state.agents.push(u.agent);
+      // O(1) lookup via Map instead of O(n) findIndex
+      const existing = agentsByName.get(u.agent.name);
+      if (existing) {
+        const idx = state.agents.indexOf(existing);
+        if (idx >= 0) state.agents[idx] = u.agent;
+      } else {
+        state.agents.push(u.agent);
+      }
+      agentsByName.set(u.agent.name, u.agent);
       emit('agents-changed');
       break;
     }
     case 'agent_destroyed': {
       const u = msg as Extract<WsEvent, { type: 'agent_destroyed' }>;
+      agentsByName.delete(u.name);
       state.agents = state.agents.filter((a) => a.name !== u.name);
       state.selectedAgents.delete(u.name);
       delete state.threads[u.name];
@@ -252,6 +262,7 @@ function handle(msg: WsEvent): void {
     case 'teams_update': {
       const u = msg as Extract<WsEvent, { type: 'teams_update' }>;
       state.teams = u.teams ?? [];
+      rebuildTeamIndex();
       emit('teams-changed');
       break;
     }

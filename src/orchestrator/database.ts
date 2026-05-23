@@ -1472,6 +1472,89 @@ export class Database {
     return rows.map(mapDashboardMessageRow);
   }
 
+  /**
+   * Paginated merged message feed across multiple agents. Used by v3 dashboard
+   * for efficient virtual scrolling — server does the merge/sort, client only
+   * renders what's visible.
+   *
+   * @param agents - array of agent names to include (empty = all)
+   * @param limit - max messages to return
+   * @param beforeId - cursor for pagination (return messages older than this id)
+   * @param afterId - cursor for newer messages (return messages newer than this id)
+   */
+  getMergedMessages(
+    agents: string[],
+    limit: number = 50,
+    beforeId?: number,
+    afterId?: number,
+  ): { messages: DashboardMessage[]; hasMore: boolean; hasNewer: boolean } {
+    const agentFilter = agents.length > 0
+      ? `dm.agent IN (${agents.map(() => '?').join(',')})`
+      : '1=1';
+
+    // Build cursor condition
+    let cursorCondition = '';
+    const params: unknown[] = [...agents];
+
+    if (beforeId !== undefined) {
+      cursorCondition = 'AND dm.id < ?';
+      params.push(beforeId);
+    } else if (afterId !== undefined) {
+      cursorCondition = 'AND dm.id > ?';
+      params.push(afterId);
+    }
+
+    // Fetch limit+1 to detect if there are more
+    params.push(limit + 1);
+
+    const orderDir = afterId !== undefined ? 'ASC' : 'DESC';
+    const sql = `
+      SELECT dm.*, pm.status AS delivery_status
+      FROM dashboard_messages dm
+      LEFT JOIN pending_messages pm ON dm.queue_id = pm.id
+      WHERE ${agentFilter} ${cursorCondition}
+      ORDER BY dm.created_at ${orderDir}, dm.id ${orderDir}
+      LIMIT ?
+    `;
+
+    const rows = this.db.prepare(sql).all(...params) as Array<Record<string, unknown>>;
+    let messages = rows.map(mapDashboardMessageRow);
+
+    // Check if there are more in the requested direction
+    const hasMore = messages.length > limit;
+    if (hasMore) messages = messages.slice(0, limit);
+
+    // If fetching newer (afterId), reverse to get chronological order
+    if (afterId !== undefined) messages.reverse();
+
+    // Check if there are newer messages (for afterId queries, we already know;
+    // for beforeId queries, do a quick existence check)
+    let hasNewer = false;
+    if (beforeId !== undefined && messages.length > 0) {
+      const newerCheck = this.db.prepare(`
+        SELECT 1 FROM dashboard_messages dm
+        WHERE ${agentFilter} AND dm.id > ?
+        LIMIT 1
+      `).get(...agents, messages[messages.length - 1]!.id);
+      hasNewer = newerCheck !== undefined;
+    }
+
+    return { messages, hasMore, hasNewer };
+  }
+
+  /**
+   * Get total message count for agents (for scroll position estimation).
+   */
+  getMessageCount(agents: string[]): number {
+    if (agents.length === 0) {
+      const row = this.db.prepare('SELECT COUNT(*) as cnt FROM dashboard_messages').get() as { cnt: number };
+      return row.cnt;
+    }
+    const sql = `SELECT COUNT(*) as cnt FROM dashboard_messages WHERE agent IN (${agents.map(() => '?').join(',')})`;
+    const row = this.db.prepare(sql).get(...agents) as { cnt: number };
+    return row.cnt;
+  }
+
   // ── Proxies ──
 
   registerProxy(proxyId: string, token: string, host: string, version?: string): ProxyRegistration {
