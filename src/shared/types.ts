@@ -98,6 +98,18 @@ export type DetectionConfig = {
   autoRecover?: boolean;
 };
 
+// ── Files (orchestrator-native file registry) ──
+
+export type FileRecord = {
+  id: string;
+  name: string;
+  size: number;
+  mime: string;
+  path: string;
+  createdAt: string;
+  expiresAt: string | null;
+};
+
 // ── Pages ──
 
 export type PageRecord = {
@@ -229,6 +241,7 @@ export type DashboardMessage = {
   deliveryStatus: string | null;
   withdrawn: boolean;
   createdAt: string;
+  fileIds: string[] | null;
 };
 
 // ── Message Queue ──
