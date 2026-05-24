@@ -446,9 +446,11 @@ server.on('upgrade', (req, socket, head) => {
 
 // On WS connect, send init event
 wss.onConnect((client) => {
-  // Combine persistent agents + templates for dashboard display.
-  // Templates that share a name with a persistent agent are filtered out —
-  // the persistent agent takes precedence (already spawned/running).
+  // Combine persistent agents + ephemeral templates for dashboard display.
+  // Ephemeral templates (persistent: false) have isTemplate: true so the
+  // sidebar renders them with distinct styling (dashed border, italic name).
+  // Templates sharing a name with a persistent agent are filtered out as a
+  // defensive guard (persistent agent takes precedence if both exist).
   const persistentAgents = db.listAgents();
   const persistentNames = new Set(persistentAgents.map((a) => a.name));
   const templateAgents = db.listTemplatesAsAgentRecords()

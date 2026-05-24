@@ -241,12 +241,12 @@ function memberHtml(agentName: string): string {
   const stateTip = isTemplate
     ? `${agentName} — template (messaging spawns new agent)`
     : `${agentName} — ${agent.state}`;
-  const nameClass = isTemplate ? 'nm template' : 'nm';
+  // Template styling is handled via .member.is-template .nm in CSS
   return `
     <div class="member ${checked}${isTemplate ? ' is-template' : ''}" data-member="${escapeHtml(agentName)}">
       <span class="check"></span>
       <span class="status ${status}" title="${escapeHtml(stateTip)}">${isTemplate ? '+' : ''}</span>
-      <span class="${nameClass}">${escapeHtml(agentName)}</span>
+      <span class="nm">${escapeHtml(agentName)}</span>
       <span class="eye" data-eye="${escapeHtml(agentName)}" title="Watch ${escapeHtml(agentName)}">${icons['eye']}</span>
     </div>
   `;

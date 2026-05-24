@@ -264,10 +264,14 @@
 .member .status.offline { background: var(--ink-4); }
 /* Template indicator — dashed border + plus sign */
 .member .status.template {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 12px;
+  border-radius: 3px;
   background: transparent;
   border: 1.5px dashed var(--steel);
   color: var(--steel);
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 700;
   line-height: 1;
   display: flex;

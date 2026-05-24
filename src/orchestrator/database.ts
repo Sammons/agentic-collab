@@ -734,16 +734,17 @@ export class Database {
   }
 
   /**
-   * List templates as AgentRecord format for dashboard display.
+   * List ephemeral templates as AgentRecord format for dashboard display.
+   * Only non-persistent templates are returned (persistent: false in frontmatter).
    * Templates appear alongside persistent agents but with isTemplate: true.
    */
   listTemplatesAsAgentRecords(): AgentRecord[] {
-    const templates = this.listAgentTemplates();
+    const templates = this.listAgentTemplates().filter((t) => !t.persistent);
     return templates.map((t): AgentRecord => ({
       name: t.id,
       engine: t.engine,
       model: t.model,
-      thinking: t.thinking,
+      thinking: null, // templates don't have thinking config
       cwd: t.cwdBase ?? '',
       persona: null,
       permissions: null,
