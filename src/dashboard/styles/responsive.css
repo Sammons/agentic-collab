@@ -14,11 +14,11 @@
 .mobile-menu {
   display: none;
   position: fixed;
-  top: 10px;
-  left: 10px;
+  top: 8px;
+  left: 8px;
   z-index: 50;
-  width: 40px;
-  height: 40px;
+  width: 36px;
+  height: 36px;
   background: var(--paper-card);
   border: 1px solid var(--rule);
   border-radius: var(--radius);
@@ -26,7 +26,7 @@
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  box-shadow: 0 2px 6px -2px rgba(22,24,28,0.12);
+  box-shadow: 0 2px 8px -2px rgba(22,24,28,0.18);
 }
 .mobile-menu:hover { color: var(--ink); }
 
@@ -72,7 +72,17 @@
   .main {
     width: 100%;
     min-height: 100vh;
-    padding-top: 56px; /* leave room for the fixed hamburger */
+    padding-top: 52px; /* leave room for the fixed hamburger */
+  }
+
+  /* Offset headers so hamburger doesn't overlap title text */
+  .chat-pane .pane-hdr,
+  .pg-hdr,
+  .rm-hdr,
+  .st-hdr,
+  .sr-hdr,
+  .watch-hdr {
+    padding-left: 52px !important; /* hamburger (36px) + gap */
   }
 
   /* lock body scroll while drawer is open */
