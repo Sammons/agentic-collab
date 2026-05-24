@@ -60,20 +60,17 @@ function render(root: HTMLElement): void {
     </div>
   `;
 
-  renderThread();
+  // Initial load — don't rely on events since they may have already fired
+  void loadInitialFeed();
   wire(root);
 
   // Subscribe to state changes.
-  // For new messages: append to feed if it's for a selected agent
+  // For new messages: cache the body and schedule debounced feed re-fetch
   detachers.push(on('message', (msg) => {
     const m = msg as DashboardMessage;
+    if (m.id > 0) messageCache.set(m.id, m);
     if (state.selectedAgents.has(m.agent) || SYSTEM_THREADS.has(m.agent)) {
-      // Append new message to feed (optimistic — server will confirm via WS)
-      const isDupe = feedState.messages.some((x) => x.id === m.id);
-      if (!isDupe) {
-        feedState.messages.push(m);
-        scheduleRender();
-      }
+      scheduleRefetch();
     }
   }));
   detachers.push(on('message-withdrawn', (msg) => {
@@ -115,8 +112,13 @@ function teardown(): void {
 // Instead of loading all messages into the DOM, we fetch pages from the server
 // and only render what's visible + a buffer. This keeps DOM size ~50-100 nodes.
 
-const PAGE_SIZE = 50;
+const PAGE_SIZE = 25;
 const SCROLL_BUFFER = 20; // extra messages above/below viewport
+
+// Content cache: id → full message body. Survives across feed re-fetches so we
+// don't re-download bodies we already have. The feed endpoint returns thin
+// results; we hydrate from cache or fetch missing bodies.
+const messageCache = new Map<number, DashboardMessage>();
 
 type FeedState = {
   messages: DashboardMessage[];
@@ -148,6 +150,18 @@ function scheduleRender(): void {
   }, RENDER_DEBOUNCE_MS);
 }
 
+// Debounce feed re-fetch on rapid message arrivals
+let refetchTimer: ReturnType<typeof setTimeout> | null = null;
+const REFETCH_DEBOUNCE_MS = 300;
+
+function scheduleRefetch(): void {
+  if (refetchTimer !== null) clearTimeout(refetchTimer);
+  refetchTimer = setTimeout(() => {
+    refetchTimer = null;
+    void loadInitialFeed();
+  }, REFETCH_DEBOUNCE_MS);
+}
+
 function getAgentsKey(): string {
   return [...state.selectedAgents].sort().join(',');
 }
@@ -176,6 +190,11 @@ async function fetchFeed(before?: number, after?: number): Promise<void> {
       totalCount: number;
     };
 
+    // Populate content cache with fetched messages
+    for (const m of data.messages) {
+      if (m.id > 0) messageCache.set(m.id, m);
+    }
+
     if (before !== undefined) {
       // Prepend older messages
       feedState.messages = [...data.messages, ...feedState.messages];
@@ -185,7 +204,7 @@ async function fetchFeed(before?: number, after?: number): Promise<void> {
       feedState.messages = [...feedState.messages, ...data.messages];
       feedState.hasNewer = data.hasNewer;
     } else {
-      // Initial load
+      // Initial load — replace wholesale with server truth
       feedState.messages = data.messages;
       feedState.hasMore = data.hasMore;
       feedState.hasNewer = data.hasNewer;
@@ -289,8 +308,9 @@ async function renderFeed(forceScrollBottom = false): Promise<void> {
     fragment.appendChild(wrap);
   }
 
-  // Render messages
-  for (const m of feedState.messages) {
+  // Render messages oldest-first (chat convention: newest at bottom)
+  const chronological = [...feedState.messages].reverse();
+  for (const m of chronological) {
     const wrapper = document.createElement('div');
     wrapper.innerHTML = msgHtml(m);
     const el = wrapper.firstElementChild;
