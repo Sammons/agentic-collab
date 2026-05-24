@@ -243,7 +243,13 @@ export function toggleFocusMode(agents: string[]): void {
 /** Update focus targets while staying in focus mode. */
 export function updateFocusTargets(agents: string[]): void {
   if (preFocusSelection === null) return; // not in focus mode
-  state.selectedAgents = new Set(agents);
+  // Only emit if the set actually changed — avoids re-render spam on every keystroke
+  const newSet = new Set(agents);
+  if (newSet.size === state.selectedAgents.size &&
+      agents.every(a => state.selectedAgents.has(a))) {
+    return; // no change
+  }
+  state.selectedAgents = newSet;
   emit('selection-changed');
 }
 
