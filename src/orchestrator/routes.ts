@@ -898,26 +898,9 @@ route('POST', '/api/dashboard/upload', async (req, res, _match, ctx) => {
   const writtenPath = (proxyResult.data?.path as string) ?? `${agent.cwd}/${filename}`;
   const fileSize = (proxyResult.data?.size as number) ?? 0;
 
-  // Enqueue agent notification through existing pipeline
-  const uploadNotice = `I uploaded ${writtenPath}`;
-  const agentMessage = userMessage ? `${userMessage}\n\n${uploadNotice}` : uploadNotice;
-  const envelope = buildReplyEnvelope('dashboard', 'file-upload', sanitizeMessage(agentMessage));
-  const displayMessage = userMessage
-    ? `${userMessage}\n\nUploaded ${filename} (${formatBytes(fileSize)})`
-    : `Uploaded ${filename} (${formatBytes(fileSize)})`;
-
-  const { msg, pending } = enqueueAndDeliver(ctx, {
-    agentName,
-    displayMessage,
-    envelope,
-    topic,
-    sourceAgent: 'dashboard',
-    targetAgent: agentName,
-    queueSourceAgent: null,
-    broadcastLinked: false,
-  });
-
-  json(res, 202, { ok: true, msg, queueId: pending.id, path: writtenPath, size: fileSize });
+  // Silent upload: file lands on disk but no message or agent notification.
+  // User can later send a message mentioning the file if desired.
+  json(res, 200, { ok: true, path: writtenPath, size: fileSize });
 });
 
 route('POST', '/api/dashboard/reply', async (req, res, _match, ctx) => {

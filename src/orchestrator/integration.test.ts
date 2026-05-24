@@ -432,33 +432,29 @@ describe('Integration: file upload via streaming', () => {
     }));
   }
 
-  it('uploads a file to agent cwd and enqueues message', async () => {
+  it('uploads a file to agent cwd silently (no message or notification)', async () => {
     const content = 'Hello from upload test!';
     const res = await uploadFile('upload-agent', 'hello.txt', content);
 
-    assert.equal(res.status, 202);
+    // Silent upload: 200 OK, no queueId, no msg
+    assert.equal(res.status, 200);
     assert.equal(res.data.ok, true);
     assert.ok((res.data.path as string).endsWith('/hello.txt'));
     assert.equal(res.data.size, Buffer.byteLength(content));
-    assert.ok(res.data.queueId, 'should have a queueId');
+    assert.equal(res.data.queueId, undefined, 'should NOT have a queueId (silent)');
+    assert.equal(res.data.msg, undefined, 'should NOT have a msg (silent)');
 
     // Verify file was written to disk
     const filePath = join(tmpDir, 'hello.txt');
     assert.ok(existsSync(filePath), 'File should exist on disk');
     assert.equal(readFileSync(filePath, 'utf-8'), content);
-
-    // Verify message was enqueued
-    const msg = res.data.msg as Record<string, unknown>;
-    assert.equal(msg.direction, 'to_agent');
-    assert.ok((msg.message as string).includes('hello.txt'));
-    assert.equal(msg.topic, 'file-upload');
   });
 
   it('uploads binary data correctly', async () => {
     const data = Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]); // PNG header
     const res = await uploadFile('upload-agent', 'image.png', data);
 
-    assert.equal(res.status, 202);
+    assert.equal(res.status, 200);
     const written = readFileSync(join(tmpDir, 'image.png'));
     assert.deepEqual(written, data);
   });
@@ -520,7 +516,7 @@ describe('Integration: file upload via streaming', () => {
     // The mock proxy now validates x-proxy-token — if the orchestrator didn't
     // forward it, the mock would return 401 and the orchestrator would return 500.
     const res = await uploadFile('upload-agent', 'token-test.txt', 'token-verified');
-    assert.equal(res.status, 202);
+    assert.equal(res.status, 200);
     assert.equal(res.data.ok, true);
     // File was written — proxy accepted the token
     assert.ok(existsSync(join(tmpDir, 'token-test.txt')));
@@ -551,9 +547,9 @@ describe('Integration: file upload via streaming', () => {
       files.map(f => uploadFile('upload-agent', f.name, f.content)),
     );
 
-    // All should succeed
+    // All should succeed (200 for silent uploads)
     for (let i = 0; i < files.length; i++) {
-      assert.equal(results[i].status, 202, `File ${files[i].name} should succeed`);
+      assert.equal(results[i].status, 200, `File ${files[i].name} should succeed`);
       assert.equal(results[i].data.ok, true);
     }
 
