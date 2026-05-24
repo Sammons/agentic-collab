@@ -360,6 +360,13 @@
   margin-left: 8px;
   font-size: 11px;
 }
+/* Staged files indicator — shown when files are pending send */
+.chat-pane .composer .ctrls .hint .staged-files {
+  color: var(--steel);
+  font-weight: 600;
+  margin-left: 8px;
+  font-size: 11px;
+}
 .chat-pane .composer .ctrls .hint .escape-topics,
 .chat-pane .composer .ctrls .hint .focus-btn {
   font-family: var(--sans);

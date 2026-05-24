@@ -26,6 +26,28 @@ import { initVoice, voiceState, clearUsedFlag } from './voice.ts';
 // lifecycle banners, etc.).
 const SYSTEM_THREADS = new Set(['dashboard', 'system']);
 
+// Staged files: maps agent name → list of uploaded file paths.
+// Files are staged silently on drag-drop/paste, then appended to the
+// message body when Send is clicked.
+const stagedFiles = new Map<string, string[]>();
+
+/** Get all staged files for the given agents. */
+function getStagedFilePaths(agents: string[]): string[] {
+  const paths: string[] = [];
+  for (const agent of agents) {
+    const files = stagedFiles.get(agent);
+    if (files) paths.push(...files);
+  }
+  return paths;
+}
+
+/** Clear staged files for the given agents after send. */
+function clearStagedFiles(agents: string[]): void {
+  for (const agent of agents) {
+    stagedFiles.delete(agent);
+  }
+}
+
 export function setupChat(): void {
   registerRoute('dashboard', render);
 }
@@ -770,14 +792,20 @@ function wire(root: HTMLElement): void {
         ? ` <span class="explode">→ ${total} messages</span>`
         : '';
 
+      // Staged files indicator
+      const stagedPaths = getStagedFilePaths(parsed.agents);
+      const stagedNote = stagedPaths.length > 0
+        ? ` <span class="staged-files">📎 ${stagedPaths.length} file${stagedPaths.length > 1 ? 's' : ''}</span>`
+        : '';
+
       // Button text: "Spawn" if all targets are dead, otherwise "Send"
       const btnText = allTargetsDead
         ? (total > 1 ? `Spawn → ${total}` : 'Spawn')
         : (total > 1 ? `Send → ${total}` : 'Send');
 
       hint.innerHTML = messageReady
-        ? `Sending to ${list}${topicsChip}${spawnNote}${countNote}${focusBtn}${escapeBtn}`
-        : `${list}${topicsChip}${spawnNote}${countNote}${focusBtn}${escapeBtn} — type a message`;
+        ? `Sending to ${list}${topicsChip}${spawnNote}${stagedNote}${countNote}${focusBtn}${escapeBtn}`
+        : `${list}${topicsChip}${spawnNote}${stagedNote}${countNote}${focusBtn}${escapeBtn} — type a message`;
       sendBtn.disabled = !messageReady;
       sendBtn.textContent = btnText;
 
@@ -1137,6 +1165,15 @@ async function handleSend(input: HTMLTextAreaElement): Promise<void> {
   const parsed = parseComposer(input.value);
   if (parsed.agents.length === 0 || !parsed.message) return;
 
+  // Append staged file paths to the message
+  const stagedPaths = getStagedFilePaths(parsed.agents);
+  let finalMessage = parsed.message;
+  if (stagedPaths.length > 0) {
+    const fileList = stagedPaths.map(p => `  ${p}`).join('\n');
+    finalMessage = `${parsed.message}\n\nAttached files:\n${fileList}`;
+    clearStagedFiles(parsed.agents);
+  }
+
   // Spawn dead agents before sending — suspended agents resume, others spawn
   const deadAgents = parsed.agents.filter((name) => {
     const agent = agentsByName.get(name);
@@ -1188,7 +1225,7 @@ async function handleSend(input: HTMLTextAreaElement): Promise<void> {
         sourceAgent: null,
         targetAgent: agent,
         topic,
-        message: parsed.message,
+        message: finalMessage,
         queueId: null,
         deliveryStatus: 'pending',
         withdrawn: false,
@@ -1218,7 +1255,7 @@ async function handleSend(input: HTMLTextAreaElement): Promise<void> {
       const res = await fetch('/api/dashboard/send', {
         method: 'POST',
         headers: authHeaders(),
-        body: JSON.stringify({ agent: target, message: parsed.message, topic }),
+        body: JSON.stringify({ agent: target, message: finalMessage, topic }),
       });
       if (!res.ok) {
         const idx = list.findIndex((m) => m.id === optimisticId);
@@ -1348,7 +1385,7 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
-async function uploadFile(file: File, agent: string, message: string, topic: string): Promise<{ file: string; ok: boolean; error?: string }> {
+async function uploadFile(file: File, agent: string, message: string, topic: string): Promise<{ file: string; ok: boolean; path?: string; error?: string }> {
   let url = `/api/dashboard/upload?agent=${encodeURIComponent(agent)}&filename=${encodeURIComponent(file.name)}&topic=${encodeURIComponent(topic)}`;
   if (message) url += `&message=${encodeURIComponent(message)}`;
 
@@ -1357,7 +1394,7 @@ async function uploadFile(file: File, agent: string, message: string, topic: str
 
   const res = await fetch(url, { method: 'POST', headers, body: file });
   const body = await res.json().catch(() => ({})) as Record<string, unknown>;
-  return { file: file.name, ok: res.ok, error: body.error as string | undefined };
+  return { file: file.name, ok: res.ok, path: body.path as string | undefined, error: body.error as string | undefined };
 }
 
 async function handleFileUpload(files: File[], agents: string[], message: string, topic: string = 'file-upload'): Promise<void> {
@@ -1377,25 +1414,43 @@ async function handleFileUpload(files: File[], agents: string[], message: string
   toast(`Uploading ${files.length} file${files.length > 1 ? 's' : ''} to ${agentList}…`);
 
   try {
-    // Fan out: each file × each agent
-    const uploads: Promise<{ file: string; ok: boolean; error?: string }>[] = [];
+    // Fan out: each file × each agent. Track paths per agent for staging.
+    const uploadsByAgent = new Map<string, Promise<{ file: string; ok: boolean; path?: string; error?: string }>[]>();
     for (const agent of agents) {
+      const agentUploads: Promise<{ file: string; ok: boolean; path?: string; error?: string }>[] = [];
       for (const f of files) {
-        uploads.push(uploadFile(f, agent, message, topic));
+        agentUploads.push(uploadFile(f, agent, message, topic));
+      }
+      uploadsByAgent.set(agent, agentUploads);
+    }
+
+    // Await all and stage successful paths
+    let succeeded = 0;
+    let failed = 0;
+    for (const [agent, uploads] of uploadsByAgent) {
+      const results = await Promise.allSettled(uploads);
+      for (const result of results) {
+        if (result.status === 'fulfilled' && result.value.ok && result.value.path) {
+          succeeded++;
+          const existing = stagedFiles.get(agent) ?? [];
+          existing.push(result.value.path);
+          stagedFiles.set(agent, existing);
+        } else {
+          failed++;
+        }
       }
     }
-    const results = await Promise.allSettled(uploads);
-    const succeeded = results.filter(r => r.status === 'fulfilled' && (r.value as { ok: boolean }).ok).length;
-    const failed = results.length - succeeded;
 
     if (failed === 0) {
-      toast(`Uploaded ${files.length} file${files.length > 1 ? 's' : ''}${agents.length > 1 ? ` to ${agents.length} agents` : ''}`);
+      const count = succeeded / agents.length; // files per agent
+      toast(`Staged ${count} file${count > 1 ? 's' : ''} — will be sent with your next message`);
     } else {
-      const firstError = (results.find(r => r.status === 'fulfilled' && !(r.value as { ok: boolean }).ok) as PromiseFulfilledResult<{ error?: string }> | undefined)?.value?.error
-        ?? (results.find(r => r.status === 'rejected') as PromiseRejectedResult | undefined)?.reason?.message
-        ?? 'unknown error';
-      toast(`${failed} upload${failed > 1 ? 's' : ''} failed: ${firstError}`, 'error');
+      toast(`${failed} upload${failed > 1 ? 's' : ''} failed`, 'error');
     }
+
+    // Trigger hint update to show staged files
+    const input = document.querySelector<HTMLTextAreaElement>('[data-composer-input]');
+    if (input) input.dispatchEvent(new Event('input'));
   } catch {
     toast('Upload failed', 'error');
   }
