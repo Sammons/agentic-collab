@@ -250,6 +250,17 @@ route('GET', '/dashboard', async (_req, res, _match, ctx) => {
   res.end(ctx.getDashboardHtml());
 });
 
+route('GET', '/filter-test', async (_req, res) => {
+  const html = await import('node:fs').then(fs =>
+    fs.promises.readFile(join(import.meta.dirname!, '..', 'dashboard', 'filter-test.html'), 'utf-8')
+  );
+  res.writeHead(200, {
+    'content-type': 'text/html; charset=utf-8',
+    'cache-control': 'no-cache',
+  });
+  res.end(html);
+});
+
 route('GET', '/dashboard/assets/:path+', async (req, res, match) => {
   const filePath = match.pathname.groups['path'] ?? '';
   const ext = filePath.slice(filePath.lastIndexOf('.'));
@@ -805,6 +816,7 @@ route('POST', '/api/dashboard/upload', async (req, res, _match, ctx) => {
   const agentName = url.searchParams.get('agent');
   const filename = url.searchParams.get('filename');
   const userMessage = url.searchParams.get('message');
+  const topic = url.searchParams.get('topic') || 'file-upload';
 
   if (!agentName || !filename) {
     return json(res, 400, { error: 'agent and filename query params required' });
@@ -885,7 +897,7 @@ route('POST', '/api/dashboard/upload', async (req, res, _match, ctx) => {
     agentName,
     displayMessage,
     envelope,
-    topic: 'file-upload',
+    topic,
     sourceAgent: 'dashboard',
     targetAgent: agentName,
     queueSourceAgent: null,
