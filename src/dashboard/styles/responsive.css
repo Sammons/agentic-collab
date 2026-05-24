@@ -165,17 +165,7 @@
   /* ── chat ── */
 
   .chat-pane .pane-hdr {
-    padding: 10px 14px 8px !important;
-    border-bottom: none;
-  }
-  .chat-pane .filter-summary {
-    font-size: 16px !important;
-    line-height: 1.3;
-  }
-  .chat-pane .filter-summary .sub,
-  .chat-pane .filter-summary .clear,
-  .chat-pane .pane-hdr .right {
-    display: none !important; /* hide extras on mobile */
+    display: none !important; /* hide entire header on mobile — tab bar shows context */
   }
   .chat-pane .thread {
     padding: 8px 14px 14px;
@@ -212,18 +202,21 @@
   .chat-pane .msg .head .who { font-size: 12px; }
   .chat-pane .msg .body { padding-left: 10px; font-size: 13px; line-height: 1.45; }
   .chat-pane .composer {
-    padding: 8px 14px 12px;
+    padding: 6px 12px 10px;
     position: sticky;
     bottom: 0;
     background: var(--paper-card);
   }
   .chat-pane .composer textarea {
-    min-height: 42px;
-    padding: 10px 12px;
+    min-height: 38px;
+    padding: 8px 10px;
     font-size: 16px; /* iOS won't zoom on focus when >= 16px */
   }
   .chat-pane .composer .ctrls { padding: 2px 4px 4px; }
   .chat-pane .composer .ctrls .hint { font-size: 10px; }
+  .chat-pane .composer .voice-ctrls,
+  .chat-pane .composer .voice-btn { display: none; } /* hide voice on mobile */
+  .chat-pane .composer .ctrls .hint:last-of-type { display: none; } /* hide ⌘↵ hint */
 
   /* profile popover — go full width near the bottom */
   .profile-pop {
