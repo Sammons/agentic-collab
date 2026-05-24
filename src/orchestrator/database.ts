@@ -733,6 +733,53 @@ export class Database {
     return rows.map(mapAgentTemplateRow);
   }
 
+  /**
+   * List templates as AgentRecord format for dashboard display.
+   * Templates appear alongside persistent agents but with isTemplate: true.
+   */
+  listTemplatesAsAgentRecords(): AgentRecord[] {
+    const templates = this.listAgentTemplates();
+    return templates.map((t): AgentRecord => ({
+      name: t.id,
+      engine: t.engine,
+      model: t.model,
+      thinking: t.thinking,
+      cwd: t.cwdBase ?? '',
+      persona: null,
+      permissions: null,
+      agentGroup: null,
+      launchEnv: null,
+      account: null,
+      sortOrder: 9999, // templates sort after persistent agents
+      hookStart: null,
+      hookResume: null,
+      hookCompact: null,
+      hookExit: null,
+      hookInterrupt: null,
+      hookReload: null,
+      hookSubmit: null,
+      state: 'void', // templates don't have runtime state
+      stateBeforeShutdown: null,
+      currentSessionId: null,
+      tmuxSession: null,
+      proxyId: null,
+      lastActivity: null,
+      lastContextPct: null,
+      reloadQueued: 0,
+      reloadTask: null,
+      failedAt: null,
+      failureReason: null,
+      capturedVars: null,
+      customButtons: null,
+      indicators: null,
+      icon: null,
+      version: 0,
+      spawnCount: 0,
+      createdAt: t.createdAt,
+      isTemplate: true,
+    }));
+  }
+
   getTopicsForTemplate(templateId: string): TopicRow[] {
     const rows = this.db.prepare(
       'SELECT * FROM topics WHERE agent_template = ? ORDER BY name ASC',
@@ -2260,6 +2307,8 @@ function mapAgentRow(row: Record<string, unknown>): AgentRecord {
     version: row['version'] as number,
     spawnCount: row['spawn_count'] as number,
     createdAt: row['created_at'] as string,
+    // Persistent agents are never templates
+    isTemplate: false,
   } as AgentRecord;
 }
 

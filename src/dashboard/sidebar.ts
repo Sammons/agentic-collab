@@ -236,13 +236,17 @@ function memberHtml(agentName: string): string {
   // Caller (teamHtml) has already filtered orphans, so `agent` is guaranteed.
   const checked = state.selectedAgents.has(agentName) ? 'checked' : '';
   const agent = agentsByName.get(agentName)!;
-  const status = statusClass(agent.state);
-  const stateTip = `${agentName} — ${agent.state}`;
+  const isTemplate = agent.isTemplate ?? false;
+  const status = isTemplate ? 'template' : statusClass(agent.state);
+  const stateTip = isTemplate
+    ? `${agentName} — template (messaging spawns new agent)`
+    : `${agentName} — ${agent.state}`;
+  const nameClass = isTemplate ? 'nm template' : 'nm';
   return `
-    <div class="member ${checked}" data-member="${escapeHtml(agentName)}">
+    <div class="member ${checked}${isTemplate ? ' is-template' : ''}" data-member="${escapeHtml(agentName)}">
       <span class="check"></span>
-      <span class="status ${status}" title="${escapeHtml(stateTip)}"></span>
-      <span class="nm">${escapeHtml(agentName)}</span>
+      <span class="status ${status}" title="${escapeHtml(stateTip)}">${isTemplate ? '+' : ''}</span>
+      <span class="${nameClass}">${escapeHtml(agentName)}</span>
       <span class="eye" data-eye="${escapeHtml(agentName)}" title="Watch ${escapeHtml(agentName)}">${icons['eye']}</span>
     </div>
   `;

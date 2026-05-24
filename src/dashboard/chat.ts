@@ -733,6 +733,15 @@ function wire(root: HTMLElement): void {
       const total = parsed.agents.length * parsed.topics.length;
       const messageReady = parsed.message.length > 0;
 
+      // Check if any target is a template (will spawn new ephemeral)
+      const templateTargets = parsed.agents.filter((a) => {
+        const agent = agentsByName.get(a);
+        return agent?.isTemplate === true;
+      });
+      const spawnNote = templateTargets.length > 0
+        ? ` <span class="spawn-warn">⚡ spawns new ${templateTargets.map(t => `@${escapeHtml(t)}`).join(', ')}</span>`
+        : '';
+
       // Explosion warning: any time we'd fan out across multiple topics,
       // give the user an explicit count + an Escape Topics shortcut.
       const explode = parsed.topics.length > 1 && parsed.topics.some((t) => t !== 'general');
@@ -744,8 +753,8 @@ function wire(root: HTMLElement): void {
         : '';
 
       hint.innerHTML = messageReady
-        ? `Sending to ${list}${topicsChip}${countNote}${escapeBtn}`
-        : `${list}${topicsChip}${countNote}${escapeBtn} — type a message`;
+        ? `Sending to ${list}${topicsChip}${spawnNote}${countNote}${escapeBtn}`
+        : `${list}${topicsChip}${spawnNote}${countNote}${escapeBtn} — type a message`;
       sendBtn.disabled = !messageReady;
       sendBtn.textContent = total > 1 ? `Send → ${total}` : 'Send';
 

@@ -409,7 +409,10 @@ server.on('upgrade', (req, socket, head) => {
 
 // On WS connect, send init event
 wss.onConnect((client) => {
-  const agents = db.listAgents();
+  // Combine persistent agents + templates for dashboard display
+  const persistentAgents = db.listAgents();
+  const templateAgents = db.listTemplatesAsAgentRecords();
+  const agents = [...persistentAgents, ...templateAgents];
   // Delta init: the client may pass its max-seen message id via
   // ?sinceMessageId=N. If present and non-zero, we ship just the rows
   // that have appeared since (typically tiny). Otherwise we cold-load

@@ -194,6 +194,12 @@ export type AgentRecord = {
   version: number;
   spawnCount: number;
   createdAt: string;
+  /** True if this is an ephemeral template (persistent: false). Messaging spawns a new instance. */
+  isTemplate: boolean;
+  /** For ephemeral instances: which template spawned this. Absent for templates and persistent agents. */
+  templateName?: string;
+  /** For ephemeral instances: the unique 6-char suffix (e.g., "7f3a2b"). */
+  instanceSuffix?: string;
 };
 
 // ── Events ──
