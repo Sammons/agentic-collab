@@ -409,9 +409,13 @@ server.on('upgrade', (req, socket, head) => {
 
 // On WS connect, send init event
 wss.onConnect((client) => {
-  // Combine persistent agents + templates for dashboard display
+  // Combine persistent agents + templates for dashboard display.
+  // Templates that share a name with a persistent agent are filtered out —
+  // the persistent agent takes precedence (already spawned/running).
   const persistentAgents = db.listAgents();
-  const templateAgents = db.listTemplatesAsAgentRecords();
+  const persistentNames = new Set(persistentAgents.map((a) => a.name));
+  const templateAgents = db.listTemplatesAsAgentRecords()
+    .filter((t) => !persistentNames.has(t.name));
   const agents = [...persistentAgents, ...templateAgents];
   // Delta init: the client may pass its max-seen message id via
   // ?sinceMessageId=N. If present and non-zero, we ship just the rows
