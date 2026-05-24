@@ -1,6 +1,6 @@
 # RFC: File Upload v2 — Orchestrator-Native File Handling
 
-**Status:** Draft  
+**Status:** Approved  
 **Author:** agentic-collab-lead  
 **Date:** 2026-05-24
 
