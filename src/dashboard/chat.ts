@@ -742,6 +742,14 @@ function wire(root: HTMLElement): void {
         ? ` <span class="spawn-warn">⚡ spawns new ${templateTargets.map(t => `@${escapeHtml(t)}`).join(', ')}</span>`
         : '';
 
+      // Check if any target is dead (needs spawn/resume before message delivery)
+      const deadTargets = parsed.agents.filter((a) => {
+        const agent = agentsByName.get(a);
+        if (!agent || agent.isTemplate) return false;
+        return ['void', 'failed', 'suspended'].includes(agent.state);
+      });
+      const allTargetsDead = deadTargets.length > 0 && deadTargets.length === parsed.agents.length;
+
       // Explosion warning: any time we'd fan out across multiple topics,
       // give the user an explicit count + an Escape Topics shortcut.
       const explode = parsed.topics.length > 1 && parsed.topics.some((t) => t !== 'general');
@@ -752,11 +760,16 @@ function wire(root: HTMLElement): void {
         ? ` <span class="explode">→ ${total} messages</span>`
         : '';
 
+      // Button text: "Spawn" if all targets are dead, otherwise "Send"
+      const btnText = allTargetsDead
+        ? (total > 1 ? `Spawn → ${total}` : 'Spawn')
+        : (total > 1 ? `Send → ${total}` : 'Send');
+
       hint.innerHTML = messageReady
         ? `Sending to ${list}${topicsChip}${spawnNote}${countNote}${escapeBtn}`
         : `${list}${topicsChip}${spawnNote}${countNote}${escapeBtn} — type a message`;
       sendBtn.disabled = !messageReady;
-      sendBtn.textContent = total > 1 ? `Send → ${total}` : 'Send';
+      sendBtn.textContent = btnText;
 
       // Wire the Escape Topics button (re-bound on every render).
       hint.querySelector<HTMLElement>('[data-escape-topics]')?.addEventListener('click', () => {
@@ -1107,6 +1120,35 @@ function parseComposer(text: string): Parsed {
 async function handleSend(input: HTMLTextAreaElement): Promise<void> {
   const parsed = parseComposer(input.value);
   if (parsed.agents.length === 0 || !parsed.message) return;
+
+  // Spawn dead agents before sending — suspended agents resume, others spawn
+  const deadAgents = parsed.agents.filter((name) => {
+    const agent = agentsByName.get(name);
+    if (!agent || agent.isTemplate) return false;
+    return ['void', 'failed', 'suspended'].includes(agent.state);
+  });
+
+  if (deadAgents.length > 0) {
+    toast(`Spawning ${deadAgents.length} agent${deadAgents.length > 1 ? 's' : ''}…`);
+    await Promise.all(deadAgents.map(async (name) => {
+      const agent = agentsByName.get(name);
+      if (!agent) return;
+      const action = agent.state === 'suspended' ? 'resume' : 'spawn';
+      try {
+        const res = await fetch(`/api/agents/${encodeURIComponent(name)}/${action}`, {
+          method: 'POST',
+          headers: authHeaders(),
+          body: JSON.stringify({}),
+        });
+        if (!res.ok) {
+          const body = await res.json().catch(() => null);
+          toast(`Failed to ${action} @${name}: ${body?.error ?? 'unknown'}`, 'error');
+        }
+      } catch {
+        toast(`Failed to ${action} @${name}: network error`, 'error');
+      }
+    }));
+  }
 
   // Cartesian fanout — one optimistic row + one POST per (agent × topic)
   // pair. Each lives in the recipient agent's thread (independent of topic).
