@@ -836,8 +836,8 @@ function wire(root: HTMLElement): void {
           return;
         }
         // Upload files without message text — file attachment only, fan out to all agents
+        // Keep composer text so user can continue editing/send their message after upload
         handleFileUpload(Array.from(files), parsed.agents, '', parsed.topics[0] ?? 'file-upload');
-        input.value = '';  // Clear composer after upload
       }
     });
   }
@@ -862,8 +862,8 @@ function wire(root: HTMLElement): void {
       return;
     }
     // Upload files without message text — file attachment only, fan out to all agents
+    // Keep composer text so user can continue editing/send their message after upload
     handleFileUpload(files, parsed.agents, '', parsed.topics[0] ?? 'file-upload');
-    input.value = '';  // Clear composer after upload
   });
 
   updateHint();
