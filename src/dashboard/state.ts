@@ -240,6 +240,13 @@ export function toggleFocusMode(agents: string[]): void {
   }
 }
 
+/** Update focus targets while staying in focus mode. */
+export function updateFocusTargets(agents: string[]): void {
+  if (preFocusSelection === null) return; // not in focus mode
+  state.selectedAgents = new Set(agents);
+  emit('selection-changed');
+}
+
 /**
  * Restore the user's last selection from localStorage (intersected with the
  * currently-known agents so we drop names that no longer exist). If nothing

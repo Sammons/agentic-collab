@@ -15,7 +15,7 @@
  * Profile popover opens on sender-name click. Click outside closes it.
  */
 import type { AgentRecord, DashboardMessage } from '../shared/types.ts';
-import { state, on, authHeaders, agentsByName, isFocusMode, toggleFocusMode } from './state.ts';
+import { state, on, authHeaders, agentsByName, isFocusMode, toggleFocusMode, updateFocusTargets } from './state.ts';
 import { registerRoute, go } from './routing.ts';
 import { openEditPersonaModal } from './overlays.ts';
 import { renderMarkdown } from '../shared/markdown.ts';
@@ -725,6 +725,12 @@ function wire(root: HTMLElement): void {
 
   const updateHint = () => {
     const parsed = parseComposer(input.value);
+
+    // If in focus mode, keep the focus targets in sync with composer targets
+    if (isFocusMode() && parsed.agents.length > 0) {
+      updateFocusTargets(parsed.agents);
+    }
+
     if (parsed.agents.length > 0) {
       const list = parsed.agents.map((a) => `<span class="target">@${escapeHtml(a)}</span>`).join(', ');
       const topicsChip = parsed.topics.length === 1 && parsed.topics[0] === 'general'
