@@ -320,6 +320,7 @@ async function renderFeed(forceScrollBottom = false): Promise<void> {
   root.replaceChildren(fragment);
   wireProfileTriggers(root);
   wireFeedControls(root);
+  wireCollapsibleMessages(root);
 
   // Scroll handling
   if (pendingFocusId !== null) {
@@ -346,6 +347,30 @@ function wireFeedControls(root: HTMLElement): void {
       await fetchFeed(oldestId);
       scheduleRender();
     });
+  }
+}
+
+const COLLAPSE_THRESHOLD = 200;
+const isMobile = () => window.matchMedia('(max-width: 768px)').matches;
+
+function wireCollapsibleMessages(root: HTMLElement): void {
+  if (!isMobile()) return;
+
+  const bodies = root.querySelectorAll<HTMLElement>('.msg .body');
+  for (const body of bodies) {
+    const text = body.textContent ?? '';
+    if (text.length > COLLAPSE_THRESHOLD) {
+      body.classList.add('collapsed');
+      const btn = document.createElement('button');
+      btn.className = 'expand-btn';
+      btn.textContent = 'Show more';
+      btn.addEventListener('click', () => {
+        const isCollapsed = body.classList.contains('collapsed');
+        body.classList.toggle('collapsed');
+        btn.textContent = isCollapsed ? 'Show less' : 'Show more';
+      });
+      body.parentElement?.appendChild(btn);
+    }
   }
 }
 
@@ -800,7 +825,7 @@ function wire(root: HTMLElement): void {
           toast('Drop target missing — start with @agent-name to specify where to upload', 'error');
           return;
         }
-        handleFileUpload(Array.from(files), parsed.agents[0], input.value.trim());
+        handleFileUpload(Array.from(files), parsed.agents[0]!, input.value.trim(), parsed.topics[0] ?? 'file-upload');
       }
     });
   }
@@ -824,7 +849,7 @@ function wire(root: HTMLElement): void {
       toast('Paste target missing — start with @agent-name to specify where to upload', 'error');
       return;
     }
-    handleFileUpload(files, parsed.agents[0], input.value.trim());
+    handleFileUpload(files, parsed.agents[0]!, input.value.trim(), parsed.topics[0] ?? 'file-upload');
   });
 
   updateHint();
@@ -1251,8 +1276,8 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
-async function uploadFile(file: File, agent: string, message: string): Promise<{ file: string; ok: boolean; error?: string }> {
-  let url = `/api/dashboard/upload?agent=${encodeURIComponent(agent)}&filename=${encodeURIComponent(file.name)}`;
+async function uploadFile(file: File, agent: string, message: string, topic: string): Promise<{ file: string; ok: boolean; error?: string }> {
+  let url = `/api/dashboard/upload?agent=${encodeURIComponent(agent)}&filename=${encodeURIComponent(file.name)}&topic=${encodeURIComponent(topic)}`;
   if (message) url += `&message=${encodeURIComponent(message)}`;
 
   const headers: Record<string, string> = { 'content-type': 'application/octet-stream' };
@@ -1263,7 +1288,7 @@ async function uploadFile(file: File, agent: string, message: string): Promise<{
   return { file: file.name, ok: res.ok, error: body.error as string | undefined };
 }
 
-async function handleFileUpload(files: File[], agent: string, message: string): Promise<void> {
+async function handleFileUpload(files: File[], agent: string, message: string, topic: string = 'file-upload'): Promise<void> {
   if (files.length === 0 || !agent) return;
 
   // Warn about large files
@@ -1280,8 +1305,9 @@ async function handleFileUpload(files: File[], agent: string, message: string): 
   toast(`Uploading ${files.length} file${files.length > 1 ? 's' : ''} to @${agent}…`);
 
   try {
+    // All files get the same message - backend will dedupe in the display
     const results = await Promise.allSettled(
-      files.map((f, i) => uploadFile(f, agent, i === 0 ? message : ''))
+      files.map((f) => uploadFile(f, agent, message, topic))
     );
     const succeeded = results.filter(r => r.status === 'fulfilled' && (r.value as { ok: boolean }).ok).length;
     const failed = results.length - succeeded;
