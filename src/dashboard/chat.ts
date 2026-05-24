@@ -31,6 +31,10 @@ const SYSTEM_THREADS = new Set(['dashboard', 'system']);
 // message body when Send is clicked.
 const stagedFiles = new Map<string, string[]>();
 
+// Reference to the current updateHint function for direct invocation from
+// handleFileUpload. Populated by wire() when the dashboard is mounted.
+let currentUpdateHint: (() => void) | null = null;
+
 /** Get all staged files for the given agents. */
 function getStagedFilePaths(agents: string[]): string[] {
   const paths: string[] = [];
@@ -128,6 +132,8 @@ function teardown(): void {
     clearTimeout(renderTimer);
     renderTimer = null;
   }
+  // Clear the updateHint reference to avoid calling a stale closure
+  currentUpdateHint = null;
 }
 
 // ── Virtual scroll state ──────────────────────────────────────────────────
@@ -830,6 +836,9 @@ function wire(root: HTMLElement): void {
     }
   };
 
+  // Register the updateHint function for direct invocation from handleFileUpload
+  currentUpdateHint = updateHint;
+
   const mention = setupMentionAutocomplete(input, inputWrap, updateHint);
 
   input.addEventListener('input', () => {
@@ -1448,9 +1457,16 @@ async function handleFileUpload(files: File[], agents: string[], message: string
       toast(`${failed} upload${failed > 1 ? 's' : ''} failed`, 'error');
     }
 
-    // Trigger hint update to show staged files
-    const input = document.querySelector<HTMLTextAreaElement>('[data-composer-input]');
-    if (input) input.dispatchEvent(new Event('input'));
+    // Trigger hint update to show staged files.
+    // Use direct function call to ensure the update runs immediately, as
+    // synthetic events may not trigger reliably in all scenarios.
+    if (currentUpdateHint) {
+      currentUpdateHint();
+    } else {
+      // Fallback: dispatch input event to trigger listener
+      const input = document.querySelector<HTMLTextAreaElement>('[data-composer-input]');
+      if (input) input.dispatchEvent(new Event('input'));
+    }
   } catch {
     toast('Upload failed', 'error');
   }
