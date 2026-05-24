@@ -454,6 +454,14 @@ Persona files are editable in the dashboard UI. Agents can also edit their own p
 | `SUSPEND_TIMEOUT_MS` | `60000` | Watchdog timeout for suspend operations |
 | `RESUME_TIMEOUT_MS` | `60000` | Watchdog timeout for resume operations |
 | `RELOAD_TIMEOUT_MS` | `90000` | Watchdog timeout for reload operations |
+| `ELEVENLABS_API_KEY` | _(unset)_ | Enable ElevenLabs realtime STT (WebSocket streaming, partial transcripts) |
+| `ELEVENLABS_STT_MODEL` | `scribe_v2_realtime` | ElevenLabs model id |
+| `ELEVENLABS_STT_LANGUAGE` | `eng` | ElevenLabs language code |
+| `WHISPER_URL` | _(unset)_ | Enable Whisper batch STT. Full endpoint URL (e.g. `https://api.openai.com/v1/audio/transcriptions` or `http://localhost:8000/v1/audio/transcriptions`) |
+| `WHISPER_API_KEY` | _(unset)_ | Bearer token for Whisper endpoint (required for OpenAI; optional for self-hosted) |
+| `WHISPER_MODEL` | `whisper-1` | Whisper model name (matches the endpoint's vocabulary) |
+| `WHISPER_LANGUAGE` | _(unset)_ | ISO-639-1 language hint passed to Whisper |
+| `STT_PROVIDER` | `auto` | Dashboard's default STT provider when both are configured. `auto` prefers ElevenLabs if its key is set, else Whisper. Override with `elevenlabs` or `whisper`. |
 
 ### Proxy
 

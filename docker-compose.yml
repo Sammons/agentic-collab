@@ -23,6 +23,15 @@ services:
       - PERSONAS_HOST_DIR=${PERSONAS_HOST_DIR:-}
       - ORCHESTRATOR_HOST=${ORCHESTRATOR_HOST:-http://localhost:3000}
       - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY:-}
+      # Whisper STT (OpenAI-compatible). Set WHISPER_URL to enable a
+      # batch PTT path alongside ElevenLabs. Optional API key; optional
+      # model + language hint. STT_PROVIDER pins the dashboard default
+      # when both providers are configured (auto|elevenlabs|whisper).
+      - WHISPER_URL=${WHISPER_URL:-}
+      - WHISPER_API_KEY=${WHISPER_API_KEY:-}
+      - WHISPER_MODEL=${WHISPER_MODEL:-}
+      - WHISPER_LANGUAGE=${WHISPER_LANGUAGE:-}
+      - STT_PROVIDER=${STT_PROVIDER:-auto}
     labels:
       io.agentic-collab.role: orchestrator
     restart: unless-stopped
