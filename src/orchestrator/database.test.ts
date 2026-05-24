@@ -1092,4 +1092,118 @@ describe('Database', () => {
       rmSync(mdir, { recursive: true, force: true });
     });
   });
+
+  describe('files', () => {
+    it('creates and retrieves a file record', () => {
+      const file = db.addFile({
+        id: 'test-file-id-001',
+        name: 'test-document.pdf',
+        size: 1024,
+        mime: 'application/pdf',
+        path: '/data/files/test-file-id-001.pdf',
+      });
+
+      assert.equal(file.id, 'test-file-id-001');
+      assert.equal(file.name, 'test-document.pdf');
+      assert.equal(file.size, 1024);
+      assert.equal(file.mime, 'application/pdf');
+      assert.equal(file.path, '/data/files/test-file-id-001.pdf');
+      assert.equal(file.expiresAt, null);
+      assert.ok(file.createdAt);
+
+      const retrieved = db.getFile('test-file-id-001');
+      assert.deepEqual(retrieved, file);
+    });
+
+    it('creates a file with expiresAt', () => {
+      const expiresAt = '2026-12-31T23:59:59Z';
+      const file = db.addFile({
+        id: 'test-file-id-002',
+        name: 'temporary.txt',
+        size: 512,
+        mime: 'text/plain',
+        path: '/data/files/test-file-id-002.txt',
+        expiresAt,
+      });
+
+      assert.equal(file.expiresAt, expiresAt);
+    });
+
+    it('lists all files', () => {
+      db.addFile({
+        id: 'test-file-id-003',
+        name: 'file3.json',
+        size: 256,
+        mime: 'application/json',
+        path: '/data/files/test-file-id-003.json',
+      });
+
+      const files = db.listFiles();
+      assert.ok(files.length >= 3);
+      const ids = files.map((f) => f.id);
+      assert.ok(ids.includes('test-file-id-001'));
+      assert.ok(ids.includes('test-file-id-002'));
+      assert.ok(ids.includes('test-file-id-003'));
+    });
+
+    it('deletes a file record', () => {
+      const file = db.addFile({
+        id: 'test-file-id-delete',
+        name: 'to-be-deleted.txt',
+        size: 100,
+        mime: 'text/plain',
+        path: '/data/files/test-file-id-delete.txt',
+      });
+
+      const deleted = db.deleteFile(file.id);
+      assert.equal(deleted, true);
+
+      const retrieved = db.getFile('test-file-id-delete');
+      assert.equal(retrieved, null);
+
+      // Deleting again returns false
+      const deletedAgain = db.deleteFile('test-file-id-delete');
+      assert.equal(deletedAgain, false);
+    });
+
+    it('returns null for non-existent file', () => {
+      const file = db.getFile('non-existent-id');
+      assert.equal(file, null);
+    });
+  });
+
+  describe('dashboard messages with fileIds', () => {
+    it('creates a message with file IDs attached', () => {
+      const msg = db.addDashboardMessage('test-agent', 'to_agent', 'Hello with files', {
+        topic: 'test-topic',
+        sourceAgent: 'dashboard',
+        targetAgent: 'test-agent',
+        fileIds: ['file-001', 'file-002'],
+      });
+
+      assert.deepEqual(msg.fileIds, ['file-001', 'file-002']);
+    });
+
+    it('creates a message without file IDs', () => {
+      const msg = db.addDashboardMessage('test-agent', 'to_agent', 'Hello without files', {
+        topic: 'test-topic',
+        sourceAgent: 'dashboard',
+        targetAgent: 'test-agent',
+      });
+
+      assert.equal(msg.fileIds, null);
+    });
+
+    it('creates a message with empty file IDs array', () => {
+      const msg = db.addDashboardMessage('test-agent', 'to_agent', 'Hello with empty files', {
+        topic: 'test-topic',
+        sourceAgent: 'dashboard',
+        targetAgent: 'test-agent',
+        fileIds: [],
+      });
+
+      // Empty array should be stored as null
+      assert.equal(msg.fileIds, null);
+    });
+  });
 });
