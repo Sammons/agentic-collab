@@ -58,6 +58,16 @@
   --brick:        #8a4f41;
   --brick-bg:     #e0cac3;
 
+  /* status dots — higher-chroma siblings of the palette colors used
+     ONLY for 6-7px status dots, where the muted palette tokens are too
+     close in lightness/hue to read as distinct at that scale. Text
+     labels keep the muted palette tokens. */
+  --dot-active:    #3e8c2f;
+  --dot-running:   #d65a1a;
+  --dot-suspended: #6e3eb3;
+  --dot-failed:    #c0392b;
+  --dot-idle:      #7a7d77;
+
   /* typography */
   --sans: 'Bricolage Grotesque', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
   --mono: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -111,6 +121,12 @@
 
     --brick:        #c08572;
     --brick-bg:     #2f1f1a;
+
+    --dot-active:    #6cc956;
+    --dot-running:   #ff7c33;
+    --dot-suspended: #ba9bf2;
+    --dot-failed:    #ff4f43;
+    --dot-idle:      #8c8e89;
   }
 }
 

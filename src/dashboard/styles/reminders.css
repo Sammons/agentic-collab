@@ -275,15 +275,15 @@
   gap: 5px;
 }
 .rm-agent-hdr .state .dot {
-  width: 5px; height: 5px;
+  width: 6px; height: 6px;
   border-radius: 50%;
-  background: var(--ink-4);
+  background: var(--dot-idle);
 }
-.rm-agent-hdr .state.active .dot { background: var(--moss); }
+.rm-agent-hdr .state.active .dot { background: var(--dot-active); }
 .rm-agent-hdr .state.active { color: var(--moss); }
-.rm-agent-hdr .state.running .dot { background: var(--clay); }
+.rm-agent-hdr .state.running .dot { background: var(--dot-running); }
 .rm-agent-hdr .state.running { color: var(--clay); }
-.rm-agent-hdr .state.idle .dot { background: var(--ink-4); }
+.rm-agent-hdr .state.idle .dot { background: var(--dot-idle); }
 .rm-agent-hdr .meta {
   font-family: var(--mono);
   font-size: 11px;

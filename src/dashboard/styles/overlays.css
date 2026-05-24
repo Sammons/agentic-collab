@@ -481,13 +481,13 @@
   margin-bottom: 12px;
 }
 .pop .state .dot {
-  width: 6px; height: 6px;
+  width: 7px; height: 7px;
   border-radius: 50%;
-  background: var(--ink-4);
+  background: var(--dot-idle);
 }
-.pop .state.active .dot { background: var(--moss); }
+.pop .state.active .dot { background: var(--dot-active); }
 .pop .state.active { color: var(--moss); }
-.pop .state.running .dot { background: var(--clay); }
+.pop .state.running .dot { background: var(--dot-running); }
 .pop .state.running { color: var(--clay); }
 .pop .row {
   border-top: 1px solid var(--rule-soft);
