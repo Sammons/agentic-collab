@@ -124,6 +124,27 @@ function setupMobileNav(): void {
         closeDrawer();
       }
     });
+
+    // Hide tab bar when virtual keyboard is open (mobile)
+    // Uses Visual Viewport API which accurately detects keyboard on iOS/Android
+    if (window.visualViewport) {
+      const vv = window.visualViewport;
+      let initialHeight = vv.height;
+
+      const checkKeyboard = () => {
+        // If viewport shrinks significantly, keyboard is likely open
+        const keyboardOpen = vv.height < initialHeight * 0.75;
+        tabs.classList.toggle('keyboard-open', keyboardOpen);
+      };
+
+      vv.addEventListener('resize', () => {
+        // Update initial height on orientation change (wider viewport = taller initial)
+        if (Math.abs(vv.height - initialHeight) > 200 && vv.height > initialHeight) {
+          initialHeight = vv.height;
+        }
+        checkKeyboard();
+      });
+    }
   }
 }
 

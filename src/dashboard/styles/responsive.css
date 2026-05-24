@@ -55,6 +55,10 @@
   width: 22px;
   height: 22px;
 }
+/* Hide tab bar when virtual keyboard is open */
+.mobile-tabs.keyboard-open {
+  display: none;
+}
 
 .sidebar-scrim {
   display: none;
