@@ -6,8 +6,8 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { request as httpRequest } from 'node:http';
 import { pipeline } from 'node:stream/promises';
-import { timingSafeEqual } from 'node:crypto';
-import { readdirSync, readFileSync, writeFileSync, mkdirSync, unlinkSync, existsSync, rmSync, statSync, createWriteStream } from 'node:fs';
+import { timingSafeEqual, randomUUID } from 'node:crypto';
+import { readdirSync, readFileSync, writeFileSync, mkdirSync, unlinkSync, existsSync, rmSync, statSync, createWriteStream, createReadStream } from 'node:fs';
 import { join } from 'node:path';
 import { stripTypeScriptTypes } from 'node:module';
 import { DatabaseSync } from 'node:sqlite';
@@ -15,7 +15,7 @@ import { renderMarkdown, wrapInHtml, DOC_PAGES } from '../docs/render.ts';
 import { hostname } from 'node:os';
 import type { Database } from './database.ts';
 import type { WebSocketServer } from '../shared/websocket-server.ts';
-import type { AgentState, DashboardMessage, DestinationRecord, EngineType, PendingMessage, ProxyCommand, ProxyResponse, ProxyRegistration } from '../shared/types.ts';
+import type { AgentState, DashboardMessage, DestinationRecord, EngineType, FileRecord, PendingMessage, ProxyCommand, ProxyResponse, ProxyRegistration } from '../shared/types.ts';
 import type { TelegramDispatcher } from './telegram.ts';
 import { sanitizeMessage, generateMessageId } from '../shared/sanitize.ts';
 import { parseAddress } from '../shared/address.ts';
@@ -81,6 +81,7 @@ export type RouteContext = {
   accountStore: import('./accounts.ts').AccountStore;
   pagesDir: string;
   storesDir: string;
+  filesDir: string;
   telegramDispatcher: TelegramDispatcher;
   /**
    * v3 Q3 ephemeral surface — optional so test fixtures that don't exercise
@@ -631,6 +632,7 @@ route('POST', '/api/dashboard/send', async (req, res, _match, ctx) => {
 
   const sanitized = sanitizeMessage(body.message);
   const topicStr = body.topic as string;
+  const fileIds = Array.isArray(body.fileIds) ? body.fileIds.filter((id: unknown) => typeof id === 'string') : undefined;
 
   const envelope = buildReplyEnvelope('dashboard', topicStr, sanitized);
   const { msg, pending } = enqueueAndDeliver(ctx, {
@@ -641,6 +643,7 @@ route('POST', '/api/dashboard/send', async (req, res, _match, ctx) => {
     sourceAgent: 'dashboard',
     targetAgent: body.agent as string,
     queueSourceAgent: null,
+    fileIds,
   });
 
   // Auto-create reply reminder if requested
@@ -1509,6 +1512,238 @@ route('DELETE', '/api/stores/:name', async (_req, res, match, ctx) => {
   const deleted = ctx.db.deleteStore(name);
   if (!deleted) return json(res, 404, { error: 'Store not found' });
   ctx.wss.broadcast(JSON.stringify({ type: 'stores_update', stores: ctx.db.listStores() }));
+  json(res, 200, { ok: true });
+});
+
+// ── Files (orchestrator-native file registry) ──
+
+const FILE_MAX_BYTES = 100 * 1024 * 1024; // 100 MB
+
+/**
+ * Derive MIME type from filename extension. Returns application/octet-stream
+ * for unknown extensions.
+ */
+function fileMime(filename: string): string {
+  const ext = filename.substring(filename.lastIndexOf('.')).toLowerCase();
+  const MIME_MAP: Record<string, string> = {
+    '.txt': 'text/plain',
+    '.html': 'text/html',
+    '.htm': 'text/html',
+    '.css': 'text/css',
+    '.js': 'application/javascript',
+    '.json': 'application/json',
+    '.xml': 'application/xml',
+    '.pdf': 'application/pdf',
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif',
+    '.svg': 'image/svg+xml',
+    '.ico': 'image/x-icon',
+    '.webp': 'image/webp',
+    '.mp3': 'audio/mpeg',
+    '.wav': 'audio/wav',
+    '.ogg': 'audio/ogg',
+    '.mp4': 'video/mp4',
+    '.webm': 'video/webm',
+    '.zip': 'application/zip',
+    '.tar': 'application/x-tar',
+    '.gz': 'application/gzip',
+    '.md': 'text/markdown',
+    '.csv': 'text/csv',
+  };
+  return MIME_MAP[ext] ?? 'application/octet-stream';
+}
+
+/**
+ * Upload a file. Accepts multipart/form-data or raw octet-stream.
+ * Files are stored in `$DATA_DIR/files/<uuid>.<ext>`.
+ * Returns the FileRecord with metadata.
+ */
+route('POST', '/api/files', async (req, res, _match, ctx) => {
+  // Ensure files directory exists
+  mkdirSync(ctx.filesDir, { recursive: true });
+
+  const contentType = req.headers['content-type'] ?? '';
+  let filename: string | null = null;
+  let fileBuffer: Buffer | null = null;
+
+  if (contentType.startsWith('multipart/form-data')) {
+    // Parse multipart — extract first file field
+    const boundary = contentType.split('boundary=')[1];
+    if (!boundary) {
+      return json(res, 400, { error: 'Missing multipart boundary' });
+    }
+
+    const chunks: Buffer[] = [];
+    let totalSize = 0;
+    for await (const chunk of req) {
+      totalSize += (chunk as Buffer).length;
+      if (totalSize > FILE_MAX_BYTES) {
+        return json(res, 413, { error: `File exceeds ${FILE_MAX_BYTES / 1024 / 1024}MB limit` });
+      }
+      chunks.push(chunk as Buffer);
+    }
+    const body = Buffer.concat(chunks);
+
+    // Simple multipart parser — find the first file field
+    const boundaryBytes = Buffer.from(`--${boundary}`);
+    const parts = splitBuffer(body, boundaryBytes);
+    for (const part of parts) {
+      const headerEnd = part.indexOf('\r\n\r\n');
+      if (headerEnd === -1) continue;
+      const headers = part.slice(0, headerEnd).toString('utf-8');
+      const filenameMatch = headers.match(/filename="([^"]+)"/);
+      if (filenameMatch) {
+        filename = filenameMatch[1]!;
+        // Content starts after \r\n\r\n, ends before trailing \r\n
+        const content = part.slice(headerEnd + 4);
+        // Trim trailing \r\n if present
+        if (content.length >= 2 && content[content.length - 2] === 0x0d && content[content.length - 1] === 0x0a) {
+          fileBuffer = content.slice(0, content.length - 2);
+        } else {
+          fileBuffer = content;
+        }
+        break;
+      }
+    }
+
+    if (!filename || !fileBuffer) {
+      return json(res, 400, { error: 'No file found in multipart body' });
+    }
+  } else {
+    // Raw octet-stream upload — filename from query param or header
+    const url = new URL(req.url!, `http://${req.headers.host}`);
+    filename = url.searchParams.get('filename') ?? (req.headers['x-filename'] as string | undefined) ?? null;
+
+    if (!filename) {
+      return json(res, 400, { error: 'filename required (query param or X-Filename header)' });
+    }
+
+    // Stream to a temp buffer (with size check)
+    const chunks: Buffer[] = [];
+    let totalSize = 0;
+    for await (const chunk of req) {
+      totalSize += (chunk as Buffer).length;
+      if (totalSize > FILE_MAX_BYTES) {
+        return json(res, 413, { error: `File exceeds ${FILE_MAX_BYTES / 1024 / 1024}MB limit` });
+      }
+      chunks.push(chunk as Buffer);
+    }
+    fileBuffer = Buffer.concat(chunks);
+  }
+
+  // Validate filename
+  if (filename.includes('/') || filename.includes('\\') ||
+      filename === '.' || filename === '..' ||
+      filename.includes('\0') || filename.length > 255) {
+    return json(res, 400, { error: 'Invalid filename' });
+  }
+
+  // Generate UUID and preserve extension
+  const id = randomUUID();
+  const ext = filename.includes('.') ? filename.substring(filename.lastIndexOf('.')) : '';
+  const storedFilename = `${id}${ext}`;
+  const storedPath = join(ctx.filesDir, storedFilename);
+  const mime = fileMime(filename);
+
+  // Write file to disk
+  writeFileSync(storedPath, fileBuffer);
+
+  // Record in database
+  const fileRecord = ctx.db.addFile({
+    id,
+    name: filename,
+    size: fileBuffer.length,
+    mime,
+    path: storedPath,
+  });
+
+  json(res, 201, fileRecord);
+});
+
+/** Split a buffer by a delimiter buffer. */
+function splitBuffer(buf: Buffer, delim: Buffer): Buffer[] {
+  const parts: Buffer[] = [];
+  let start = 0;
+  let idx: number;
+  while ((idx = buf.indexOf(delim, start)) !== -1) {
+    if (idx > start) {
+      parts.push(buf.slice(start, idx));
+    }
+    start = idx + delim.length;
+  }
+  if (start < buf.length) {
+    parts.push(buf.slice(start));
+  }
+  return parts;
+}
+
+/**
+ * Get file content by ID. Returns the raw file with proper content-type.
+ */
+route('GET', '/api/files/:id', async (_req, res, match, ctx) => {
+  const id = match.pathname.groups['id']!;
+  const fileRecord = ctx.db.getFile(id);
+  if (!fileRecord) {
+    return json(res, 404, { error: 'File not found' });
+  }
+
+  if (!existsSync(fileRecord.path)) {
+    return json(res, 404, { error: 'File content not found on disk' });
+  }
+
+  res.writeHead(200, {
+    'Content-Type': fileRecord.mime,
+    'Content-Length': String(fileRecord.size),
+    'Content-Disposition': `inline; filename="${encodeURIComponent(fileRecord.name)}"`,
+  });
+
+  // Stream the file
+  const stream = createReadStream(fileRecord.path);
+  stream.pipe(res);
+  stream.on('error', () => {
+    res.end();
+  });
+});
+
+/**
+ * Get file metadata by ID. Returns the FileRecord JSON.
+ */
+route('GET', '/api/files/:id/meta', async (_req, res, match, ctx) => {
+  const id = match.pathname.groups['id']!;
+  const fileRecord = ctx.db.getFile(id);
+  if (!fileRecord) {
+    return json(res, 404, { error: 'File not found' });
+  }
+  json(res, 200, fileRecord);
+});
+
+/**
+ * List all files.
+ */
+route('GET', '/api/files', async (_req, res, _match, ctx) => {
+  const files = ctx.db.listFiles();
+  json(res, 200, files);
+});
+
+/**
+ * Delete a file by ID. Removes both the database record and the file on disk.
+ */
+route('DELETE', '/api/files/:id', async (_req, res, match, ctx) => {
+  const id = match.pathname.groups['id']!;
+  const fileRecord = ctx.db.getFile(id);
+  if (!fileRecord) {
+    return json(res, 404, { error: 'File not found' });
+  }
+
+  // Delete from disk
+  if (existsSync(fileRecord.path)) {
+    unlinkSync(fileRecord.path);
+  }
+
+  // Delete from database
+  ctx.db.deleteFile(id);
   json(res, 200, { ok: true });
 });
 
@@ -2726,6 +2961,8 @@ function enqueueAndDeliver(
     direction?: 'to_agent' | 'from_agent';
     /** Whether to broadcast the linked msg (with queueId/deliveryStatus) or the raw msg. Defaults to true. */
     broadcastLinked?: boolean;
+    /** File IDs attached to this message. */
+    fileIds?: string[];
   },
 ): { msg: DashboardMessage; pending: PendingMessage; linkedMsg: DashboardMessage & { queueId: number; deliveryStatus: string } } {
   const direction = opts.direction ?? 'to_agent';
@@ -2735,6 +2972,7 @@ function enqueueAndDeliver(
     topic: opts.topic ?? undefined,
     sourceAgent: opts.sourceAgent ?? undefined,
     targetAgent: opts.targetAgent ?? undefined,
+    fileIds: opts.fileIds,
   });
 
   const queueSource = opts.queueSourceAgent !== undefined ? opts.queueSourceAgent : (opts.sourceAgent ?? null);
