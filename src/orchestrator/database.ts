@@ -461,6 +461,20 @@ export class Database {
       }
       this.db.exec('PRAGMA user_version = 1');
     }
+
+    // v2: add suffix column to agent_instances for unique ephemeral naming.
+    // Existing rows get suffix = first 6 chars of their id (UUID prefix).
+    if (userVersion < 2) {
+      const instCols = this.db.prepare('PRAGMA table_info(agent_instances)').all() as Array<Record<string, unknown>>;
+      if (instCols.length > 0 && !instCols.some((c) => c['name'] === 'suffix')) {
+        this.db.exec('ALTER TABLE agent_instances ADD COLUMN suffix TEXT');
+        this.db.exec("UPDATE agent_instances SET suffix = SUBSTR(id, 1, 6) WHERE suffix IS NULL");
+        // Unique constraint on (template, suffix) for collision detection
+        this.db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_instances_template_suffix ON agent_instances(agent_template, suffix)');
+        console.log('[migrate v2] Added suffix column to agent_instances with backfill');
+      }
+      this.db.exec('PRAGMA user_version = 2');
+    }
   }
 
   /** Expose raw handle for LockManager (shares same DB connection). */
@@ -778,6 +792,8 @@ export class Database {
     statusPath: string;
     worktreePath: string | null;
     monitorOfInstance?: string | null;
+    /** 6-char hex suffix for human-readable naming (e.g., "7f3a2b" → "researcher-7f3a2b") */
+    suffix: string;
     /**
      * Per-topic concurrency cap. The claim only commits when the count of
      * live `agent_instances` rows for (template, topic) is strictly less than
@@ -836,8 +852,8 @@ export class Database {
           id, agent_template, spawned_from_topic, instance_addr,
           tmux_session, worktree_path, proxy_id, state,
           reply_to_addr, message_id, message_path, reply_path, status_path,
-          queue_id, monitor_of_instance
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'spawning', ?, ?, ?, ?, ?, ?, ?)
+          queue_id, monitor_of_instance, suffix
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'spawning', ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         opts.instanceId,
         opts.agentTemplate,
@@ -853,6 +869,7 @@ export class Database {
         opts.statusPath,
         queueRow.id,
         opts.monitorOfInstance ?? null,
+        opts.suffix,
       );
       const insRow = this.db.prepare(
         'SELECT * FROM agent_instances WHERE id = ?',
@@ -1005,14 +1022,15 @@ export class Database {
     replyPath: string;
     statusPath: string;
     proxyId: string;
+    suffix: string;
   }): AgentInstanceRow {
     this.db.prepare(`
       INSERT INTO agent_instances (
         id, agent_template, spawned_from_topic, instance_addr,
         tmux_session, worktree_path, proxy_id, state,
         reply_to_addr, message_id, message_path, reply_path, status_path,
-        queue_id, monitor_of_instance
-      ) VALUES (?, ?, NULL, ?, ?, ?, ?, 'spawning', NULL, ?, ?, ?, ?, NULL, ?)
+        queue_id, monitor_of_instance, suffix
+      ) VALUES (?, ?, NULL, ?, ?, ?, ?, 'spawning', NULL, ?, ?, ?, ?, NULL, ?, ?)
     `).run(
       opts.id,
       opts.agentTemplate,
@@ -1025,6 +1043,7 @@ export class Database {
       opts.replyPath,
       opts.statusPath,
       opts.monitorOfInstance,
+      opts.suffix,
     );
     const row = this.db.prepare(
       'SELECT * FROM agent_instances WHERE id = ?',
@@ -2436,6 +2455,7 @@ function mapAgentInstanceRow(row: Record<string, unknown>): AgentInstanceRow {
     statusPath: row['status_path'] as string,
     queueId: (row['queue_id'] as number | null) ?? null,
     monitorOfInstance: (row['monitor_of_instance'] as string | null) ?? null,
+    suffix: (row['suffix'] as string | null) ?? null,
     startedAt: row['started_at'] as string,
     completedAt: (row['completed_at'] as string | null) ?? null,
   };

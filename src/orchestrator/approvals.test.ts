@@ -285,7 +285,7 @@ describe('ApprovalService (Q5)', () => {
       instanceId: 'inst-1', instanceAddr: 'agent:tmpl-a/inst-1',
       tmuxSession: 'tmux-inst-1', proxyId: 'p1',
       messageId: 'msg-1', messagePath: '/tmp/m', replyPath: '/tmp/r', statusPath: '/tmp/s',
-      worktreePath: null,
+      worktreePath: null, suffix: 'test01',
     });
     assert.ok(claim);
     db.updateInstanceState('inst-1', 'running');

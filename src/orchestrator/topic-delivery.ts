@@ -182,8 +182,9 @@ export class TopicDelivery {
       }
 
       const instanceId = generateInstanceId();
-      const instanceAddr = `agent:${template.id}/${instanceId}`;
-      const tmuxSession = `inst-${template.id}-${instanceId}`;
+      const suffix = generateSuffix();
+      const instanceAddr = `agent:${template.id}-${suffix}`;
+      const tmuxSession = `inst-${template.id}-${suffix}`.slice(0, 200); // tmux 256 char limit safety
       const ipc = allocateIpcPaths(instanceId, this.ipcRoot);
 
       const cwdBase = template.cwdBase ?? '';
@@ -205,6 +206,7 @@ export class TopicDelivery {
         replyPath: ipc.replyPath,
         statusPath: ipc.statusPath,
         worktreePath,
+        suffix,
         concurrency: topic.concurrency,
       });
       if (!claim) return; // queue empty OR concurrency cap hit — done draining
@@ -400,8 +402,9 @@ export class TopicDelivery {
     }
 
     const monitorId = generateInstanceId();
-    const monitorAddr = `agent:${monitorTemplate.id}/${monitorId}`;
-    const monitorTmuxSession = `inst-${monitorTemplate.id}-${monitorId}`;
+    const monitorSuffix = generateSuffix();
+    const monitorAddr = `agent:${monitorTemplate.id}-${monitorSuffix}`;
+    const monitorTmuxSession = `inst-${monitorTemplate.id}-${monitorSuffix}`.slice(0, 200);
     const monitorIpc = allocateIpcPaths(monitorId, this.ipcRoot);
     const cwdBase = monitorTemplate.cwdBase ?? '';
     const repoRoot = monitorTemplate.repoRoot ?? cwdBase;
@@ -425,6 +428,7 @@ export class TopicDelivery {
         replyPath: monitorIpc.replyPath,
         statusPath: monitorIpc.statusPath,
         proxyId,
+        suffix: monitorSuffix,
       });
     } catch (err) {
       console.warn(`[topic-delivery] failed to insert monitor row for worker ${workerInstance.id}: ${(err as Error).message}`);
@@ -634,12 +638,21 @@ export class TopicDelivery {
 }
 
 /**
- * Random base64url-ish id, 24 chars. Stable enough to fit `NAME_RE` /
+ * Random base64url-ish id, 16 chars. Stable enough to fit `NAME_RE` /
  * `INSTANCE_ID_RE` (alnum start, [a-zA-Z0-9_-] body).
  */
 function generateInstanceId(): string {
   const uuid = randomUUID().replace(/-/g, '');
   return uuid.slice(0, 16);
+}
+
+/**
+ * Generate a 6-char hex suffix for human-readable ephemeral naming.
+ * e.g., "7f3a2b" → instance displays as "researcher-7f3a2b"
+ */
+function generateSuffix(): string {
+  const uuid = randomUUID().replace(/-/g, '');
+  return uuid.slice(0, 6).toLowerCase();
 }
 
 /** Render `cwd_template` placeholders. Supports `{{message_id}}`. */

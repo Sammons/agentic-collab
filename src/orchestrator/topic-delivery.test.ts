@@ -92,18 +92,19 @@ describe('TopicDelivery — Q3 invariants', () => {
     db.enqueueTopicMessage({ agentTemplate: 'tA', topicName: 'echo', payload: '{"n":2}' });
 
     // Build claim option templates so the two calls race over the same cap.
-    const claimOpts = (suffix: string) => ({
+    const claimOpts = (s: string) => ({
       agentTemplate: 'tA',
       topicName: 'echo',
-      instanceId: `race-${suffix}`,
-      instanceAddr: `agent:tA/race-${suffix}`,
-      tmuxSession: `inst-tA-race-${suffix}`,
+      instanceId: `race-${s}`,
+      instanceAddr: `agent:tA/race-${s}`,
+      tmuxSession: `inst-tA-race-${s}`,
       proxyId: 'p1',
-      messageId: `race-${suffix}`,
-      messagePath: `/tmp/m-${suffix}`,
-      replyPath: `/tmp/r-${suffix}`,
-      statusPath: `/tmp/s-${suffix}`,
+      messageId: `race-${s}`,
+      messagePath: `/tmp/m-${s}`,
+      replyPath: `/tmp/r-${s}`,
+      statusPath: `/tmp/s-${s}`,
       worktreePath: null,
+      suffix: s.slice(0, 6).padEnd(6, '0'),
       concurrency: 1,
     });
 
@@ -287,6 +288,7 @@ describe('TopicDelivery — Q3 invariants', () => {
       replyPath: '/tmp/reply',
       statusPath: '/tmp/status',
       worktreePath: null,
+      suffix: 'test02',
     });
     assert.ok(claim, 'claim succeeds');
 

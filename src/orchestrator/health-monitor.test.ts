@@ -990,6 +990,7 @@ describe('HealthMonitor indicators', () => {
       replyPath: '/tmp/r',
       statusPath: '/tmp/s',
       worktreePath: null,
+      suffix: 'test01',
     });
     assert.ok(claim);
     // Promote to running so it would be a candidate IF the health monitor

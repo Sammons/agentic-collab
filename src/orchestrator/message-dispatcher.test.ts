@@ -150,6 +150,7 @@ describe('MessageDispatcher', () => {
       replyPath: '/tmp/reply',
       statusPath: '/tmp/status',
       worktreePath: null,
+      suffix: 'test01',
     });
     assert.ok(claim);
     db.updateInstanceState('inst-x', 'running');
@@ -205,6 +206,7 @@ describe('MessageDispatcher', () => {
       replyPath: '/tmp/reply',
       statusPath: '/tmp/status',
       worktreePath: null,
+      suffix: 'test02',
     });
     assert.ok(claim);
     // Still in 'spawning' state.

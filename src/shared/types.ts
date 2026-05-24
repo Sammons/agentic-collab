@@ -367,6 +367,8 @@ export type AgentInstanceRow = {
   statusPath: string;
   queueId: number | null;
   monitorOfInstance: string | null;
+  /** 6-char hex suffix for human-readable naming (e.g., "7f3a2b" → "researcher-7f3a2b") */
+  suffix: string | null;
   startedAt: string;
   completedAt: string | null;
 };

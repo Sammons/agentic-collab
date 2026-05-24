@@ -1086,7 +1086,8 @@ describe('Database', () => {
       const db = new Database(join(mdir, 'fresh.db'));
       assert.deepEqual(db.listTeams(), []);
       const v = db.rawDb.prepare('PRAGMA user_version').get() as { user_version: number };
-      assert.equal(v.user_version, 1);
+      // v2 adds suffix column to agent_instances
+      assert.equal(v.user_version, 2);
       db.close();
       rmSync(mdir, { recursive: true, force: true });
     });

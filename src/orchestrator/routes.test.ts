@@ -1142,7 +1142,7 @@ describe('API Routes — v3 Q3 endpoints', () => {
       instanceId: 'live-1', instanceAddr: 'agent:q3-tmpl/live-1',
       tmuxSession: 'inst-q3-tmpl-live-1', proxyId: 'p1',
       messageId: 'live-1', messagePath: '/tmp/m', replyPath: '/tmp/r', statusPath: '/tmp/s',
-      worktreePath: null,
+      worktreePath: null, suffix: 'live01',
     });
     assert.ok(claim);
     db.updateInstanceState('live-1', 'running');
@@ -1166,7 +1166,7 @@ describe('API Routes — v3 Q3 endpoints', () => {
       instanceId: 'terminal-1', instanceAddr: 'agent:q3-tmpl/terminal-1',
       tmuxSession: 'inst-q3-tmpl-terminal-1', proxyId: 'p1',
       messageId: 'terminal-1', messagePath: '/tmp/m', replyPath: '/tmp/r', statusPath: '/tmp/s',
-      worktreePath: null,
+      worktreePath: null, suffix: 'term01',
     });
     assert.ok(claim);
     // Force terminal state.
