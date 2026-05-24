@@ -43,8 +43,9 @@ function toast(msg: string, kind: 'info' | 'error' = 'info'): void {
   setTimeout(() => el.remove(), 3000);
 }
 
-function escapeHtml(s: string): string {
-  return s
+function escapeHtml(s: string | null | undefined): string {
+  if (s == null) return '';
+  return String(s)
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
