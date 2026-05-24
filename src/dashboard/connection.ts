@@ -223,8 +223,11 @@ function handle(msg: WsEvent): void {
       persistCachedThreads();
       rebuildAgentIndex();
       rebuildTeamIndex();
-      restoreSelectionOnInit();
+      // Emit 'init' BEFORE restoring selection so chat.ts clears feedState
+      // before selection-changed triggers loadInitialFeed(). Otherwise the
+      // init handler clears the feed after it's already being populated.
       emit('init');
+      restoreSelectionOnInit();
       emit('agents-changed');
       emit('teams-changed');
       break;
