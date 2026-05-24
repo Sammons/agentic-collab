@@ -10,25 +10,51 @@
      • Touch targets bump to ≥40px tall.
    ────────────────────────────────────────────────────────────────────── */
 
-/* hamburger + scrim — both display:none on desktop */
+/* hamburger — hidden on desktop, also hidden on mobile now (replaced by bottom tabs) */
 .mobile-menu {
   display: none;
+}
+
+/* Bottom tab bar — mobile only */
+.mobile-tabs {
+  display: none;
   position: fixed;
-  top: 8px;
-  left: 8px;
-  z-index: 50;
-  width: 36px;
-  height: 36px;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 56px;
   background: var(--paper-card);
-  border: 1px solid var(--rule);
-  border-radius: var(--radius);
-  color: var(--ink-2);
+  border-top: 1px solid var(--rule);
+  z-index: 50;
+  padding-bottom: env(safe-area-inset-bottom, 0);
+}
+.mobile-tabs .tab {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 2px;
+  color: var(--ink-3);
+  text-decoration: none;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  padding: 6px 0;
+  background: none;
+  border: none;
   cursor: pointer;
-  box-shadow: 0 2px 8px -2px rgba(22,24,28,0.18);
+  transition: color 120ms ease;
 }
-.mobile-menu:hover { color: var(--ink); }
+.mobile-tabs .tab:hover,
+.mobile-tabs .tab:focus { color: var(--ink-2); }
+.mobile-tabs .tab.active {
+  color: var(--steel);
+}
+.mobile-tabs .tab svg {
+  width: 22px;
+  height: 22px;
+}
 
 .sidebar-scrim {
   display: none;
@@ -48,7 +74,10 @@
     grid-template-columns: 1fr;
   }
 
-  .mobile-menu { display: inline-flex; }
+  /* Bottom tab bar visible on mobile */
+  .mobile-tabs {
+    display: flex;
+  }
   .sidebar-scrim.is-visible { display: block; }
 
   .sidebar {
@@ -57,7 +86,7 @@
     left: 0;
     width: 86%;
     max-width: 320px;
-    height: 100vh;
+    height: calc(100vh - 56px - env(safe-area-inset-bottom, 0)); /* leave room for tab bar */
     transform: translateX(-100%);
     transition: transform 220ms ease;
     z-index: 40;
@@ -72,17 +101,7 @@
   .main {
     width: 100%;
     min-height: 100vh;
-    padding-top: 52px; /* leave room for the fixed hamburger */
-  }
-
-  /* Offset headers so hamburger doesn't overlap title text */
-  .chat-pane .pane-hdr,
-  .pg-hdr,
-  .rm-hdr,
-  .st-hdr,
-  .sr-hdr,
-  .watch-hdr {
-    padding-left: 52px !important; /* hamburger (36px) + gap */
+    padding-bottom: calc(56px + env(safe-area-inset-bottom, 0)); /* leave room for tab bar */
   }
 
   /* lock body scroll while drawer is open */

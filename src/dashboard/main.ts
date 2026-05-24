@@ -45,46 +45,86 @@ function boot(): void {
 }
 
 /**
- * Mobile drawer behavior — sidebar is a slide-in panel on narrow viewports.
- *  - Hamburger button (#mobileMenuBtn) opens the drawer
- *  - Scrim (#sidebarScrim) closes it on tap
- *  - Navigating (clicking a nav-action or member eye-icon) auto-closes
+ * Mobile navigation:
+ *  - Bottom tab bar (#mobileTabs) for primary navigation
+ *  - Sidebar drawer for Teams filter (opened via "Teams" tab)
+ *  - Scrim (#sidebarScrim) closes drawer on tap
  *  - Escape key also closes
- * On desktop (>= 769px) the CSS makes the hamburger + scrim display:none
- * and the sidebar is always visible; this JS is harmless there.
+ * On desktop (>= 769px) the CSS hides the tab bar and shows the sidebar;
+ * this JS is harmless there.
  */
 function setupMobileNav(): void {
-  const btn = document.getElementById('mobileMenuBtn');
   const sidebar = document.getElementById('sidebar');
   const scrim = document.getElementById('sidebarScrim');
-  if (!btn || !sidebar || !scrim) return;
+  const tabs = document.getElementById('mobileTabs');
+  if (!sidebar || !scrim) return;
 
-  const open = () => {
+  const openDrawer = () => {
     sidebar.classList.add('is-open');
     scrim.classList.add('is-visible');
     document.body.classList.add('drawer-open');
   };
-  const close = () => {
+  const closeDrawer = () => {
     sidebar.classList.remove('is-open');
     scrim.classList.remove('is-visible');
     document.body.classList.remove('drawer-open');
   };
 
-  btn.addEventListener('click', () => {
-    if (sidebar.classList.contains('is-open')) close(); else open();
-  });
-  scrim.addEventListener('click', close);
+  scrim.addEventListener('click', closeDrawer);
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && sidebar.classList.contains('is-open')) close();
+    if (e.key === 'Escape' && sidebar.classList.contains('is-open')) closeDrawer();
   });
-  // Close drawer when the user navigates via the sidebar so the new
-  // surface gets full mobile width. Only on narrow viewports.
+
+  // Close drawer when the user navigates via the sidebar
   sidebar.addEventListener('click', (e) => {
     const t = e.target as HTMLElement;
     if (t.closest('[data-go], [data-eye]')) {
-      if (window.matchMedia('(max-width: 768px)').matches) close();
+      if (window.matchMedia('(max-width: 768px)').matches) closeDrawer();
     }
   });
+
+  // Bottom tab bar — handle "Teams" button to toggle sidebar, update active states
+  if (tabs) {
+    const updateActiveTab = () => {
+      const hash = location.hash || '#/';
+      tabs.querySelectorAll<HTMLElement>('.tab').forEach((tab) => {
+        const tabId = tab.dataset['tab'];
+        let isActive = false;
+        if (tabId === 'dashboard' && (hash === '#/' || hash === '#/dashboard' || hash.startsWith('#/watch/'))) {
+          isActive = true;
+        } else if (tabId === 'agents' && hash === '#/agents') {
+          isActive = true;
+        } else if (tabId === 'settings' && hash.startsWith('#/settings')) {
+          isActive = true;
+        }
+        tab.classList.toggle('active', isActive);
+      });
+    };
+
+    // Update on hash change
+    window.addEventListener('hashchange', updateActiveTab);
+    updateActiveTab();
+
+    // Handle tab clicks
+    tabs.addEventListener('click', (e) => {
+      const tab = (e.target as HTMLElement).closest<HTMLElement>('.tab');
+      if (!tab) return;
+      const tabId = tab.dataset['tab'];
+
+      if (tabId === 'sidebar') {
+        // Toggle sidebar drawer
+        e.preventDefault();
+        if (sidebar.classList.contains('is-open')) {
+          closeDrawer();
+        } else {
+          openDrawer();
+        }
+      } else {
+        // Close drawer when navigating to another tab
+        closeDrawer();
+      }
+    });
+  }
 }
 
 if (document.readyState === 'loading') {
