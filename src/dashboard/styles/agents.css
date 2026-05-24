@@ -138,23 +138,23 @@
   white-space: nowrap;
 }
 .pg-row .state .dot {
-  width: 6px; height: 6px; border-radius: 50%;
-  background: var(--ink-4);
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--dot-idle);
   flex-shrink: 0;
 }
 .pg-row .state.active { color: var(--moss); }
-.pg-row .state.active .dot { background: var(--moss); }
-.pg-row .state.idle .dot { background: var(--ink-4); }
+.pg-row .state.active .dot { background: var(--dot-active); }
+.pg-row .state.idle .dot { background: var(--dot-idle); }
 .pg-row .state.spawning,
 .pg-row .state.resuming,
 .pg-row .state.suspending { color: var(--clay); }
 .pg-row .state.spawning .dot,
 .pg-row .state.resuming .dot,
-.pg-row .state.suspending .dot { background: var(--clay); }
+.pg-row .state.suspending .dot { background: var(--dot-running); }
 .pg-row .state.suspended { color: var(--plum); }
-.pg-row .state.suspended .dot { background: var(--plum); }
+.pg-row .state.suspended .dot { background: var(--dot-suspended); }
 .pg-row .state.failed { color: var(--brick); }
-.pg-row .state.failed .dot { background: var(--brick); }
+.pg-row .state.failed .dot { background: var(--dot-failed); }
 
 .pg-row .actions {
   display: flex; gap: 2px;

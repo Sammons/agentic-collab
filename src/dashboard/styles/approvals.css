@@ -121,16 +121,16 @@
 .ap-item:hover { background: var(--paper-hover); }
 .ap-item.active { background: var(--paper-sel); }
 .ap-item .dot {
-  width: 6px; height: 6px;
+  width: 7px; height: 7px;
   border-radius: 50%;
-  background: var(--ink-4);
+  background: var(--dot-idle);
   margin-top: 8px;
   flex-shrink: 0;
 }
-.ap-item.pending .dot { background: var(--clay); }
-.ap-item.approved .dot { background: var(--moss); }
-.ap-item.rejected .dot { background: var(--brick); }
-.ap-item.amended .dot { background: var(--plum); }
+.ap-item.pending .dot { background: var(--dot-running); }
+.ap-item.approved .dot { background: var(--dot-active); }
+.ap-item.rejected .dot { background: var(--dot-failed); }
+.ap-item.amended .dot { background: var(--dot-suspended); }
 .ap-item .main { min-width: 0; }
 .ap-item .id {
   font-family: var(--mono);

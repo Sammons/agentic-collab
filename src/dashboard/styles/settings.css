@@ -161,13 +161,13 @@
   gap: 5px;
 }
 .st-item .state .dot {
-  width: 5px; height: 5px;
+  width: 6px; height: 6px;
   border-radius: 50%;
-  background: var(--ink-4);
+  background: var(--dot-idle);
 }
 .st-item .state.enabled { color: var(--moss); }
-.st-item .state.enabled .dot { background: var(--moss); }
-.st-item .state.disabled .dot { background: var(--ink-4); }
+.st-item .state.enabled .dot { background: var(--dot-active); }
+.st-item .state.disabled .dot { background: var(--dot-idle); }
 .st-item .badge-usage {
   font-family: var(--mono);
   font-size: 11px;
