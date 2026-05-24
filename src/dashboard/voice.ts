@@ -393,11 +393,16 @@ async function startVoiceWhisper(): Promise<void> {
     const type = recorder.mimeType || mimeType || 'audio/webm';
     const blob = new Blob(chunks, { type });
     voiceState.recorder = null;
-    // Stop the mic immediately — upload runs without it.
+    // Stop the mic immediately — upload runs without it. Drop the
+    // 'recording' visual class now so the button stops looking active
+    // during the transcribe-in-flight window (stopVoiceLocal would
+    // otherwise only clear it after the upload finishes).
     if (voiceState.stream) {
       voiceState.stream.getTracks().forEach((t) => t.stop());
       voiceState.stream = null;
     }
+    const pttBtnEl = document.querySelector('[data-voice-btn]');
+    pttBtnEl?.classList.remove('recording');
     if (blob.size === 0) {
       stopVoiceLocal();
       return;
