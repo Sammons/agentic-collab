@@ -141,32 +141,24 @@
     font-size: 14px;
     padding-left: 14px;
   }
-  /* Collapsible long messages on mobile */
+  /* Collapsible long messages on mobile — tight ellipsis style */
   .chat-pane .msg .body.collapsed {
-    max-height: 150px;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
     overflow: hidden;
-    position: relative;
-  }
-  .chat-pane .msg .body.collapsed::after {
-    content: '';
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    height: 40px;
-    background: linear-gradient(transparent, var(--paper-card));
-    pointer-events: none;
+    text-overflow: ellipsis;
   }
   .chat-pane .msg .expand-btn {
-    display: block;
+    display: inline;
     background: none;
     border: none;
     color: var(--steel);
     font-size: 12px;
     font-weight: 500;
-    padding: 6px 14px;
+    padding: 0 4px;
     cursor: pointer;
-    margin-top: 4px;
+    margin-left: 4px;
   }
   .chat-pane .msg .expand-btn:hover {
     text-decoration: underline;

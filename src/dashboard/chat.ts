@@ -361,15 +361,21 @@ function wireCollapsibleMessages(root: HTMLElement): void {
     const text = body.textContent ?? '';
     if (text.length > COLLAPSE_THRESHOLD) {
       body.classList.add('collapsed');
+      // Wrap existing content in a span so we can append the button inline
+      const wrapper = document.createElement('span');
+      wrapper.className = 'body-text';
+      wrapper.innerHTML = body.innerHTML;
       const btn = document.createElement('button');
       btn.className = 'expand-btn';
-      btn.textContent = 'Show more';
+      btn.textContent = '… more';
       btn.addEventListener('click', () => {
         const isCollapsed = body.classList.contains('collapsed');
         body.classList.toggle('collapsed');
-        btn.textContent = isCollapsed ? 'Show less' : 'Show more';
+        btn.textContent = isCollapsed ? ' less' : '… more';
       });
-      body.parentElement?.appendChild(btn);
+      body.innerHTML = '';
+      body.appendChild(wrapper);
+      body.appendChild(btn);
     }
   }
 }
@@ -825,7 +831,8 @@ function wire(root: HTMLElement): void {
           toast('Drop target missing — start with @agent-name to specify where to upload', 'error');
           return;
         }
-        handleFileUpload(Array.from(files), parsed.agents[0]!, input.value.trim(), parsed.topics[0] ?? 'file-upload');
+        handleFileUpload(Array.from(files), parsed.agents[0]!, parsed.message, parsed.topics[0] ?? 'file-upload');
+        input.value = '';  // Clear composer after upload
       }
     });
   }
@@ -849,7 +856,8 @@ function wire(root: HTMLElement): void {
       toast('Paste target missing — start with @agent-name to specify where to upload', 'error');
       return;
     }
-    handleFileUpload(files, parsed.agents[0]!, input.value.trim(), parsed.topics[0] ?? 'file-upload');
+    handleFileUpload(files, parsed.agents[0]!, parsed.message, parsed.topics[0] ?? 'file-upload');
+    input.value = '';  // Clear composer after upload
   });
 
   updateHint();
