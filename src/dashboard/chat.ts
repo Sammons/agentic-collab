@@ -26,30 +26,45 @@ import { initVoice, voiceState, clearUsedFlag } from './voice.ts';
 // lifecycle banners, etc.).
 const SYSTEM_THREADS = new Set(['dashboard', 'system']);
 
-// Staged files: maps agent name → list of uploaded file paths.
-// Files are staged silently on drag-drop/paste, then appended to the
-// message body when Send is clicked.
-const stagedFiles = new Map<string, string[]>();
+// Staged files: list of file IDs ready to attach to the next message.
+// Files are uploaded to orchestrator storage on drag-drop/paste,
+// then attached to the message when Send is clicked.
+type StagedFile = { id: string; name: string; size: number };
+const stagedFiles: StagedFile[] = [];
 
 // Reference to the current updateHint function for direct invocation from
 // handleFileUpload. Populated by wire() when the dashboard is mounted.
 let currentUpdateHint: (() => void) | null = null;
 
-/** Get all staged files for the given agents. */
-function getStagedFilePaths(agents: string[]): string[] {
-  const paths: string[] = [];
-  for (const agent of agents) {
-    const files = stagedFiles.get(agent);
-    if (files) paths.push(...files);
-  }
-  return paths;
+/** Get staged file IDs. */
+function getStagedFileIds(): string[] {
+  return stagedFiles.map(f => f.id);
 }
 
-/** Clear staged files for the given agents after send. */
-function clearStagedFiles(agents: string[]): void {
-  for (const agent of agents) {
-    stagedFiles.delete(agent);
-  }
+/** Get staged file count for display. */
+function getStagedFileCount(): number {
+  return stagedFiles.length;
+}
+
+/** Get staged file names for display. */
+function getStagedFileNames(): string[] {
+  return stagedFiles.map(f => f.name);
+}
+
+/** Clear all staged files after send. */
+function clearStagedFiles(): void {
+  stagedFiles.length = 0;
+}
+
+/** Add a staged file. */
+function addStagedFile(file: StagedFile): void {
+  stagedFiles.push(file);
+}
+
+/** Remove a staged file by ID. */
+function removeStagedFile(id: string): void {
+  const idx = stagedFiles.findIndex(f => f.id === id);
+  if (idx >= 0) stagedFiles.splice(idx, 1);
 }
 
 export function setupChat(): void {
@@ -799,9 +814,9 @@ function wire(root: HTMLElement): void {
         : '';
 
       // Staged files indicator
-      const stagedPaths = getStagedFilePaths(parsed.agents);
-      const stagedNote = stagedPaths.length > 0
-        ? ` <span class="staged-files">📎 ${stagedPaths.length} file${stagedPaths.length > 1 ? 's' : ''}</span>`
+      const stagedCount = getStagedFileCount();
+      const stagedNote = stagedCount > 0
+        ? ` <span class="staged-files">📎 ${stagedCount} file${stagedCount > 1 ? 's' : ''}</span>`
         : '';
 
       // Button text: "Spawn" if all targets are dead, otherwise "Send"
@@ -1174,14 +1189,12 @@ async function handleSend(input: HTMLTextAreaElement): Promise<void> {
   const parsed = parseComposer(input.value);
   if (parsed.agents.length === 0 || !parsed.message) return;
 
-  // Append staged file paths to the message
-  const stagedPaths = getStagedFilePaths(parsed.agents);
-  let finalMessage = parsed.message;
-  if (stagedPaths.length > 0) {
-    const fileList = stagedPaths.map(p => `  ${p}`).join('\n');
-    finalMessage = `${parsed.message}\n\nAttached files:\n${fileList}`;
-    clearStagedFiles(parsed.agents);
+  // Collect staged file IDs and clear staging
+  const fileIds = getStagedFileIds();
+  if (fileIds.length > 0) {
+    clearStagedFiles();
   }
+  const finalMessage = parsed.message;
 
   // Spawn dead agents before sending — suspended agents resume, others spawn
   const deadAgents = parsed.agents.filter((name) => {
@@ -1235,6 +1248,7 @@ async function handleSend(input: HTMLTextAreaElement): Promise<void> {
         targetAgent: agent,
         topic,
         message: finalMessage,
+        fileIds: fileIds.length > 0 ? fileIds : null,
         queueId: null,
         deliveryStatus: 'pending',
         withdrawn: false,
@@ -1261,10 +1275,12 @@ async function handleSend(input: HTMLTextAreaElement): Promise<void> {
   await Promise.all(pending.map(async ({ agent, topic, optimisticId, list }) => {
     try {
       const target = agent.includes(':') || agent.includes('/') ? agent : `agent:${agent}`;
+      const payload: Record<string, unknown> = { agent: target, message: finalMessage, topic };
+      if (fileIds.length > 0) payload.fileIds = fileIds;
       const res = await fetch('/api/dashboard/send', {
         method: 'POST',
         headers: authHeaders(),
-        body: JSON.stringify({ agent: target, message: finalMessage, topic }),
+        body: JSON.stringify(payload),
       });
       if (!res.ok) {
         const idx = list.findIndex((m) => m.id === optimisticId);
@@ -1394,20 +1410,25 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
-async function uploadFile(file: File, agent: string, message: string, topic: string): Promise<{ file: string; ok: boolean; path?: string; error?: string }> {
-  let url = `/api/dashboard/upload?agent=${encodeURIComponent(agent)}&filename=${encodeURIComponent(file.name)}&topic=${encodeURIComponent(topic)}`;
-  if (message) url += `&message=${encodeURIComponent(message)}`;
-
+/** Upload a file to orchestrator storage, returns file record. */
+async function uploadFileToStorage(file: File): Promise<{ ok: boolean; id?: string; name?: string; size?: number; error?: string }> {
+  const url = `/api/files?filename=${encodeURIComponent(file.name)}`;
   const headers: Record<string, string> = { 'content-type': 'application/octet-stream' };
   if (state.token) headers['authorization'] = `Bearer ${state.token}`;
 
   const res = await fetch(url, { method: 'POST', headers, body: file });
   const body = await res.json().catch(() => ({})) as Record<string, unknown>;
-  return { file: file.name, ok: res.ok, path: body.path as string | undefined, error: body.error as string | undefined };
+  return {
+    ok: res.ok,
+    id: body.id as string | undefined,
+    name: body.name as string | undefined,
+    size: body.size as number | undefined,
+    error: body.error as string | undefined,
+  };
 }
 
-async function handleFileUpload(files: File[], agents: string[], message: string, topic: string = 'file-upload'): Promise<void> {
-  if (files.length === 0 || agents.length === 0) return;
+async function handleFileUpload(files: File[], _agents: string[], _message: string, _topic: string = 'file-upload'): Promise<void> {
+  if (files.length === 0) return;
 
   // Warn about large files
   const largeFiles = files.filter(f => f.size >= LARGE_FILE_THRESHOLD);
@@ -1419,51 +1440,38 @@ async function handleFileUpload(files: File[], agents: string[], message: string
     if (!confirmed) return;
   }
 
-  const agentList = agents.length === 1 ? `@${agents[0]}` : `${agents.length} agents`;
-  toast(`Uploading ${files.length} file${files.length > 1 ? 's' : ''} to ${agentList}…`);
+  toast(`Uploading ${files.length} file${files.length > 1 ? 's' : ''}…`);
 
   try {
-    // Fan out: each file × each agent. Track paths per agent for staging.
-    const uploadsByAgent = new Map<string, Promise<{ file: string; ok: boolean; path?: string; error?: string }>[]>();
-    for (const agent of agents) {
-      const agentUploads: Promise<{ file: string; ok: boolean; path?: string; error?: string }>[] = [];
-      for (const f of files) {
-        agentUploads.push(uploadFile(f, agent, message, topic));
-      }
-      uploadsByAgent.set(agent, agentUploads);
-    }
+    // Upload all files to orchestrator storage
+    const uploads = files.map(f => uploadFileToStorage(f));
+    const results = await Promise.allSettled(uploads);
 
-    // Await all and stage successful paths
     let succeeded = 0;
     let failed = 0;
-    for (const [agent, uploads] of uploadsByAgent) {
-      const results = await Promise.allSettled(uploads);
-      for (const result of results) {
-        if (result.status === 'fulfilled' && result.value.ok && result.value.path) {
-          succeeded++;
-          const existing = stagedFiles.get(agent) ?? [];
-          existing.push(result.value.path);
-          stagedFiles.set(agent, existing);
-        } else {
-          failed++;
-        }
+    for (const result of results) {
+      if (result.status === 'fulfilled' && result.value.ok && result.value.id) {
+        succeeded++;
+        addStagedFile({
+          id: result.value.id,
+          name: result.value.name ?? 'unknown',
+          size: result.value.size ?? 0,
+        });
+      } else {
+        failed++;
       }
     }
 
     if (failed === 0) {
-      const count = succeeded / agents.length; // files per agent
-      toast(`Staged ${count} file${count > 1 ? 's' : ''} — will be sent with your next message`);
+      toast(`Staged ${succeeded} file${succeeded > 1 ? 's' : ''} — will be attached to your next message`);
     } else {
       toast(`${failed} upload${failed > 1 ? 's' : ''} failed`, 'error');
     }
 
     // Trigger hint update to show staged files.
-    // Use direct function call to ensure the update runs immediately, as
-    // synthetic events may not trigger reliably in all scenarios.
     if (currentUpdateHint) {
       currentUpdateHint();
     } else {
-      // Fallback: dispatch input event to trigger listener
       const input = document.querySelector<HTMLTextAreaElement>('[data-composer-input]');
       if (input) input.dispatchEvent(new Event('input'));
     }
