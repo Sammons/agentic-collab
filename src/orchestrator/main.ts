@@ -43,12 +43,14 @@ if (!ORCHESTRATOR_SECRET) {
   console.log(`[orchestrator] Auth enabled (secret from ${process.env['ORCHESTRATOR_SECRET'] ? 'env' : getSecretPath()})`);
 }
 
-// Ensure DB + pages + stores directories exist
+// Ensure DB + pages + stores + files directories exist
 mkdirSync(dirname(DB_PATH), { recursive: true });
 const PAGES_DIR = join(dirname(DB_PATH), 'pages');
 mkdirSync(PAGES_DIR, { recursive: true });
 const STORES_DIR = join(dirname(DB_PATH), 'stores');
 mkdirSync(STORES_DIR, { recursive: true });
+const FILES_DIR = join(dirname(DB_PATH), 'files');
+mkdirSync(FILES_DIR, { recursive: true });
 
 const db = new Database(DB_PATH);
 const wss = new WebSocketServer();
@@ -360,6 +362,7 @@ const routeCtx: RouteContext = {
   accountStore,
   pagesDir: PAGES_DIR,
   storesDir: STORES_DIR,
+  filesDir: FILES_DIR,
   telegramDispatcher,
   topicDelivery,
   instanceReaper,
