@@ -221,6 +221,9 @@
 
   /* ── agents ── */
 
+  /* Hide the "N agents" stats line on mobile — redundant with bottom tab */
+  .pg-stats { display: none; }
+
   .pg-row {
     grid-template-columns: 1fr auto !important;
     grid-template-rows: auto auto;
