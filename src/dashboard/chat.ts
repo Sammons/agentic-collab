@@ -83,6 +83,7 @@ function render(root: HTMLElement): void {
         <div class="input-wrap">
           <textarea data-composer-input placeholder="Message — start with @agent-name to target an agent…"></textarea>
         </div>
+        <div class="staged-files-row" data-staged-files></div>
         <div class="voice-status" data-voice-status style="display:none"></div>
         <div class="ctrls">
           <span class="hint" data-target-hint>No target — start with <span class="target">@agent</span> to send.</span>
@@ -851,8 +852,43 @@ function wire(root: HTMLElement): void {
     }
   };
 
+  // Staged files row — shows chips for each staged file with remove button
+  const stagedRow = root.querySelector<HTMLElement>('[data-staged-files]');
+  const renderStagedFiles = () => {
+    if (!stagedRow) return;
+    if (stagedFiles.length === 0) {
+      stagedRow.innerHTML = '';
+      stagedRow.style.display = 'none';
+      return;
+    }
+    stagedRow.style.display = 'flex';
+    stagedRow.innerHTML = stagedFiles.map(f => `
+      <span class="file-chip" data-file-id="${escapeHtml(f.id)}">
+        <span class="name">${escapeHtml(f.name)}</span>
+        <span class="size">${formatFileSize(f.size)}</span>
+        <button class="remove" title="Remove file">×</button>
+      </span>
+    `).join('');
+    // Wire remove buttons
+    stagedRow.querySelectorAll<HTMLElement>('.file-chip .remove').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        const chip = btn.closest<HTMLElement>('.file-chip');
+        const fileId = chip?.dataset['fileId'];
+        if (fileId) {
+          removeStagedFile(fileId);
+          renderStagedFiles();
+          updateHint();
+        }
+      });
+    });
+  };
+
   // Register the updateHint function for direct invocation from handleFileUpload
-  currentUpdateHint = updateHint;
+  currentUpdateHint = () => {
+    updateHint();
+    renderStagedFiles();
+  };
 
   const mention = setupMentionAutocomplete(input, inputWrap, updateHint);
 
@@ -958,6 +994,9 @@ function wire(root: HTMLElement): void {
       detachers.push(cleanup);
     });
   }
+
+  // Initial render of staged files (if any survive from before route change)
+  renderStagedFiles();
 }
 
 /* ── @-mention autocomplete ────────────────────────────────────────── */
