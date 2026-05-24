@@ -29,6 +29,7 @@ import { resolveSecret, getSecretPath } from '../shared/config.ts';
 import type { ProxyCommand, ProxyResponse, ProxyRegistration } from '../shared/types.ts';
 import { getVersion } from '../shared/version.ts';
 import { handleVoiceUpgrade, type VoiceProxyOptions } from './voice-proxy.ts';
+import type { WhisperOptions } from './whisper-stt.ts';
 import { DEFAULT_ENGINE_CONFIGS } from './default-engine-configs.ts';
 
 const PORT = parseInt(process.env['PORT'] ?? '3000', 10);
@@ -229,7 +230,14 @@ const lifecycleCtx: LifecycleContext = {
   accountStore,
 };
 
-// Voice proxy config
+// Voice proxy config — two providers can coexist.
+//
+// ElevenLabs: realtime WebSocket streaming STT (partial transcripts).
+// Whisper:    OpenAI-compatible batch HTTP STT (one-shot PTT clips).
+//
+// STT_PROVIDER pins the default the dashboard picks when both are
+// available. 'auto' (default) means: ElevenLabs if its key is set, else
+// Whisper if its URL is set, else neither.
 const ELEVENLABS_API_KEY = process.env['ELEVENLABS_API_KEY'] ?? '';
 const voiceOpts: VoiceProxyOptions | null = ELEVENLABS_API_KEY
   ? {
@@ -239,8 +247,35 @@ const voiceOpts: VoiceProxyOptions | null = ELEVENLABS_API_KEY
     }
   : null;
 
+const WHISPER_URL = process.env['WHISPER_URL'] ?? '';
+const whisperOpts: WhisperOptions | null = WHISPER_URL
+  ? {
+      url: WHISPER_URL,
+      apiKey: process.env['WHISPER_API_KEY'] || undefined,
+      model: process.env['WHISPER_MODEL'] || undefined,
+      language: process.env['WHISPER_LANGUAGE'] || undefined,
+    }
+  : null;
+
+const STT_PROVIDER_ENV = (process.env['STT_PROVIDER'] ?? 'auto').toLowerCase();
+const sttProviderPin: 'elevenlabs' | 'whisper' | 'auto' =
+  STT_PROVIDER_ENV === 'elevenlabs' || STT_PROVIDER_ENV === 'whisper'
+    ? STT_PROVIDER_ENV
+    : 'auto';
+
+function resolveDefaultSttProvider(): 'elevenlabs' | 'whisper' | null {
+  if (sttProviderPin === 'elevenlabs') return voiceOpts ? 'elevenlabs' : null;
+  if (sttProviderPin === 'whisper') return whisperOpts ? 'whisper' : null;
+  if (voiceOpts) return 'elevenlabs';
+  if (whisperOpts) return 'whisper';
+  return null;
+}
+
 if (voiceOpts) {
-  console.log('[orchestrator] Voice dictation enabled (ElevenLabs API key set)');
+  console.log('[orchestrator] Voice dictation: ElevenLabs realtime enabled');
+}
+if (whisperOpts) {
+  console.log(`[orchestrator] Voice dictation: Whisper batch enabled (${WHISPER_URL})`);
 }
 
 // ── Telegram Dispatcher ──
@@ -320,6 +355,8 @@ const routeCtx: RouteContext = {
   messageDispatcher,
   usagePoller,
   voiceEnabled: !!voiceOpts,
+  whisperOpts,
+  defaultSttProvider: resolveDefaultSttProvider(),
   accountStore,
   pagesDir: PAGES_DIR,
   storesDir: STORES_DIR,

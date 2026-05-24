@@ -37,6 +37,7 @@ import type { TopicDelivery } from './topic-delivery.ts';
 import type { InstanceReaper } from './instance-reaper.ts';
 import type { ApprovalService } from './approvals.ts';
 import type { BootReconciler, ProxyReconnectHandler, OrphanedWorktreeSweep } from './recovery.ts';
+import { transcribe as whisperTranscribe, type WhisperOptions } from './whisper-stt.ts';
 
 /** Validates agent and persona names: 1-63 chars, alphanumeric start, [a-zA-Z0-9_-]. */
 const NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$/;
@@ -65,6 +66,18 @@ export type RouteContext = {
   messageDispatcher: MessageDispatcher;
   usagePoller: UsagePoller;
   voiceEnabled: boolean;
+  /**
+   * Whisper batch STT config. When set, dashboard can record PTT clips
+   * locally and POST them to /api/voice/transcribe for one-shot
+   * transcription. Coexists with ElevenLabs realtime; the dashboard
+   * picks the path per `defaultSttProvider`.
+   */
+  whisperOpts?: WhisperOptions | null;
+  /**
+   * Which STT provider the dashboard should use by default. Computed
+   * from STT_PROVIDER env + which provider configs are present.
+   */
+  defaultSttProvider?: 'elevenlabs' | 'whisper' | null;
   accountStore: import('./accounts.ts').AccountStore;
   pagesDir: string;
   storesDir: string;
@@ -2149,8 +2162,70 @@ route('GET', '/api/engines/status', async (_req, res, _match, ctx) => {
 });
 
 route('GET', '/api/voice/status', async (_req, res, _match, ctx) => {
-  json(res, 200, { enabled: ctx.voiceEnabled });
+  const elevenlabs = ctx.voiceEnabled;
+  const whisper = !!ctx.whisperOpts;
+  json(res, 200, {
+    enabled: elevenlabs || whisper,
+    providers: { elevenlabs, whisper },
+    defaultProvider: ctx.defaultSttProvider ?? null,
+  });
 });
+
+const WHISPER_MAX_BYTES = 25 * 1024 * 1024; // 25 MB — matches OpenAI Whisper's per-file cap
+const WHISPER_DEFAULT_FILENAME = 'audio.webm';
+
+route('POST', '/api/voice/transcribe', async (req, res, _match, ctx) => {
+  if (!ctx.whisperOpts) {
+    return json(res, 503, { error: 'Whisper not configured (set WHISPER_URL)' });
+  }
+  const contentType = (req.headers['content-type'] ?? '').toString();
+  if (!contentType || !contentType.startsWith('audio/')) {
+    return json(res, 400, { error: 'Content-Type must be audio/*' });
+  }
+  const chunks: Buffer[] = [];
+  let total = 0;
+  try {
+    for await (const chunk of req) {
+      const buf = chunk as Buffer;
+      total += buf.length;
+      if (total > WHISPER_MAX_BYTES) {
+        return json(res, 413, { error: `Audio too large (max ${WHISPER_MAX_BYTES} bytes)` });
+      }
+      chunks.push(buf);
+    }
+  } catch (err) {
+    return json(res, 400, { error: `Failed reading audio body: ${(err as Error).message}` });
+  }
+  if (total === 0) {
+    return json(res, 400, { error: 'Empty audio body' });
+  }
+  const audio = Buffer.concat(chunks);
+  // Derive a sensible filename extension from the MIME so Whisper
+  // servers that sniff by extension still work.
+  const filename = filenameFromContentType(contentType);
+  try {
+    const result = await whisperTranscribe(audio, contentType, filename, ctx.whisperOpts);
+    json(res, 200, result);
+  } catch (err) {
+    console.error('[voice] Whisper transcribe error:', (err as Error).message);
+    json(res, 502, { error: (err as Error).message });
+  }
+});
+
+function filenameFromContentType(ct: string): string {
+  const base = ct.split(';')[0]!.trim().toLowerCase();
+  switch (base) {
+    case 'audio/webm': return 'audio.webm';
+    case 'audio/ogg':  return 'audio.ogg';
+    case 'audio/mp4':
+    case 'audio/m4a':  return 'audio.m4a';
+    case 'audio/mpeg': return 'audio.mp3';
+    case 'audio/wav':
+    case 'audio/x-wav':
+    case 'audio/wave': return 'audio.wav';
+    default:           return WHISPER_DEFAULT_FILENAME;
+  }
+}
 
 route('POST', '/api/engines/poll', async (_req, res, _match, ctx) => {
   try {
