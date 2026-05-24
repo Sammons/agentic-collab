@@ -361,21 +361,16 @@ function wireCollapsibleMessages(root: HTMLElement): void {
     const text = body.textContent ?? '';
     if (text.length > COLLAPSE_THRESHOLD) {
       body.classList.add('collapsed');
-      // Wrap existing content in a span so we can append the button inline
-      const wrapper = document.createElement('span');
-      wrapper.className = 'body-text';
-      wrapper.innerHTML = body.innerHTML;
+      // Button goes AFTER body (sibling) so it's not clipped by line-clamp overflow
       const btn = document.createElement('button');
       btn.className = 'expand-btn';
       btn.textContent = '… more';
       btn.addEventListener('click', () => {
         const isCollapsed = body.classList.contains('collapsed');
         body.classList.toggle('collapsed');
-        btn.textContent = isCollapsed ? ' less' : '… more';
+        btn.textContent = isCollapsed ? 'less' : '… more';
       });
-      body.innerHTML = '';
-      body.appendChild(wrapper);
-      body.appendChild(btn);
+      body.after(btn);
     }
   }
 }
@@ -831,7 +826,8 @@ function wire(root: HTMLElement): void {
           toast('Drop target missing — start with @agent-name to specify where to upload', 'error');
           return;
         }
-        handleFileUpload(Array.from(files), parsed.agents[0]!, parsed.message, parsed.topics[0] ?? 'file-upload');
+        // Upload files without message text — file attachment only, fan out to all agents
+        handleFileUpload(Array.from(files), parsed.agents, '', parsed.topics[0] ?? 'file-upload');
         input.value = '';  // Clear composer after upload
       }
     });
@@ -856,7 +852,8 @@ function wire(root: HTMLElement): void {
       toast('Paste target missing — start with @agent-name to specify where to upload', 'error');
       return;
     }
-    handleFileUpload(files, parsed.agents[0]!, parsed.message, parsed.topics[0] ?? 'file-upload');
+    // Upload files without message text — file attachment only, fan out to all agents
+    handleFileUpload(files, parsed.agents, '', parsed.topics[0] ?? 'file-upload');
     input.value = '';  // Clear composer after upload
   });
 
@@ -1296,8 +1293,8 @@ async function uploadFile(file: File, agent: string, message: string, topic: str
   return { file: file.name, ok: res.ok, error: body.error as string | undefined };
 }
 
-async function handleFileUpload(files: File[], agent: string, message: string, topic: string = 'file-upload'): Promise<void> {
-  if (files.length === 0 || !agent) return;
+async function handleFileUpload(files: File[], agents: string[], message: string, topic: string = 'file-upload'): Promise<void> {
+  if (files.length === 0 || agents.length === 0) return;
 
   // Warn about large files
   const largeFiles = files.filter(f => f.size >= LARGE_FILE_THRESHOLD);
@@ -1309,19 +1306,23 @@ async function handleFileUpload(files: File[], agent: string, message: string, t
     if (!confirmed) return;
   }
 
-  const fileNames = files.map(f => `${f.name} (${formatFileSize(f.size)})`).join(', ');
-  toast(`Uploading ${files.length} file${files.length > 1 ? 's' : ''} to @${agent}…`);
+  const agentList = agents.length === 1 ? `@${agents[0]}` : `${agents.length} agents`;
+  toast(`Uploading ${files.length} file${files.length > 1 ? 's' : ''} to ${agentList}…`);
 
   try {
-    // All files get the same message - backend will dedupe in the display
-    const results = await Promise.allSettled(
-      files.map((f) => uploadFile(f, agent, message, topic))
-    );
+    // Fan out: each file × each agent
+    const uploads: Promise<{ file: string; ok: boolean; error?: string }>[] = [];
+    for (const agent of agents) {
+      for (const f of files) {
+        uploads.push(uploadFile(f, agent, message, topic));
+      }
+    }
+    const results = await Promise.allSettled(uploads);
     const succeeded = results.filter(r => r.status === 'fulfilled' && (r.value as { ok: boolean }).ok).length;
     const failed = results.length - succeeded;
 
     if (failed === 0) {
-      toast(`Uploaded ${succeeded} file${succeeded > 1 ? 's' : ''}`);
+      toast(`Uploaded ${files.length} file${files.length > 1 ? 's' : ''}${agents.length > 1 ? ` to ${agents.length} agents` : ''}`);
     } else {
       const firstError = (results.find(r => r.status === 'fulfilled' && !(r.value as { ok: boolean }).ok) as PromiseFulfilledResult<{ error?: string }> | undefined)?.value?.error
         ?? (results.find(r => r.status === 'rejected') as PromiseRejectedResult | undefined)?.reason?.message
