@@ -360,7 +360,8 @@
   margin-left: 8px;
   font-size: 11px;
 }
-.chat-pane .composer .ctrls .hint .escape-topics {
+.chat-pane .composer .ctrls .hint .escape-topics,
+.chat-pane .composer .ctrls .hint .focus-btn {
   font-family: var(--sans);
   font-size: 11px;
   color: var(--ink-3);
@@ -372,10 +373,16 @@
   cursor: pointer;
   letter-spacing: -0.003em;
 }
-.chat-pane .composer .ctrls .hint .escape-topics:hover {
+.chat-pane .composer .ctrls .hint .escape-topics:hover,
+.chat-pane .composer .ctrls .hint .focus-btn:hover {
   color: var(--ink);
   background: var(--paper-2);
   border-color: var(--rule-strong);
+}
+.chat-pane .composer .ctrls .hint .focus-btn.on {
+  color: var(--steel);
+  background: var(--steel-bg);
+  border-color: var(--steel);
 }
 .chat-pane .composer .ctrls .spacer { flex: 1; }
 .chat-pane .composer .ctrls kbd {

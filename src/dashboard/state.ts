@@ -204,6 +204,42 @@ export function toggleAllAgents(): void {
   emit('selection-changed');
 }
 
+/* ── Focus mode ────────────────────────────────────────────────────── */
+
+/** Stores the selection before focus mode was entered, so we can revert. */
+let preFocusSelection: Set<string> | null = null;
+
+/** Returns true if focus mode is currently active. */
+export function isFocusMode(): boolean {
+  return preFocusSelection !== null;
+}
+
+/** Enter focus mode: save current selection, then switch to only the given agents. */
+export function enterFocusMode(agents: string[]): void {
+  if (preFocusSelection !== null) return; // already focused
+  preFocusSelection = new Set(state.selectedAgents);
+  state.selectedAgents = new Set(agents);
+  emit('selection-changed');
+}
+
+/** Exit focus mode: restore the pre-focus selection. */
+export function exitFocusMode(): void {
+  if (preFocusSelection === null) return; // not focused
+  state.selectedAgents = preFocusSelection;
+  preFocusSelection = null;
+  persistSelection();
+  emit('selection-changed');
+}
+
+/** Toggle focus mode for the given agents. */
+export function toggleFocusMode(agents: string[]): void {
+  if (preFocusSelection !== null) {
+    exitFocusMode();
+  } else {
+    enterFocusMode(agents);
+  }
+}
+
 /**
  * Restore the user's last selection from localStorage (intersected with the
  * currently-known agents so we drop names that no longer exist). If nothing

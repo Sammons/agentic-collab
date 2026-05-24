@@ -15,7 +15,7 @@
  * Profile popover opens on sender-name click. Click outside closes it.
  */
 import type { AgentRecord, DashboardMessage } from '../shared/types.ts';
-import { state, on, authHeaders, agentsByName } from './state.ts';
+import { state, on, authHeaders, agentsByName, isFocusMode, toggleFocusMode } from './state.ts';
 import { registerRoute, go } from './routing.ts';
 import { openEditPersonaModal } from './overlays.ts';
 import { renderMarkdown } from '../shared/markdown.ts';
@@ -750,6 +750,10 @@ function wire(root: HTMLElement): void {
       });
       const allTargetsDead = deadTargets.length > 0 && deadTargets.length === parsed.agents.length;
 
+      // Focus button: toggles chat filter to only show the targeted agents
+      const focused = isFocusMode();
+      const focusBtn = ` <button class="focus-btn${focused ? ' on' : ''}" data-focus type="button">${focused ? '⊗ Unfocus' : '⊙ Focus'}</button>`;
+
       // Explosion warning: any time we'd fan out across multiple topics,
       // give the user an explicit count + an Escape Topics shortcut.
       const explode = parsed.topics.length > 1 && parsed.topics.some((t) => t !== 'general');
@@ -766,10 +770,16 @@ function wire(root: HTMLElement): void {
         : (total > 1 ? `Send → ${total}` : 'Send');
 
       hint.innerHTML = messageReady
-        ? `Sending to ${list}${topicsChip}${spawnNote}${countNote}${escapeBtn}`
-        : `${list}${topicsChip}${spawnNote}${countNote}${escapeBtn} — type a message`;
+        ? `Sending to ${list}${topicsChip}${spawnNote}${countNote}${focusBtn}${escapeBtn}`
+        : `${list}${topicsChip}${spawnNote}${countNote}${focusBtn}${escapeBtn} — type a message`;
       sendBtn.disabled = !messageReady;
       sendBtn.textContent = btnText;
+
+      // Wire the Focus button (re-bound on every render).
+      hint.querySelector<HTMLElement>('[data-focus]')?.addEventListener('click', () => {
+        toggleFocusMode(parsed.agents);
+        updateHint();
+      });
 
       // Wire the Escape Topics button (re-bound on every render).
       hint.querySelector<HTMLElement>('[data-escape-topics]')?.addEventListener('click', () => {
