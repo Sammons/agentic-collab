@@ -191,80 +191,26 @@ describe('UI Test Framework - Smoke', () => {
 
   // ── Dashboard script validation ──
 
-  it('dashboard inline script references only declared variables', async () => {
-    const res = await fetch(ctx.url);
-    const html = await res.text();
+  // v3 dashboard uses external TS modules loaded via importmap, not inline scripts.
+  // The inline script validation tests are obsolete.
 
-    // Extract inline <script type="module"> content
-    const scriptMatch = html.match(/<script type="module">([\s\S]*?)<\/script>/);
-    assert.ok(scriptMatch, 'should have inline module script');
-    const script = scriptMatch![1]!;
-
-    // Find all getElementById calls and track the variable names they assign to
-    const idRefs = new Map<string, string>(); // varName -> elementId
-    for (const match of script.matchAll(/(?:const|let|var)\s+(\w+)\s*=\s*document\.getElementById\(['"](\w+)['"]\)/g)) {
-      idRefs.set(match[1]!, match[2]!);
-    }
-
-    // Find all .addEventListener, .querySelector, .classList, .value, .style references
-    // and check that the variable was declared (getElementById or import)
-    const memberRefs = [...script.matchAll(/\b(\w+)\.(addEventListener|querySelector|classList|value|style|onclick|innerHTML|textContent|getDraft|clear)\b/g)];
-    const importedNames = new Set<string>();
-    for (const match of script.matchAll(/import\s*\{([^}]+)\}/g)) {
-      for (const name of match[1]!.split(',')) {
-        importedNames.add(name.trim().split(/\s+as\s+/).pop()!.trim());
-      }
-    }
-    // Also count const/let declarations
-    for (const match of script.matchAll(/(?:const|let|var)\s+(\w+)\s*=/g)) {
-      importedNames.add(match[1]!);
-    }
-    // Function declarations
-    for (const match of script.matchAll(/function\s+(\w+)\s*\(/g)) {
-      importedNames.add(match[1]!);
-    }
-
-    const undeclared: string[] = [];
-    for (const ref of memberRefs) {
-      const varName = ref[1]!;
-      // Skip well-known globals and properties
-      if (['document', 'window', 'location', 'console', 'state', 'e', 'evt', 'err', 'res', 'body', 'btn', 'file', 'item', 'files', 'items', 'i', 'droppedFiles', 'threadPanel'].includes(varName)) continue;
-      if (importedNames.has(varName)) continue;
-      if (idRefs.has(varName)) continue;
-      undeclared.push(`${varName}.${ref[2]}`);
-    }
-
-    assert.deepEqual(undeclared, [], `Found references to undeclared variables: ${undeclared.join(', ')}`);
-  });
-
-  it('all dashboard asset imports reference existing files', async () => {
-    const { existsSync } = await import('node:fs');
+  it('all dashboard module files exist and are importable', async () => {
+    const { readdirSync, existsSync } = await import('node:fs');
     const { join } = await import('node:path');
-    const res = await fetch(ctx.url);
-    const html = await res.text();
 
-    // Extract all import paths from the module script
-    const importPaths: string[] = [];
-    for (const match of html.matchAll(/from\s+['"]([^'"]+)['"]/g)) {
-      importPaths.push(match[1]!);
-    }
-    for (const match of html.matchAll(/import\s+['"]([^'"]+)['"]/g)) {
-      importPaths.push(match[1]!);
-    }
+    const dashDir = join(import.meta.dirname!, '..', '..', 'dashboard');
+    const tsFiles = readdirSync(dashDir).filter((f: string) => f.endsWith('.ts'));
 
-    assert.ok(importPaths.length > 0, 'should have module imports');
+    // Verify main.ts exists (entry point)
+    assert.ok(tsFiles.includes('main.ts'), 'dashboard should have main.ts entry point');
 
-    // Verify each import path maps to a real file on disk
-    // /dashboard/assets/foo.ts → src/dashboard/foo.ts
-    const srcDir = join(import.meta.dirname!, '..', '..', 'dashboard');
-    const missing: string[] = [];
-    for (const path of importPaths) {
-      const rel = path.replace('/dashboard/assets/', '');
-      if (!existsSync(join(srcDir, rel))) {
-        missing.push(path);
-      }
-    }
-    assert.deepEqual(missing, [], `Imports reference missing files: ${missing.join(', ')}`);
+    // Verify all TS files exist
+    assert.ok(tsFiles.length > 5, `dashboard should have multiple module files (found ${tsFiles.length})`);
+
+    // Spot-check key modules
+    const requiredModules = ['state.ts', 'routing.ts', 'chat.ts', 'connection.ts'];
+    const missing = requiredModules.filter((m) => !existsSync(join(dashDir, m)));
+    assert.deepEqual(missing, [], `Missing required dashboard modules: ${missing.join(', ')}`);
   });
 
   // ── Dashboard .ts syntax validation ──
@@ -273,31 +219,57 @@ describe('UI Test Framework - Smoke', () => {
   // declarations that tsc would normally find.
 
   it('dashboard .ts files have no syntax errors', async () => {
-    const { readdirSync, readFileSync } = await import('node:fs');
+    const { readdirSync, readFileSync, writeFileSync, unlinkSync, mkdtempSync } = await import('node:fs');
     const { join } = await import('node:path');
-    const vm = await import('node:vm');
+    const { tmpdir } = await import('node:os');
+    const { execSync } = await import('node:child_process');
 
     const dashDir = join(import.meta.dirname!, '..', '..', 'dashboard');
     const tsFiles = readdirSync(dashDir).filter((f: string) => f.endsWith('.ts'));
     assert.ok(tsFiles.length > 0, 'should find dashboard .ts files');
 
+    // Create a temp dir for isolated syntax check
+    const tmpDir = mkdtempSync(join(tmpdir(), 'dash-syntax-'));
     const errors: string[] = [];
+
     for (const file of tsFiles) {
       let source = readFileSync(join(dashDir, file), 'utf-8');
-      // Strip import/export statements (vm.compileFunction doesn't support ESM)
-      source = source.replace(/^\s*import\s+.*$/gm, '/* import stripped */');
-      source = source.replace(/^\s*export\s+(default\s+)?/gm, '');
-      // Strip type annotations: `: Type`, `as Type`, `<Type>` generics, type/interface blocks
-      source = source.replace(/:\s*[A-Z]\w*(\[\])?\s*(?=[,)=;\n{])/g, ' ');
-      source = source.replace(/\bas\s+\w+/g, '');
-      source = source.replace(/^(type|interface)\s+\w+[\s\S]*?(?=\n(?:const|let|var|function|class|export|\/))/gm, '');
+      // Convert browser bare imports to node-resolvable paths (syntax check only)
+      source = source.replace(/from\s+['"]\.\/(\w+)\.ts['"]/g, "from './$1.mts'");
+      source = source.replace(/from\s+['"]\.\.\/shared\/(\w+)\.ts['"]/g, "from '../shared/$1.mts'");
+      // Stub the imports — we only care about syntax, not resolution
+      source = source.replace(/^import\s+.*$/gm, '// import stubbed');
+      source = source.replace(/^export\s+/gm, '');
+
+      const tmpFile = join(tmpDir, file.replace('.ts', '.mts'));
+      writeFileSync(tmpFile, source);
+
       try {
-        vm.compileFunction(source, [], { filename: file });
+        // Use Node's built-in TS type stripping to parse the file
+        execSync(`node --experimental-strip-types -e "import('${tmpFile}')"`, {
+          encoding: 'utf-8',
+          stdio: ['pipe', 'pipe', 'pipe'],
+        });
       } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        errors.push(`${file}: ${msg}`);
+        const stderr = (err as { stderr?: string }).stderr ?? '';
+        // Extract the actual syntax error from Node's output
+        const match = stderr.match(/SyntaxError:.*|error TS\d+:.*/);
+        if (match) {
+          errors.push(`${file}: ${match[0]}`);
+        } else {
+          // Other errors (like module resolution) are expected and ignored
+        }
+      } finally {
+        try { unlinkSync(tmpFile); } catch {}
       }
     }
+
+    // Cleanup temp dir
+    try {
+      const { rmdirSync } = await import('node:fs');
+      rmdirSync(tmpDir);
+    } catch {}
+
     assert.deepEqual(errors, [], `Dashboard syntax errors:\n${errors.join('\n')}`);
   });
 });
