@@ -93,7 +93,7 @@ function render(root: HTMLElement, route: Route): void {
 
       <div class="watch-type">
         <div class="input-wrap">
-          <input type="text" placeholder="Type literal text into the session…" data-type-input>
+          <input type="text" placeholder="Type literal text into the session…" data-type-input autocorrect="off" autocapitalize="off" spellcheck="false">
         </div>
         <button class="send" data-type-send>Send</button>
         <button class="send primary" data-type-send-enter>Send <span class="returnico">↵</span></button>

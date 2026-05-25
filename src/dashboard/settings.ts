@@ -586,7 +586,7 @@ async function hydrateEditEngine(root: HTMLElement, name: string): Promise<void>
     <div class="ee-advanced">
       <label>Advanced (JSON)</label>
       <div class="help">hooks · indicators · detection · customButtons · launchEnv. Edit as JSON; strictly parsed on save.</div>
-      <textarea class="ov-textarea" data-advanced spellcheck="false">${escapeHtml(advancedJson)}</textarea>
+      <textarea class="ov-textarea" data-advanced autocorrect="off" autocapitalize="off" spellcheck="false">${escapeHtml(advancedJson)}</textarea>
       <div class="help" data-parse-err></div>
     </div>
     <div class="ee-foot">

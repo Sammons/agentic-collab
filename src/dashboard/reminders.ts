@@ -42,7 +42,7 @@ function render(root: HTMLElement): void {
       </div>
       <div class="rm-quickadd" style="margin: 14px 32px;">
         <span class="agent-pick empty" data-qa-agent>Pick agent… <span class="caret">▾</span></span>
-        <input type="text" class="prompt-in" placeholder="Reminder prompt — pasted into the agent&rsquo;s tmux on cadence" data-qa-prompt>
+        <input type="text" class="prompt-in" placeholder="Reminder prompt — pasted into the agent&rsquo;s tmux on cadence" data-qa-prompt autocorrect="off" autocapitalize="off" spellcheck="false">
         <span class="pill" data-qa-cadence>every 30m <span class="caret">▾</span></span>
         <span class="skip" data-qa-skip>
           <span class="box"></span>

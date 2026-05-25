@@ -362,7 +362,7 @@ function openAmendModal(a: ApprovalRow, notifyAgent?: string | null): void {
           </div>
           <div class="col">
             <div class="lbl">Amended <span class="right">edit me</span></div>
-            <textarea data-amend-payload style="width:100%;min-height:240px;font-family:var(--mono);font-size:12px;padding:10px;border:1px solid var(--rule);border-radius:3px;background:var(--paper-card);outline:none;resize:vertical;">${escapeHtml(pretty(a.payload))}</textarea>
+            <textarea data-amend-payload autocorrect="off" autocapitalize="off" spellcheck="false" style="width:100%;min-height:240px;font-family:var(--mono);font-size:12px;padding:10px;border:1px solid var(--rule);border-radius:3px;background:var(--paper-card);outline:none;resize:vertical;">${escapeHtml(pretty(a.payload))}</textarea>
           </div>
         </div>
       </div>

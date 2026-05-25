@@ -88,7 +88,7 @@ function render(root: HTMLElement): void {
       <div class="thread" id="chat-thread" data-thread></div>
       <div class="composer">
         <div class="input-wrap">
-          <textarea data-composer-input placeholder="Message — start with @agent-name to target an agent…"></textarea>
+          <textarea data-composer-input placeholder="Message — start with @agent-name to target an agent…" autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
         </div>
         <div class="staged-files-row" data-staged-files></div>
         <div class="voice-status" data-voice-status style="display:none"></div>

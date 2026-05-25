@@ -78,7 +78,7 @@ export function openNewAgentModal(): void {
       </div>
       <div class="group">
         <div class="group-hdr">Persona body <span class="when">markdown · system prompt</span></div>
-        <textarea class="ov-textarea body" data-persona placeholder="You are <name>…"></textarea>
+        <textarea class="ov-textarea body" data-persona placeholder="You are <name>…" autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
       </div>
     </div>
     <div class="foot">
@@ -527,11 +527,11 @@ export async function openEditPersonaModal(agentName: string): Promise<void> {
       <div class="ov-persona-grid">
         <div class="ov-persona-col">
           <div class="label">Frontmatter <span class="hint">YAML · saved on submit</span></div>
-          <textarea class="ov-textarea" data-fm>${escapeHtml(frontmatter)}</textarea>
+          <textarea class="ov-textarea" data-fm autocorrect="off" autocapitalize="off" spellcheck="false">${escapeHtml(frontmatter)}</textarea>
         </div>
         <div class="ov-persona-col">
           <div class="label">Body <span class="hint">Markdown · system prompt</span></div>
-          <textarea class="ov-textarea" data-body>${escapeHtml(body)}</textarea>
+          <textarea class="ov-textarea" data-body autocorrect="off" autocapitalize="off" spellcheck="false">${escapeHtml(body)}</textarea>
         </div>
       </div>
     </div>
