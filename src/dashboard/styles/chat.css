@@ -787,6 +787,28 @@
   z-index: 100;
 }
 
+/* ── Collapsible long messages (mobile) ───────────────────────────── */
+.chat-pane .msg .body.collapsed {
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.chat-pane .msg .expand-btn {
+  display: inline-block;
+  background: none;
+  border: none;
+  color: var(--steel);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 2px 0;
+  margin-left: 18px;
+}
+.chat-pane .msg .expand-btn:hover {
+  text-decoration: underline;
+}
+
 /* ── Mobile: tighter vertical spacing ─────────────────────────────── */
 @media (max-width: 600px) {
   .chat-pane .pane-hdr { padding: 12px 16px 10px; }
