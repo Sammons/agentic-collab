@@ -78,8 +78,10 @@ describe('Engine Adapters', () => {
         task: undefined,
         appendSystemPrompt: undefined,
       });
-      assert.ok(cmd.startsWith('claude --add-dir '));
-      assert.ok(cmd.includes('claude-home'));
+      // --add-dir is opt-in via CLAUDE_HOME_DIR env; not asserted here.
+      // (When the env var is set, --add-dir appears between any
+      // --dangerously-skip-permissions flag and the --model/--effort block.)
+      assert.equal(cmd, 'claude');
     });
 
     it('builds spawn command with pre-set session ID', () => {

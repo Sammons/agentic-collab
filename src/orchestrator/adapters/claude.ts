@@ -5,7 +5,7 @@
 import { SPINNER_REGEX, type EngineAdapter, type SpawnOptions, type ResumeOptions, type IdleState, type ContextResult } from './types.ts';
 import { shellQuote } from '../../shared/utils.ts';
 
-const CLAUDE_HOME_DIR = process.env['CLAUDE_HOME_DIR'] || '/home/sammons/Desktop/claude-home';
+const CLAUDE_HOME_DIR = process.env['CLAUDE_HOME_DIR'] || null;
 
 export class ClaudeAdapter implements EngineAdapter {
   readonly engine = 'claude';
@@ -18,7 +18,9 @@ export class ClaudeAdapter implements EngineAdapter {
       parts.push('--dangerously-skip-permissions');
     }
 
-    parts.push('--add-dir', CLAUDE_HOME_DIR);
+    if (CLAUDE_HOME_DIR) {
+      parts.push('--add-dir', CLAUDE_HOME_DIR);
+    }
 
     if (opts.model) {
       parts.push('--model', opts.model);
@@ -54,7 +56,9 @@ export class ClaudeAdapter implements EngineAdapter {
       parts.push('--resume', opts.sessionId);
     }
 
-    parts.push('--add-dir', CLAUDE_HOME_DIR);
+    if (CLAUDE_HOME_DIR) {
+      parts.push('--add-dir', CLAUDE_HOME_DIR);
+    }
 
     if (opts.appendSystemPrompt) {
       parts.push('--append-system-prompt', shellQuote(opts.appendSystemPrompt));
