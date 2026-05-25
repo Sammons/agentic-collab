@@ -401,11 +401,8 @@ function wireFeedControls(root: HTMLElement): void {
 }
 
 const COLLAPSE_THRESHOLD = 200;
-const isMobile = () => window.matchMedia('(max-width: 768px)').matches;
 
 function wireCollapsibleMessages(root: HTMLElement): void {
-  if (!isMobile()) return;
-
   const bodies = root.querySelectorAll<HTMLElement>('.msg .body');
   for (const body of bodies) {
     const text = body.textContent ?? '';
