@@ -125,7 +125,7 @@ export const DEFAULT_ENGINE_CONFIGS: DefaultEngineConfig[] = [
     name: 'claude',
     engine: 'claude',
     hookStart: JSON.stringify([
-      { type: 'shell', command: 'claude --dangerously-skip-permissions --add-dir ~/Desktop/claude-home --model opus --effort max --append-system-prompt $PERSONA_PROMPT' },
+      { type: 'shell', command: 'claude --dangerously-skip-permissions --model opus --effort max --append-system-prompt $PERSONA_PROMPT' },
       { type: 'wait', ms: 5000 },
       { type: 'keystroke', key: 'Enter' },
       { type: 'wait', ms: 500 },
@@ -136,7 +136,7 @@ export const DEFAULT_ENGINE_CONFIGS: DefaultEngineConfig[] = [
       { type: 'keystroke', key: 'Escape' },
     ]),
     hookResume: JSON.stringify([
-      { type: 'shell', command: 'claude --resume $SESSION_ID --add-dir ~/Desktop/claude-home --append-system-prompt $PERSONA_PROMPT' },
+      { type: 'shell', command: 'claude --resume $SESSION_ID --append-system-prompt $PERSONA_PROMPT' },
       { type: 'wait', ms: 5000 },
       { type: 'keystroke', key: 'Enter' },
       { type: 'wait', ms: 500 },
@@ -160,7 +160,7 @@ export const DEFAULT_ENGINE_CONFIGS: DefaultEngineConfig[] = [
     hookReload: JSON.stringify([
       { type: 'shell', command: '/exit' },
       { type: 'wait', ms: 10000 },
-      { type: 'shell', command: 'claude --dangerously-skip-permissions --add-dir ~/Desktop/claude-home --model opus --effort max --append-system-prompt $PERSONA_PROMPT' },
+      { type: 'shell', command: 'claude --dangerously-skip-permissions --model opus --effort max --append-system-prompt $PERSONA_PROMPT' },
       { type: 'wait', ms: 5000 },
       { type: 'keystroke', key: 'Enter' },
       { type: 'wait', ms: 500 },

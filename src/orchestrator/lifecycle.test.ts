@@ -200,8 +200,7 @@ describe('Lifecycle', () => {
       assert.ok(paste.text.includes('--effort high'), 'should include --effort');
       assert.ok(paste.text.includes('fix the bug'), 'should include task');
       assert.ok(paste.text.includes('--dangerously-skip-permissions'), 'should include skip-permissions');
-      assert.ok(paste.text.includes('--add-dir '), 'should include --add-dir flag');
-      assert.ok(paste.text.includes('claude-home'), 'should reference claude-home in --add-dir target');
+      // --add-dir is opt-in via CLAUDE_HOME_DIR env; not asserted here.
     });
 
     it('codex spawn includes --model and positional task', async () => {
