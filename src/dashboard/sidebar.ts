@@ -13,7 +13,7 @@
  * Selection is purely a filter signal; it never navigates. Nav actions and
  * the Watch eye icon DO navigate (via routing.ts).
  */
-import { state, on, toggleAgentSelected, toggleTeam, toggleAllAgents, agentsByName } from './state.ts';
+import { state, on, toggleAgentSelected, toggleTeam, toggleAllAgents, agentsByName, enterFocusMode } from './state.ts';
 import { go } from './routing.ts';
 import { openNewTeamModal, openEditTeamModal } from './overlays.ts';
 import type { Team } from '../shared/types.ts';
@@ -31,6 +31,7 @@ const icons: Record<string, string> = {
   chev:      `<svg width="9" height="9" viewBox="0 0 10 10" fill="currentColor"><path d="M2 3 L8 3 L5 7 z"/></svg>`,
   folder:    `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5a1 1 0 0 1 1-1h3l2 2h5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V5z"/></svg>`,
   eye:       `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1 8s2.5-4.5 7-4.5S15 8 15 8s-2.5 4.5-7 4.5S1 8 1 8z"/><circle cx="8" cy="8" r="2"/></svg>`,
+  focus:     `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="7" r="4"/><line x1="14" y1="14" x2="10" y2="10"/></svg>`,
   edit:      `<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11 1.5l3.5 3.5L5 14.5H1.5V11L11 1.5z"/></svg>`,
 };
 
@@ -247,6 +248,7 @@ function memberHtml(agentName: string): string {
       <span class="check"></span>
       <span class="status ${status}" title="${escapeHtml(stateTip)}">${isTemplate ? '+' : ''}</span>
       <span class="nm">${escapeHtml(agentName)}</span>
+      <span class="focus" data-focus="${escapeHtml(agentName)}" title="Focus on ${escapeHtml(agentName)}">${icons['focus']}</span>
       <span class="eye" data-eye="${escapeHtml(agentName)}" title="Watch ${escapeHtml(agentName)}">${icons['eye']}</span>
     </div>
   `;
@@ -365,7 +367,7 @@ function wire(r: HTMLElement): void {
   r.querySelectorAll<HTMLElement>('[data-member]').forEach((el) => {
     el.addEventListener('click', (e) => {
       const target = e.target as HTMLElement;
-      if (target.closest('[data-eye]')) return;
+      if (target.closest('[data-eye]') || target.closest('[data-focus]')) return;
       const name = el.dataset['member']!;
 
       if (state.route.kind !== 'dashboard') {
@@ -395,6 +397,16 @@ function wire(r: HTMLElement): void {
 
       // Default: toggle.
       toggleAgentSelected(name);
+    });
+  });
+
+  // Focus icon → enter focus mode for this agent and go to dashboard
+  r.querySelectorAll<HTMLElement>('[data-focus]').forEach((el) => {
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const name = el.dataset['focus']!;
+      enterFocusMode([name]);
+      go({ kind: 'dashboard' });
     });
   });
 

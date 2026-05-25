@@ -311,6 +311,7 @@
 }
 .member .nm { flex: 1; color: var(--ink-3); }
 .member.checked .nm { color: var(--ink); }
+.member .focus,
 .member .eye {
   color: var(--ink-4);
   display: inline-flex;
@@ -321,7 +322,10 @@
   opacity: 0;
   transition: opacity 140ms ease, color 140ms ease;
 }
+.member:hover .focus,
 .member:hover .eye { opacity: 1; }
+.member .focus:hover { color: var(--steel); }
+.member .eye:hover { color: var(--clay); }
 .member.watching .eye {
   opacity: 1;
   color: var(--clay);
