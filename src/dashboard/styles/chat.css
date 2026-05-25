@@ -215,12 +215,14 @@
 .chat-pane .msg .body {
   color: var(--ink);
   font-size: 14.5px;
-  line-height: 1.6;
+  line-height: 1.5;
   letter-spacing: -0.005em;
   padding: 2px 0 2px 18px;
   border-left: 2px solid transparent;
-  white-space: pre-wrap;
   word-break: break-word;
+}
+.chat-pane .msg .body p:last-child {
+  margin-bottom: 0;
 }
 .chat-pane .msg.from-eph .body { border-left-color: var(--steel); }
 .chat-pane .msg.from-per .body { border-left-color: var(--plum); }
@@ -228,6 +230,29 @@
 .chat-pane .msg.withdrawn .body {
   opacity: 0.45;
   font-style: italic;
+}
+.chat-pane .msg .body .attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+.chat-pane .msg .body .attachments .file-link {
+  display: inline-block;
+  padding: 4px 8px;
+  background: var(--paper-2);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--ink-3);
+  text-decoration: none;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+.chat-pane .msg .body .attachments .file-link:hover {
+  background: var(--paper-3);
+  border-color: var(--ink-4);
+  color: var(--ink);
 }
 /* Transient highlight when a search result jumps to a specific message. */
 .chat-pane .msg.focus-flash {

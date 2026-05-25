@@ -10,7 +10,7 @@
  * (per-event broadcasts).
  */
 import type { AgentRecord, DashboardMessage, Team } from '../shared/types.ts';
-import { state, emit, restoreSelectionOnInit, saveToken, loadCachedThreads, persistCachedThreads, agentsByName, rebuildAgentIndex, rebuildTeamIndex } from './state.ts';
+import { state, emit, restoreSelectionOnInit, saveToken, loadCachedThreads, persistCachedThreads, agentsByName, rebuildAgentIndex, rebuildTeamIndex, on } from './state.ts';
 
 type WsEvent =
   | { type: 'init'; agents: AgentRecord[]; threads: Record<string, DashboardMessage[]>; teams?: Team[] }
@@ -20,6 +20,7 @@ type WsEvent =
   | { type: 'message'; msg: DashboardMessage }
   | { type: 'teams_update'; teams: Team[] }
   | { type: 'message_withdrawn'; msg: DashboardMessage }
+  | { type: 'subscribed'; mode: string; agents: string[] }
   | { type: string; [k: string]: unknown };
 
 let socket: WebSocket | null = null;
@@ -27,6 +28,7 @@ let reconnectDelay = 1000;
 const MAX_RECONNECT_DELAY = 30000;
 let didOpenOnce = false;
 let connectionAttempts = 0;
+let selectionUnsub: (() => void) | null = null;
 
 // Persisting threads to localStorage on every WS message would thrash on
 // busy streams. Coalesce writes to one per 500ms.
@@ -52,6 +54,19 @@ function wsUrl(): string {
   return `${proto}//${window.location.host}/ws${qs}`;
 }
 
+/**
+ * Send the current agent selection to the server as a subscription filter.
+ * Server will only deliver messages for agents in this set, eliminating
+ * client-side "break-through" bugs from race conditions during selection
+ * changes or WebSocket reconnects.
+ */
+function sendSubscription(): void {
+  if (!socket || socket.readyState !== WebSocket.OPEN) return;
+  const agents = [...state.selectedAgents];
+  const mode = agents.length === 0 ? 'all' : 'include';
+  socket.send(JSON.stringify({ type: 'subscribe', mode, agents }));
+}
+
 export function connect(): void {
   state.connected = 'connecting';
   emit('connection-changed');
@@ -75,6 +90,12 @@ export function connect(): void {
     connectionAttempts = 0;
     emit('connection-changed');
     console.log('[v3] WebSocket connected');
+
+    // Server-side subscription filtering: send current selection to server so
+    // it only delivers messages for those agents. Re-send on selection change.
+    sendSubscription();
+    if (selectionUnsub) selectionUnsub();
+    selectionUnsub = on('selection-changed', sendSubscription);
   });
 
   socket.addEventListener('message', (event) => {
@@ -309,6 +330,12 @@ function handle(msg: WsEvent): void {
         if (i >= 0) list[i] = u.msg;
       }
       emit('message-withdrawn', u.msg);
+      break;
+    }
+    case 'subscribed': {
+      // Server confirms our subscription filter is active. Log for debugging.
+      const u = msg as Extract<WsEvent, { type: 'subscribed' }>;
+      console.log(`[v3] Subscription active: mode=${u.mode}, agents=[${u.agents.join(', ')}]`);
       break;
     }
     default:

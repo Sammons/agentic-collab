@@ -128,7 +128,7 @@ export function renderMarkdown(escaped: string): string {
         closePara();
         out.push(line);
       } else {
-        if (!inPara) { out.push('<p style="margin:4px 0">'); inPara = true; }
+        if (!inPara) { out.push('<p style="margin:0 0 0.5em 0">'); inPara = true; }
         else { out.push('<br>'); }
         out.push(line);
       }

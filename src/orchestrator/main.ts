@@ -512,11 +512,16 @@ wss.onConnect((client) => {
 });
 
 // On WS message from dashboard
-wss.onMessage((_client, data) => {
+wss.onMessage((client, data) => {
   try {
     const msg = JSON.parse(data);
     if (msg.type === 'ping') {
       // Keepalive, no action needed
+    } else if (msg.type === 'subscribe') {
+      // Focus mode subscription: client declares which agents to receive messages for
+      const mode = msg.mode === 'include' || msg.mode === 'exclude' ? msg.mode : 'all';
+      const agents = Array.isArray(msg.agents) ? msg.agents.filter((a: unknown) => typeof a === 'string') : [];
+      wss.setSubscription(client, mode, agents);
     }
   } catch {
     // Ignore malformed messages

@@ -126,6 +126,34 @@ async function api(method, path, body) {
   return data;
 }
 
+/**
+ * Upload a file to the orchestrator and return the file record.
+ * @param {string} filePath - Path to the file to upload
+ * @returns {Promise<{id: string, name: string, size: number}>}
+ */
+async function uploadFile(filePath) {
+  const resolvedPath = resolve(filePath);
+  if (!existsSync(resolvedPath)) {
+    console.error(`error: file not found: ${filePath}`);
+    process.exit(1);
+  }
+  const content = readFileSync(resolvedPath);
+  const filename = basename(resolvedPath);
+  const h = headers();
+  h['content-type'] = 'application/octet-stream';
+  const resp = await fetch(`${_host}/api/files?filename=${encodeURIComponent(filename)}`, {
+    method: 'POST',
+    headers: h,
+    body: content,
+  });
+  const data = await resp.json();
+  if (!resp.ok) {
+    console.error(`error uploading ${filename}: ${data.error || resp.status}`);
+    process.exit(1);
+  }
+  return data;
+}
+
 function agentName() {
   return process.env['COLLAB_AGENT'] || null;
 }
@@ -163,6 +191,7 @@ function parseSendArgs(args, implicitTarget = null) {
   let replyReminder = null;
   let inReplyTo = null;
   let notify = null;
+  const files = [];
   const target = implicitTarget ?? args[0];
   const positional = [];
   const startIdx = implicitTarget ? 0 : 1;
@@ -170,6 +199,7 @@ function parseSendArgs(args, implicitTarget = null) {
   for (let i = startIdx; i < args.length; i++) {
     if (args[i] === '--topic' && args[i + 1]) { topic = args[++i]; }
     else if (args[i] === '--in-reply-to' && args[i + 1]) { inReplyTo = args[++i]; }
+    else if (args[i] === '--file' && args[i + 1]) { files.push(args[++i]); }
     else if (args[i] === '--notify') {
       const next = args[i + 1];
       if (next && !next.startsWith('-')) { notify = args[++i]; }
@@ -189,6 +219,7 @@ function parseSendArgs(args, implicitTarget = null) {
     replyReminder,
     inReplyTo,
     notify,
+    files,
     message: positional.join(' '),
   };
 }
@@ -214,15 +245,25 @@ async function resolveDestination(target) {
   return null;
 }
 
-async function dispatchSend({ target, topic, message, replyReminder, inReplyTo, notify }) {
+async function dispatchSend({ target, topic, message, replyReminder, inReplyTo, notify, files }) {
+  // Upload any attached files first
+  const fileIds = [];
+  if (files && files.length > 0) {
+    for (const filePath of files) {
+      const result = await uploadFile(filePath);
+      fileIds.push(result.id);
+      console.log(`uploaded: ${result.name} (${result.id})`);
+    }
+  }
+
   // Destination routing: "telegram" or "telegram:name"
   const destName = await resolveDestination(target);
   if (destName) {
-    if (!message) {
+    if (!message && fileIds.length === 0) {
       console.error('usage: collab send telegram "message"');
       process.exit(1);
     }
-    const formattedMessage = formatReplyContext(message, inReplyTo);
+    const formattedMessage = formatReplyContext(message || '(file attachment)', inReplyTo);
     const fromAgent = agentName() || undefined;
     await api('POST', `/api/destinations/${encodeURIComponent(destName)}/send`, {
       message: formattedMessage,
@@ -236,8 +277,8 @@ async function dispatchSend({ target, topic, message, replyReminder, inReplyTo, 
     return;
   }
 
-  if (!target || !topic || !message) {
-    console.error('usage: collab send <target> --topic <topic> [--in-reply-to <text>] [--notify [priority]] <message>');
+  if (!target || !topic || (!message && fileIds.length === 0)) {
+    console.error('usage: collab send <target> --topic <topic> [--file <path>] [--in-reply-to <text>] [--notify [priority]] <message>');
     process.exit(1);
   }
 
@@ -254,14 +295,16 @@ async function dispatchSend({ target, topic, message, replyReminder, inReplyTo, 
     }
   }
 
-  const formattedMessage = formatReplyContext(message, inReplyTo);
+  const formattedMessage = formatReplyContext(message || '(file attachment)', inReplyTo);
   if (target === 'operator' || target === 'dashboard') {
     if (replyReminder) {
       console.error('error: --reply-reminder is only supported when messaging another agent');
       process.exit(1);
     }
     const agent = requireAgentName();
-    await api('POST', '/api/dashboard/reply', { agent, message: formattedMessage, topic });
+    const body = { agent, message: formattedMessage, topic };
+    if (fileIds.length > 0) body.fileIds = fileIds;
+    await api('POST', '/api/dashboard/reply', body);
     console.log('sent');
     if (notify) {
       await api('POST', '/api/notify', { agent, message: formattedMessage, priority: notify }).catch(() => {});
@@ -272,6 +315,7 @@ async function dispatchSend({ target, topic, message, replyReminder, inReplyTo, 
   const from = requireAgentName();
   const body = { from, to: target, message: formattedMessage, topic };
   if (replyReminder) body.replyReminder = replyReminder;
+  if (fileIds.length > 0) body.fileIds = fileIds;
   const data = await api('POST', '/api/agents/send', body);
   console.log(`queued (id:${data.queueId})`);
 
@@ -308,7 +352,7 @@ cmd('status', 'status', 'Orchestrator status', async () => {
   }
 });
 
-cmd('send', 'send <target> --topic <topic> [--in-reply-to <text>] [--notify [priority]] <message>', 'Send a message to operator or another agent', async (args) => {
+cmd('send', 'send <target> --topic <topic> [--file <path>]... [--in-reply-to <text>] [--notify [priority]] <message>', 'Send a message to operator or another agent', async (args) => {
   await dispatchSend(parseSendArgs(args));
 });
 

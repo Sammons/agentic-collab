@@ -524,9 +524,10 @@ route('POST', '/api/agents/send', async (req, res, _match, ctx) => {
   const messageId = generateMessageId();
   const sanitized = sanitizeMessage(body.message);
   const topicStr = body.topic as string;
+  const fileIds = Array.isArray(body.fileIds) ? body.fileIds.filter((id: unknown) => typeof id === 'string') : undefined;
 
-  // Format envelope with topic
-  const envelope = buildReplyEnvelope(body.from as string, topicStr, sanitized);
+  // Format envelope with topic (include file references if present)
+  const envelope = buildReplyEnvelope(body.from as string, topicStr, sanitized, fileIds);
 
   // Enqueue for async delivery
   const pending = ctx.db.enqueueMessage({
@@ -540,6 +541,7 @@ route('POST', '/api/agents/send', async (req, res, _match, ctx) => {
     topic: topicStr,
     sourceAgent: body.from as string,
     targetAgent: body.to as string,
+    fileIds,
   });
   ctx.db.linkDashboardMessageToQueue(senderMsg.id, pending.id);
 
@@ -548,6 +550,7 @@ route('POST', '/api/agents/send', async (req, res, _match, ctx) => {
     topic: topicStr,
     sourceAgent: body.from as string,
     targetAgent: body.to as string,
+    fileIds,
   });
   ctx.db.linkDashboardMessageToQueue(receiverMsg.id, pending.id);
 
@@ -555,11 +558,11 @@ route('POST', '/api/agents/send', async (req, res, _match, ctx) => {
   ctx.db.logEvent(body.from as string, 'message_queued', messageId, { to: body.to, queueId: pending.id });
   ctx.db.logEvent(body.to as string, 'message_queued', messageId, { from: body.from, queueId: pending.id });
 
-  // Broadcast both messages + queue update to dashboard
-  const linkedSenderMsg = { ...senderMsg, queueId: pending.id, deliveryStatus: 'pending' };
-  const linkedReceiverMsg = { ...receiverMsg, queueId: pending.id, deliveryStatus: 'pending' };
-  ctx.wss.broadcast(JSON.stringify({ type: 'message', msg: linkedSenderMsg }));
-  ctx.wss.broadcast(JSON.stringify({ type: 'message', msg: linkedReceiverMsg }));
+  // Broadcast both messages + queue update to dashboard (filtered by subscription)
+  const linkedSenderMsg = { ...senderMsg, queueId: pending.id, deliveryStatus: 'pending' } as DashboardMessage;
+  const linkedReceiverMsg = { ...receiverMsg, queueId: pending.id, deliveryStatus: 'pending' } as DashboardMessage;
+  broadcastMessage(ctx, linkedSenderMsg);
+  broadcastMessage(ctx, linkedReceiverMsg);
   ctx.wss.broadcast(JSON.stringify({ type: 'queue_update', message: pending }));
 
   // Auto-create reply reminder if requested
@@ -634,7 +637,7 @@ route('POST', '/api/dashboard/send', async (req, res, _match, ctx) => {
   const topicStr = body.topic as string;
   const fileIds = Array.isArray(body.fileIds) ? body.fileIds.filter((id: unknown) => typeof id === 'string') : undefined;
 
-  const envelope = buildReplyEnvelope('dashboard', topicStr, sanitized);
+  const envelope = buildReplyEnvelope('dashboard', topicStr, sanitized, fileIds);
   const { msg, pending } = enqueueAndDeliver(ctx, {
     agentName: body.agent as string,
     displayMessage: sanitized,
@@ -913,10 +916,15 @@ route('POST', '/api/dashboard/reply', async (req, res, _match, ctx) => {
   }
 
   const sanitized = sanitizeMessage(body.message);
-  const msg = ctx.db.addDashboardMessage(body.agent, 'from_agent', sanitized, { topic: body.topic as string, sourceAgent: body.agent as string });
+  const fileIds = Array.isArray(body.fileIds) ? body.fileIds.filter((id: unknown) => typeof id === 'string') : undefined;
+  const msg = ctx.db.addDashboardMessage(body.agent, 'from_agent', sanitized, {
+    topic: body.topic as string,
+    sourceAgent: body.agent as string,
+    fileIds,
+  });
 
-  // Broadcast to dashboard WebSocket
-  ctx.wss.broadcast(JSON.stringify({ type: 'message', msg }));
+  // Broadcast to dashboard WebSocket (filtered by subscription)
+  broadcastMessage(ctx, msg);
 
   json(res, 200, { ok: true, msg });
 });
@@ -2911,6 +2919,14 @@ function broadcastAgentUpdate(ctx: RouteContext, agentName: string): void {
   }
 }
 
+/**
+ * Broadcast a dashboard message with subscription filtering.
+ * Messages are delivered only to clients subscribed to the agent's thread.
+ */
+function broadcastMessage(ctx: RouteContext, msg: DashboardMessage): void {
+  ctx.wss.broadcastFiltered(JSON.stringify({ type: 'message', msg }), msg.agent);
+}
+
 /** Insert a lifecycle event as a system message in the agent's chat thread and broadcast it. */
 function broadcastLifecycleEvent(ctx: RouteContext, agentName: string, label: string): void {
   // Include the agent name in the body so the dashboard can render it
@@ -2920,7 +2936,7 @@ function broadcastLifecycleEvent(ctx: RouteContext, agentName: string, label: st
     sourceAgent: 'system',
     targetAgent: agentName,
   });
-  ctx.wss.broadcast(JSON.stringify({ type: 'message', msg }));
+  broadcastMessage(ctx, msg);
 }
 
 function validateAgentName(name: string): string | null {
@@ -2933,8 +2949,12 @@ function replyHint(from: string, topic: string): string {
   return `reply with collab send ${from} --topic ${topic}`;
 }
 
-function buildReplyEnvelope(from: string, topic: string, message: string): string {
-  return `[from: ${from}, ${replyHint(from, topic)}]: '${message}'`;
+function buildReplyEnvelope(from: string, topic: string, message: string, fileIds?: string[]): string {
+  const base = `[from: ${from}, ${replyHint(from, topic)}]: '${message}'`;
+  if (!fileIds || fileIds.length === 0) return base;
+  // Append file references so the agent can access them
+  const fileRefs = fileIds.map(id => `  - /api/files/${id} (use Read tool or curl to fetch)`).join('\n');
+  return `${base}\n\n[Attached files (${fileIds.length}):\n${fileRefs}]`;
 }
 
 /**
@@ -2986,7 +3006,7 @@ function enqueueAndDeliver(
 
   const linkedMsg = { ...msg, queueId: pending.id, deliveryStatus: 'pending' as const };
   const broadcastLinked = opts.broadcastLinked ?? true;
-  ctx.wss.broadcast(JSON.stringify({ type: 'message', msg: broadcastLinked ? linkedMsg : msg }));
+  broadcastMessage(ctx, broadcastLinked ? linkedMsg : msg);
   ctx.wss.broadcast(JSON.stringify({ type: 'queue_update', message: pending }));
 
   ctx.messageDispatcher.tryDeliver(deliverTo).catch((err) => {
@@ -3111,7 +3131,7 @@ export function startTelegramPolling(ctx: RouteContext, dest: DestinationRecord)
       const msg = ctx.db.addDashboardMessage('telegram', 'from_agent', messageText, {
         sourceAgent: `telegram:${dest.name}`,
       });
-      ctx.wss.broadcast(JSON.stringify({ type: 'message', msg }));
+      broadcastMessage(ctx, msg);
       console.log('[telegram] Routed message to dashboard');
     }
   });

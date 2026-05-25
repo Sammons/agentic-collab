@@ -38,6 +38,7 @@ let currentUpdateHint: (() => void) | null = null;
 
 /** Get staged file IDs. */
 function getStagedFileIds(): string[] {
+  console.log('[DEBUG] getStagedFileIds called, stagedFiles:', JSON.stringify(stagedFiles));
   return stagedFiles.map(f => f.id);
 }
 
@@ -58,13 +59,19 @@ function clearStagedFiles(): void {
 
 /** Add a staged file. */
 function addStagedFile(file: StagedFile): void {
+  console.log('[DEBUG] addStagedFile called:', JSON.stringify(file));
   stagedFiles.push(file);
+  console.log('[DEBUG] stagedFiles after add:', JSON.stringify(stagedFiles));
 }
 
 /** Remove a staged file by ID. */
 function removeStagedFile(id: string): void {
+  console.log('[DEBUG] removeStagedFile called with id:', id);
+  console.log('[DEBUG] stagedFiles before remove:', JSON.stringify(stagedFiles));
   const idx = stagedFiles.findIndex(f => f.id === id);
+  console.log('[DEBUG] found index:', idx);
   if (idx >= 0) stagedFiles.splice(idx, 1);
+  console.log('[DEBUG] stagedFiles after remove:', JSON.stringify(stagedFiles));
 }
 
 export function setupChat(): void {
@@ -467,6 +474,12 @@ function msgHtml(m: DashboardMessage): string {
   const toLabel = fromMe ? (toAgent ?? 'broadcast') : (toAgent ?? 'you');
 
   const topic = m.topic || 'general';
+  const fileCount = m.fileIds?.length ?? 0;
+  const filesHtml = fileCount > 0
+    ? `<div class="attachments">${m.fileIds!.map((id, i) =>
+        `<a href="/api/files/${escapeHtml(id)}" target="_blank" class="file-link" title="Open file in new tab">📎 File ${i + 1}</a>`
+      ).join(' ')}</div>`
+    : '';
   return `
     <div class="${cls.join(' ')}" data-msg-id="${m.id}">
       <div class="head">
@@ -476,7 +489,7 @@ function msgHtml(m: DashboardMessage): string {
         <span class="topic ${topic === 'general' ? 'default' : ''}" title="topic">#${escapeHtml(topic)}</span>
         <span class="time">${formatTime(m.createdAt)}</span>
       </div>
-      <div class="body">${m.withdrawn ? '(withdrawn)' : renderMessageBody(m.message, m.id)}</div>
+      <div class="body">${m.withdrawn ? '(withdrawn)' : renderMessageBody(m.message, m.id)}${filesHtml}</div>
     </div>
   `;
 }
@@ -553,8 +566,11 @@ function renderMessageBody(text: string, msgId?: number): string {
     if (cached) return cached;
   }
 
+  // Normalize excessive whitespace: collapse 3+ newlines to 2 (one blank line)
+  const normalized = text.replace(/\n{3,}/g, '\n\n').trim();
+
   // Escape first, then apply markdown rendering
-  let html = escapeHtml(text);
+  let html = escapeHtml(normalized);
   html = renderMarkdown(html);
   // Highlight @mentions (after markdown so they don't interfere with link syntax)
   html = html.replace(/(^|[\s>])(@[a-zA-Z0-9_\-/]+)/g, (_, lead, mention) => {
@@ -781,7 +797,8 @@ function wire(root: HTMLElement): void {
         ? ''
         : ` on ${parsed.topics.map((t) => `<span class="target">#${escapeHtml(t)}</span>`).join(', ')}`;
       const total = parsed.agents.length * parsed.topics.length;
-      const messageReady = parsed.message.length > 0;
+      const hasFiles = getStagedFileCount() > 0;
+      const messageReady = parsed.message.length > 0 || hasFiles;
 
       // Check if any target is a template (will spawn new ephemeral)
       const templateTargets = parsed.agents.filter((a) => {
@@ -825,9 +842,11 @@ function wire(root: HTMLElement): void {
         ? (total > 1 ? `Spawn → ${total}` : 'Spawn')
         : (total > 1 ? `Send → ${total}` : 'Send');
 
+      const hasMessage = parsed.message.length > 0;
+      const hintPrefix = hasMessage ? 'Sending to' : (hasFiles ? 'Attaching to' : '');
       hint.innerHTML = messageReady
-        ? `Sending to ${list}${topicsChip}${spawnNote}${stagedNote}${countNote}${focusBtn}${escapeBtn}`
-        : `${list}${topicsChip}${spawnNote}${stagedNote}${countNote}${focusBtn}${escapeBtn} — type a message`;
+        ? `${hintPrefix} ${list}${topicsChip}${spawnNote}${stagedNote}${countNote}${focusBtn}${escapeBtn}`
+        : `${list}${topicsChip}${spawnNote}${stagedNote}${countNote}${focusBtn}${escapeBtn} — type a message or attach files`;
       sendBtn.disabled = !messageReady;
       sendBtn.textContent = btnText;
 
@@ -855,26 +874,33 @@ function wire(root: HTMLElement): void {
   // Staged files row — shows chips for each staged file with remove button
   const stagedRow = root.querySelector<HTMLElement>('[data-staged-files]');
   const renderStagedFiles = () => {
-    if (!stagedRow) return;
+    console.log('[DEBUG] renderStagedFiles called, stagedFiles.length:', stagedFiles.length);
+    if (!stagedRow) {
+      console.log('[DEBUG] stagedRow is null!');
+      return;
+    }
     if (stagedFiles.length === 0) {
       stagedRow.innerHTML = '';
       stagedRow.style.display = 'none';
       return;
     }
     stagedRow.style.display = 'flex';
-    stagedRow.innerHTML = stagedFiles.map(f => `
+    const html = stagedFiles.map(f => `
       <span class="file-chip" data-file-id="${escapeHtml(f.id)}">
         <span class="name">${escapeHtml(f.name)}</span>
         <span class="size">${formatFileSize(f.size)}</span>
         <button class="remove" title="Remove file">×</button>
       </span>
     `).join('');
+    console.log('[DEBUG] renderStagedFiles HTML:', html);
+    stagedRow.innerHTML = html;
     // Wire remove buttons
     stagedRow.querySelectorAll<HTMLElement>('.file-chip .remove').forEach(btn => {
       btn.addEventListener('click', (e) => {
         e.preventDefault();
         const chip = btn.closest<HTMLElement>('.file-chip');
         const fileId = chip?.dataset['fileId'];
+        console.log('[DEBUG] remove click, fileId:', fileId);
         if (fileId) {
           removeStagedFile(fileId);
           renderStagedFiles();
@@ -943,15 +969,19 @@ function wire(root: HTMLElement): void {
       }
     });
     chatPane.addEventListener('drop', (e) => {
+      console.log('[DEBUG] drop event received');
       e.preventDefault();
       chatPane.classList.remove('drag-over');
       const files = e.dataTransfer?.files;
+      console.log('[DEBUG] drop files:', files?.length);
       if (files && files.length > 0) {
         const parsed = parseComposer(input.value);
+        console.log('[DEBUG] parseComposer result:', JSON.stringify({ agents: parsed.agents, topics: parsed.topics }));
         if (parsed.agents.length === 0) {
           toast('Drop target missing — start with @agent-name to specify where to upload', 'error');
           return;
         }
+        console.log('[DEBUG] calling handleFileUpload with', files.length, 'files');
         // Upload files without message text — file attachment only, fan out to all agents
         // Keep composer text so user can continue editing/send their message after upload
         handleFileUpload(Array.from(files), parsed.agents, '', parsed.topics[0] ?? 'file-upload');
@@ -1226,14 +1256,19 @@ function parseComposer(text: string): Parsed {
 
 async function handleSend(input: HTMLTextAreaElement): Promise<void> {
   const parsed = parseComposer(input.value);
-  if (parsed.agents.length === 0 || !parsed.message) return;
-
-  // Collect staged file IDs and clear staging
+  // Collect staged file IDs first, before validation
   const fileIds = getStagedFileIds();
+  console.log('[DEBUG] handleSend: parsed.message=', JSON.stringify(parsed.message), 'fileIds=', fileIds);
+
+  // Allow send if there's a message OR there are staged files
+  if (parsed.agents.length === 0) return;
+  if (!parsed.message && fileIds.length === 0) return;
   if (fileIds.length > 0) {
     clearStagedFiles();
+    // Update UI to reflect cleared staging
+    if (currentUpdateHint) currentUpdateHint();
   }
-  const finalMessage = parsed.message;
+  const finalMessage = parsed.message || '(attached files)';
 
   // Spawn dead agents before sending — suspended agents resume, others spawn
   const deadAgents = parsed.agents.filter((name) => {

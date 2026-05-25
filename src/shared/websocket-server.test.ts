@@ -162,4 +162,92 @@ describe('WebSocketServer', () => {
     client.close();
     await new Promise((r) => setTimeout(r, 100));
   });
+
+  it('subscription filtering delivers to matching clients only', async () => {
+    wss.onConnect(() => {});
+    const messagesC1: string[] = [];
+    const messagesC2: string[] = [];
+
+    // Set up two clients
+    const c1 = new WebSocket(`ws://localhost:${port}`);
+    const c2 = new WebSocket(`ws://localhost:${port}`);
+
+    c1.onmessage = (evt) => messagesC1.push(evt.data as string);
+    c2.onmessage = (evt) => messagesC2.push(evt.data as string);
+
+    // Wait for both to connect
+    await new Promise<void>((resolve) => {
+      let count = 0;
+      const onOpen = () => { if (++count === 2) resolve(); };
+      c1.onopen = onOpen;
+      c2.onopen = onOpen;
+    });
+
+    // Set different subscriptions via message handler
+    wss.onMessage((client, data) => {
+      try {
+        const msg = JSON.parse(data);
+        if (msg.type === 'subscribe') {
+          wss.setSubscription(client, msg.mode, msg.agents);
+        }
+      } catch {}
+    });
+
+    // Client 1 subscribes to agent-a only
+    c1.send(JSON.stringify({ type: 'subscribe', mode: 'include', agents: ['agent-a'] }));
+    // Client 2 subscribes to agent-b only
+    c2.send(JSON.stringify({ type: 'subscribe', mode: 'include', agents: ['agent-b'] }));
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Broadcast filtered messages
+    wss.broadcastFiltered('msg-for-a', 'agent-a');
+    wss.broadcastFiltered('msg-for-b', 'agent-b');
+
+    await new Promise((r) => setTimeout(r, 100));
+
+    // C1 should receive agent-a message + its subscribed confirmation
+    const c1MsgsFiltered = messagesC1.filter(m => m.startsWith('msg-'));
+    const c2MsgsFiltered = messagesC2.filter(m => m.startsWith('msg-'));
+
+    assert.equal(c1MsgsFiltered.length, 1, 'c1 should receive exactly 1 message');
+    assert.equal(c1MsgsFiltered[0], 'msg-for-a');
+    assert.equal(c2MsgsFiltered.length, 1, 'c2 should receive exactly 1 message');
+    assert.equal(c2MsgsFiltered[0], 'msg-for-b');
+
+    c1.close();
+    c2.close();
+    await new Promise((r) => setTimeout(r, 100));
+  });
+
+  it('system messages (null agent) always delivered regardless of subscription', async () => {
+    wss.onConnect(() => {});
+    const messages: string[] = [];
+
+    const client = new WebSocket(`ws://localhost:${port}`);
+    client.onmessage = (evt) => messages.push(evt.data as string);
+
+    await new Promise<void>((resolve) => { client.onopen = () => resolve(); });
+
+    wss.onMessage((c, data) => {
+      try {
+        const msg = JSON.parse(data);
+        if (msg.type === 'subscribe') wss.setSubscription(c, msg.mode, msg.agents);
+      } catch {}
+    });
+
+    // Subscribe to agent-x only (doesn't exist)
+    client.send(JSON.stringify({ type: 'subscribe', mode: 'include', agents: ['agent-x'] }));
+    await new Promise((r) => setTimeout(r, 50));
+
+    // System message (null agent) should still be delivered
+    wss.broadcastFiltered('system-msg', null);
+    await new Promise((r) => setTimeout(r, 100));
+
+    const systemMsgs = messages.filter(m => m === 'system-msg');
+    assert.equal(systemMsgs.length, 1, 'system messages should always be delivered');
+
+    client.close();
+    await new Promise((r) => setTimeout(r, 100));
+  });
 });

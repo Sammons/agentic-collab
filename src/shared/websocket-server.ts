@@ -23,6 +23,13 @@ const OPCODE_CLOSE = 0x8;
 const OPCODE_PING = 0x9;
 const OPCODE_PONG = 0xA;
 
+export type SubscriptionMode = 'all' | 'include' | 'exclude';
+
+export type Subscription = {
+  mode: SubscriptionMode;
+  agents: Set<string>;
+};
+
 export type WsClient = {
   id: string;
   socket: Duplex;
@@ -31,6 +38,8 @@ export type WsClient = {
   compress: boolean;
   /** Per-connection attributes the caller stashed at handshake time. */
   attrs: Record<string, unknown>;
+  /** Subscription filter for message delivery. Default is 'all'. */
+  subscription: Subscription;
 };
 
 export class WebSocketServer {
@@ -91,6 +100,7 @@ export class WebSocketServer {
       alive: true,
       compress: !!deflate,
       attrs,
+      subscription: { mode: 'all', agents: new Set() },
     };
 
     this.clients.set(client.id, client);
@@ -192,6 +202,57 @@ export class WebSocketServer {
    */
   broadcastEvent(event: WsEvent): void {
     this.broadcast(JSON.stringify(event));
+  }
+
+  /**
+   * Update a client's subscription filter.
+   */
+  setSubscription(client: WsClient, mode: SubscriptionMode, agents: string[]): void {
+    client.subscription = { mode, agents: new Set(agents) };
+    // Send confirmation
+    this.send(client, JSON.stringify({
+      type: 'subscribed',
+      mode,
+      agents,
+    }));
+  }
+
+  /**
+   * Check if a message should be delivered to a client based on subscription.
+   */
+  shouldDeliver(client: WsClient, agent: string | null): boolean {
+    const sub = client.subscription;
+    if (sub.mode === 'all') return true;
+    if (!agent) return true; // System messages always delivered
+    if (sub.mode === 'include') return sub.agents.has(agent);
+    if (sub.mode === 'exclude') return !sub.agents.has(agent);
+    return true;
+  }
+
+  /**
+   * Broadcast a message only to clients subscribed to the given agent.
+   * Used for dashboard messages that should respect focus mode.
+   */
+  broadcastFiltered(data: string, agent: string | null): void {
+    const raw = Buffer.from(data, 'utf-8');
+    let uncompressedFrame: Buffer | null = null;
+    let compressedFrame: Buffer | null = null;
+    const wantsCompress = raw.length >= COMPRESS_THRESHOLD;
+    for (const client of this.clients.values()) {
+      if (!client.socket.writable) continue;
+      if (!this.shouldDeliver(client, agent)) continue;
+      if (client.compress && wantsCompress) {
+        if (compressedFrame === null) {
+          compressedFrame = this.encodeFrame(OPCODE_TEXT, compressFrame(raw), true);
+        }
+        client.socket.write(compressedFrame);
+      } else {
+        if (uncompressedFrame === null) {
+          uncompressedFrame = this.encodeFrame(OPCODE_TEXT, raw, false);
+        }
+        client.socket.write(uncompressedFrame);
+      }
+    }
   }
 
   /**
