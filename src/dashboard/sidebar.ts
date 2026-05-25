@@ -384,14 +384,17 @@ function wire(r: HTMLElement): void {
 
       // Smart @mention injection:
       // - If composer is empty → inject @agent
-      // - If composer has only @mentions (no message body) → replace with @agent
+      // - If composer has only @mentions and #topics (no message body) → replace @agent, keep topics
       // - Otherwise → toggle selection as usual
       if (!clickedCheckbox && composer) {
         const value = composer.value.trim();
-        // Check if value is empty or only contains @mentions with no message
-        const onlyMentions = value === '' || /^(@[a-zA-Z0-9_\-/]+\s*)+$/.test(value);
-        if (onlyMentions) {
-          composer.value = `@${name} `;
+        // Check if value is empty or only contains @mentions and optional #topics (no actual message)
+        const onlyPrefixes = value === '' || /^([@#][a-zA-Z0-9_\-/]+\s*)+$/.test(value);
+        if (onlyPrefixes) {
+          // Extract any #topics from the current value to preserve them
+          const topics = value.match(/#[a-zA-Z0-9_\-]+/g) || [];
+          const topicSuffix = topics.length > 0 ? ' ' + topics.join(' ') + ' ' : '';
+          composer.value = `@${name}${topicSuffix || ' '}`;
           composer.focus();
           composer.setSelectionRange(composer.value.length, composer.value.length);
           composer.dispatchEvent(new Event('input', { bubbles: true }));
