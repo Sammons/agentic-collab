@@ -32,6 +32,8 @@ services:
       - WHISPER_MODEL=${WHISPER_MODEL:-}
       - WHISPER_LANGUAGE=${WHISPER_LANGUAGE:-}
       - STT_PROVIDER=${STT_PROVIDER:-auto}
+      # Claude Code --add-dir path for persistent personas / knowledge
+      - CLAUDE_HOME_DIR=${CLAUDE_HOME_DIR:-/home/sammons/Desktop/claude-home}
     labels:
       io.agentic-collab.role: orchestrator
     restart: unless-stopped

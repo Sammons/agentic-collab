@@ -844,7 +844,32 @@
   .chat-pane .msg .body { padding: 2px 0 2px 12px; font-size: 13.5px; line-height: 1.5; }
   .chat-pane .composer { padding: 10px 12px 14px; }
   .chat-pane .composer textarea { min-height: 44px; padding: 10px 12px 6px; font-size: 13px; }
-  .chat-pane .composer .ctrls { padding: 2px 6px 6px; }
+  .chat-pane .composer .ctrls {
+    padding: 6px 6px 8px;
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
   .chat-pane .composer .ctrls .hint { font-size: 10.5px; }
+  /* Hide keyboard hint on mobile — users tap Send */
+  .chat-pane .composer .ctrls > .hint:has(kbd) { display: none; }
+  /* Spacer doesn't push on mobile — just fills remaining space on row 1 */
+  .chat-pane .composer .ctrls .spacer {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  /* Voice toggle and button: keep visible, sized for touch */
+  .chat-pane .composer .ctrls .voice-ctrls {
+    flex-shrink: 0;
+  }
+  .chat-pane .composer .ctrls .voice-ctrls button {
+    padding: 6px 10px;
+    font-size: 12px;
+  }
+  .chat-pane .composer .ctrls .voice-btn {
+    width: 40px;
+    height: 40px;
+    margin-right: 8px;
+    flex-shrink: 0;
+  }
   .chat-pane .sys-event { padding: 5px 12px; font-size: 11.5px; margin: 4px 0; }
 }
