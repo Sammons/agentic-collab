@@ -103,27 +103,25 @@ export async function initVoice(
   };
   toggleContainer.addEventListener('click', toggleClick);
 
-  // PTT button handlers
-  const pttDown = (e: Event) => {
+  // Auto-enable voice mode and make mic button look tappable
+  voiceState.mode = 'ptt';
+  pttButton.classList.remove('inactive');
+  pttButton.title = 'Click to record';
+
+  // Tap/click to toggle recording (same behavior on all platforms)
+  const pttClick = async (e: Event) => {
     e.preventDefault();
-    if (voiceState.mode !== 'ptt') return;
-    if (voiceState.audioCtx?.state === 'suspended') {
-      voiceState.audioCtx.resume();
+    e.stopPropagation();
+
+    if (voiceState.recording) {
+      commitAndStopPtt();
+    } else {
+      await startVoice();
     }
-    startVoice();
-  };
-  const pttUp = () => {
-    if (voiceState.mode !== 'ptt' || !voiceState.recording) return;
-    commitAndStopPtt();
   };
   const pttContextmenu = (e: Event) => e.preventDefault();
 
-  pttButton.addEventListener('pointerdown', pttDown);
-  pttButton.addEventListener('pointerup', pttUp);
-  pttButton.addEventListener('pointerleave', pttUp);
-  pttButton.addEventListener('touchstart', pttDown, { passive: false });
-  pttButton.addEventListener('touchend', pttUp);
-  pttButton.addEventListener('touchcancel', pttUp);
+  pttButton.addEventListener('click', pttClick);
   pttButton.addEventListener('contextmenu', pttContextmenu);
 
   // Spacebar PTT when not in an input
@@ -152,12 +150,7 @@ export async function initVoice(
     toggleContainer.removeEventListener('mousedown', toggleMousedown);
     toggleContainer.removeEventListener('click', toggleClick);
     pttButton.removeEventListener('mousedown', pttMousedown);
-    pttButton.removeEventListener('pointerdown', pttDown);
-    pttButton.removeEventListener('pointerup', pttUp);
-    pttButton.removeEventListener('pointerleave', pttUp);
-    pttButton.removeEventListener('touchstart', pttDown);
-    pttButton.removeEventListener('touchend', pttUp);
-    pttButton.removeEventListener('touchcancel', pttUp);
+    pttButton.removeEventListener('click', pttClick);
     pttButton.removeEventListener('contextmenu', pttContextmenu);
     document.removeEventListener('keydown', keydownHandler);
     document.removeEventListener('keyup', keyupHandler);
