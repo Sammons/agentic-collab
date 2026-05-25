@@ -245,23 +245,43 @@
   transform: rotate(-45deg);
   margin-top: -1px;
 }
-/* status dot — between checkbox and name. Color reflects agent state. */
+/* status indicator — between checkbox and name. Uses SHAPE + COLOR for
+   accessibility: colorblind users can distinguish states by shape alone.
+   - online:  solid green disc
+   - busy:    orange ring (hollow) with pulse animation
+   - paused:  plum square
+   - failed:  red diamond (rotated square)
+   - offline: grey hollow ring */
 .member .status {
-  width: 7px; height: 7px;
-  border-radius: 50%;
-  flex: 0 0 7px;
-  background: var(--ink-4);
-  box-shadow: 0 0 0 1.5px var(--paper);
-  transition: background 140ms ease;
+  width: 8px; height: 8px;
+  flex: 0 0 8px;
+  position: relative;
+  transition: background 140ms ease, border-color 140ms ease;
 }
-.member .status.online { background: var(--moss); }
+.member .status.online {
+  background: var(--moss);
+  border-radius: 50%;
+}
 .member .status.busy {
-  background: var(--clay);
+  background: transparent;
+  border: 2px solid var(--clay);
+  border-radius: 50%;
   animation: status-pulse 1.6s ease-in-out infinite;
 }
-.member .status.paused { background: var(--plum); }
-.member .status.failed { background: var(--brick); }
-.member .status.offline { background: var(--ink-4); }
+.member .status.paused {
+  background: var(--plum);
+  border-radius: 2px;
+}
+.member .status.failed {
+  background: var(--brick);
+  border-radius: 1px;
+  transform: rotate(45deg);
+}
+.member .status.offline {
+  background: transparent;
+  border: 1.5px solid var(--ink-4);
+  border-radius: 50%;
+}
 /* Template indicator — dashed border + plus sign */
 .member .status.template {
   width: 12px;
