@@ -123,15 +123,15 @@ const NESTED_FIELDS = new Set([...nestedPersonaKeys(), 'env', 'spawn', 'prepare'
  * Only nested-capable fields (env, start, resume, compact, exit, interrupt,
  * submit, spawn) receive structured parsing. All other fields remain flat strings.
  */
-export function parseFrontmatter(raw: string): { frontmatter: Record<string, unknown>; body: string } {
+export function parseFrontmatter(raw: string): { frontmatter: Record<string, unknown>; frontmatterRaw: string; body: string } {
   const trimmed = raw.trimStart();
   if (!trimmed.startsWith('---')) {
-    return { frontmatter: {}, body: raw };
+    return { frontmatter: {}, frontmatterRaw: '', body: raw };
   }
 
   const endIdx = trimmed.indexOf('\n---', 3);
   if (endIdx === -1) {
-    return { frontmatter: {}, body: raw };
+    return { frontmatter: {}, frontmatterRaw: '', body: raw };
   }
 
   const fmBlock = trimmed.slice(4, endIdx); // skip opening ---\n
@@ -240,7 +240,7 @@ export function parseFrontmatter(raw: string): { frontmatter: Record<string, unk
     i++;
   }
 
-  return { frontmatter, body };
+  return { frontmatter, frontmatterRaw: fmBlock, body };
 }
 
 /**

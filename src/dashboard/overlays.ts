@@ -527,8 +527,8 @@ export async function openEditPersonaModal(agentName: string): Promise<void> {
   try {
     const res = await fetch(`/api/personas/${encodeURIComponent(agentName)}`, { headers: authHeaders() });
     if (res.ok) {
-      const data = await res.json() as { frontmatter?: string; body?: string; content?: string };
-      frontmatter = data.frontmatter ?? '';
+      const data = await res.json() as { frontmatterRaw?: string; body?: string; content?: string };
+      frontmatter = data.frontmatterRaw ?? '';
       body = data.body ?? data.content ?? '';
     }
   } catch {}
