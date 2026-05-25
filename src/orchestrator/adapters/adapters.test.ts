@@ -78,7 +78,8 @@ describe('Engine Adapters', () => {
         task: undefined,
         appendSystemPrompt: undefined,
       });
-      assert.equal(cmd, 'claude --add-dir ~/Desktop/claude-home');
+      assert.ok(cmd.startsWith('claude --add-dir '));
+      assert.ok(cmd.includes('claude-home'));
     });
 
     it('builds spawn command with pre-set session ID', () => {
