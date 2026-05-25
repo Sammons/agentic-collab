@@ -200,6 +200,7 @@ describe('Lifecycle', () => {
       assert.ok(paste.text.includes('--effort high'), 'should include --effort');
       assert.ok(paste.text.includes('fix the bug'), 'should include task');
       assert.ok(paste.text.includes('--dangerously-skip-permissions'), 'should include skip-permissions');
+      assert.ok(paste.text.includes('--add-dir ~/Desktop/claude-home'), 'should include --add-dir for shared claude-home');
     });
 
     it('codex spawn includes --model and positional task', async () => {

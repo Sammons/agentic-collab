@@ -16,6 +16,8 @@ export class ClaudeAdapter implements EngineAdapter {
       parts.push('--dangerously-skip-permissions');
     }
 
+    parts.push('--add-dir', '~/Desktop/claude-home');
+
     if (opts.model) {
       parts.push('--model', opts.model);
     }
@@ -49,6 +51,8 @@ export class ClaudeAdapter implements EngineAdapter {
     if (opts.sessionId) {
       parts.push('--resume', opts.sessionId);
     }
+
+    parts.push('--add-dir', '~/Desktop/claude-home');
 
     if (opts.appendSystemPrompt) {
       parts.push('--append-system-prompt', shellQuote(opts.appendSystemPrompt));
