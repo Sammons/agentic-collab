@@ -17,6 +17,7 @@ import { state, on, toggleAgentSelected, toggleTeam, toggleAllAgents, agentsByNa
 import { go } from './routing.ts';
 import { openNewTeamModal, openEditTeamModal } from './overlays.ts';
 import type { Team } from '../shared/types.ts';
+import { escapeHtml } from './util.ts';
 
 const root = (): HTMLElement => document.getElementById('sidebar')!;
 
@@ -437,11 +438,3 @@ function wire(r: HTMLElement): void {
   });
 }
 
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}

@@ -10,6 +10,7 @@
  */
 import type { AgentRecord, Team } from '../shared/types.ts';
 import { state, authHeaders } from './state.ts';
+import { escapeHtml, toast } from './util.ts';
 
 /* ── shared modal helpers ──────────────────────────────────────────── */
 
@@ -35,23 +36,6 @@ function openModal(html: string, size: 'sm' | '' | 'lg' = ''): { overlay: HTMLEl
   return { overlay, close };
 }
 
-function toast(msg: string, kind: 'info' | 'error' = 'info'): void {
-  const el = document.createElement('div');
-  el.className = `chat-toast ${kind === 'error' ? 'error' : ''}`;
-  el.textContent = msg;
-  document.body.appendChild(el);
-  setTimeout(() => el.remove(), 3000);
-}
-
-function escapeHtml(s: string | null | undefined): string {
-  if (s == null) return '';
-  return String(s)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
 
 /* ── + New agent ───────────────────────────────────────────────────── */
 

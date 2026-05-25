@@ -7,7 +7,7 @@
  *  - `reply`    — JSON reply the agent writes via `collab complete`
  *  - `status`   — single-line marker the reaper polls (`ok` or `error\n<...>`)
  *
- * `buildInstanceEnv` returns the v3 env contract per
+ * `buildHostShellEnv` returns the v3 env contract per
  * docs/v3-vision.md §"Env contract" — a flat key/value record that both
  * `prepare`/`cleanup` (host shell) and `start` (tmux paste) see.
  *
@@ -140,12 +140,3 @@ export function buildTmuxSessionEnv(
   return out;
 }
 
-/**
- * @deprecated Use `buildHostShellEnv` (full env) or
- * `buildTmuxSessionEnv(buildHostShellEnv(opts))` (tmux-safe subset). Retained
- * so the reaper's cleanup wrapper, which only needs the host-shell view, can
- * keep its existing call shape.
- */
-export function buildInstanceEnv(opts: BuildEnvOpts): Record<string, string> {
-  return buildHostShellEnv(opts);
-}

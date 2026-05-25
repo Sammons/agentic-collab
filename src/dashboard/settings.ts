@@ -20,6 +20,7 @@ import type {
 import { on, authHeaders } from './state.ts';
 import { registerRoute, go } from './routing.ts';
 import type { Route } from './state.ts';
+import { escapeHtml, toast } from './util.ts';
 
 let configs: EngineConfigRecord[] = [];
 let pages: PageRecord[] = [];
@@ -478,14 +479,6 @@ function setText(sel: string, text: string): void {
   if (el) el.textContent = text;
 }
 
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
 
 /* ── engine config editor ──────────────────────────────────────────── */
 
@@ -656,10 +649,5 @@ async function hydrateEditEngine(root: HTMLElement, name: string): Promise<void>
   });
 }
 
-function showToast(msg: string, kind: 'info' | 'error' = 'info'): void {
-  const el = document.createElement('div');
-  el.className = `chat-toast ${kind === 'error' ? 'error' : ''}`;
-  el.textContent = msg;
-  document.body.appendChild(el);
-  setTimeout(() => el.remove(), 3000);
-}
+// Use toast from util.ts, aliased as showToast for backward compat
+const showToast = toast;

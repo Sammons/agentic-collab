@@ -12,47 +12,46 @@
 }
 
 .watch-hdr {
-  padding: 18px 28px 16px;
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  gap: 16px;
+  padding: 10px 20px;
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  gap: 8px 12px;
   border-bottom: 1px solid var(--rule-soft);
 }
 .watch-hdr .back {
-  display: inline-flex; align-items: center; gap: 6px;
-  font-size: 12.5px;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 14px;
   color: var(--ink-3);
-  font-weight: 500;
   cursor: pointer;
-  padding: 5px 8px;
+  padding: 4px 8px;
   border-radius: 3px;
   background: transparent;
   border: 0;
+  flex-shrink: 0;
 }
 .watch-hdr .back:hover { color: var(--ink); background: var(--paper-2); }
-.watch-hdr .title-block { min-width: 0; }
-.watch-hdr .super {
-  font-size: 10.5px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
+.watch-hdr .breadcrumb {
+  font-size: 13px;
+  font-weight: 500;
   color: var(--ink-3);
-  font-weight: 600;
-  margin-bottom: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
 }
-.watch-hdr .super .crumb-arrow { color: var(--ink-4); margin: 0 6px; }
-.watch-hdr .super .name { color: var(--clay); }
 .watch-hdr .title {
-  font-size: 26px;
-  font-weight: 700;
-  letter-spacing: -0.024em;
-  line-height: 1.05;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
   color: var(--ink);
   margin: 0;
-  display: flex; align-items: baseline; gap: 10px;
-  flex-wrap: wrap;
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.watch-hdr .title .state-pill {
+.watch-hdr .state-pill {
   font-size: 11px;
   padding: 3px 9px;
   border-radius: 999px;
@@ -61,11 +60,43 @@
   letter-spacing: 0.04em;
   background: var(--moss-bg);
   color: var(--moss);
+  flex-shrink: 0;
 }
-.watch-hdr .title .state-pill.failed,
-.watch-hdr .title .state-pill.suspended { background: var(--brick-bg); color: var(--brick); }
-.watch-hdr .title .state-pill.idle { background: var(--paper-2); color: var(--ink-3); }
-.watch-hdr .right { display: flex; align-items: center; gap: 6px; }
+.watch-hdr .state-pill.failed,
+.watch-hdr .state-pill.suspended { background: var(--brick-bg); color: var(--brick); }
+.watch-hdr .state-pill.idle { background: var(--paper-2); color: var(--ink-3); }
+.watch-hdr .right {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+/* Mobile: actions row wraps below header content */
+@media (max-width: 600px) {
+  .watch-hdr {
+    padding: 10px 12px;
+    gap: 6px 8px;
+  }
+  .watch-hdr .right {
+    flex-basis: 100%;
+    margin-left: 0;
+    justify-content: flex-start;
+    padding-top: 6px;
+    border-top: 1px solid var(--rule-soft);
+    margin-top: 4px;
+  }
+  .watch-hdr .title {
+    font-size: 15px;
+  }
+  .watch-hdr .breadcrumb {
+    font-size: 11px;
+  }
+  /* Hide "Open in tmux" on mobile — not useful without terminal access */
+  .watch-hdr [data-open-tmux] {
+    display: none;
+  }
+}
 
 /* live status bar */
 .watch-ctrls {

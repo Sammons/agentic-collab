@@ -108,6 +108,74 @@ describe('Lifecycle', () => {
       const agent = db.getAgent('fail-spawn');
       assert.equal(agent?.state, 'failed');
     });
+
+    it('kills stale session before creating new one (GH #5 idempotency)', async () => {
+      db.createAgent({ name: 'stale-session-spawn', engine: 'claude', cwd: '/tmp', proxyId: 'p1' });
+      const staleSessionCtx: LifecycleContext = {
+        ...ctx,
+        proxyDispatch: async (_proxyId: string, command: ProxyCommand): Promise<ProxyResponse> => {
+          proxyCommands.push(command);
+          if (command.action === 'has_session') {
+            // Simulate stale session exists
+            return { ok: true, data: true };
+          }
+          if (command.action === 'capture') {
+            return { ok: true, data: '> \n' };
+          }
+          return { ok: true };
+        },
+      };
+
+      proxyCommands = [];
+      const result = await spawnAgent(staleSessionCtx, {
+        name: 'stale-session-spawn',
+        engine: 'claude',
+        cwd: '/tmp',
+        proxyId: 'p1',
+      });
+
+      assert.equal(result.state, 'active');
+      // Should have: has_session, kill_session, create_session (in that order)
+      const hasSessionIdx = proxyCommands.findIndex(c => c.action === 'has_session');
+      const killSessionIdx = proxyCommands.findIndex(c => c.action === 'kill_session');
+      const createSessionIdx = proxyCommands.findIndex(c => c.action === 'create_session');
+      assert.ok(hasSessionIdx >= 0, 'should call has_session');
+      assert.ok(killSessionIdx >= 0, 'should call kill_session when session exists');
+      assert.ok(createSessionIdx >= 0, 'should call create_session');
+      assert.ok(hasSessionIdx < killSessionIdx, 'has_session should come before kill_session');
+      assert.ok(killSessionIdx < createSessionIdx, 'kill_session should come before create_session');
+    });
+
+    it('skips kill when no stale session exists', async () => {
+      db.createAgent({ name: 'no-stale-spawn', engine: 'claude', cwd: '/tmp', proxyId: 'p1' });
+      const noStaleCtx: LifecycleContext = {
+        ...ctx,
+        proxyDispatch: async (_proxyId: string, command: ProxyCommand): Promise<ProxyResponse> => {
+          proxyCommands.push(command);
+          if (command.action === 'has_session') {
+            // No stale session
+            return { ok: true, data: false };
+          }
+          if (command.action === 'capture') {
+            return { ok: true, data: '> \n' };
+          }
+          return { ok: true };
+        },
+      };
+
+      proxyCommands = [];
+      const result = await spawnAgent(noStaleCtx, {
+        name: 'no-stale-spawn',
+        engine: 'claude',
+        cwd: '/tmp',
+        proxyId: 'p1',
+      });
+
+      assert.equal(result.state, 'active');
+      assert.ok(proxyCommands.some(c => c.action === 'has_session'), 'should call has_session');
+      assert.ok(!proxyCommands.some(c => c.action === 'kill_session'), 'should NOT call kill_session when no session exists');
+      assert.ok(proxyCommands.some(c => c.action === 'create_session'), 'should call create_session');
+    });
   });
 
   describe('spawnAgent — paste command verification', () => {

@@ -11,9 +11,10 @@
  * Scope-by-type chips narrow the result list. Cmd+K focuses the input.
  */
 import type { AgentRecord, DashboardMessage, Reminder, ApprovalRow, PageRecord } from '../shared/types.ts';
-import { state, on, authHeaders } from './state.ts';
+import { state, on, authHeaders, enterFocusMode, emit } from './state.ts';
 import { registerRoute, go } from './routing.ts';
 import { focusMessage } from './chat.ts';
+import { escapeHtml, formatTime } from './util.ts';
 
 type Hit =
   | { kind: 'agent';     score: number; matched: string[]; record: AgentRecord }
@@ -363,7 +364,13 @@ function wireResults(scope: HTMLElement): void {
   scope.querySelectorAll<HTMLElement>('.sr-result.agent').forEach((el) => {
     el.addEventListener('click', () => {
       const name = el.dataset['go']!;
-      go({ kind: 'watch', agentName: name });
+      if (state.route.kind === 'watch') {
+        go({ kind: 'watch', agentName: name });
+      } else {
+        enterFocusMode([name]);
+        state.pendingComposerText = `@${name} `;
+        go({ kind: 'dashboard' });
+      }
     });
   });
   scope.querySelectorAll<HTMLElement>('.sr-result.message').forEach((el) => {
@@ -414,16 +421,3 @@ function highlight(text: string): string {
   return out.join('');
 }
 
-function formatTime(iso: string): string {
-  try { return new Date(iso).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }); }
-  catch { return ''; }
-}
-
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}

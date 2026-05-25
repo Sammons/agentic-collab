@@ -368,7 +368,7 @@ describe('renderMarkdown', () => {
     });
 
     it('handles text with collab message format', () => {
-      const input = '[from: agent-a, reply with collab send agent-a]: \'hello\'';
+      const input = '[from: agent-a: reply with collab send agent-a --topic work]: \'hello\'';
       const out = renderMarkdown(input);
       // Should render as plain text, not break
       has(out, 'from: agent-a');

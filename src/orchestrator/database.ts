@@ -1599,11 +1599,16 @@ export class Database {
     params.push(limit + 1);
 
     const orderDir = afterId !== undefined ? 'ASC' : 'DESC';
+    // Dedupe by queue_id: when a message is sent A→B, it creates rows in both
+    // threads with the same queue_id. Use MIN(id) to pick one representative
+    // row per logical message. Messages without queue_id (system, dashboard)
+    // are kept as-is via COALESCE to a unique pseudo-key.
     const sql = `
       SELECT dm.*, pm.status AS delivery_status
       FROM dashboard_messages dm
       LEFT JOIN pending_messages pm ON dm.queue_id = pm.id
       WHERE ${agentFilter} ${cursorCondition}
+      GROUP BY COALESCE(dm.queue_id, 'no-queue-' || dm.id)
       ORDER BY dm.created_at ${orderDir}, dm.id ${orderDir}
       LIMIT ?
     `;

@@ -14,6 +14,7 @@ import type { AgentRecord, AgentState, Team } from '../shared/types.ts';
 import { state, on, authHeaders, emit, agentsByName, teamsByAgent } from './state.ts';
 import { registerRoute, go } from './routing.ts';
 import { openNewAgentModal, openEditPersonaModal } from './overlays.ts';
+import { escapeHtml, toast } from './util.ts';
 
 const STATE_PRIORITY: Record<AgentState, number> = {
   failed:     0,
@@ -317,19 +318,5 @@ const icons = {
   trash: `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4h12"/><path d="M5 4V2a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/><path d="M3.5 4l1 10a1 1 0 0 0 1 1h5a1 1 0 0 0 1-1l1-10"/></svg>`,
 };
 
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
-function showToast(msg: string, kind: 'info' | 'error' = 'info'): void {
-  const el = document.createElement('div');
-  el.className = `chat-toast ${kind === 'error' ? 'error' : ''}`;
-  el.textContent = msg;
-  document.body.appendChild(el);
-  setTimeout(() => el.remove(), 3000);
-}
+// Use toast from util.ts, aliased as showToast for backward compat
+const showToast = toast;

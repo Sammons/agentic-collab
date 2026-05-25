@@ -28,26 +28,10 @@ export function sanitizeMessage(text: string): string {
 }
 
 /**
- * Generate a simple message ID (nano-id style, no deps).
+ * Generate a simple message ID using crypto.randomUUID().
  */
 export function generateMessageId(): string {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-  // Rejection sampling: largest multiple of 62 that fits in a byte
-  const limit = 256 - (256 % chars.length); // 248
-  let id = 'msg-';
-  let filled = 0;
-  while (filled < 12) {
-    const bytes = new Uint8Array(16); // over-allocate to reduce rounds
-    crypto.getRandomValues(bytes);
-    for (const b of bytes) {
-      if (b < limit) {
-        id += chars[b % chars.length];
-        filled++;
-        if (filled >= 12) break;
-      }
-    }
-  }
-  return id;
+  return 'msg-' + crypto.randomUUID().slice(0, 12);
 }
 
 /**

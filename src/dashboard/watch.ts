@@ -18,6 +18,7 @@ import type { AgentRecord } from '../shared/types.ts';
 import { state, on, authHeaders } from './state.ts';
 import { registerRoute, go, type Route } from './routing.ts';
 import { openEditPersonaModal } from './overlays.ts';
+import { escapeHtml, toast } from './util.ts';
 
 const POLL_INTERVAL_MS = 3000;
 const PEEK_LINES = 200;
@@ -47,21 +48,17 @@ function render(root: HTMLElement, route: Route): void {
   root.innerHTML = `
     <div class="watch-page">
       <div class="watch-hdr">
-        <button class="back" data-back>← Back to chat</button>
-        <div class="title-block">
-          <div class="super"><span>Watching</span> <span class="crumb-arrow">/</span> <span class="name">${escapeHtml(name)}</span></div>
-          <h1 class="title">
-            ${escapeHtml(name)}
-            ${agent ? `<span class="state-pill ${agent.state}">${agent.state}</span>` : `<span class="state-pill failed">unknown</span>`}
-          </h1>
-        </div>
+        <button class="back" data-back>←</button>
+        <span class="breadcrumb">Watch</span>
+        ${agent ? `<span class="state-pill ${agent.state}">${agent.state}</span>` : `<span class="state-pill failed">unknown</span>`}
+        <h1 class="title">${escapeHtml(name)}</h1>
         <div class="right">
           ${!isTransient && !isRunning ? `<button class="btn primary" data-start>${startLabel}</button>` : ''}
-          ${isRunning ? `<button class="btn" data-kill>Kill</button>` : ''}
+          ${isRunning ? `<button class="btn ghost" data-kill>Kill</button>` : ''}
           <button class="btn ghost" data-persona>Persona</button>
           <button class="btn ghost" data-open-tmux>↗ Open in tmux</button>
           <button class="btn ghost danger" data-delete>Delete</button>
-          <button class="btn" data-stop>Stop watching</button>
+          <button class="btn ghost" data-stop>Stop watching</button>
         </div>
       </div>
 
@@ -110,7 +107,7 @@ function render(root: HTMLElement, route: Route): void {
   detachers.push(on('agents-changed', () => {
     if (currentAgent !== name) return;
     const a = state.agents.find((x) => x.name === name);
-    const pill = document.querySelector<HTMLElement>('.watch-hdr .title .state-pill');
+    const pill = document.querySelector<HTMLElement>('.watch-hdr .state-pill');
     if (pill && a) {
       pill.className = `state-pill ${a.state}`;
       pill.textContent = a.state;
@@ -316,22 +313,8 @@ function keyBtn(label: string, keys: string, extra: string = ''): string {
   return `<button class="k ${extra}" data-keys="${escapeHtml(keys)}">${escapeHtml(label)}</button>`;
 }
 
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
-function showToast(msg: string, kind: 'info' | 'error' = 'info'): void {
-  const el = document.createElement('div');
-  el.className = `chat-toast ${kind === 'error' ? 'error' : ''}`;
-  el.textContent = msg;
-  document.body.appendChild(el);
-  setTimeout(() => el.remove(), 3000);
-}
+// Use toast from util.ts, aliased as showToast for backward compat
+const showToast = toast;
 
 async function lifecycleAction(agentName: string, action: string, gerund: string): Promise<void> {
   try {

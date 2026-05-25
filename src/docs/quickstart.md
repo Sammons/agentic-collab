@@ -86,7 +86,7 @@ Replace `my-backend` with the actual agent name.
 **What the receiving agent sees** in its tmux session:
 
 ```
-[from: my-frontend, reply with collab send my-frontend --topic api]: 'Add a /health endpoint'
+[from: my-frontend: reply with collab send my-frontend --topic api]: 'Add a /health endpoint'
 ```
 
 **Topics** are labels (any string) that group messages in the dashboard thread. They don't affect routing -- all messages go to the target agent regardless of topic.

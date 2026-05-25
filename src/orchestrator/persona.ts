@@ -1049,13 +1049,23 @@ export function composeSystemPrompt(opts: {
   parts.push(`You have the \`collab\` CLI on your PATH (standalone binary, not a pnpm script).
 Your agent name: COLLAB_AGENT=${opts.agentName}
 
-Incoming messages appear as: [from: <sender>, reply with collab send <sender> --topic <topic>]: '<message>'
+Incoming messages appear as: [from: <sender>: reply with collab send <sender> --topic <topic>]: '<message>'
 
 Core commands:
   collab send operator --topic <t> <msg>      # message the human operator
   collab send <agent> --topic <t> <msg>       # message a peer agent
   collab agents                               # list all agents + status
   collab queue [--agent X] [--status S] [--limit N]  # message history
+
+Approvals (request human sign-off before taking sensitive actions):
+  collab approval create <channel> "<payload>"  # request approval, returns ID
+  collab approval await <id> [--timeout 5m]     # block until approved/rejected
+  collab approval get <id>                      # check status
+  collab approval withdraw <id>                 # cancel pending request
+
+  Use approvals for: destructive operations, external API calls, spending money,
+  sending emails, publishing content, or anything the operator should review first.
+  The operator sees pending approvals on the dashboard and can approve/reject them.
 
 Tmux (routed through orchestrator to the correct proxy):
   collab tmux <agent> -- capture-pane         # read agent's terminal output
@@ -1076,7 +1086,10 @@ Run \`collab help\` for full command reference.`);
 
   parts.push(`
 
-Your terminal output, tool calls, and reasoning are invisible to the operator — only messages you send via \`collab send operator\` appear on the dashboard.
+IMPORTANT: Your terminal output, tool calls, and reasoning are INVISIBLE to the operator.
+The operator CANNOT see anything you do unless you explicitly send it to them via \`collab send operator\`.
+If you want the operator to know something — your status, a question, a result, a blocker — you MUST send a message.
+Silence looks like "agent is working" from the dashboard; the operator has no other window into your progress.
 
 Use /compact proactively when your context grows large.
 Keep context light — delegate to sub-agents when appropriate.`);

@@ -8,8 +8,8 @@
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { createWriteStream, existsSync, realpathSync, unlinkSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
-import { join, relative, isAbsolute, dirname } from 'node:path';
+import { createWriteStream, existsSync, realpathSync, unlinkSync, readFileSync, writeFileSync, mkdirSync, readdirSync, statSync } from 'node:fs';
+import { join, relative, isAbsolute, dirname, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { pipeline } from 'node:stream/promises';
 import { Transform } from 'node:stream';
@@ -45,6 +45,16 @@ function authHeaders(): Record<string, string> {
     headers['authorization'] = `Bearer ${orchestratorSecret}`;
   }
   return headers;
+}
+
+/**
+ * Validates the x-proxy-token header using timing-safe comparison.
+ * Returns true if the token is valid, false otherwise.
+ */
+function validateToken(req: IncomingMessage): boolean {
+  const t = req.headers['x-proxy-token'];
+  return typeof t === 'string' && t.length === token.length &&
+         timingSafeEqual(Buffer.from(t), Buffer.from(token));
 }
 
 // ── Registration ──
@@ -261,9 +271,6 @@ async function executeCommand(command: ProxyCommand): Promise<ProxyResponse> {
         return { ok: true };
 
       case 'list_dir': {
-        const { readdirSync, statSync, realpathSync } = await import('node:fs');
-        const { resolve, sep } = await import('node:path');
-        const { homedir } = await import('node:os');
         const showHidden = command.showHidden === true;
         // Resolve: empty → HOME; '~' → HOME; otherwise resolve absolute.
         let raw = command.path?.trim() ?? '';
@@ -339,9 +346,7 @@ const server = createServer(async (req, res) => {
 
   // File upload endpoint — streams binary to disk
   if (req.method === 'POST' && req.url?.startsWith('/upload')) {
-    const incomingToken = req.headers['x-proxy-token'];
-    if (typeof incomingToken !== 'string' || incomingToken.length !== token.length ||
-        !timingSafeEqual(Buffer.from(incomingToken), Buffer.from(token))) {
+    if (!validateToken(req)) {
       json(res, 401, { ok: false, error: 'Invalid token' });
       return;
     }
@@ -404,9 +409,7 @@ const server = createServer(async (req, res) => {
 
   // Command endpoint — token-protected
   if (req.method === 'POST' && req.url === '/command') {
-    const incomingToken = req.headers['x-proxy-token'];
-    if (typeof incomingToken !== 'string' || incomingToken.length !== token.length ||
-        !timingSafeEqual(Buffer.from(incomingToken), Buffer.from(token))) {
+    if (!validateToken(req)) {
       json(res, 401, { ok: false, error: 'Invalid token' });
       return;
     }

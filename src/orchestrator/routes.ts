@@ -2960,7 +2960,7 @@ function replyHint(from: string, topic: string): string {
 }
 
 function buildReplyEnvelope(from: string, topic: string, message: string, fileIds?: string[]): string {
-  const base = `[from: ${from}, ${replyHint(from, topic)}]: '${message}'`;
+  const base = `[from: ${from}: ${replyHint(from, topic)}]: '${message}'`;
   if (!fileIds || fileIds.length === 0) return base;
   // Append file references so the agent can access them
   const fileRefs = fileIds.map(id => `  - /api/files/${id} (use Read tool or curl to fetch)`).join('\n');

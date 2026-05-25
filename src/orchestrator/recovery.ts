@@ -47,7 +47,7 @@ import type {
   WsInstanceFailedEvent,
 } from '../shared/types.ts';
 import { shellQuote, DEFAULT_WORKTREE_PREFIX } from '../shared/utils.ts';
-import { buildInstanceEnv } from './instance-env.ts';
+import { buildHostShellEnv } from './instance-env.ts';
 
 /**
  * Narrow fs surface so tests can inject a recorder and avoid touching the
@@ -768,7 +768,7 @@ async function failInstance(
 }
 
 function buildCleanupEnv(row: AgentInstanceRow, template: AgentTemplateRow): Record<string, string> {
-  return buildInstanceEnv({
+  return buildHostShellEnv({
     messageId: row.messageId,
     messagePath: row.messagePath,
     replyPath: row.replyPath,

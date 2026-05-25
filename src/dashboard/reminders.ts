@@ -13,6 +13,7 @@
 import type { Reminder } from '../shared/types.ts';
 import { state, on, authHeaders } from './state.ts';
 import { registerRoute } from './routing.ts';
+import { escapeHtml, toast } from './util.ts';
 
 let reminders: Reminder[] = [];
 const detachers: Array<() => void> = [];
@@ -433,19 +434,5 @@ function ago(iso: string): string {
   return `${Math.floor(ms / 86_400_000)}d`;
 }
 
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
-function showToast(msg: string, kind: 'info' | 'error' = 'info'): void {
-  const el = document.createElement('div');
-  el.className = `chat-toast ${kind === 'error' ? 'error' : ''}`;
-  el.textContent = msg;
-  document.body.appendChild(el);
-  setTimeout(() => el.remove(), 3000);
-}
+// Use toast from util.ts, aliased as showToast for backward compat
+const showToast = toast;

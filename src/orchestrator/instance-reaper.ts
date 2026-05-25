@@ -34,7 +34,7 @@ import type {
 import type { MessageDispatcher } from './message-dispatcher.ts';
 import type { TopicDelivery } from './topic-delivery.ts';
 import { shellQuote } from '../shared/utils.ts';
-import { buildInstanceEnv } from './instance-env.ts';
+import { buildHostShellEnv } from './instance-env.ts';
 
 /**
  * Narrow fs surface the reaper uses. Tests can inject a wrapper that records
@@ -232,7 +232,7 @@ export class InstanceReaper {
     // Step 5: run cleanup hook (best-effort).
     const template = this.db.getAgentTemplate(row.agentTemplate);
     if (template?.hookCleanup) {
-      const env = buildInstanceEnv({
+      const env = buildHostShellEnv({
         messageId: row.messageId,
         messagePath: row.messagePath,
         replyPath: row.replyPath,
@@ -361,7 +361,7 @@ export class InstanceReaper {
       const monitorTemplate = this.db.getAgentTemplate(monitor.agentTemplate);
       let cleanupError: string | null = null;
       if (monitorTemplate?.hookCleanup) {
-        const env = buildInstanceEnv({
+        const env = buildHostShellEnv({
           messageId: monitor.messageId,
           messagePath: monitor.messagePath,
           replyPath: monitor.replyPath,

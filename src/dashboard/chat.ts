@@ -19,6 +19,7 @@ import { state, on, authHeaders, agentsByName, isFocusMode, toggleFocusMode, upd
 import { registerRoute, go } from './routing.ts';
 import { renderMarkdown } from '../shared/markdown.ts';
 import { initVoice, voiceState, clearUsedFlag } from './voice.ts';
+import { escapeHtml, formatTime, toast } from './util.ts';
 
 // Threads whose name isn't a registered agent but still belongs in the
 // merged feed — operator-visible system context (approval auto-notify,
@@ -371,6 +372,7 @@ async function renderFeed(forceScrollBottom = false): Promise<void> {
   wireProfileTriggers(root);
   wireFeedControls(root);
   wireCollapsibleMessages(root);
+  wireCopyOnClick(root);
 
   // Scroll handling
   if (pendingFocusId !== null) {
@@ -419,6 +421,26 @@ function wireCollapsibleMessages(root: HTMLElement): void {
       });
       body.after(btn);
     }
+  }
+}
+
+function wireCopyOnClick(root: HTMLElement): void {
+  const bodies = root.querySelectorAll<HTMLElement>('.msg .body[data-raw-message]');
+  for (const body of bodies) {
+    body.style.cursor = 'pointer';
+    body.addEventListener('click', async (e) => {
+      // Don't copy if clicking a link or button inside the body
+      if ((e.target as HTMLElement).closest('a, button')) return;
+
+      const raw = body.dataset['rawMessage'] ?? body.textContent ?? '';
+      try {
+        await navigator.clipboard.writeText(raw);
+        body.classList.add('copied');
+        setTimeout(() => body.classList.remove('copied'), 600);
+      } catch {
+        // Clipboard API may fail in some contexts
+      }
+    });
   }
 }
 
@@ -485,7 +507,7 @@ function msgHtml(m: DashboardMessage): string {
         <span class="topic ${topic === 'general' ? 'default' : ''}" title="topic">#${escapeHtml(topic)}</span>
         <span class="time">${formatTime(m.createdAt)}</span>
       </div>
-      <div class="body">${m.withdrawn ? '(withdrawn)' : renderMessageBody(m.message, m.id)}${filesHtml}</div>
+      <div class="body" data-raw-message="${escapeHtml(m.message)}">${m.withdrawn ? '(withdrawn)' : renderMessageBody(m.message, m.id)}${filesHtml}</div>
     </div>
   `;
 }
@@ -615,6 +637,15 @@ function wire(root: HTMLElement): void {
   if (savedPrefix && !input.value) {
     input.value = savedPrefix;
     input.setSelectionRange(input.value.length, input.value.length);
+  }
+
+  // Consume any pending composer text from cross-route navigation (e.g. search → dashboard)
+  if (state.pendingComposerText) {
+    input.value = state.pendingComposerText;
+    state.pendingComposerText = null;
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
   }
 
   const updateHint = () => {
@@ -1283,29 +1314,6 @@ function neutralizeLeadingTopics(text: string): string {
   return lead + out.join('') + rest;
 }
 
-function formatTime(iso: string): string {
-  try {
-    const d = new Date(iso);
-    return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
-  } catch { return ''; }
-}
-
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
-function toast(msg: string, kind: 'info' | 'error' = 'info'): void {
-  const el = document.createElement('div');
-  el.className = `chat-toast ${kind === 'error' ? 'error' : ''}`;
-  el.textContent = msg;
-  document.body.appendChild(el);
-  setTimeout(() => el.remove(), 3000);
-}
 
 /* ── file upload ───────────────────────────────────────────────────── */
 

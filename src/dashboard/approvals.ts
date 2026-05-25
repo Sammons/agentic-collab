@@ -15,6 +15,7 @@
 import type { ApprovalRow, ApprovalState } from '../shared/types.ts';
 import { state, on, authHeaders } from './state.ts';
 import { registerRoute } from './routing.ts';
+import { escapeHtml, toast } from './util.ts';
 
 let approvals: ApprovalRow[] = [];
 let selectedId: string | null = null;
@@ -440,19 +441,5 @@ function setText(sel: string, text: string): void {
   if (el) el.textContent = text;
 }
 
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
-function showToast(msg: string, kind: 'info' | 'error' = 'info'): void {
-  const el = document.createElement('div');
-  el.className = `chat-toast ${kind === 'error' ? 'error' : ''}`;
-  el.textContent = msg;
-  document.body.appendChild(el);
-  setTimeout(() => el.remove(), 3000);
-}
+// Use toast from util.ts, aliased as showToast for backward compat
+const showToast = toast;

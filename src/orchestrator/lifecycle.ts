@@ -270,7 +270,13 @@ async function injectRename(
   }
 }
 
-/** Create a tmux session and write a config profile for engines that use one (e.g. Codex). */
+/**
+ * Create a tmux session and write a config profile for engines that use one (e.g. Codex).
+ *
+ * Idempotent: if the session already exists (e.g. stale shell from a crashed CLI),
+ * kills it first to ensure a clean slate. This prevents quote-mode zombies when
+ * the next spawn/resume pastes the persona into a dirty shell (GH #5).
+ */
 async function createSessionAndWriteProfile(
   ctx: LifecycleContext,
   proxyId: string,
@@ -280,6 +286,20 @@ async function createSessionAndWriteProfile(
   name: string,
   systemPrompt: string | null,
 ): Promise<ProxyResponse> {
+  // Check if session already exists and kill it to ensure a clean slate (GH #5)
+  const hasResult = await ctx.proxyDispatch(proxyId, {
+    action: 'has_session',
+    sessionName: tmuxSession,
+  }).catch(() => ({ ok: false, data: false }));
+
+  if (hasResult.ok && hasResult.data === true) {
+    console.log(`[lifecycle] ${name}: killing stale tmux session before create`);
+    await ctx.proxyDispatch(proxyId, {
+      action: 'kill_session',
+      sessionName: tmuxSession,
+    }).catch(() => {});
+  }
+
   const createResult = await ctx.proxyDispatch(proxyId, {
     action: 'create_session',
     sessionName: tmuxSession,

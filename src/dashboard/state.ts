@@ -46,6 +46,8 @@ export type DashboardState = {
   route: Route;
   /** Auth token for /api/* requests. */
   token: string | null;
+  /** Pending composer text to inject on next chat mount (cross-route injection). */
+  pendingComposerText: string | null;
 };
 
 export const state: DashboardState = {
@@ -57,6 +59,7 @@ export const state: DashboardState = {
   connected: 'connecting',
   route: { kind: 'dashboard' },
   token: null,
+  pendingComposerText: null,
 };
 
 /** O(1) agent lookup by name. Rebuilt on init/agents_update/agent_destroyed. */
