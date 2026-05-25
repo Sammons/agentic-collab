@@ -380,22 +380,31 @@ function wire(r: HTMLElement): void {
 
       // On dashboard:
       const clickedCheckbox = !!target.closest('.check');
-      const isSelected = state.selectedAgents.has(name);
+      const composer = document.querySelector<HTMLTextAreaElement>('[data-composer-input]');
 
-      if (!clickedCheckbox && isSelected) {
-        // Try the "inject @mention" shortcut when the composer is empty.
-        const composer = document.querySelector<HTMLTextAreaElement>('[data-composer-input]');
-        if (composer && composer.value.trim() === '') {
+      // Smart @mention injection:
+      // - If composer is empty → inject @agent
+      // - If composer has only @mentions (no message body) → replace with @agent
+      // - Otherwise → toggle selection as usual
+      if (!clickedCheckbox && composer) {
+        const value = composer.value.trim();
+        // Check if value is empty or only contains @mentions with no message
+        const onlyMentions = value === '' || /^(@[a-zA-Z0-9_\-/]+\s*)+$/.test(value);
+        if (onlyMentions) {
           composer.value = `@${name} `;
           composer.focus();
           composer.setSelectionRange(composer.value.length, composer.value.length);
-          // Triggers the hint update in chat.ts.
           composer.dispatchEvent(new Event('input', { bubbles: true }));
+          // Also select the agent in the sidebar if not already
+          if (!state.selectedAgents.has(name)) {
+            state.selectedAgents.add(name);
+            import('./state.ts').then((s) => s.emit('selection-changed'));
+          }
           return;
         }
       }
 
-      // Default: toggle.
+      // Default: toggle selection.
       toggleAgentSelected(name);
     });
   });
