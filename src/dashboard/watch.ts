@@ -60,6 +60,7 @@ function render(root: HTMLElement, route: Route): void {
           ${isRunning ? `<button class="btn" data-kill>Kill</button>` : ''}
           <button class="btn ghost" data-persona>Persona</button>
           <button class="btn ghost" data-open-tmux>↗ Open in tmux</button>
+          <button class="btn ghost danger" data-delete>Delete</button>
           <button class="btn" data-stop>Stop watching</button>
         </div>
       </div>
@@ -230,6 +231,24 @@ function wire(root: HTMLElement, name: string): void {
       console.error('[watch] openEditPersonaModal failed', err);
       showToast(`Persona open failed: ${(err as Error).message}`, 'error');
     });
+  });
+  root.querySelector<HTMLElement>('[data-delete]')?.addEventListener('click', async () => {
+    if (!window.confirm(`Delete agent "${name}"? This will destroy the agent and remove it from the database.`)) return;
+    try {
+      const res = await fetch(`/api/agents/${encodeURIComponent(name)}`, {
+        method: 'DELETE',
+        headers: authHeaders(),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        showToast(body?.error ?? 'Delete failed', 'error');
+        return;
+      }
+      showToast(`Deleted agent ${name}`);
+      go({ kind: 'agents' });
+    } catch {
+      showToast('Network error', 'error');
+    }
   });
 
   root.querySelector<HTMLElement>('[data-pause]')?.addEventListener('click', () => {

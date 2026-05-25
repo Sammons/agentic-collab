@@ -61,6 +61,14 @@
   background: var(--paper-hover);
 }
 
+.btn.ghost.danger {
+  color: var(--ink-3);
+}
+.btn.ghost.danger:hover {
+  color: var(--brick);
+  background: var(--brick-bg);
+}
+
 /* small kbd hint inside buttons */
 .btn kbd {
   font-family: var(--mono);
