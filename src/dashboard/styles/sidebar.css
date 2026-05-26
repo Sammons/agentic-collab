@@ -195,6 +195,10 @@
 }
 .team-row:hover .team-edit { opacity: 0.7; }
 .team-row .team-edit:hover { opacity: 1; color: var(--clay); }
+/* no-team row lacks edit icon — add equivalent margin to align count */
+.team.no-team .team-row .ct {
+  margin-right: 22px; /* 16px icon + 6px margin */
+}
 
 .team-members {
   display: none;

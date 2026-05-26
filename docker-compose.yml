@@ -10,6 +10,9 @@ services:
       # PERSONAS_HOST_DIR should point to the canonical personas directory.
       # Default ./persistent-agents works as a directory or symlink to the real location.
       - ${PERSONAS_HOST_DIR:-./persistent-agents}:/app/persistent-personas
+      # Dev: bind-mount src for hot-reload without rebuild. Dockerfile COPY
+      # still bakes src/ into the image for prod/CI (self-contained deploys).
+      - ./src:/app/src
     # host.docker.internal resolves to the host on Docker Desktop (macOS/Windows).
     # On Linux, this requires Docker Engine 20.10+ with the host-gateway feature.
     # If host-gateway is unavailable, use --network=host or set

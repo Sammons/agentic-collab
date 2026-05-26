@@ -77,20 +77,34 @@
   .watch-hdr {
     padding: 10px 12px;
     gap: 6px 8px;
+    align-items: center;
+  }
+  .watch-hdr .back {
+    padding: 6px 10px;
   }
   .watch-hdr .right {
     flex-basis: 100%;
     margin-left: 0;
     justify-content: flex-start;
-    padding-top: 6px;
+    padding-top: 8px;
     border-top: 1px solid var(--rule-soft);
-    margin-top: 4px;
+    margin-top: 6px;
+    gap: 8px;
+  }
+  .watch-hdr .right .btn {
+    padding: 8px 12px;
+    font-size: 12px;
   }
   .watch-hdr .title {
-    font-size: 15px;
+    font-size: 18px;
+    line-height: 1.2;
   }
   .watch-hdr .breadcrumb {
     font-size: 11px;
+  }
+  .watch-hdr .state-pill {
+    font-size: 10px;
+    padding: 2px 8px;
   }
   /* Hide "Open in tmux" on mobile — not useful without terminal access */
   .watch-hdr [data-open-tmux] {
