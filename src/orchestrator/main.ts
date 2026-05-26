@@ -31,6 +31,8 @@ import { getVersion } from '../shared/version.ts';
 import { handleVoiceUpgrade, type VoiceProxyOptions } from './voice-proxy.ts';
 import type { WhisperOptions } from './whisper-stt.ts';
 import { DEFAULT_ENGINE_CONFIGS } from './default-engine-configs.ts';
+import { setCustomEngineResolver } from './adapters/index.ts';
+import type { EngineType } from '../shared/types.ts';
 
 const PORT = parseInt(process.env['PORT'] ?? '3000', 10);
 const DB_PATH = process.env['DB_PATH'] ?? join(process.env['HOME'] ?? '/data', '.agentic-collab', 'orchestrator.db');
@@ -64,6 +66,15 @@ for (const config of DEFAULT_ENGINE_CONFIGS) {
     console.log(`[orchestrator] Seeded default engine config: ${config.name}`);
   }
 }
+
+// ── Custom Engine Resolver ──
+// Wire the adapter registry so it can resolve custom engine names
+// (e.g. "claude-with-home") to their underlying adapter type by looking
+// up the engine_configs DB row.
+setCustomEngineResolver((name) => {
+  const config = db.getEngineConfig(name);
+  return (config?.engine as EngineType | undefined) ?? null;
+});
 
 // ── Proxy Dispatch ──
 
