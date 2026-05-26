@@ -392,7 +392,11 @@ route('POST', '/api/agents', async (req, res, _match, ctx) => {
 
   const VALID_ENGINES = new Set(['claude', 'codex', 'opencode']);
   if (!VALID_ENGINES.has(resolvedEngine)) {
-    return json(res, 400, { error: 'engine must be claude, codex, or opencode' });
+    // Custom engine: must exist in engine_configs DB and reference a valid underlying engine.
+    const config = ctx.db.getEngineConfig(resolvedEngine);
+    if (!config || !VALID_ENGINES.has(config.engine)) {
+      return json(res, 400, { error: `engine must be claude/codex/opencode or a custom engine name from engine_configs (got "${resolvedEngine}")` });
+    }
   }
 
   const existing = ctx.db.getAgent(body.name);
