@@ -395,7 +395,8 @@ function wireFeedControls(root: HTMLElement): void {
   if (loadOlderBtn) {
     loadOlderBtn.addEventListener('click', async () => {
       if (feedState.messages.length === 0) return;
-      const oldestId = feedState.messages[0]!.id;
+      // Messages are stored newest-first (DESC), so oldest is at the end
+      const oldestId = feedState.messages[feedState.messages.length - 1]!.id;
       await fetchFeed(oldestId);
       scheduleRender();
     });
