@@ -44,6 +44,14 @@ export type LifecycleContext = {
   onLifecycleOp?: (agentName: string) => void;
 };
 
+/**
+ * Live set of registered proxy ids, passed to requireProxy so a persona-pinned
+ * proxy that isn't currently registered fails loud (RFC-003 §2).
+ */
+function registeredProxySet(ctx: LifecycleContext): ReadonlySet<string> {
+  return new Set(ctx.db.listProxies().map((p) => p.proxyId));
+}
+
 // Timeouts and delays — configurable via env vars for tuning in different environments
 const SPAWN_TIMEOUT_MS = parseInt(process.env['SPAWN_TIMEOUT_MS'] ?? '30000', 10);
 const SUSPEND_TIMEOUT_MS = parseInt(process.env['SUSPEND_TIMEOUT_MS'] ?? '60000', 10);
@@ -606,7 +614,7 @@ export async function resumeAgent(
     if (!canResume(agent)) {
       throw new Error(`Agent "${name}" is in state "${agent.state}", expected suspended or failed`);
     }
-    const proxyId = requireProxy(agent);
+    const proxyId = requireProxy(agent, registeredProxySet(ctx));
     const tmuxSession = sessionName(agent);
 
     const current = ctx.db.updateAgentState(name, 'resuming', agent.version, {
@@ -775,7 +783,7 @@ export async function suspendAgent(
     if (!canSuspend(agent)) {
       throw new Error(`Agent "${name}" is in state "${agent.state}", expected active or idle`);
     }
-    const proxyId = requireProxy(agent);
+    const proxyId = requireProxy(agent, registeredProxySet(ctx));
 
     const current = ctx.db.updateAgentState(name, 'suspending', agent.version, {
       lastActivity: new Date().toISOString(),
@@ -923,7 +931,7 @@ export async function reloadAgent(
     if (!canSuspend(agent)) {
       throw new Error(`Agent "${name}" is in state "${agent.state}", cannot reload`);
     }
-    const proxyId = requireProxy(agent);
+    const proxyId = requireProxy(agent, registeredProxySet(ctx));
 
     const current = ctx.db.updateAgentState(name, 'suspending', agent.version, {
       lastActivity: new Date().toISOString(),
@@ -1097,7 +1105,7 @@ export async function recoverAgent(
     if (agent.state !== 'failed') {
       throw new Error(`Agent "${name}" is in state "${agent.state}", recovery requires 'failed'`);
     }
-    const proxyId = requireProxy(agent);
+    const proxyId = requireProxy(agent, registeredProxySet(ctx));
 
     const current = ctx.db.updateAgentState(name, 'spawning', agent.version, {
       lastActivity: new Date().toISOString(),
@@ -1215,7 +1223,7 @@ export async function interruptAgent(
   await ctx.locks.withLock(name, async () => {
     const agent = ctx.db.getAgent(name);
     if (!agent) throw new Error(`Agent "${name}" not found`);
-    const proxyId = requireProxy(agent);
+    const proxyId = requireProxy(agent, registeredProxySet(ctx));
 
     // Resolve engine config defaults for hook fields
     const engineConfig = ctx.db.getEngineConfig(agent.engine);
@@ -1243,7 +1251,7 @@ export async function compactAgent(
   await ctx.locks.withLock(name, async () => {
     const agent = ctx.db.getAgent(name);
     if (!agent) throw new Error(`Agent "${name}" not found`);
-    const proxyId = requireProxy(agent);
+    const proxyId = requireProxy(agent, registeredProxySet(ctx));
 
     // Resolve engine config defaults for hook fields
     const engineConfig = ctx.db.getEngineConfig(agent.engine);
@@ -1287,7 +1295,7 @@ export async function killAgent(
   await ctx.locks.withLock(name, async () => {
     const agent = ctx.db.getAgent(name);
     if (!agent) throw new Error(`Agent "${name}" not found`);
-    const proxyId = requireProxy(agent);
+    const proxyId = requireProxy(agent, registeredProxySet(ctx));
 
     await ctx.proxyDispatch(proxyId, {
       action: 'kill_session',
@@ -1318,7 +1326,7 @@ export async function executeCustomButton(
     const agent = ctx.db.getAgent(name);
     if (!agent) throw new Error(`Agent "${name}" not found`);
 
-    const proxyId = requireProxy(agent);
+    const proxyId = requireProxy(agent, registeredProxySet(ctx));
 
     // Merge custom buttons: engine config defaults + agent-level overrides
     const buttons: Record<string, unknown> = {};
@@ -1363,7 +1371,7 @@ export async function executeIndicatorAction(
     if (!agent) throw new Error(`Agent "${name}" not found`);
     if (!agent.indicators) throw new Error(`Agent "${name}" has no indicators`);
 
-    const proxyId = requireProxy(agent);
+    const proxyId = requireProxy(agent, registeredProxySet(ctx));
     let defs: Array<{ id: string; regex?: string; actions?: Record<string, unknown> }>;
     try {
       defs = JSON.parse(agent.indicators) as Array<{ id: string; regex?: string; actions?: Record<string, unknown> }>;
@@ -1451,7 +1459,7 @@ export async function deliverToAgent(
         return;
       }
 
-      const proxyId = requireProxy(currentAgent);
+      const proxyId = requireProxy(currentAgent, registeredProxySet(ctx));
 
       // Resolve engine config defaults for hook fields
       const engineConfig = ctx.db.getEngineConfig(currentAgent.engine);

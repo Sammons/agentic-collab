@@ -173,6 +173,7 @@ export type AgentRecord = {
   agentGroup: string | null; // grouping label from persona frontmatter
   launchEnv: LaunchEnv | null; // launch-time env injected on spawn/resume/reload
   account: string | null; // named credential account for HOME isolation
+  proxyPin: string | null; // persona-declared proxy (frontmatter `proxy:`); authoritative over proxyId
   sortOrder: number; // manual ordering within group
   /** Hook value for starting the agent (preset/file/inline). */
   hookStart: string | null;

@@ -17,8 +17,17 @@ import {
 
 describe('field-registry', () => {
   describe('CONFIG_FIELDS', () => {
-    it('has 19 entries covering all config fields', () => {
-      assert.equal(CONFIG_FIELDS.length, 19);
+    it('has 20 entries covering all config fields', () => {
+      assert.equal(CONFIG_FIELDS.length, 20);
+    });
+
+    it('includes proxyPin mapped to proxy_pin (personaKey proxy, upsertable, not createOnly)', () => {
+      const f = CONFIG_FIELDS.find(x => x.name === 'proxyPin');
+      assert.ok(f, 'proxyPin field exists');
+      assert.equal(f!.column, 'proxy_pin');
+      assert.equal(f!.personaKey, 'proxy');
+      assert.equal(f!.upsertable, true);
+      assert.equal(f!.createOnly, false);
     });
 
     it('has unique field names', () => {
@@ -162,7 +171,7 @@ describe('field-registry', () => {
       // Registry provides everything except 'name' and 'state' (prepended/appended manually)
       const expected = [
         'engine', 'model', 'thinking', 'cwd', 'persona', 'permissions',
-        'proxy_id', 'agent_group', 'account', 'launch_env',
+        'proxy_id', 'agent_group', 'account', 'proxy_pin', 'launch_env',
         'hook_start', 'hook_resume', 'hook_compact', 'hook_exit',
         'hook_interrupt', 'hook_submit', 'custom_buttons', 'indicators', 'icon',
       ];
@@ -180,7 +189,7 @@ describe('field-registry', () => {
       const cols = configUpsertColumns();
       const expected = [
         'engine', 'model', 'thinking', 'cwd', 'persona', 'permissions',
-        'agent_group', 'account', 'launch_env',
+        'agent_group', 'account', 'proxy_pin', 'launch_env',
         'hook_start', 'hook_resume', 'hook_compact', 'hook_exit',
         'hook_interrupt', 'hook_submit', 'custom_buttons', 'indicators', 'icon',
       ];
@@ -212,7 +221,7 @@ describe('field-registry', () => {
       };
 
       const params = serializeConfigParams(opts);
-      assert.equal(params.length, 19); // 19 config fields
+      assert.equal(params.length, 20); // 20 config fields
       assert.equal(params[0], 'claude'); // engine
       assert.equal(params[1], null);    // model
       assert.equal(params[2], null);    // thinking
@@ -235,7 +244,7 @@ describe('field-registry', () => {
       };
 
       const params = serializeConfigParams(opts);
-      assert.equal(params[9], JSON.stringify({ FOO: 'bar', BAZ: 'qux' })); // launch_env index
+      assert.equal(params[10], JSON.stringify({ FOO: 'bar', BAZ: 'qux' })); // launch_env index (after proxy_pin)
     });
 
     it('serializes hook values (string passthrough)', () => {
@@ -249,9 +258,9 @@ describe('field-registry', () => {
       };
 
       const params = serializeConfigParams(opts);
-      assert.equal(params[10], '/start');   // hook_start
-      assert.equal(params[12], '/compact'); // hook_compact
-      // indices: 0=engine..7=agentGroup, 8=account, 9=launchEnv, 10=hookStart, 12=hookCompact
+      assert.equal(params[11], '/start');   // hook_start
+      assert.equal(params[13], '/compact'); // hook_compact
+      // indices: 0=engine..7=agentGroup, 8=account, 9=proxyPin, 10=launchEnv, 11=hookStart, 13=hookCompact
     });
 
     it('serializes hook values (object to JSON)', () => {
@@ -266,7 +275,7 @@ describe('field-registry', () => {
       };
 
       const params = serializeConfigParams(opts);
-      assert.equal(params[10], JSON.stringify(hookObj)); // hook_start at index 10
+      assert.equal(params[11], JSON.stringify(hookObj)); // hook_start at index 11
     });
 
     it('serializes customButtons (empty object to null)', () => {
@@ -281,7 +290,7 @@ describe('field-registry', () => {
       };
 
       const params = serializeConfigParams(opts);
-      assert.equal(params[16], null); // custom_buttons at index 16
+      assert.equal(params[17], null); // custom_buttons at index 17
     });
 
     it('serializes indicators (empty array to null)', () => {
@@ -296,7 +305,7 @@ describe('field-registry', () => {
       };
 
       const params = serializeConfigParams(opts);
-      assert.equal(params[17], null); // indicators at index 17
+      assert.equal(params[18], null); // indicators at index 18
     });
   });
 
@@ -312,7 +321,7 @@ describe('field-registry', () => {
       };
 
       const params = serializeUpsertParams(opts);
-      assert.equal(params.length, 18); // 19 - 1 (proxyId)
+      assert.equal(params.length, 19); // 20 - 1 (proxyId)
       // proxyId value 'p1' should NOT appear
       assert.ok(!params.includes('p1'));
     });
@@ -556,6 +565,18 @@ describe('field-registry', () => {
       const opts = buildUpsertOptsFromFrontmatter('test', fm);
       assert.ok(!('proxyId' in opts));
     });
+
+    it('maps frontmatter proxy → opts.proxyPin (RFC-003)', () => {
+      const fm = { engine: 'claude', cwd: '/tmp', proxy: 'br-proxy' };
+      const opts = buildUpsertOptsFromFrontmatter('test', fm);
+      assert.equal(opts['proxyPin'], 'br-proxy');
+    });
+
+    it('absent proxy → proxyPin undefined', () => {
+      const fm = { engine: 'claude', cwd: '/tmp' };
+      const opts = buildUpsertOptsFromFrontmatter('test', fm);
+      assert.equal(opts['proxyPin'], undefined);
+    });
   });
 
   describe('buildMigrationStatements', () => {
@@ -566,6 +587,11 @@ describe('field-registry', () => {
       // Should have one statement per config field
       assert.equal(stmts.length, CONFIG_FIELDS.length);
       assert.ok(stmts.every(s => s.startsWith('ALTER TABLE agents ADD COLUMN')));
+    });
+
+    it('includes an ALTER for proxy_pin when missing (RFC-003)', () => {
+      const stmts = buildMigrationStatements(new Set<string>());
+      assert.ok(stmts.some(s => s === 'ALTER TABLE agents ADD COLUMN proxy_pin TEXT'));
     });
 
     it('returns empty array when all columns exist', () => {

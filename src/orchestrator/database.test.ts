@@ -952,7 +952,7 @@ describe('Database', () => {
         'hook_resume', 'hook_spawn', 'hook_start', 'hook_submit', 'icon',
         'indicators', 'last_activity', 'last_context_pct', 'launch_env',
         'model', 'name', 'permissions', 'persona', 'proxy_host', 'proxy_id',
-        'reload_queued', 'reload_task', 'sort_order', 'spawn_count', 'state',
+        'proxy_pin', 'reload_queued', 'reload_task', 'sort_order', 'spawn_count', 'state',
         'state_before_shutdown', 'thinking', 'tmux_session', 'version',
       ].sort();
       const cols = (tDb.rawDb.prepare('PRAGMA table_info(agents)').all() as Array<Record<string, unknown>>)
