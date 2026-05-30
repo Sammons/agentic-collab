@@ -613,6 +613,36 @@ function buttonRowHtml(name: string, steps: Record<string, unknown>[]): string {
   </div>`;
 }
 
+/** One indicator-action row: name + its pipeline (a named-pipeline-map entry). */
+function actionRowHtml(name: string, steps: Record<string, unknown>[]): string {
+  return `<div class="pl-action" data-action style="border:1px dashed ${PL_BORDER};border-radius:5px;padding:6px;margin:4px 0;">
+    <div style="display:flex;gap:6px;margin-bottom:4px;"><input class="ov-input" data-action-name value="${escapeHtml(name)}" placeholder="action key (e.g. approve, $1)" style="flex:1;max-width:240px;"><button class="btn" type="button" data-action-del style="flex:0 0 auto;">Remove</button></div>
+    ${pipelineEditorHtml(steps)}
+  </div>`;
+}
+
+/** One indicator card: id/regex/badge/style + named action pipelines. */
+function indicatorRowHtml(def: Record<string, unknown>): string {
+  const style = String(def['style'] ?? 'info');
+  const styleOpts = ['info', 'warning', 'danger'].map((s) => `<option value="${s}" ${s === style ? 'selected' : ''}>${s}</option>`).join('');
+  const actions = (def['actions'] && typeof def['actions'] === 'object' && !Array.isArray(def['actions'])) ? def['actions'] as Record<string, Record<string, unknown>[]> : {};
+  const actionRows = Object.entries(actions).map(([n, s]) => actionRowHtml(n, Array.isArray(s) ? s : [])).join('');
+  return `<div class="pl-indicator" data-indicator style="border:1px solid ${PL_BORDER};border-radius:6px;padding:8px;margin:6px 0;">
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:4px;">
+      <input class="ov-input" data-ind-id value="${escapeHtml(String(def['id'] ?? ''))}" placeholder="id" style="flex:0 0 140px;">
+      <input class="ov-input" data-ind-regex value="${escapeHtml(String(def['regex'] ?? ''))}" placeholder="regex (match in output)" style="flex:1;min-width:160px;">
+      <button class="btn" type="button" data-indicator-del style="flex:0 0 auto;">Remove</button>
+    </div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:4px;">
+      <input class="ov-input" data-ind-badge value="${escapeHtml(String(def['badge'] ?? ''))}" placeholder="badge label" style="flex:1;min-width:140px;">
+      <select class="ov-select" data-ind-style style="flex:0 0 130px;">${styleOpts}</select>
+    </div>
+    <div class="label" style="margin-top:4px;">Actions <span class="hint">named key → pipeline (capture groups: $1, $2…)</span></div>
+    <div data-actions-map>${actionRows}</div>
+    <button class="btn" type="button" data-action-add style="margin-top:2px;">+ action</button>
+  </div>`;
+}
+
 /** Read a keystrokes step's SendAction[] back from the DOM. */
 function collectSendActions(stepRow: Element): Record<string, unknown>[] {
   return [...stepRow.querySelectorAll('[data-act]')].map((r) => {
@@ -654,6 +684,11 @@ function wirePipelineEditors(root: HTMLElement): void {
     if (t.closest('[data-act-del]')) { t.closest('[data-act]')?.remove(); return; }
     if (t.closest('[data-button-add]')) { root.querySelector('[data-buttons]')?.insertAdjacentHTML('beforeend', buttonRowHtml('', [])); return; }
     if (t.closest('[data-button-del]')) { t.closest('[data-button]')?.remove(); return; }
+    if (t.closest('[data-indicator-add]')) { root.querySelector('[data-indicators]')?.insertAdjacentHTML('beforeend', indicatorRowHtml({ style: 'info' })); return; }
+    if (t.closest('[data-indicator-del]')) { t.closest('[data-indicator]')?.remove(); return; }
+    const addAction = t.closest('[data-action-add]');
+    if (addAction) { addAction.closest('[data-indicator]')?.querySelector('[data-actions-map]')?.insertAdjacentHTML('beforeend', actionRowHtml('', [])); return; }
+    if (t.closest('[data-action-del]')) { t.closest('[data-action]')?.remove(); return; }
   });
   root.addEventListener('change', (e) => {
     const t = e.target as HTMLElement;
@@ -701,6 +736,7 @@ export async function openEditPersonaModal(agentName: string): Promise<void> {
   const curEngine = sv('engine');
   const teamNames = [...new Set([...state.teams.map((t) => t.name), ...curTeams])];
   const curButtons: Record<string, Record<string, unknown>[]> = (fm['custom_buttons'] && typeof fm['custom_buttons'] === 'object' && !Array.isArray(fm['custom_buttons'])) ? fm['custom_buttons'] as Record<string, Record<string, unknown>[]> : {};
+  const curIndicators: Record<string, unknown>[] = Array.isArray(fm['indicators']) ? fm['indicators'] as Record<string, unknown>[] : [];
 
   const esc = escapeHtml;
   // One hook field: mode select (none/command/pipeline) + a mode-dependent body.
@@ -771,6 +807,11 @@ export async function openEditPersonaModal(agentName: string): Promise<void> {
           <div class="group-hdr">Custom buttons <span class="when">named action pipelines</span></div>
           <div data-buttons>${Object.entries(curButtons).map(([n, s]) => buttonRowHtml(n, Array.isArray(s) ? s : [])).join('')}</div>
           <button class="btn" type="button" data-button-add style="margin-top:4px;">+ button</button>
+        </div>
+        <div class="group">
+          <div class="group-hdr">Indicators <span class="when">badge + actions on output matches</span></div>
+          <div data-indicators>${curIndicators.map(indicatorRowHtml).join('')}</div>
+          <button class="btn" type="button" data-indicator-add style="margin-top:4px;">+ indicator</button>
         </div>
       </div>
 
@@ -887,6 +928,26 @@ export async function openEditPersonaModal(agentName: string): Promise<void> {
         if (name && steps.length) buttons[name] = steps;
       });
       if (Object.keys(buttons).length) fields['custom_buttons'] = buttons;
+      // indicators: id/regex/badge/style + named action pipelines (require id+regex+badge — the parser drops incomplete ones).
+      const indicators: Record<string, unknown>[] = [];
+      overlay.querySelectorAll<HTMLElement>('[data-indicator]').forEach((row) => {
+        const id = row.querySelector<HTMLInputElement>('[data-ind-id]')?.value.trim() ?? '';
+        const regex = row.querySelector<HTMLInputElement>('[data-ind-regex]')?.value.trim() ?? '';
+        const badge = row.querySelector<HTMLInputElement>('[data-ind-badge]')?.value.trim() ?? '';
+        const style = row.querySelector<HTMLSelectElement>('[data-ind-style]')?.value ?? 'info';
+        if (!id || !regex || !badge) return;
+        const actions: Record<string, Record<string, unknown>[]> = {};
+        row.querySelectorAll<HTMLElement>('[data-actions-map] > [data-action]').forEach((ar) => {
+          const an = ar.querySelector<HTMLInputElement>('[data-action-name]')?.value.trim();
+          const pl = ar.querySelector<HTMLElement>('[data-pipeline]');
+          const steps = pl ? collectPipeline(pl) : [];
+          if (an && steps.length) actions[an] = steps;
+        });
+        const def: Record<string, unknown> = { id, regex, badge, style };
+        if (Object.keys(actions).length) def['actions'] = actions;
+        indicators.push(def);
+      });
+      if (indicators.length) fields['indicators'] = indicators;
       payload = { fields, body: bd };
     } else {
       // Advanced fallback → raw frontmatter passthrough.
