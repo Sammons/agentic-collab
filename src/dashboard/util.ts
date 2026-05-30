@@ -32,6 +32,25 @@ export function formatTime(iso: string): string {
 }
 
 /**
+ * Set (or clear) the top-level `proxy:` key in a raw YAML frontmatter block.
+ *
+ * Pure string op (no parsing) so it round-trips losslessly through the
+ * raw-passthrough `PUT /api/personas/:name`: drops any existing top-level
+ * `proxy:` line — indented/nested keys and lookalikes such as `proxyId:` are
+ * left untouched — then appends `proxy: <value>` when `value` is non-empty.
+ * Used by the Edit-persona modal so the proxy dropdown stays in sync with the
+ * frontmatter textarea that is actually submitted.
+ */
+export function setFrontmatterProxy(raw: string, value: string): string {
+  const lines = raw.split('\n').filter((line) => !/^proxy:(\s|$)/.test(line));
+  if (value) {
+    while (lines.length && lines[lines.length - 1]!.trim() === '') lines.pop();
+    lines.push(`proxy: ${value}`);
+  }
+  return lines.join('\n');
+}
+
+/**
  * Show a toast notification that auto-dismisses after 3 seconds.
  */
 export function toast(msg: string, kind: 'info' | 'error' = 'info'): void {

@@ -429,6 +429,7 @@ route('POST', '/api/agents', async (req, res, _match, ctx) => {
     persona: body.name,
     permissions: body.permissions,
     proxyId: body.proxyId,
+    proxyPin: body.proxy,
     agentGroup: body.group,
   });
 
@@ -441,6 +442,7 @@ route('POST', '/api/agents', async (req, res, _match, ctx) => {
     fmLines.push(`cwd: ${body.cwd}`);
     if (body.permissions) fmLines.push(`permissions: ${body.permissions}`);
     if (body.group) fmLines.push(`group: ${body.group}`);
+    if (body.proxy) fmLines.push(`proxy: ${body.proxy}`);
     const content = `---\n${fmLines.join('\n')}\n---\n`;
     const dir = getPersonasDir();
     mkdirSync(dir, { recursive: true });
