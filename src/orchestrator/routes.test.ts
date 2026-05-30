@@ -923,12 +923,20 @@ describe('API Routes — Personas', () => {
     } finally { rmSync(join(personasDir, 'struct-agent.md'), { force: true }); }
   });
 
-  it('GET reports structuredRenderable=false for a persona with a hook (→ advanced mode)', async () => {
+  it('GET reports structuredRenderable=true for a flat-string hook (PR2)', async () => {
     try {
       writeFileSync(join(personasDir, 'hooky.md'), '---\nengine: claude\ncwd: /tmp\nstart: claude --resume\n---\nb\n');
       const { data } = await api('GET', '/api/personas/hooky');
-      assert.equal((data as { structuredRenderable: boolean }).structuredRenderable, false);
+      assert.equal((data as { structuredRenderable: boolean }).structuredRenderable, true);
     } finally { rmSync(join(personasDir, 'hooky.md'), { force: true }); }
+  });
+
+  it('GET reports structuredRenderable=false for a structured-hook object (→ advanced mode)', async () => {
+    try {
+      writeFileSync(join(personasDir, 'hooky2.md'), '---\nengine: claude\ncwd: /tmp\nstart:\n  shell: /compact\n---\nb\n');
+      const { data } = await api('GET', '/api/personas/hooky2');
+      assert.equal((data as { structuredRenderable: boolean }).structuredRenderable, false);
+    } finally { rmSync(join(personasDir, 'hooky2.md'), { force: true }); }
   });
 
   it('GET /api/personas/:name returns persona content', async () => {

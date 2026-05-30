@@ -270,13 +270,83 @@ export function parseFrontmatter(raw: string): { frontmatter: Record<string, unk
   return { frontmatter, frontmatterRaw: fmBlock, body };
 }
 
+/** Hook frontmatter keys, in canonical emit order (inverse of the field-registry hooks). */
+const HOOK_KEYS = ['start', 'resume', 'compact', 'exit', 'interrupt', 'submit'] as const;
+
+/** Emit SendAction[] as `<pad>- keystroke|text|paste: val` (+ optional post_wait_ms). Inverse of the keystrokes sub-parser. */
+function emitSendActions(actions: SendAction[], pad: string): string[] {
+  const out: string[] = [];
+  for (const a of actions) {
+    const rec = a as Record<string, unknown>;
+    const key = 'keystroke' in rec ? 'keystroke' : 'text' in rec ? 'text' : 'paste' in rec ? 'paste' : null;
+    if (key === null) continue;
+    out.push(`${pad}- ${key}: ${String(rec[key])}`);
+    if (rec['post_wait_ms'] !== undefined && rec['post_wait_ms'] !== null) {
+      out.push(`${pad}  post_wait_ms: ${String(rec['post_wait_ms'])}`);
+    }
+  }
+  return out;
+}
+
+/** Emit a PipelineStep[] as `<pad>- <step>` lines (inverse of parsePipelineSteps). */
+function emitPipeline(steps: PipelineStep[], pad: string): string[] {
+  const out: string[] = [];
+  for (const s of steps) {
+    switch (s.type) {
+      case 'shell': out.push(`${pad}- shell: ${s.command}`); break;
+      case 'keystroke': out.push(`${pad}- keystroke: ${s.key}`); break;
+      case 'wait': out.push(`${pad}- wait: ${s.ms}`); break;
+      case 'keystrokes':
+        out.push(`${pad}- keystrokes:`);
+        out.push(...emitSendActions(s.actions, `${pad}  `));
+        break;
+      case 'capture':
+        out.push(`${pad}- capture:`);
+        out.push(`${pad}    lines: ${s.lines}`);
+        out.push(`${pad}    regex: ${s.regex}`);
+        out.push(`${pad}    var: ${s.var}`);
+        break;
+    }
+  }
+  return out;
+}
+
+/** Emit a `Record<string, PipelineStep[]>` (custom_buttons, indicator actions): names at namePad, steps at namePad+2. */
+function emitNamedPipelineMap(map: Record<string, PipelineStep[]>, namePad: string): string[] {
+  const out: string[] = [];
+  for (const [name, steps] of Object.entries(map)) {
+    out.push(`${namePad}${name}:`);
+    out.push(...emitPipeline(steps, `${namePad}  `));
+  }
+  return out;
+}
+
+/**
+ * Serialize one hook value. Handles the forms the structured editor edits:
+ * a flat string (→ `key: value`, or a block scalar when multi-line) and a
+ * PipelineStep[] (→ `key:` + `- step` lines). Structured-hook objects
+ * (preset/shell/send/keystrokes) return null → not emitted → the persona
+ * round-trip-fails and opens in advanced mode (no data loss).
+ */
+function serializeHook(key: string, value: unknown): string[] | null {
+  if (typeof value === 'string') {
+    if (value === '') return null;
+    if (value.includes('\n')) return [`${key}: |`, ...value.split('\n').map((l) => `  ${l}`)];
+    return [`${key}: ${value}`];
+  }
+  if (Array.isArray(value) && value.length > 0) return [`${key}:`, ...emitPipeline(value as PipelineStep[], '  ')];
+  return null;
+}
+
 /**
  * Serialize a parsed-frontmatter object back to a YAML-subset block (the inverse
  * of parseFrontmatter), covering the field types the structured editor handles:
- * scalars, `teams` (inline list), and `env` (nested key/value). Keys it does NOT
- * handle (hooks, indicators, custom_buttons, …) are intentionally omitted — so
- * `structuredRenderable` round-trip-fails for such personas and the UI falls back
- * to the raw "advanced" editor rather than risk dropping them.
+ * scalars, `teams` (inline list), `env` (nested key/value), hooks (string or
+ * pipeline), and `custom_buttons` (named pipelines). Shapes it does NOT handle
+ * (structured-hook objects, indicators in this release, topics/spawn/…) are
+ * intentionally omitted — so `structuredRenderable` round-trip-fails for such
+ * personas and the UI falls back to the raw "advanced" editor rather than risk
+ * dropping them.
  */
 const SERIALIZE_SCALARS = ['icon', 'engine', 'model', 'thinking', 'cwd', 'permissions', 'group', 'account', 'proxy'] as const;
 export function serializeFrontmatter(fm: Record<string, unknown>): string {
@@ -292,6 +362,18 @@ export function serializeFrontmatter(fm: Record<string, unknown>): string {
     if (entries.length) {
       lines.push('env:');
       for (const [k, v] of entries) lines.push(`  ${k}: ${v}`);
+    }
+  }
+  for (const k of HOOK_KEYS) {
+    const hook = serializeHook(k, fm[k]);
+    if (hook) lines.push(...hook);
+  }
+  const cb = fm['custom_buttons'];
+  if (cb && typeof cb === 'object' && !Array.isArray(cb)) {
+    const entries = Object.entries(cb as Record<string, unknown>);
+    if (entries.length) {
+      lines.push('custom_buttons:');
+      lines.push(...emitNamedPipelineMap(cb as Record<string, PipelineStep[]>, '  '));
     }
   }
   return lines.join('\n');
