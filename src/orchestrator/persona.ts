@@ -7,6 +7,7 @@
 
 import { readFileSync, readdirSync, realpathSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join, resolve, relative, isAbsolute } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import type { StructuredHook, HookValue, SendAction, LaunchEnv, PipelineStep, IndicatorDefinition } from '../shared/types.ts';
 
 export const PERSONAS_DIR = process.env['PERSONAS_DIR'] ?? join(process.env['HOME'] ?? '/data', 'persistent-agents');
@@ -267,6 +268,46 @@ export function parseFrontmatter(raw: string): { frontmatter: Record<string, unk
   }
 
   return { frontmatter, frontmatterRaw: fmBlock, body };
+}
+
+/**
+ * Serialize a parsed-frontmatter object back to a YAML-subset block (the inverse
+ * of parseFrontmatter), covering the field types the structured editor handles:
+ * scalars, `teams` (inline list), and `env` (nested key/value). Keys it does NOT
+ * handle (hooks, indicators, custom_buttons, …) are intentionally omitted — so
+ * `structuredRenderable` round-trip-fails for such personas and the UI falls back
+ * to the raw "advanced" editor rather than risk dropping them.
+ */
+const SERIALIZE_SCALARS = ['icon', 'engine', 'model', 'thinking', 'cwd', 'permissions', 'group', 'account', 'proxy'] as const;
+export function serializeFrontmatter(fm: Record<string, unknown>): string {
+  const lines: string[] = [];
+  for (const k of SERIALIZE_SCALARS) {
+    const v = fm[k];
+    if (typeof v === 'string' && v !== '') lines.push(`${k}: ${v}`);
+  }
+  if (Array.isArray(fm['teams'])) lines.push(`teams: ${serializeTeams(fm['teams'] as string[])}`);
+  const env = fm['env'];
+  if (env && typeof env === 'object' && !Array.isArray(env)) {
+    const entries = Object.entries(env as Record<string, unknown>);
+    if (entries.length) {
+      lines.push('env:');
+      for (const [k, v] of entries) lines.push(`  ${k}: ${v}`);
+    }
+  }
+  return lines.join('\n');
+}
+
+/**
+ * True iff the structured editor can faithfully represent this frontmatter —
+ * i.e. serializing the parsed form reproduces the same parsed structure. When
+ * false, the UI opens the raw "advanced" editor (and encourages it). This is the
+ * data-loss guard: a persona using a field the structured form doesn't cover
+ * (hooks/indicators/…) or an unusual shape won't round-trip → advanced mode.
+ */
+export function structuredRenderable(raw: string): boolean {
+  const { frontmatter } = parseFrontmatter(raw);
+  const reparsed = parseFrontmatter(`---\n${serializeFrontmatter(frontmatter)}\n---\n`).frontmatter;
+  return isDeepStrictEqual(frontmatter, reparsed);
 }
 
 /**

@@ -905,6 +905,32 @@ describe('API Routes — Personas', () => {
     }
   });
 
+  it('PUT { fields } serializes structured frontmatter; GET reports structuredRenderable', async () => {
+    try {
+      await api('PUT', '/api/personas/struct-agent', {
+        fields: { engine: 'claude', cwd: '/tmp/proj', model: 'opus', teams: ['infra', 'advisors'], env: { FOO: 'bar' } },
+        body: 'You are struct.',
+      });
+      const raw = readFileSync(join(personasDir, 'struct-agent.md'), 'utf-8');
+      assert.match(raw, /^engine: claude$/m);
+      assert.match(raw, /^cwd: \/tmp\/proj$/m);
+      assert.match(raw, /^teams: \[infra, advisors\]$/m);
+      assert.match(raw, /^env:$/m);
+      assert.match(raw, /^ {2}FOO: bar$/m);
+      assert.match(raw, /You are struct\./);
+      const { data } = await api('GET', '/api/personas/struct-agent');
+      assert.equal((data as { structuredRenderable: boolean }).structuredRenderable, true);
+    } finally { rmSync(join(personasDir, 'struct-agent.md'), { force: true }); }
+  });
+
+  it('GET reports structuredRenderable=false for a persona with a hook (→ advanced mode)', async () => {
+    try {
+      writeFileSync(join(personasDir, 'hooky.md'), '---\nengine: claude\ncwd: /tmp\nstart: claude --resume\n---\nb\n');
+      const { data } = await api('GET', '/api/personas/hooky');
+      assert.equal((data as { structuredRenderable: boolean }).structuredRenderable, false);
+    } finally { rmSync(join(personasDir, 'hooky.md'), { force: true }); }
+  });
+
   it('GET /api/personas/:name returns persona content', async () => {
     const { status, data } = await api('GET', '/api/personas/researcher');
     assert.equal(status, 200);

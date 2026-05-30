@@ -10,7 +10,7 @@
  */
 import type { AgentRecord, ProxyRegistration, Team } from '../shared/types.ts';
 import { state, authHeaders, agentsByName } from './state.ts';
-import { escapeHtml, toast, setFrontmatterProxy } from './util.ts';
+import { escapeHtml, toast } from './util.ts';
 
 /* ── shared modal helpers ──────────────────────────────────────────── */
 
@@ -553,52 +553,97 @@ export function openEditTeamModal(team: Team): void {
 /* ── Edit persona ──────────────────────────────────────────────────── */
 
 export async function openEditPersonaModal(agentName: string): Promise<void> {
-  // Load current persona text
-  let frontmatter = '';
+  // Load persona: parsed frontmatter (→ structured fields), raw (→ advanced
+  // fallback), body, and whether the bespoke editor can faithfully represent it.
+  let fm: Record<string, unknown> = {};
+  let frontmatterRaw = '';
   let body = '';
-  let currentProxy = '';
+  let renderable = false;
   try {
     const res = await fetch(`/api/personas/${encodeURIComponent(agentName)}`, { headers: authHeaders() });
     if (res.ok) {
-      const data = await res.json() as { frontmatterRaw?: string; body?: string; content?: string; frontmatter?: { proxy?: string } };
-      frontmatter = data.frontmatterRaw ?? '';
+      const data = await res.json() as { frontmatter?: Record<string, unknown>; frontmatterRaw?: string; body?: string; content?: string; structuredRenderable?: boolean };
+      fm = data.frontmatter ?? {};
+      frontmatterRaw = data.frontmatterRaw ?? '';
       body = data.body ?? data.content ?? '';
-      currentProxy = data.frontmatter?.proxy ?? '';
+      renderable = data.structuredRenderable ?? false;
     }
   } catch {}
 
+  const sv = (k: string) => (typeof fm[k] === 'string' ? fm[k] as string : '');
+  const curProxy = sv('proxy');
+  const curTeams: string[] = Array.isArray(fm['teams']) ? (fm['teams'] as string[]) : [];
+  const curEnv: Record<string, string> = (fm['env'] && typeof fm['env'] === 'object' && !Array.isArray(fm['env'])) ? fm['env'] as Record<string, string> : {};
+  const ENGINES = ['claude', 'codex', 'opencode'];
+  const curEngine = sv('engine');
+  const teamNames = [...new Set([...state.teams.map((t) => t.name), ...curTeams])];
+
+  const esc = escapeHtml;
   const html = `
     <div class="hdr">
       <span class="ttl">Edit persona</span>
-      <span class="sub">${escapeHtml(agentName)} · <code style="font-family:var(--mono);font-size:11px;color:var(--ink-2);">persistent-agents/${escapeHtml(agentName)}.md</code></span>
+      <span class="sub">${esc(agentName)} · <code style="font-family:var(--mono);font-size:11px;color:var(--ink-2);">persistent-agents/${esc(agentName)}.md</code></span>
       <button class="esc">esc</button>
     </div>
     <div class="body">
-      <div class="ov-field" style="margin-bottom:14px;">
-        <label>Proxy</label>
-        <div>
-          <select class="ov-select" data-proxy>
-            ${currentProxy ? `<option value="${escapeHtml(currentProxy)}" selected>${escapeHtml(currentProxy)}</option>` : '<option value="" selected>Auto (first available)</option>'}
-          </select>
-          <div class="help" data-proxy-hint>Writes the <code>proxy:</code> key below. Reload on save to apply.</div>
+      <div data-structured style="${renderable ? '' : 'display:none;'}">
+        <div class="group">
+          <div class="group-hdr">Config</div>
+          <div class="ov-field"><label>Engine</label>
+            <select class="ov-select" data-f="engine">
+              ${ENGINES.map((e) => `<option value="${e}" ${curEngine === e ? 'selected' : ''}>${e}</option>`).join('')}
+              ${curEngine && !ENGINES.includes(curEngine) ? `<option value="${esc(curEngine)}" selected>${esc(curEngine)}</option>` : ''}
+            </select>
+          </div>
+          <div class="ov-field"><label>Model</label><div><input class="ov-input" data-f="model" value="${esc(sv('model'))}" placeholder="(engine default)"></div></div>
+          <div class="ov-field"><label>Thinking</label>
+            <select class="ov-select" data-f="thinking">
+              ${['', 'low', 'medium', 'high'].map((t) => `<option value="${t}" ${sv('thinking') === t ? 'selected' : ''}>${t || '(none)'}</option>`).join('')}
+            </select>
+          </div>
+          <div class="ov-field"><label>cwd</label>
+            <div class="ov-cwd-wrap">
+              <input class="ov-input path" type="text" data-f="cwd" value="${esc(sv('cwd'))}" placeholder="Click Browse…" readonly>
+              <button class="btn" type="button" data-browse-cwd>Browse…</button>
+            </div>
+          </div>
+          <div class="ov-field"><label>Permissions</label><div><input class="ov-input" data-f="permissions" value="${esc(sv('permissions'))}" placeholder="(default)"></div></div>
+          <div class="ov-field"><label>Account</label><div><input class="ov-input" data-f="account" value="${esc(sv('account'))}" placeholder="(none)"></div></div>
+          <div class="ov-field"><label>Icon</label><div><input class="ov-input" data-f="icon" value="${esc(sv('icon'))}" placeholder="emoji"></div></div>
+          <div class="ov-field"><label>Proxy</label>
+            <div>
+              <select class="ov-select" data-f="proxy">
+                ${curProxy ? `<option value="${esc(curProxy)}" selected>${esc(curProxy)}</option>` : '<option value="" selected>Auto (first available)</option>'}
+              </select>
+              <div class="help" data-proxy-hint></div>
+            </div>
+          </div>
+        </div>
+        <div class="group">
+          <div class="group-hdr">Teams <span class="when">click to toggle membership</span></div>
+          <div class="ov-chips" data-teams-chips>${teamNames.map((n) => `<span class="ov-chip ${curTeams.includes(n) ? 'on' : ''}" data-team="${esc(n)}">${esc(n)}</span>`).join('') || '<span style="font-size:12px;color:var(--ink-4);font-style:italic;">No teams yet.</span>'}</div>
+          <div style="margin-top:6px;display:flex;gap:6px;"><input class="ov-input" data-new-team type="text" placeholder="new team name…" style="max-width:220px;"><button class="btn" type="button" data-add-team>+ Add</button></div>
+        </div>
+        <div class="group">
+          <div class="group-hdr">Env <span class="when">launch-time vars</span></div>
+          <div data-env-rows></div>
+          <button class="btn" type="button" data-add-env>+ Add var</button>
         </div>
       </div>
-      <div class="ov-persona-grid">
-        <div class="ov-persona-col">
-          <div class="label">Frontmatter <span class="hint">YAML · saved on submit</span></div>
-          <textarea class="ov-textarea" data-fm>${escapeHtml(frontmatter)}</textarea>
-        </div>
-        <div class="ov-persona-col">
-          <div class="label">Body <span class="hint">Markdown · system prompt</span></div>
-          <textarea class="ov-textarea" data-body>${escapeHtml(body)}</textarea>
-        </div>
+
+      <div data-advanced style="${renderable ? 'display:none;' : ''}">
+        ${renderable ? '' : '<div class="help" style="color:var(--danger,#c0392b);margin-bottom:6px;">Could not fully parse this persona into fields — edit the raw YAML below (advanced).</div>'}
+        <div class="label">Frontmatter <span class="hint">YAML · raw</span></div>
+        <textarea class="ov-textarea" data-fm style="min-height:220px;">${esc(frontmatterRaw)}</textarea>
+      </div>
+
+      <div class="group">
+        <div class="group-hdr">Body <span class="when">markdown · system prompt</span></div>
+        <textarea class="ov-textarea" data-body style="min-height:160px;">${esc(body)}</textarea>
       </div>
     </div>
     <div class="foot">
-      <label class="secondary-check" data-reload>
-        <span class="box"></span>
-        Reload persona on save
-      </label>
+      <label class="secondary-check" data-reload><span class="box"></span>Reload persona on save</label>
       <span class="hint" style="color: var(--ink-4); font-style: italic;">Replaces the running tmux session.</span>
       <span class="spacer"></span>
       <button class="btn" data-cancel>Cancel</button>
@@ -608,21 +653,46 @@ export async function openEditPersonaModal(agentName: string): Promise<void> {
   const { overlay, close } = openModal(html, 'lg');
   let reloadOnSave = false;
 
-  // Proxy dropdown: populate from registered proxies, keep the frontmatter
-  // textarea (the submitted source of truth) in sync, and surface drift.
-  const proxySelect = overlay.querySelector<HTMLSelectElement>('[data-proxy]');
+  // cwd folder picker (reuses the New-agent picker)
+  const cwdInput = overlay.querySelector<HTMLInputElement>('[data-f="cwd"]');
+  overlay.querySelector<HTMLElement>('[data-browse-cwd]')?.addEventListener('click', () => {
+    openCwdPicker(cwdInput?.value || '', (picked) => { if (cwdInput) cwdInput.value = picked; });
+  });
+  // Proxy dropdown: populate + surface drift
+  const proxySelect = overlay.querySelector<HTMLSelectElement>('[data-f="proxy"]');
   const proxyHint = overlay.querySelector<HTMLElement>('[data-proxy-hint]');
   const livePlacement = agentsByName.get(agentName)?.proxyId ?? null;
-  if (proxyHint && livePlacement && livePlacement !== currentProxy) {
-    proxyHint.textContent = `Currently running on: ${livePlacement}`;
-  }
-  void loadProxies().then((proxies) => {
-    if (proxySelect) proxySelect.innerHTML = proxyOptionsHtml(proxies, currentProxy);
+  if (proxyHint && livePlacement && livePlacement !== curProxy) proxyHint.textContent = `Currently running on: ${livePlacement}`;
+  void loadProxies().then((proxies) => { if (proxySelect) proxySelect.innerHTML = proxyOptionsHtml(proxies, curProxy); });
+  // Teams chips: toggle on click; add new by name
+  const chipsHost = overlay.querySelector<HTMLElement>('[data-teams-chips]');
+  chipsHost?.addEventListener('click', (e) => {
+    const chip = (e.target as HTMLElement).closest<HTMLElement>('[data-team]');
+    if (chip) chip.classList.toggle('on');
   });
-  proxySelect?.addEventListener('change', () => {
-    const fmEl = overlay.querySelector<HTMLTextAreaElement>('[data-fm]');
-    if (fmEl) fmEl.value = setFrontmatterProxy(fmEl.value, proxySelect.value);
+  overlay.querySelector<HTMLElement>('[data-add-team]')?.addEventListener('click', () => {
+    const inp = overlay.querySelector<HTMLInputElement>('[data-new-team]');
+    const name = inp?.value.trim();
+    const exists = !!chipsHost && [...chipsHost.querySelectorAll<HTMLElement>('[data-team]')].some((c) => c.dataset['team'] === name);
+    if (!name || !chipsHost || exists) { if (inp) inp.value = ''; return; }
+    const chip = document.createElement('span');
+    chip.className = 'ov-chip on';
+    chip.dataset['team'] = name;
+    chip.textContent = name;
+    chipsHost.appendChild(chip);
+    inp!.value = '';
   });
+  // Env key/value rows
+  const envHost = overlay.querySelector<HTMLElement>('[data-env-rows]');
+  const addEnvRow = (k = '', v = '') => {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;gap:6px;margin-bottom:4px;';
+    row.innerHTML = `<input class="ov-input" data-env-k placeholder="KEY" value="${esc(k)}" style="max-width:200px;"><input class="ov-input" data-env-v placeholder="value" value="${esc(v)}"><button class="btn" type="button" data-env-del>×</button>`;
+    row.querySelector('[data-env-del]')?.addEventListener('click', () => row.remove());
+    envHost?.appendChild(row);
+  };
+  for (const [k, v] of Object.entries(curEnv)) addEnvRow(k, String(v));
+  overlay.querySelector<HTMLElement>('[data-add-env]')?.addEventListener('click', () => addEnvRow());
 
   overlay.querySelector<HTMLElement>('[data-reload]')?.addEventListener('click', (e) => {
     reloadOnSave = !reloadOnSave;
@@ -635,25 +705,35 @@ export async function openEditPersonaModal(agentName: string): Promise<void> {
   });
 
   const submit = async () => {
-    const fm = overlay.querySelector<HTMLTextAreaElement>('[data-fm]')?.value ?? '';
     const bd = overlay.querySelector<HTMLTextAreaElement>('[data-body]')?.value ?? '';
+    let payload: Record<string, unknown>;
+    if (renderable) {
+      // Structured mode → typed fields; server serializes via serializeFrontmatter.
+      const fields: Record<string, unknown> = {};
+      overlay.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-f]').forEach((el) => {
+        const val = el.value.trim();
+        if (val) fields[el.getAttribute('data-f')!] = val;
+      });
+      const teams = [...overlay.querySelectorAll<HTMLElement>('[data-team].on')].map((c) => c.dataset['team']!);
+      if (teams.length || curTeams.length) fields['teams'] = teams; // [] clears existing memberships
+      const env: Record<string, string> = {};
+      overlay.querySelectorAll<HTMLElement>('[data-env-rows] > div').forEach((row) => {
+        const k = row.querySelector<HTMLInputElement>('[data-env-k]')?.value.trim();
+        if (k) env[k] = row.querySelector<HTMLInputElement>('[data-env-v]')?.value ?? '';
+      });
+      if (Object.keys(env).length) fields['env'] = env;
+      payload = { fields, body: bd };
+    } else {
+      // Advanced fallback → raw frontmatter passthrough.
+      payload = { frontmatter: overlay.querySelector<HTMLTextAreaElement>('[data-fm]')?.value ?? '', body: bd };
+    }
     try {
       const res = await fetch(`/api/personas/${encodeURIComponent(agentName)}`, {
-        method: 'PUT',
-        headers: authHeaders(),
-        body: JSON.stringify({ frontmatter: fm, body: bd }),
+        method: 'PUT', headers: authHeaders(), body: JSON.stringify(payload),
       });
-      if (!res.ok) {
-        const b = await res.json().catch(() => null);
-        toast(b?.error ?? 'Save failed', 'error');
-        return;
-      }
+      if (!res.ok) { const b = await res.json().catch(() => null); toast(b?.error ?? 'Save failed', 'error'); return; }
       if (reloadOnSave) {
-        await fetch(`/api/agents/${encodeURIComponent(agentName)}/reload`, {
-          method: 'POST',
-          headers: authHeaders(),
-          body: JSON.stringify({}),
-        });
+        await fetch(`/api/agents/${encodeURIComponent(agentName)}/reload`, { method: 'POST', headers: authHeaders(), body: JSON.stringify({}) });
       }
       toast(`Saved persona for ${agentName}`);
       close();
