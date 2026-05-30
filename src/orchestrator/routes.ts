@@ -30,7 +30,7 @@ import {
 } from './lifecycle.ts';
 import { getAdapter } from './adapters/index.ts';
 import { shutdownAgents, restoreAllAgents } from './network.ts';
-import { sessionName } from '../shared/agent-entity.ts';
+import { sessionName, ProxyUnavailableError } from '../shared/agent-entity.ts';
 import type { MessageDispatcher } from './message-dispatcher.ts';
 import type { UsagePoller } from './usage-poller.ts';
 import type { TopicDelivery } from './topic-delivery.ts';
@@ -114,16 +114,34 @@ export type RouteContext = {
 
 /**
  * Resolve the proxy ID for an agent at spawn/resume time.
- * Priority: explicit body value > agent's existing proxyId > any available proxy.
+ *
+ * Priority (RFC-003 §2):
+ *   1. explicit body override (one-shot operator escape hatch)
+ *   2. persona pin (proxyPin) — authoritative; throws if not registered (fail-loud)
+ *   3. existing runtime placement (proxyId)
+ *   4. any registered proxy (legacy fallback for un-pinned agents)
  */
-function resolveProxyId(ctx: RouteContext, agent: { proxyId: string | null }, bodyProxyId?: string): string {
-  // 1. Explicit override from request body
+function resolveProxyId(
+  ctx: RouteContext,
+  agent: { name: string; proxyId: string | null; proxyPin: string | null },
+  bodyProxyId?: string,
+): string {
+  // 1. Explicit override from request body (does not persist over a pin — see §2b)
   if (bodyProxyId) return bodyProxyId;
 
-  // 2. Already assigned (e.g. from a previous spawn)
+  // 2. Persona pin is authoritative; fail loud if its proxy isn't registered.
+  if (agent.proxyPin) {
+    const registered = ctx.db.listProxies().some((p) => p.proxyId === agent.proxyPin);
+    if (!registered) {
+      throw new ProxyUnavailableError(agent.name, agent.proxyPin);
+    }
+    return agent.proxyPin;
+  }
+
+  // 3. Already assigned (e.g. from a previous spawn)
   if (agent.proxyId) return agent.proxyId;
 
-  // 3. Fall back to any registered proxy
+  // 4. Fall back to any registered proxy
   const proxies = ctx.db.listProxies();
   if (proxies.length > 0) return proxies[0]!.proxyId;
 
@@ -411,6 +429,7 @@ route('POST', '/api/agents', async (req, res, _match, ctx) => {
     persona: body.name,
     permissions: body.permissions,
     proxyId: body.proxyId,
+    proxyPin: body.proxy,
     agentGroup: body.group,
   });
 
@@ -423,6 +442,7 @@ route('POST', '/api/agents', async (req, res, _match, ctx) => {
     fmLines.push(`cwd: ${body.cwd}`);
     if (body.permissions) fmLines.push(`permissions: ${body.permissions}`);
     if (body.group) fmLines.push(`group: ${body.group}`);
+    if (body.proxy) fmLines.push(`proxy: ${body.proxy}`);
     const content = `---\n${fmLines.join('\n')}\n---\n`;
     const dir = getPersonasDir();
     mkdirSync(dir, { recursive: true });

@@ -7,7 +7,7 @@ Zero-dependency orchestrator for AI coding agents via tmux. Node 24 native TypeS
 ```bash
 ./start.sh          # orchestrator (Docker :3000) + proxy (host :3100)
 node --test 'src/**/*.test.ts'  # ~875 tests
-npx tsc --noEmit    # type check
+pnpm typecheck      # type check (tsc --noEmit)
 ```
 
 ## Architecture
@@ -68,6 +68,6 @@ Changes:
 ## Don't
 
 - Add npm dependencies (zero-dep is a design constraint)
-- Skip the type check (`npx tsc --noEmit`)
+- Skip the type check (`pnpm typecheck`)
 - Push directly to main (use worktree + PR)
 - Use --no-verify on commits

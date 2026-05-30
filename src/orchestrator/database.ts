@@ -516,6 +516,7 @@ export class Database {
     persona?: string;
     permissions?: string;
     proxyId?: string;
+    proxyPin?: string | null;
     agentGroup?: string;
     launchEnv?: LaunchEnv | null;
     hookStart?: string;
@@ -548,6 +549,7 @@ export class Database {
     cwd: string;
     persona?: string;
     permissions?: string;
+    proxyPin?: string | null;
     agentGroup?: string;
     launchEnv?: LaunchEnv | null;
     hookStart?: string;
@@ -1684,10 +1686,15 @@ export class Database {
     return rows.map(mapProxyRow);
   }
 
-  /** Migrate all agents from one proxy to another. Returns count migrated. */
+  /**
+   * Migrate un-pinned agents from one proxy to another. Returns count migrated.
+   * Pinned agents (proxy_pin set) are intentionally left in place — they do not
+   * fail over to a different proxy (RFC-003 §2c); their next lifecycle op fails
+   * loud until the pinned proxy returns.
+   */
   migrateAgentsToProxy(fromProxyId: string, toProxyId: string): number {
     const result = this.db.prepare(
-      'UPDATE agents SET proxy_id = ? WHERE proxy_id = ?'
+      'UPDATE agents SET proxy_id = ? WHERE proxy_id = ? AND proxy_pin IS NULL'
     ).run(toProxyId, fromProxyId);
     return result.changes;
   }

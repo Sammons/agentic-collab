@@ -1,7 +1,7 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:http';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { Database } from './database.ts';
@@ -845,6 +845,40 @@ describe('API Routes — Personas', () => {
     const data = await resp.json();
     return { status: resp.status, data };
   }
+
+  it('POST /api/agents with proxy writes proxy: frontmatter and sets proxyPin', async () => {
+    try {
+      const { status, data } = await api('POST', '/api/agents', {
+        name: 'proxy-pinned-agent',
+        engine: 'claude',
+        cwd: '/tmp/test',
+        proxy: 'proxy-east',
+      });
+      assert.equal(status, 201);
+      assert.equal((data as Record<string, unknown>).proxyPin, 'proxy-east');
+      const raw = readFileSync(join(personasDir, 'proxy-pinned-agent.md'), 'utf-8');
+      assert.match(raw, /^proxy: proxy-east$/m);
+    } finally {
+      // keep personasDir clean for the count-based listing tests
+      rmSync(join(personasDir, 'proxy-pinned-agent.md'), { force: true });
+    }
+  });
+
+  it('POST /api/agents without proxy leaves proxyPin unset and writes no proxy: line', async () => {
+    try {
+      const { status, data } = await api('POST', '/api/agents', {
+        name: 'unpinned-agent',
+        engine: 'claude',
+        cwd: '/tmp/test',
+      });
+      assert.equal(status, 201);
+      assert.ok(!(data as Record<string, unknown>).proxyPin);
+      const raw = readFileSync(join(personasDir, 'unpinned-agent.md'), 'utf-8');
+      assert.ok(!/^proxy:/m.test(raw));
+    } finally {
+      rmSync(join(personasDir, 'unpinned-agent.md'), { force: true });
+    }
+  });
 
   it('GET /api/personas lists persona files', async () => {
     const { status, data } = await api('GET', '/api/personas');

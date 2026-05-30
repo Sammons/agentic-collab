@@ -18,7 +18,7 @@
 import type { Database } from './database.ts';
 import type { LockManager } from '../shared/lock.ts';
 import type { ProxyCommand, ProxyResponse, AgentRecord, PendingMessage, DashboardMessage, IndicatorDefinition, ActiveIndicator, PipelineStep, DetectionConfig } from '../shared/types.ts';
-import { sessionName, canSuspend } from '../shared/agent-entity.ts';
+import { sessionName, canSuspend, ProxyUnavailableError } from '../shared/agent-entity.ts';
 import { getAdapter } from './adapters/index.ts';
 import { reloadAgent, recoverAgent, type LifecycleContext } from './lifecycle.ts';
 import { resolveEffectiveConfig } from './engine-config-resolver.ts';
@@ -819,6 +819,27 @@ export class HealthMonitor {
     }
   }
 
+  /**
+   * A background lifecycle op (auto-reload/auto-recover) hit a
+   * ProxyUnavailableError — the agent's pinned proxy isn't registered. A
+   * swallowed throw here would leave the agent wedged but shown green (the
+   * exact failure RFC-003 kills), so transition it to `failed` with the pin
+   * reason. Returns true if the error was a ProxyUnavailableError (handled).
+   */
+  private failOnProxyUnavailable(agentName: string, err: unknown): boolean {
+    if (!(err instanceof ProxyUnavailableError)) return false;
+    const latest = this.db.getAgent(agentName);
+    if (latest && latest.state !== 'failed') {
+      this.db.updateAgentState(agentName, 'failed', latest.version, {
+        failedAt: new Date().toISOString(),
+        failureReason: err.message,
+      });
+      this.db.logEvent(agentName, 'proxy_unavailable', undefined, { reason: err.message });
+      this.emitSystemMessage(agentName, `Failed — ${err.message}`);
+    }
+    return true;
+  }
+
   private async handleReload(agent: AgentRecord): Promise<void> {
     try {
       const lifecycleCtx = this.makeLifecycleCtx();
@@ -828,7 +849,9 @@ export class HealthMonitor {
       });
       this.onAgentUpdate(agent.name);
     } catch (err) {
-      console.error(`[health] Reload failed for ${agent.name}:`, err);
+      if (!this.failOnProxyUnavailable(agent.name, err)) {
+        console.error(`[health] Reload failed for ${agent.name}:`, err);
+      }
       this.onAgentUpdate(agent.name);
     }
   }
@@ -853,7 +876,9 @@ export class HealthMonitor {
       console.log(`[health] ${agent.name}: auto-recovery completed`);
       this.onAgentUpdate(agent.name);
     }).catch((err) => {
-      console.error(`[health] ${agent.name}: auto-recovery failed:`, err);
+      if (!this.failOnProxyUnavailable(agent.name, err)) {
+        console.error(`[health] ${agent.name}: auto-recovery failed:`, err);
+      }
       this.onAgentUpdate(agent.name);
     });
   }

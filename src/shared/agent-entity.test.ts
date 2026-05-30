@@ -1,115 +1,162 @@
-import { describe, it } from 'node:test';
+import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { sessionName, requireProxy, isRunning, isTransitioning, canSuspend, canResume } from './agent-entity.ts';
+import {
+  sessionName,
+  requireProxy,
+  isRunning,
+  isTransitioning,
+  canSuspend,
+  canResume,
+  ProxyUnavailableError,
+} from './agent-entity.ts';
 import type { AgentRecord } from './types.ts';
 
-function makeAgent(overrides: Partial<AgentRecord> = {}): AgentRecord {
-  return {
-    name: 'test',
+// ── Test Fixtures ──
+
+function makeAgent(overrides: Partial<AgentRecord> & Record<string, unknown> = {}): AgentRecord {
+  const base = {
+    name: 'test-agent',
     engine: 'claude',
-    cwd: '/tmp',
-    state: 'void',
-    version: 1,
-    spawnCount: 0,
-    createdAt: new Date().toISOString(),
-    proxyId: null,
-    tmuxSession: null,
-    sessionId: null,
+    state: 'active',
     model: null,
     thinking: null,
+    cwd: '/test',
     persona: null,
     permissions: null,
-    task: null,
-    dangerouslySkipPermissions: 0,
-    reloadQueued: 0,
-    reloadTask: null,
-    stateBeforeShutdown: null,
+    proxyId: 'proxy-1',
+    proxyPin: null,
+    sortOrder: 0,
+    account: null,
+    capturedVars: null,
+    launchEnv: null,
+    version: 1,
+    spawnCount: 0,
+    createdAt: '2024-01-01T00:00:00Z',
     lastActivity: null,
-    lastContextPct: null,
+    hookStart: null,
+    hookResume: null,
+    hookCompact: null,
+    hookExit: null,
+    hookInterrupt: null,
+    hookSubmit: null,
+    customButtons: null,
+    indicators: null,
+    currentSessionId: null,
     failedAt: null,
     failureReason: null,
-    ...overrides,
+    reloadQueued: 0,
+    reloadTask: null,
+    icon: null,
+    agentGroup: null,
+    lastContextPct: null,
+    tmuxSession: null,
   };
+  return { ...base, ...overrides } as AgentRecord;
 }
 
-describe('agent-entity helpers', () => {
-  describe('sessionName', () => {
-    it('returns tmuxSession when set', () => {
-      const agent = makeAgent({ tmuxSession: 'custom-session' });
-      assert.equal(sessionName(agent), 'custom-session');
-    });
+// ── requireProxy edge cases (proxy pinning, RFC-003) ──
 
-    it('returns agent-{name} when tmuxSession is null', () => {
-      const agent = makeAgent({ name: 'my-agent', tmuxSession: null });
-      assert.equal(sessionName(agent), 'agent-my-agent');
-    });
+describe('requireProxy', () => {
+  // baseline (un-pinned) behavior
+  test('no pin + proxyId set returns proxyId', () => {
+    const agent = makeAgent({ proxyId: 'proxy-9' });
+    assert.equal(requireProxy(agent), 'proxy-9');
   });
 
-  describe('requireProxy', () => {
-    it('returns proxyId when set', () => {
-      const agent = makeAgent({ proxyId: 'p1' });
-      assert.equal(requireProxy(agent), 'p1');
-    });
-
-    it('throws when proxyId is null', () => {
-      const agent = makeAgent({ proxyId: null });
-      assert.throws(() => requireProxy(agent), /no proxy/);
-    });
+  test('no pin + proxyId set with registeredProxies provided returns proxyId', () => {
+    const agent = makeAgent({ proxyId: 'proxy-1' });
+    assert.equal(requireProxy(agent, new Set(['proxy-1'])), 'proxy-1');
   });
 
-  describe('isRunning', () => {
+  test('no pin + no proxyId throws ProxyUnavailableError', () => {
+    const agent = makeAgent({ proxyId: null });
+    assert.throws(() => requireProxy(agent), ProxyUnavailableError);
+  });
+
+  // pinned behavior
+  test('pin set + in registeredProxies returns pin', () => {
+    const agent = makeAgent({ proxyPin: 'proxy-2', proxyId: 'proxy-1' });
+    assert.equal(requireProxy(agent, new Set(['proxy-2'])), 'proxy-2');
+  });
+
+  test('pin set + NOT in registeredProxies throws ProxyUnavailableError', () => {
+    const agent = makeAgent({ proxyPin: 'proxy-2' });
+    assert.throws(() => requireProxy(agent, new Set(['proxy-1'])), ProxyUnavailableError);
+  });
+
+  test('pin overrides a different proxyId (returns pin not proxyId)', () => {
+    const agent = makeAgent({ proxyPin: 'proxy-2', proxyId: 'proxy-1' });
+    assert.equal(requireProxy(agent, new Set(['proxy-2'])), 'proxy-2');
+  });
+
+  test('pin set but no registeredProxies arg returns pin (no throw)', () => {
+    const agent = makeAgent({ proxyPin: 'proxy-2', proxyId: 'proxy-1' });
+    assert.equal(requireProxy(agent), 'proxy-2');
+  });
+
+  test('ProxyUnavailableError carries agentName and pin', () => {
+    const agent = makeAgent({ name: 'pinned-agent', proxyPin: 'down-proxy', proxyId: 'proxy-1' });
+    try {
+      requireProxy(agent, new Set(['proxy-1']));
+      assert.fail('expected throw');
+    } catch (err) {
+      assert.ok(err instanceof ProxyUnavailableError);
+      assert.equal(err.agentName, 'pinned-agent');
+      assert.equal(err.pin, 'down-proxy');
+    }
+  });
+});
+
+// ── sessionName ──
+
+describe('sessionName', () => {
+  test('returns tmuxSession when set', () => {
+    const agent = makeAgent({ tmuxSession: 'custom-session' });
+    assert.equal(sessionName(agent), 'custom-session');
+  });
+
+  test('falls back to agent-<name> when tmuxSession is null', () => {
+    const agent = makeAgent({ name: 'foo', tmuxSession: null });
+    assert.equal(sessionName(agent), 'agent-foo');
+  });
+});
+
+// ── state group helpers ──
+
+describe('state group helpers', () => {
+  test('isRunning is true for active/idle/spawning/resuming', () => {
     for (const state of ['active', 'idle', 'spawning', 'resuming'] as const) {
-      it(`returns true for ${state}`, () => {
-        assert.equal(isRunning(makeAgent({ state })), true);
-      });
-    }
-
-    for (const state of ['void', 'suspended', 'failed', 'suspending'] as const) {
-      it(`returns false for ${state}`, () => {
-        assert.equal(isRunning(makeAgent({ state })), false);
-      });
+      assert.equal(isRunning(makeAgent({ state })), true, state);
     }
   });
 
-  describe('isTransitioning', () => {
+  test('isRunning is false for void/suspending/suspended/failed', () => {
+    for (const state of ['void', 'suspending', 'suspended', 'failed'] as const) {
+      assert.equal(isRunning(makeAgent({ state })), false, state);
+    }
+  });
+
+  test('isTransitioning is true for spawning/resuming/suspending', () => {
     for (const state of ['spawning', 'resuming', 'suspending'] as const) {
-      it(`returns true for ${state}`, () => {
-        assert.equal(isTransitioning(makeAgent({ state })), true);
-      });
-    }
-
-    for (const state of ['void', 'active', 'idle', 'suspended', 'failed'] as const) {
-      it(`returns false for ${state}`, () => {
-        assert.equal(isTransitioning(makeAgent({ state })), false);
-      });
+      assert.equal(isTransitioning(makeAgent({ state })), true, state);
     }
   });
 
-  describe('canSuspend', () => {
+  test('isTransitioning is false for active/idle', () => {
     for (const state of ['active', 'idle'] as const) {
-      it(`returns true for ${state}`, () => {
-        assert.equal(canSuspend(makeAgent({ state })), true);
-      });
-    }
-
-    for (const state of ['void', 'suspended', 'failed', 'spawning', 'resuming', 'suspending'] as const) {
-      it(`returns false for ${state}`, () => {
-        assert.equal(canSuspend(makeAgent({ state })), false);
-      });
+      assert.equal(isTransitioning(makeAgent({ state })), false, state);
     }
   });
 
-  describe('canResume', () => {
-    for (const state of ['suspended', 'failed'] as const) {
-      it(`returns true for ${state}`, () => {
-        assert.equal(canResume(makeAgent({ state })), true);
-      });
-    }
+  test('canSuspend is true for active/idle only', () => {
+    assert.equal(canSuspend(makeAgent({ state: 'active' })), true);
+    assert.equal(canSuspend(makeAgent({ state: 'idle' })), true);
+    assert.equal(canSuspend(makeAgent({ state: 'suspended' })), false);
+  });
 
-    for (const state of ['void', 'active', 'idle', 'spawning', 'resuming', 'suspending'] as const) {
-      it(`returns false for ${state}`, () => {
-        assert.equal(canResume(makeAgent({ state })), false);
-      });
-    }
+  test('canResume is true for suspended/failed only', () => {
+    assert.equal(canResume(makeAgent({ state: 'suspended' })), true);
+    assert.equal(canResume(makeAgent({ state: 'failed' })), true);
+    assert.equal(canResume(makeAgent({ state: 'active' })), false);
   });
 });

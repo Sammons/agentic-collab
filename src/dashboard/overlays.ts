@@ -8,9 +8,9 @@
  *   - agents.ts: New agent + Edit persona
  *   - sidebar.ts: New team (replaces the window.prompt fallback)
  */
-import type { AgentRecord, Team } from '../shared/types.ts';
-import { state, authHeaders } from './state.ts';
-import { escapeHtml, toast } from './util.ts';
+import type { AgentRecord, ProxyRegistration, Team } from '../shared/types.ts';
+import { state, authHeaders, agentsByName } from './state.ts';
+import { escapeHtml, toast, setFrontmatterProxy } from './util.ts';
 
 /* ── shared modal helpers ──────────────────────────────────────────── */
 
@@ -34,6 +34,37 @@ function openModal(html: string, size: 'sm' | '' | 'lg' = ''): { overlay: HTMLEl
   overlay.querySelector<HTMLElement>('.esc')?.addEventListener('click', close);
 
   return { overlay, close };
+}
+
+/* ── proxy pickers (shared by New agent + Edit persona) ──────────────── */
+
+/** Fetch registered proxies; returns [] on any failure (dropdown still usable). */
+async function loadProxies(): Promise<ProxyRegistration[]> {
+  try {
+    const res = await fetch('/api/proxies', { headers: authHeaders() });
+    if (!res.ok) return [];
+    return await res.json() as ProxyRegistration[];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Build <option>s for a proxy <select>. `current` is the pinned proxyId
+ * ('' = unpinned). Always offers "Auto"; if `current` names a proxy that is
+ * not currently registered it is still shown + selected so a valid-but-offline
+ * pin is never silently dropped.
+ */
+function proxyOptionsHtml(proxies: ProxyRegistration[], current: string): string {
+  const opts = [`<option value="" ${current === '' ? 'selected' : ''}>Auto (first available)</option>`];
+  for (const p of proxies) {
+    const label = `${p.proxyId} · ${p.host}${p.versionMatch ? '' : ' ⚠ version mismatch'}`;
+    opts.push(`<option value="${escapeHtml(p.proxyId)}" ${p.proxyId === current ? 'selected' : ''}>${escapeHtml(label)}</option>`);
+  }
+  if (current && !proxies.some((p) => p.proxyId === current)) {
+    opts.push(`<option value="${escapeHtml(current)}" selected>${escapeHtml(current)} (not registered)</option>`);
+  }
+  return opts.join('');
 }
 
 
@@ -65,6 +96,15 @@ export function openNewAgentModal(): void {
           </select>
         </div>
         <div class="ov-field">
+          <label>Proxy</label>
+          <div>
+            <select class="ov-select" data-proxy>
+              <option value="">Auto (first available)</option>
+            </select>
+            <div class="help">Pins this agent to a proxy host. Auto uses the first available.</div>
+          </div>
+        </div>
+        <div class="ov-field">
           <label>cwd</label>
           <div class="ov-cwd-wrap">
             <input class="ov-input path" type="text" data-cwd placeholder="Click Browse, or type a path…" readonly>
@@ -89,6 +129,12 @@ export function openNewAgentModal(): void {
     </div>
   `;
   const { overlay, close } = openModal(html);
+
+  // Populate the proxy dropdown from the registered proxies.
+  const proxySelect = overlay.querySelector<HTMLSelectElement>('[data-proxy]');
+  void loadProxies().then((proxies) => {
+    if (proxySelect) proxySelect.innerHTML = proxyOptionsHtml(proxies, '');
+  });
 
   // Teams chips
   const teamsHost = overlay.querySelector<HTMLElement>('[data-teams]');
@@ -121,6 +167,7 @@ export function openNewAgentModal(): void {
     const engine = overlay.querySelector<HTMLSelectElement>('[data-engine]')?.value as 'claude' | 'codex' | 'opencode';
     const cwd = overlay.querySelector<HTMLInputElement>('[data-cwd]')?.value.trim();
     const persona = overlay.querySelector<HTMLTextAreaElement>('[data-persona]')?.value;
+    const proxy = overlay.querySelector<HTMLSelectElement>('[data-proxy]')?.value.trim();
 
     if (!name) { toast('Name is required', 'error'); return; }
     if (!cwd)  { toast('cwd is required — click Browse', 'error'); return; }
@@ -128,6 +175,7 @@ export function openNewAgentModal(): void {
     try {
       const body: Record<string, unknown> = { name, engine, cwd };
       if (persona) body['persona'] = persona;
+      if (proxy) body['proxy'] = proxy;
       const res = await fetch('/api/agents', {
         method: 'POST',
         headers: authHeaders(),
@@ -508,12 +556,14 @@ export async function openEditPersonaModal(agentName: string): Promise<void> {
   // Load current persona text
   let frontmatter = '';
   let body = '';
+  let currentProxy = '';
   try {
     const res = await fetch(`/api/personas/${encodeURIComponent(agentName)}`, { headers: authHeaders() });
     if (res.ok) {
-      const data = await res.json() as { frontmatterRaw?: string; body?: string; content?: string };
+      const data = await res.json() as { frontmatterRaw?: string; body?: string; content?: string; frontmatter?: { proxy?: string } };
       frontmatter = data.frontmatterRaw ?? '';
       body = data.body ?? data.content ?? '';
+      currentProxy = data.frontmatter?.proxy ?? '';
     }
   } catch {}
 
@@ -524,6 +574,15 @@ export async function openEditPersonaModal(agentName: string): Promise<void> {
       <button class="esc">esc</button>
     </div>
     <div class="body">
+      <div class="ov-field" style="margin-bottom:14px;">
+        <label>Proxy</label>
+        <div>
+          <select class="ov-select" data-proxy>
+            ${currentProxy ? `<option value="${escapeHtml(currentProxy)}" selected>${escapeHtml(currentProxy)}</option>` : '<option value="" selected>Auto (first available)</option>'}
+          </select>
+          <div class="help" data-proxy-hint>Writes the <code>proxy:</code> key below. Reload on save to apply.</div>
+        </div>
+      </div>
       <div class="ov-persona-grid">
         <div class="ov-persona-col">
           <div class="label">Frontmatter <span class="hint">YAML · saved on submit</span></div>
@@ -548,6 +607,22 @@ export async function openEditPersonaModal(agentName: string): Promise<void> {
   `;
   const { overlay, close } = openModal(html, 'lg');
   let reloadOnSave = false;
+
+  // Proxy dropdown: populate from registered proxies, keep the frontmatter
+  // textarea (the submitted source of truth) in sync, and surface drift.
+  const proxySelect = overlay.querySelector<HTMLSelectElement>('[data-proxy]');
+  const proxyHint = overlay.querySelector<HTMLElement>('[data-proxy-hint]');
+  const livePlacement = agentsByName.get(agentName)?.proxyId ?? null;
+  if (proxyHint && livePlacement && livePlacement !== currentProxy) {
+    proxyHint.textContent = `Currently running on: ${livePlacement}`;
+  }
+  void loadProxies().then((proxies) => {
+    if (proxySelect) proxySelect.innerHTML = proxyOptionsHtml(proxies, currentProxy);
+  });
+  proxySelect?.addEventListener('change', () => {
+    const fmEl = overlay.querySelector<HTMLTextAreaElement>('[data-fm]');
+    if (fmEl) fmEl.value = setFrontmatterProxy(fmEl.value, proxySelect.value);
+  });
 
   overlay.querySelector<HTMLElement>('[data-reload]')?.addEventListener('click', (e) => {
     reloadOnSave = !reloadOnSave;
