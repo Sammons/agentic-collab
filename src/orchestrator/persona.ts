@@ -338,15 +338,30 @@ function serializeHook(key: string, value: unknown): string[] | null {
   return null;
 }
 
+/** Emit indicators: IndicatorDefinition[] → an `indicators:` block (inverse of parseIndicators). */
+function emitIndicators(defs: IndicatorDefinition[]): string[] {
+  const out: string[] = ['indicators:'];
+  for (const d of defs) {
+    out.push(`  ${d.id}:`);
+    out.push(`    regex: ${d.regex}`);
+    out.push(`    badge: ${d.badge}`);
+    out.push(`    style: ${d.style}`);
+    if (d.actions && Object.keys(d.actions).length) {
+      out.push('    actions:');
+      out.push(...emitNamedPipelineMap(d.actions, '      '));
+    }
+  }
+  return out;
+}
+
 /**
  * Serialize a parsed-frontmatter object back to a YAML-subset block (the inverse
  * of parseFrontmatter), covering the field types the structured editor handles:
  * scalars, `teams` (inline list), `env` (nested key/value), hooks (string or
- * pipeline), and `custom_buttons` (named pipelines). Shapes it does NOT handle
- * (structured-hook objects, indicators in this release, topics/spawn/…) are
- * intentionally omitted — so `structuredRenderable` round-trip-fails for such
- * personas and the UI falls back to the raw "advanced" editor rather than risk
- * dropping them.
+ * pipeline), `custom_buttons` (named pipelines), and `indicators`. Shapes it does
+ * NOT handle (structured-hook objects, topics/spawn/…) are intentionally omitted —
+ * so `structuredRenderable` round-trip-fails for such personas and the UI falls
+ * back to the raw "advanced" editor rather than risk dropping them.
  */
 const SERIALIZE_SCALARS = ['icon', 'engine', 'model', 'thinking', 'cwd', 'permissions', 'group', 'account', 'proxy'] as const;
 export function serializeFrontmatter(fm: Record<string, unknown>): string {
@@ -376,6 +391,8 @@ export function serializeFrontmatter(fm: Record<string, unknown>): string {
       lines.push(...emitNamedPipelineMap(cb as Record<string, PipelineStep[]>, '  '));
     }
   }
+  const ind = fm['indicators'];
+  if (Array.isArray(ind) && ind.length) lines.push(...emitIndicators(ind as IndicatorDefinition[]));
   return lines.join('\n');
 }
 

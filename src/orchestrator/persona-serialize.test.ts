@@ -110,3 +110,50 @@ describe('serializeFrontmatter round-trip (M2: hooks + custom_buttons)', () => {
     assert.ok(structuredRenderable(raw));
   });
 });
+
+describe('serializeFrontmatter round-trip (M3: indicators)', () => {
+  it('round-trips the real voice-edu-lead indicators (capture-group actions + a no-actions indicator)', () => {
+    const raw = [
+      '---', 'icon: 🎙️', 'engine: claude-with-home', 'cwd: /x', 'group: general',
+      'indicators:',
+      '  approval:',
+      "    regex: '(Yes)\\s*/\\s*(No)\\s*/\\s*(Always allow)'",
+      '    badge: Needs Approval',
+      '    style: warning',
+      '    actions:',
+      '      $1:',
+      '        - keystroke: $1',
+      '      $2:',
+      '        - keystroke: $2',
+      '      $3:',
+      '        - keystroke: $3',
+      '  low-context:',
+      "    regex: 'Context left until'",
+      '    badge: Low Context',
+      '    style: danger',
+      'teams: [general]',
+      '---', 'b', '',
+    ].join('\n');
+    assert.ok(roundTrips(raw), 'real indicators round-trip');
+    assert.ok(structuredRenderable(raw));
+  });
+
+  it('round-trips an indicator whose action is a multi-step pipeline', () => {
+    const raw = [
+      '---', 'engine: claude', 'cwd: /x',
+      'indicators:',
+      '  approval:',
+      '    regex: Approve this',
+      '    badge: Approve',
+      '    style: info',
+      '    actions:',
+      '      yes:',
+      '        - keystrokes:',
+      '          - keystroke: y',
+      '        - shell: /confirm',
+      '---', 'b', '',
+    ].join('\n');
+    assert.ok(roundTrips(raw), 'pipeline-action indicator round-trips');
+    assert.ok(structuredRenderable(raw));
+  });
+});
