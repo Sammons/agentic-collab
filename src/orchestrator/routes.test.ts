@@ -889,6 +889,22 @@ describe('API Routes — Personas', () => {
     assert.equal(personas[1]!.name, 'researcher');
   });
 
+  it('team membership changes write through to the persona file (RFC-004)', async () => {
+    try {
+      writeFileSync(join(personasDir, 'tw-agent.md'), '---\nengine: claude\ncwd: /tmp\n---\nbody\n');
+      const { data: team } = await api('POST', '/api/teams', { name: 'tw-team' });
+      const teamId = (team as { id: number }).id;
+      await api('POST', `/api/teams/${teamId}/members`, { agentName: 'tw-agent' });
+      let raw = readFileSync(join(personasDir, 'tw-agent.md'), 'utf-8');
+      assert.match(raw, /^teams: \[tw-team\]$/m, 'add-member writes teams: to the file');
+      await api('DELETE', `/api/teams/${teamId}/members/tw-agent`);
+      raw = readFileSync(join(personasDir, 'tw-agent.md'), 'utf-8');
+      assert.match(raw, /^teams: \[\]$/m, 'remove-member rewrites teams: []');
+    } finally {
+      rmSync(join(personasDir, 'tw-agent.md'), { force: true });
+    }
+  });
+
   it('GET /api/personas/:name returns persona content', async () => {
     const { status, data } = await api('GET', '/api/personas/researcher');
     assert.equal(status, 200);

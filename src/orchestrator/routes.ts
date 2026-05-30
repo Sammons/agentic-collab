@@ -21,7 +21,7 @@ import { sanitizeMessage, generateMessageId } from '../shared/sanitize.ts';
 import { parseAddress } from '../shared/address.ts';
 import { getVersion, versionsMatch } from '../shared/version.ts';
 import type { LockManager } from '../shared/lock.ts';
-import { getPersonasDir, parseFrontmatter, createPersonaAndAgent, syncSinglePersona, syncPersonasWithDiff, updateFrontmatterField, resolvePersonaPath, toHostPath } from './persona.ts';
+import { getPersonasDir, parseFrontmatter, createPersonaAndAgent, syncSinglePersona, syncPersonasWithDiff, updateFrontmatterField, resolvePersonaPath, toHostPath, writeAgentTeams } from './persona.ts';
 import {
   spawnAgent, resumeAgent, suspendAgent, destroyAgent,
   reloadAgent, recoverAgent, interruptAgent, compactAgent, killAgent,
@@ -2675,6 +2675,7 @@ route('POST', '/api/teams', async (req, res, _match, ctx) => {
     : [];
   try {
     const team = ctx.db.createTeam(name, members);
+    for (const m of team.members) writeAgentTeams(m, ctx.db.getAgentTeamNames(m)); // RFC-004 write-through
     broadcastTeamsUpdate(ctx);
     json(res, 201, team);
   } catch (err) {
@@ -2696,6 +2697,7 @@ route('PATCH', '/api/teams/:id', async (req, res, match, ctx) => {
   try {
     const team = ctx.db.updateTeamName(id, name);
     if (!team) return json(res, 404, { error: 'team not found' });
+    for (const m of team.members) writeAgentTeams(m, ctx.db.getAgentTeamNames(m)); // RFC-004: rename → rewrite members' files
     broadcastTeamsUpdate(ctx);
     json(res, 200, team);
   } catch (err) {
@@ -2710,8 +2712,10 @@ route('PATCH', '/api/teams/:id', async (req, res, match, ctx) => {
 route('DELETE', '/api/teams/:id', async (_req, res, match, ctx) => {
   const id = Number(match.pathname.groups['id']);
   if (!Number.isFinite(id)) return json(res, 400, { error: 'invalid id' });
+  const members = ctx.db.getTeam(id)?.members ?? []; // capture before delete
   const ok = ctx.db.deleteTeam(id);
   if (!ok) return json(res, 404, { error: 'team not found' });
+  for (const m of members) writeAgentTeams(m, ctx.db.getAgentTeamNames(m)); // RFC-004: delete → drop from members' files
   broadcastTeamsUpdate(ctx);
   res.writeHead(204);
   res.end();
@@ -2725,6 +2729,7 @@ route('POST', '/api/teams/:id/members', async (req, res, match, ctx) => {
   if (!agentName.trim()) return json(res, 400, { error: 'agentName is required' });
   const team = ctx.db.addTeamMember(id, agentName);
   if (!team) return json(res, 404, { error: 'team not found' });
+  writeAgentTeams(agentName, ctx.db.getAgentTeamNames(agentName)); // RFC-004 write-through
   broadcastTeamsUpdate(ctx);
   json(res, 200, team);
 });
@@ -2736,6 +2741,7 @@ route('DELETE', '/api/teams/:id/members/:agentName', async (_req, res, match, ct
   if (!agentName) return json(res, 400, { error: 'agentName is required' });
   const team = ctx.db.removeTeamMember(id, agentName);
   if (!team) return json(res, 404, { error: 'team not found' });
+  writeAgentTeams(agentName, ctx.db.getAgentTeamNames(agentName)); // RFC-004 write-through
   broadcastTeamsUpdate(ctx);
   json(res, 200, team);
 });

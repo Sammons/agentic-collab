@@ -560,15 +560,19 @@ export class Database {
     hookSubmit?: string;
     customButtons?: string;
     indicators?: string;
+    teams?: string[];
   }): AgentRecord {
     const existing = this.getAgent(opts.name);
-    if (!existing) {
-      return this.createAgent(opts);
+    if (existing) {
+      // Update config fields only — preserve runtime state
+      this.db.prepare(
+        `UPDATE agents SET ${configUpdateSetClause()} WHERE name = ?`,
+      ).run(...serializeUpsertParams(opts), opts.name);
+    } else {
+      this.createAgent(opts);
     }
-    // Update config fields only — preserve runtime state
-    this.db.prepare(
-      `UPDATE agents SET ${configUpdateSetClause()} WHERE name = ?`,
-    ).run(...serializeUpsertParams(opts), opts.name);
+    // RFC-004: reconcile persona-declared team memberships (file is source of truth).
+    if (Array.isArray(opts.teams)) this.setAgentTeams(opts.name, opts.teams);
     return this.getAgent(opts.name)!;
   }
 
@@ -2311,6 +2315,32 @@ export class Database {
       'DELETE FROM team_members WHERE team_id = ? AND agent_name = ?'
     ).run(teamId, agentName);
     return this.getTeam(teamId);
+  }
+
+  /**
+   * RFC-004: reconcile an agent's team memberships to exactly `names` (the
+   * persona-frontmatter source of truth). Creates missing teams by name, adds
+   * desired memberships, removes memberships not listed. Idempotent.
+   */
+  setAgentTeams(agentName: string, names: string[]): void {
+    const want = new Set(names.map((n) => n.trim()).filter(Boolean));
+    const teams = this.listTeams();
+    const byName = new Map(teams.map((t) => [t.name, t] as const));
+    for (const name of want) {
+      let team = byName.get(name);
+      if (!team) { team = this.createTeam(name); byName.set(name, team); }
+      if (!team.members.includes(agentName)) this.addTeamMember(team.id, agentName);
+    }
+    for (const t of teams) {
+      if (!want.has(t.name) && t.members.includes(agentName)) this.removeTeamMember(t.id, agentName);
+    }
+  }
+
+  /** RFC-004: team names an agent currently belongs to (for frontmatter write-back). */
+  getAgentTeamNames(agentName: string): string[] {
+    return this.listTeams()
+      .filter((t) => t.members.includes(agentName))
+      .map((t) => t.name);
   }
 
   // ── Files (orchestrator-native file registry) ──

@@ -340,6 +340,17 @@ describe('Lifecycle', () => {
       assert.ok(proxyCommands.some(c => c.action === 'paste'));
     });
 
+    it('persists proxy_id = pin on resume so health/dispatch track placement (RFC-004)', async () => {
+      db.createAgent({ name: 'relocate-test', engine: 'claude', cwd: '/tmp', proxyId: 'p1', proxyPin: 'p2' });
+      db.registerProxy('p2', 'tok', 'p2-host:3100');
+      const created = db.getAgent('relocate-test')!;
+      db.updateAgentState('relocate-test', 'suspended', created.version, {
+        tmuxSession: 'agent-relocate-test', proxyId: 'p1', currentSessionId: 's1',
+      });
+      await resumeAgent(ctx, 'relocate-test');
+      assert.equal(db.getAgent('relocate-test')!.proxyId, 'p2', 'proxy_id follows the pin');
+    });
+
     it('injects launchEnv with shell-quoted values during resume', async () => {
       db.createAgent({
         name: 'resume-env',

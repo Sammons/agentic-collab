@@ -619,6 +619,7 @@ export async function resumeAgent(
 
     const current = ctx.db.updateAgentState(name, 'resuming', agent.version, {
       lastActivity: new Date().toISOString(),
+      proxyId, // RFC-004: proxy_id tracks actual placement (= pin) so health/dispatch target the right proxy
     });
 
     return {
@@ -935,6 +936,7 @@ export async function reloadAgent(
 
     const current = ctx.db.updateAgentState(name, 'suspending', agent.version, {
       lastActivity: new Date().toISOString(),
+      proxyId, // RFC-004: proxy_id tracks actual placement (= pin) on reload
     });
 
     return {

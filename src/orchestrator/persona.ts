@@ -39,6 +39,8 @@ export type PersonaFrontmatter = {
   cwd?: string;
   permissions?: string;
   group?: string;
+  /** Team memberships (RFC-004): list of team names; file is the source of truth. */
+  teams?: string[];
   /** Named credential account for per-agent HOME isolation. */
   account?: string;
   /** Persona-declared proxy pin (RFC-003); authoritative over runtime proxyId. */
@@ -125,6 +127,21 @@ const NESTED_FIELDS = new Set([...nestedPersonaKeys(), 'env', 'spawn', 'prepare'
  * Only nested-capable fields (env, start, resume, compact, exit, interrupt,
  * submit, spawn) receive structured parsing. All other fields remain flat strings.
  */
+/** Parse an inline frontmatter list value: `[a, b]`, `a, b`, or `["a","b"]` → string[]. */
+function parseInlineList(val: string): string[] {
+  let s = val.trim();
+  if (s.startsWith('[') && s.endsWith(']')) s = s.slice(1, -1);
+  return s
+    .split(',')
+    .map((x) => x.trim().replace(/^['"]|['"]$/g, '').trim())
+    .filter(Boolean);
+}
+
+/** Serialize a team-name list to the inline frontmatter form `[a, b]` (RFC-004). */
+export function serializeTeams(names: string[]): string {
+  return `[${names.map((n) => n.trim()).filter(Boolean).join(', ')}]`;
+}
+
 export function parseFrontmatter(raw: string): { frontmatter: Record<string, unknown>; frontmatterRaw: string; body: string } {
   const trimmed = raw.trimStart();
   if (!trimmed.startsWith('---')) {
@@ -235,6 +252,13 @@ export function parseFrontmatter(raw: string): { frontmatter: Record<string, unk
         i = endLine;
         continue;
       }
+    }
+
+    // teams: inline list (RFC-004) → string[]. File is the source of truth.
+    if (key === 'teams') {
+      frontmatter[key] = parseInlineList(trimmedVal);
+      i++;
+      continue;
     }
 
     // Flat scalar value
@@ -1019,6 +1043,17 @@ export function updateFrontmatterField(filePath: string, field: string, value: s
 }
 
 /**
+ * RFC-004 write-through: rewrite an agent's `teams:` frontmatter to `names`
+ * (its full current membership list), keeping the persona file authoritative
+ * after a team mutation made via the API. No-op if the agent has no file
+ * (fileless agents are reported, never created).
+ */
+export function writeAgentTeams(agentName: string, names: string[], personasDir: string = getPersonasDir()): void {
+  const path = resolvePersonaPath(agentName, undefined, personasDir);
+  if (path) updateFrontmatterField(path, 'teams', serializeTeams(names));
+}
+
+/**
  * Compose the full system prompt for an agent.
  * Combines persona + messaging instructions + orchestrator rules.
  *
@@ -1173,7 +1208,11 @@ function isValidEngine(engine: string | undefined | null): engine is string {
 }
 
 function buildUpsertOpts(name: string, fm: PersonaFrontmatter): Parameters<Database['upsertAgentFromPersona']>[0] {
-  return buildUpsertOptsFromFrontmatter(name, fm) as Parameters<Database['upsertAgentFromPersona']>[0];
+  const opts = buildUpsertOptsFromFrontmatter(name, fm) as Parameters<Database['upsertAgentFromPersona']>[0];
+  // teams isn't a CONFIG_FIELDS column — thread it through so the single upsert
+  // chokepoint reconciles memberships (RFC-004). undefined = leave memberships untouched.
+  if (Array.isArray(fm.teams)) (opts as { teams?: string[] }).teams = fm.teams;
+  return opts;
 }
 
 /** True if this persona declares an ephemeral template (`persistent: false`).

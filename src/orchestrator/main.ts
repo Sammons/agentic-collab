@@ -19,6 +19,7 @@ import { ReminderDispatcher } from './reminder-dispatcher.ts';
 import { shutdownAgents, restoreAllAgents } from './network.ts';
 import type { LifecycleContext } from './lifecycle.ts';
 import { syncPersonasToDb, syncPersonasWithDiff, getPersonasDir } from './persona.ts';
+import { backfillFrontmatterFromDb } from './persona-backfill.ts';
 import { TopicDelivery } from './topic-delivery.ts';
 import { InstanceReaper } from './instance-reaper.ts';
 import { ApprovalService } from './approvals.ts';
@@ -620,6 +621,26 @@ server.listen(PORT, '0.0.0.0', async () => {
   console.log(`[orchestrator] Listening on port ${PORT}`);
   console.log(`[orchestrator] Dashboard: http://localhost:${PORT}/dashboard`);
   console.log(`[orchestrator] DB: ${DB_PATH}`);
+
+  // RFC-004 migration: complete persona files from the DB (scalar config gaps
+  // only — never clobbers a value already in the file) so files can become the
+  // source of truth. Idempotent + additive; never writes the DB. Runs before
+  // the file→DB sync below.
+  try {
+    const bf = backfillFrontmatterFromDb(db);
+    const n = bf.filled.reduce((s, a) => s + a.fields.length, 0);
+    if (n > 0) {
+      console.log(`[backfill] Wrote ${n} missing frontmatter field(s) across ${bf.filled.length} agent(s): ${bf.filled.map((a) => `${a.name}[${a.fields.join(',')}]`).join(' ')}`);
+    }
+    if (bf.fileless.length > 0) {
+      console.warn(`[backfill] ${bf.fileless.length} DB agent(s) have NO persona file (not created — supply a file or delete the row): ${bf.fileless.join(', ')}`);
+    }
+    if (bf.nestedGaps.length > 0) {
+      console.warn(`[backfill] DB-only nested config not yet mirrored to files (review): ${bf.nestedGaps.map((a) => `${a.name}[${a.fields.join(',')}]`).join(' ')}`);
+    }
+  } catch (err) {
+    console.error('[backfill] Frontmatter backfill failed:', err);
+  }
 
   // Sync persona files → SQLite (idempotent merge). No WS subscribers yet at
   // boot — `template_updated` events at this point would have no audience, so
