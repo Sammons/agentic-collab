@@ -552,6 +552,129 @@ export function openEditTeamModal(team: Team): void {
 
 /* ── Edit persona ──────────────────────────────────────────────────── */
 
+// ─── Pipeline-step editor — reusable control for PipelineStep[] (hooks,
+// custom_buttons, indicator actions). The DOM is the source of truth; the
+// collect* helpers reconstruct the typed structures at submit time. ───
+const HOOK_KEYS = ['start', 'resume', 'compact', 'exit', 'interrupt', 'submit'] as const;
+const STEP_TYPES = ['shell', 'keystroke', 'keystrokes', 'capture', 'wait'] as const;
+const PL_BORDER = 'rgba(128,128,128,0.3)';
+
+/** One SendAction row inside a `keystrokes` step (kind + value + optional post_wait_ms). */
+function sendActionRowHtml(kind: string, value: string, wait: string): string {
+  const opts = ['keystroke', 'text', 'paste'].map((k) => `<option value="${k}" ${k === kind ? 'selected' : ''}>${k}</option>`).join('');
+  return `<div class="pl-act" data-act style="display:flex;gap:6px;margin:3px 0;align-items:center;">
+    <select class="ov-select" data-act-kind style="flex:0 0 110px;">${opts}</select>
+    <input class="ov-input" data-act-val value="${escapeHtml(value)}" placeholder="value" style="flex:1;">
+    <input class="ov-input" data-act-wait type="number" value="${escapeHtml(wait)}" placeholder="wait ms" style="flex:0 0 90px;">
+    <button class="btn" type="button" data-act-del style="flex:0 0 auto;">×</button>
+  </div>`;
+}
+
+/** Type-specific fields for one pipeline step. */
+function stepFieldsHtml(step: Record<string, unknown>): string {
+  const t = (step['type'] as string) ?? 'shell';
+  const s = (k: string) => escapeHtml(step[k] != null ? String(step[k]) : '');
+  if (t === 'shell') return `<input class="ov-input" data-k="command" value="${s('command')}" placeholder="command (e.g. /compact)" style="flex:1;min-width:120px;">`;
+  if (t === 'keystroke') return `<input class="ov-input" data-k="key" value="${s('key')}" placeholder="key (Enter, Escape, C-c)" style="flex:1;min-width:120px;">`;
+  if (t === 'wait') return `<input class="ov-input" data-k="ms" type="number" value="${escapeHtml(String(step['ms'] ?? 0))}" placeholder="ms" style="flex:0 0 120px;">`;
+  if (t === 'capture') return `<input class="ov-input" data-k="lines" type="number" value="${escapeHtml(String(step['lines'] ?? 50))}" placeholder="lines" style="flex:0 0 80px;"><input class="ov-input" data-k="regex" value="${s('regex')}" placeholder="regex" style="flex:1;min-width:140px;"><input class="ov-input" data-k="var" value="${s('var')}" placeholder="var" style="flex:0 0 120px;">`;
+  if (t === 'keystrokes') {
+    const acts = Array.isArray(step['actions']) ? step['actions'] as Record<string, unknown>[] : [];
+    const rows = acts.map((a) => {
+      const kind = 'keystroke' in a ? 'keystroke' : 'text' in a ? 'text' : 'paste' in a ? 'paste' : 'keystroke';
+      return sendActionRowHtml(kind, String(a[kind] ?? ''), a['post_wait_ms'] != null ? String(a['post_wait_ms']) : '');
+    }).join('');
+    return `<div class="pl-acts" data-actions style="flex:1 0 100%;border-left:2px solid ${PL_BORDER};padding-left:8px;">${rows}<button class="btn" type="button" data-act-add style="margin-top:2px;">+ keystroke/text/paste</button></div>`;
+  }
+  return '';
+}
+
+/** One pipeline step row (type select + fields + delete). */
+function stepRowHtml(step: Record<string, unknown>): string {
+  const t = (step['type'] as string) ?? 'shell';
+  const opts = STEP_TYPES.map((x) => `<option value="${x}" ${x === t ? 'selected' : ''}>${x}</option>`).join('');
+  return `<div class="pl-step" data-step style="display:flex;gap:6px;align-items:flex-start;margin:4px 0;">
+    <select class="ov-select" data-step-type style="flex:0 0 120px;">${opts}</select>
+    <div class="pl-fields" data-step-fields style="flex:1;display:flex;gap:6px;flex-wrap:wrap;">${stepFieldsHtml(step)}</div>
+    <button class="btn" type="button" data-step-del style="flex:0 0 auto;">×</button>
+  </div>`;
+}
+
+/** A pipeline editor: zero or more step rows + "add step". */
+function pipelineEditorHtml(steps: Record<string, unknown>[]): string {
+  return `<div class="pl-editor" data-pipeline><div data-steps>${(steps ?? []).map(stepRowHtml).join('')}</div><button class="btn" type="button" data-step-add style="margin-top:2px;">+ step</button></div>`;
+}
+
+/** One custom_buttons row: name + its pipeline. */
+function buttonRowHtml(name: string, steps: Record<string, unknown>[]): string {
+  return `<div class="pl-button" data-button style="border:1px solid ${PL_BORDER};border-radius:6px;padding:8px;margin:6px 0;">
+    <div style="display:flex;gap:6px;margin-bottom:4px;"><input class="ov-input" data-btn-name value="${escapeHtml(name)}" placeholder="button name" style="flex:1;max-width:240px;"><button class="btn" type="button" data-button-del style="flex:0 0 auto;">Remove</button></div>
+    ${pipelineEditorHtml(steps)}
+  </div>`;
+}
+
+/** Read a keystrokes step's SendAction[] back from the DOM. */
+function collectSendActions(stepRow: Element): Record<string, unknown>[] {
+  return [...stepRow.querySelectorAll('[data-act]')].map((r) => {
+    const kind = (r.querySelector('[data-act-kind]') as HTMLSelectElement | null)?.value || 'keystroke';
+    const val = (r.querySelector('[data-act-val]') as HTMLInputElement | null)?.value ?? '';
+    const waitRaw = ((r.querySelector('[data-act-wait]') as HTMLInputElement | null)?.value ?? '').trim();
+    const act: Record<string, unknown> = { [kind]: val };
+    if (waitRaw !== '') act['post_wait_ms'] = Number(waitRaw);
+    return act;
+  });
+}
+
+/** Read a PipelineStep[] back from a [data-pipeline] element. */
+function collectPipeline(pipelineEl: Element): Record<string, unknown>[] {
+  const host = pipelineEl.querySelector('[data-steps]');
+  if (!host) return [];
+  const out: Record<string, unknown>[] = [];
+  host.querySelectorAll(':scope > [data-step]').forEach((row) => {
+    const type = (row.querySelector('[data-step-type]') as HTMLSelectElement | null)?.value || 'shell';
+    const k = (key: string) => (row.querySelector(`[data-k="${key}"]`) as HTMLInputElement | null)?.value ?? '';
+    if (type === 'shell') out.push({ type: 'shell', command: k('command') });
+    else if (type === 'keystroke') out.push({ type: 'keystroke', key: k('key') });
+    else if (type === 'wait') out.push({ type: 'wait', ms: Number(k('ms')) || 0 });
+    else if (type === 'capture') out.push({ type: 'capture', lines: Number(k('lines')) || 50, regex: k('regex'), var: k('var') });
+    else if (type === 'keystrokes') out.push({ type: 'keystrokes', actions: collectSendActions(row) });
+  });
+  return out;
+}
+
+/** Delegated wiring for every pipeline editor / custom-button under `root` (handles dynamically-added rows). */
+function wirePipelineEditors(root: HTMLElement): void {
+  root.addEventListener('click', (e) => {
+    const t = e.target as HTMLElement;
+    const addStep = t.closest('[data-step-add]');
+    if (addStep) { addStep.closest('[data-pipeline]')?.querySelector('[data-steps]')?.insertAdjacentHTML('beforeend', stepRowHtml({ type: 'shell' })); return; }
+    if (t.closest('[data-step-del]')) { t.closest('[data-step]')?.remove(); return; }
+    const addAct = t.closest('[data-act-add]');
+    if (addAct) { addAct.insertAdjacentHTML('beforebegin', sendActionRowHtml('keystroke', '', '')); return; }
+    if (t.closest('[data-act-del]')) { t.closest('[data-act]')?.remove(); return; }
+    if (t.closest('[data-button-add]')) { root.querySelector('[data-buttons]')?.insertAdjacentHTML('beforeend', buttonRowHtml('', [])); return; }
+    if (t.closest('[data-button-del]')) { t.closest('[data-button]')?.remove(); return; }
+  });
+  root.addEventListener('change', (e) => {
+    const t = e.target as HTMLElement;
+    const stepType = t.closest('[data-step-type]');
+    if (stepType) {
+      const fields = stepType.closest('[data-step]')?.querySelector('[data-step-fields]');
+      if (fields) fields.innerHTML = stepFieldsHtml({ type: (stepType as HTMLSelectElement).value });
+      return;
+    }
+    const hookMode = t.closest('[data-hook-mode]');
+    if (hookMode) {
+      const hk = hookMode.getAttribute('data-hook-mode');
+      const body = root.querySelector(`[data-hook-body="${hk}"]`);
+      const mode = (hookMode as HTMLSelectElement).value;
+      if (body) body.innerHTML = mode === 'command'
+        ? '<textarea class="ov-textarea" data-hook-cmd style="min-height:56px;"></textarea>'
+        : mode === 'pipeline' ? pipelineEditorHtml([]) : '';
+    }
+  });
+}
+
 export async function openEditPersonaModal(agentName: string): Promise<void> {
   // Load persona: parsed frontmatter (→ structured fields), raw (→ advanced
   // fallback), body, and whether the bespoke editor can faithfully represent it.
@@ -577,8 +700,19 @@ export async function openEditPersonaModal(agentName: string): Promise<void> {
   const ENGINES = ['claude', 'codex', 'opencode'];
   const curEngine = sv('engine');
   const teamNames = [...new Set([...state.teams.map((t) => t.name), ...curTeams])];
+  const curButtons: Record<string, Record<string, unknown>[]> = (fm['custom_buttons'] && typeof fm['custom_buttons'] === 'object' && !Array.isArray(fm['custom_buttons'])) ? fm['custom_buttons'] as Record<string, Record<string, unknown>[]> : {};
 
   const esc = escapeHtml;
+  // One hook field: mode select (none/command/pipeline) + a mode-dependent body.
+  const hookFieldHtml = (hk: string): string => {
+    const v = fm[hk];
+    const mode = typeof v === 'string' && v !== '' ? 'command' : Array.isArray(v) && v.length ? 'pipeline' : 'none';
+    const modeOpts = ['none', 'command', 'pipeline'].map((m) => `<option value="${m}" ${m === mode ? 'selected' : ''}>${m}</option>`).join('');
+    const inner = mode === 'command'
+      ? `<textarea class="ov-textarea" data-hook-cmd style="min-height:56px;">${esc(v as string)}</textarea>`
+      : mode === 'pipeline' ? pipelineEditorHtml(v as Record<string, unknown>[]) : '';
+    return `<div class="ov-field"><label>${hk}</label><div><select class="ov-select" data-hook-mode="${hk}" style="max-width:140px;margin-bottom:4px;">${modeOpts}</select><div data-hook-body="${hk}">${inner}</div></div></div>`;
+  };
   const html = `
     <div class="hdr">
       <span class="ttl">Edit persona</span>
@@ -629,6 +763,15 @@ export async function openEditPersonaModal(agentName: string): Promise<void> {
           <div data-env-rows></div>
           <button class="btn" type="button" data-add-env>+ Add var</button>
         </div>
+        <div class="group">
+          <div class="group-hdr">Hooks <span class="when">lifecycle automation · command or pipeline</span></div>
+          ${HOOK_KEYS.map(hookFieldHtml).join('')}
+        </div>
+        <div class="group">
+          <div class="group-hdr">Custom buttons <span class="when">named action pipelines</span></div>
+          <div data-buttons>${Object.entries(curButtons).map(([n, s]) => buttonRowHtml(n, Array.isArray(s) ? s : [])).join('')}</div>
+          <button class="btn" type="button" data-button-add style="margin-top:4px;">+ button</button>
+        </div>
       </div>
 
       <div data-advanced style="${renderable ? 'display:none;' : ''}">
@@ -652,6 +795,7 @@ export async function openEditPersonaModal(agentName: string): Promise<void> {
   `;
   const { overlay, close } = openModal(html, 'lg');
   let reloadOnSave = false;
+  wirePipelineEditors(overlay); // hooks + custom_buttons add/remove/type-change (delegated)
 
   // cwd folder picker (reuses the New-agent picker)
   const cwdInput = overlay.querySelector<HTMLInputElement>('[data-f="cwd"]');
@@ -722,6 +866,27 @@ export async function openEditPersonaModal(agentName: string): Promise<void> {
         if (k) env[k] = row.querySelector<HTMLInputElement>('[data-env-v]')?.value ?? '';
       });
       if (Object.keys(env).length) fields['env'] = env;
+      // Hooks: per field, mode none → omit, command → string, pipeline → PipelineStep[].
+      for (const hk of HOOK_KEYS) {
+        const mode = (overlay.querySelector<HTMLSelectElement>(`[data-hook-mode="${hk}"]`))?.value ?? 'none';
+        if (mode === 'command') {
+          const cmd = overlay.querySelector<HTMLTextAreaElement>(`[data-hook-body="${hk}"] [data-hook-cmd]`)?.value ?? '';
+          if (cmd.trim() !== '') fields[hk] = cmd;
+        } else if (mode === 'pipeline') {
+          const pl = overlay.querySelector<HTMLElement>(`[data-hook-body="${hk}"] [data-pipeline]`);
+          const steps = pl ? collectPipeline(pl) : [];
+          if (steps.length) fields[hk] = steps;
+        }
+      }
+      // custom_buttons: named → pipeline (drop unnamed / empty).
+      const buttons: Record<string, Record<string, unknown>[]> = {};
+      overlay.querySelectorAll<HTMLElement>('[data-button]').forEach((row) => {
+        const name = row.querySelector<HTMLInputElement>('[data-btn-name]')?.value.trim();
+        const pl = row.querySelector<HTMLElement>('[data-pipeline]');
+        const steps = pl ? collectPipeline(pl) : [];
+        if (name && steps.length) buttons[name] = steps;
+      });
+      if (Object.keys(buttons).length) fields['custom_buttons'] = buttons;
       payload = { fields, body: bd };
     } else {
       // Advanced fallback → raw frontmatter passthrough.
