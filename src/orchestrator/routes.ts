@@ -21,7 +21,7 @@ import { sanitizeMessage, generateMessageId } from '../shared/sanitize.ts';
 import { parseAddress } from '../shared/address.ts';
 import { getVersion, versionsMatch } from '../shared/version.ts';
 import type { LockManager } from '../shared/lock.ts';
-import { getPersonasDir, parseFrontmatter, createPersonaAndAgent, syncSinglePersona, syncPersonasWithDiff, updateFrontmatterField, resolvePersonaPath, toHostPath, writeAgentTeams, serializeFrontmatter, structuredRenderable } from './persona.ts';
+import { getPersonasDir, parseFrontmatter, createPersonaAndAgent, syncSinglePersona, syncPersonasWithDiff, updateFrontmatterField, resolvePersonaPath, toHostPath, writeAgentTeams, serializeFrontmatter, structuredRenderable, splitFrontmatter, serializeCore } from './persona.ts';
 import {
   spawnAgent, resumeAgent, suspendAgent, destroyAgent,
   reloadAgent, recoverAgent, interruptAgent, compactAgent, killAgent,
@@ -1898,9 +1898,11 @@ route('GET', '/api/personas/:name', async (_req, res, match) => {
     const filePath = join(getPersonasDir(), `${name}.md`);
     const raw = readFileSync(filePath, 'utf-8');
     const { frontmatter, frontmatterRaw, body } = parseFrontmatter(raw);
-    // structuredRenderable: can the bespoke field editor faithfully represent this
-    // frontmatter? false → the UI opens the raw "advanced" editor (RFC-004 fallback).
-    json(res, 200, { name, content: raw, frontmatter, frontmatterRaw, body, structuredRenderable: structuredRenderable(raw), filePath: toHostPath(filePath), hostname: hostname() });
+    // RFC-005: core = single-line widget fields; passthroughRaw = every other
+    // frontmatter line, verbatim (hooks/indicators/unknown keys/comments).
+    const { core, passthroughRaw } = splitFrontmatter(raw);
+    // structuredRenderable + frontmatterRaw retained for back-compat (older dashboard builds).
+    json(res, 200, { name, content: raw, frontmatter, frontmatterRaw, core, passthroughRaw, body, structuredRenderable: structuredRenderable(raw), filePath: toHostPath(filePath), hostname: hostname() });
   } catch {
     json(res, 404, { error: 'Persona not found' });
   }
@@ -1910,11 +1912,19 @@ route('PUT', '/api/personas/:name', async (req, res, match) => {
   const name = match.pathname.groups['name']!;
   if (!NAME_RE.test(name)) return json(res, 400, { error: 'Invalid persona name' });
   const payload = await readJson(req);
-  // Accept { content } (full file), { fields, body } (structured — server
-  // serializes via serializeFrontmatter), or { frontmatter, body } (raw split).
+  // Accept (RFC-005) { fields, passthroughRaw, body } (core widgets + verbatim
+  // passthrough), or legacy { content } (full file), { fields, body } (structured
+  // via serializeFrontmatter), or { frontmatter, body } (raw split).
   let content: string;
   if (typeof payload.content === 'string') {
     content = payload.content;
+  } else if (payload['fields'] && typeof payload['fields'] === 'object' && typeof payload['passthroughRaw'] === 'string') {
+    // RFC-005: serialize core fields, then append the verbatim passthrough block.
+    const coreFm = serializeCore(payload['fields'] as Record<string, unknown>).trim();
+    const passthrough = (payload['passthroughRaw'] as string).trim();
+    const fm = [coreFm, passthrough].filter(Boolean).join('\n');
+    const bd = String(payload['body'] ?? '').trim();
+    content = fm ? `---\n${fm}\n---\n\n${bd}` : bd;
   } else if (payload.fields && typeof payload.fields === 'object') {
     const fm = serializeFrontmatter(payload.fields as Record<string, unknown>).trim();
     const bd = (payload.body ?? '').trim();

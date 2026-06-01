@@ -396,6 +396,71 @@ export function serializeFrontmatter(fm: Record<string, unknown>): string {
   return lines.join('\n');
 }
 
+/* ── RFC-005: core fields + verbatim passthrough ──────────────────────────
+ * The structured persona editor owns a small set of single-line CORE fields as
+ * widgets; every other frontmatter line (env, hooks, custom_buttons, indicators,
+ * topics, template fields, comments, and any unknown key) is carried VERBATIM
+ * through the editor's passthrough block. This guarantees the editor can never
+ * drop a key it does not model (the pre-RFC structured editor silently dropped
+ * `group` on save). All CORE_KEYS are single-line scalars or `teams`' inline
+ * list, which keeps the line-strip in splitFrontmatter exact. */
+export const CORE_KEYS = ['engine', 'model', 'cwd', 'icon', 'group', 'thinking', 'permissions', 'account', 'proxy', 'teams'] as const;
+const CORE_KEY_SET: ReadonlySet<string> = new Set(CORE_KEYS);
+/** Emit order for serializeCore scalars (matches the legacy SERIALIZE_SCALARS order; `teams` is emitted last). */
+const CORE_SCALARS = ['icon', 'engine', 'model', 'thinking', 'cwd', 'permissions', 'group', 'account', 'proxy'] as const;
+/** Top-level key line (no leading indent): captures `key` + inline value. */
+const TOP_LEVEL_KEY_RE = /^([A-Za-z_][\w-]*)\s*:(.*)$/;
+
+/**
+ * Serialize ONLY the core fields (RFC-005) to a YAML-subset block. Unlike
+ * serializeFrontmatter this never emits hooks/custom_buttons/indicators/env —
+ * those live in the editor's verbatim passthrough. Inverse-paired with the core
+ * half of splitFrontmatter.
+ */
+export function serializeCore(core: Record<string, unknown>): string {
+  const lines: string[] = [];
+  for (const k of CORE_SCALARS) {
+    const v = core[k];
+    if (typeof v === 'string' && v !== '') lines.push(`${k}: ${v}`);
+  }
+  if (Array.isArray(core['teams'])) lines.push(`teams: ${serializeTeams(core['teams'] as string[])}`);
+  return lines.join('\n');
+}
+
+/**
+ * Split persona frontmatter into the structured-editor CORE values and a
+ * VERBATIM passthrough of every other line (RFC-005). The passthrough is the
+ * original frontmatter text with the core single-line keys removed in place;
+ * non-core keys, block scalars, nested maps, comments, and blank lines are
+ * preserved byte-for-byte in their original positions. A core key whose value
+ * is a block scalar (`|`/`>`) is left in the passthrough untouched (not
+ * widget-editable) rather than risk splitting its multi-line body.
+ *
+ * Invariant: every original frontmatter key survives a round-trip — core keys
+ * via serializeCore, all others verbatim. The only intentional loss is cosmetic
+ * (a blank or empty-valued core-key line).
+ */
+export function splitFrontmatter(raw: string): { core: Record<string, unknown>; passthroughRaw: string } {
+  const { frontmatter, frontmatterRaw } = parseFrontmatter(raw);
+  const core: Record<string, unknown> = {};
+  const kept: string[] = [];
+  for (const line of frontmatterRaw.split('\n')) {
+    const m = TOP_LEVEL_KEY_RE.exec(line);
+    if (m) {
+      const key = m[1]!;
+      const val = m[2]!.trim();
+      const isInlineScalar = val !== '|' && val !== '>'; // exclude block scalars (multi-line body)
+      if (CORE_KEY_SET.has(key) && isInlineScalar) {
+        if (key in frontmatter) core[key] = frontmatter[key];
+        continue; // strip this core line from the passthrough
+      }
+    }
+    kept.push(line);
+  }
+  const passthroughRaw = kept.join('\n').replace(/^\n+/, '').replace(/\n+$/, '');
+  return { core, passthroughRaw };
+}
+
 /**
  * True iff the structured editor can faithfully represent this frontmatter —
  * i.e. serializing the parsed form reproduces the same parsed structure. When

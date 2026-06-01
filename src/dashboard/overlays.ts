@@ -552,203 +552,74 @@ export function openEditTeamModal(team: Team): void {
 
 /* ── Edit persona ──────────────────────────────────────────────────── */
 
-// ─── Pipeline-step editor — reusable control for PipelineStep[] (hooks,
-// custom_buttons, indicator actions). The DOM is the source of truth; the
-// collect* helpers reconstruct the typed structures at submit time. ───
-const HOOK_KEYS = ['start', 'resume', 'compact', 'exit', 'interrupt', 'submit'] as const;
-const STEP_TYPES = ['shell', 'keystroke', 'keystrokes', 'capture', 'wait'] as const;
-const PL_BORDER = 'rgba(128,128,128,0.3)';
+// RFC-005: the editor owns a small set of single-line CORE fields as widgets;
+// every other frontmatter line (env, hooks, custom_buttons, indicators, unknown
+// keys, comments) is carried VERBATIM through the "Other frontmatter" passthrough
+// textarea. Field visibility is COMPUTED, not a hardcoded deprecated-list: a
+// field shows when it is populated OR it is one of the always-on core fields.
 
-/** One SendAction row inside a `keystrokes` step (kind + value + optional post_wait_ms). */
-function sendActionRowHtml(kind: string, value: string, wait: string): string {
-  const opts = ['keystroke', 'text', 'paste'].map((k) => `<option value="${k}" ${k === kind ? 'selected' : ''}>${k}</option>`).join('');
-  return `<div class="pl-act" data-act style="display:flex;gap:6px;margin:3px 0;align-items:center;">
-    <select class="ov-select" data-act-kind style="flex:0 0 110px;">${opts}</select>
-    <input class="ov-input" data-act-val value="${escapeHtml(value)}" placeholder="value" style="flex:1;">
-    <input class="ov-input" data-act-wait type="number" value="${escapeHtml(wait)}" placeholder="wait ms" style="flex:0 0 90px;">
-    <button class="btn" type="button" data-act-del style="flex:0 0 auto;">×</button>
-  </div>`;
-}
-
-/** Type-specific fields for one pipeline step. */
-function stepFieldsHtml(step: Record<string, unknown>): string {
-  const t = (step['type'] as string) ?? 'shell';
-  const s = (k: string) => escapeHtml(step[k] != null ? String(step[k]) : '');
-  if (t === 'shell') return `<input class="ov-input" data-k="command" value="${s('command')}" placeholder="command (e.g. /compact)" style="flex:1;min-width:120px;">`;
-  if (t === 'keystroke') return `<input class="ov-input" data-k="key" value="${s('key')}" placeholder="key (Enter, Escape, C-c)" style="flex:1;min-width:120px;">`;
-  if (t === 'wait') return `<input class="ov-input" data-k="ms" type="number" value="${escapeHtml(String(step['ms'] ?? 0))}" placeholder="ms" style="flex:0 0 120px;">`;
-  if (t === 'capture') return `<input class="ov-input" data-k="lines" type="number" value="${escapeHtml(String(step['lines'] ?? 50))}" placeholder="lines" style="flex:0 0 80px;"><input class="ov-input" data-k="regex" value="${s('regex')}" placeholder="regex" style="flex:1;min-width:140px;"><input class="ov-input" data-k="var" value="${s('var')}" placeholder="var" style="flex:0 0 120px;">`;
-  if (t === 'keystrokes') {
-    const acts = Array.isArray(step['actions']) ? step['actions'] as Record<string, unknown>[] : [];
-    const rows = acts.map((a) => {
-      const kind = 'keystroke' in a ? 'keystroke' : 'text' in a ? 'text' : 'paste' in a ? 'paste' : 'keystroke';
-      return sendActionRowHtml(kind, String(a[kind] ?? ''), a['post_wait_ms'] != null ? String(a['post_wait_ms']) : '');
-    }).join('');
-    return `<div class="pl-acts" data-actions style="flex:1 0 100%;border-left:2px solid ${PL_BORDER};padding-left:8px;">${rows}<button class="btn" type="button" data-act-add style="margin-top:2px;">+ keystroke/text/paste</button></div>`;
-  }
-  return '';
-}
-
-/** One pipeline step row (type select + fields + delete). */
-function stepRowHtml(step: Record<string, unknown>): string {
-  const t = (step['type'] as string) ?? 'shell';
-  const opts = STEP_TYPES.map((x) => `<option value="${x}" ${x === t ? 'selected' : ''}>${x}</option>`).join('');
-  return `<div class="pl-step" data-step style="display:flex;gap:6px;align-items:flex-start;margin:4px 0;">
-    <select class="ov-select" data-step-type style="flex:0 0 120px;">${opts}</select>
-    <div class="pl-fields" data-step-fields style="flex:1;display:flex;gap:6px;flex-wrap:wrap;">${stepFieldsHtml(step)}</div>
-    <button class="btn" type="button" data-step-del style="flex:0 0 auto;">×</button>
-  </div>`;
-}
-
-/** A pipeline editor: zero or more step rows + "add step". */
-function pipelineEditorHtml(steps: Record<string, unknown>[]): string {
-  return `<div class="pl-editor" data-pipeline><div data-steps>${(steps ?? []).map(stepRowHtml).join('')}</div><button class="btn" type="button" data-step-add style="margin-top:2px;">+ step</button></div>`;
-}
-
-/** One custom_buttons row: name + its pipeline. */
-function buttonRowHtml(name: string, steps: Record<string, unknown>[]): string {
-  return `<div class="pl-button" data-button style="border:1px solid ${PL_BORDER};border-radius:6px;padding:8px;margin:6px 0;">
-    <div style="display:flex;gap:6px;margin-bottom:4px;"><input class="ov-input" data-btn-name value="${escapeHtml(name)}" placeholder="button name" style="flex:1;max-width:240px;"><button class="btn" type="button" data-button-del style="flex:0 0 auto;">Remove</button></div>
-    ${pipelineEditorHtml(steps)}
-  </div>`;
-}
-
-/** One indicator-action row: name + its pipeline (a named-pipeline-map entry). */
-function actionRowHtml(name: string, steps: Record<string, unknown>[]): string {
-  return `<div class="pl-action" data-action style="border:1px dashed ${PL_BORDER};border-radius:5px;padding:6px;margin:4px 0;">
-    <div style="display:flex;gap:6px;margin-bottom:4px;"><input class="ov-input" data-action-name value="${escapeHtml(name)}" placeholder="action key (e.g. approve, $1)" style="flex:1;max-width:240px;"><button class="btn" type="button" data-action-del style="flex:0 0 auto;">Remove</button></div>
-    ${pipelineEditorHtml(steps)}
-  </div>`;
-}
-
-/** One indicator card: id/regex/badge/style + named action pipelines. */
-function indicatorRowHtml(def: Record<string, unknown>): string {
-  const style = String(def['style'] ?? 'info');
-  const styleOpts = ['info', 'warning', 'danger'].map((s) => `<option value="${s}" ${s === style ? 'selected' : ''}>${s}</option>`).join('');
-  const actions = (def['actions'] && typeof def['actions'] === 'object' && !Array.isArray(def['actions'])) ? def['actions'] as Record<string, Record<string, unknown>[]> : {};
-  const actionRows = Object.entries(actions).map(([n, s]) => actionRowHtml(n, Array.isArray(s) ? s : [])).join('');
-  return `<div class="pl-indicator" data-indicator style="border:1px solid ${PL_BORDER};border-radius:6px;padding:8px;margin:6px 0;">
-    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:4px;">
-      <input class="ov-input" data-ind-id value="${escapeHtml(String(def['id'] ?? ''))}" placeholder="id" style="flex:0 0 140px;">
-      <input class="ov-input" data-ind-regex value="${escapeHtml(String(def['regex'] ?? ''))}" placeholder="regex (match in output)" style="flex:1;min-width:160px;">
-      <button class="btn" type="button" data-indicator-del style="flex:0 0 auto;">Remove</button>
-    </div>
-    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:4px;">
-      <input class="ov-input" data-ind-badge value="${escapeHtml(String(def['badge'] ?? ''))}" placeholder="badge label" style="flex:1;min-width:140px;">
-      <select class="ov-select" data-ind-style style="flex:0 0 130px;">${styleOpts}</select>
-    </div>
-    <div class="label" style="margin-top:4px;">Actions <span class="hint">named key → pipeline (capture groups: $1, $2…)</span></div>
-    <div data-actions-map>${actionRows}</div>
-    <button class="btn" type="button" data-action-add style="margin-top:2px;">+ action</button>
-  </div>`;
-}
-
-/** Read a keystrokes step's SendAction[] back from the DOM. */
-function collectSendActions(stepRow: Element): Record<string, unknown>[] {
-  return [...stepRow.querySelectorAll('[data-act]')].map((r) => {
-    const kind = (r.querySelector('[data-act-kind]') as HTMLSelectElement | null)?.value || 'keystroke';
-    const val = (r.querySelector('[data-act-val]') as HTMLInputElement | null)?.value ?? '';
-    const waitRaw = ((r.querySelector('[data-act-wait]') as HTMLInputElement | null)?.value ?? '').trim();
-    const act: Record<string, unknown> = { [kind]: val };
-    if (waitRaw !== '') act['post_wait_ms'] = Number(waitRaw);
-    return act;
-  });
-}
-
-/** Read a PipelineStep[] back from a [data-pipeline] element. */
-function collectPipeline(pipelineEl: Element): Record<string, unknown>[] {
-  const host = pipelineEl.querySelector('[data-steps]');
-  if (!host) return [];
-  const out: Record<string, unknown>[] = [];
-  host.querySelectorAll(':scope > [data-step]').forEach((row) => {
-    const type = (row.querySelector('[data-step-type]') as HTMLSelectElement | null)?.value || 'shell';
-    const k = (key: string) => (row.querySelector(`[data-k="${key}"]`) as HTMLInputElement | null)?.value ?? '';
-    if (type === 'shell') out.push({ type: 'shell', command: k('command') });
-    else if (type === 'keystroke') out.push({ type: 'keystroke', key: k('key') });
-    else if (type === 'wait') out.push({ type: 'wait', ms: Number(k('ms')) || 0 });
-    else if (type === 'capture') out.push({ type: 'capture', lines: Number(k('lines')) || 50, regex: k('regex'), var: k('var') });
-    else if (type === 'keystrokes') out.push({ type: 'keystrokes', actions: collectSendActions(row) });
-  });
-  return out;
-}
-
-/** Delegated wiring for every pipeline editor / custom-button under `root` (handles dynamically-added rows). */
-function wirePipelineEditors(root: HTMLElement): void {
-  root.addEventListener('click', (e) => {
-    const t = e.target as HTMLElement;
-    const addStep = t.closest('[data-step-add]');
-    if (addStep) { addStep.closest('[data-pipeline]')?.querySelector('[data-steps]')?.insertAdjacentHTML('beforeend', stepRowHtml({ type: 'shell' })); return; }
-    if (t.closest('[data-step-del]')) { t.closest('[data-step]')?.remove(); return; }
-    const addAct = t.closest('[data-act-add]');
-    if (addAct) { addAct.insertAdjacentHTML('beforebegin', sendActionRowHtml('keystroke', '', '')); return; }
-    if (t.closest('[data-act-del]')) { t.closest('[data-act]')?.remove(); return; }
-    if (t.closest('[data-button-add]')) { root.querySelector('[data-buttons]')?.insertAdjacentHTML('beforeend', buttonRowHtml('', [])); return; }
-    if (t.closest('[data-button-del]')) { t.closest('[data-button]')?.remove(); return; }
-    if (t.closest('[data-indicator-add]')) { root.querySelector('[data-indicators]')?.insertAdjacentHTML('beforeend', indicatorRowHtml({ style: 'info' })); return; }
-    if (t.closest('[data-indicator-del]')) { t.closest('[data-indicator]')?.remove(); return; }
-    const addAction = t.closest('[data-action-add]');
-    if (addAction) { addAction.closest('[data-indicator]')?.querySelector('[data-actions-map]')?.insertAdjacentHTML('beforeend', actionRowHtml('', [])); return; }
-    if (t.closest('[data-action-del]')) { t.closest('[data-action]')?.remove(); return; }
-  });
-  root.addEventListener('change', (e) => {
-    const t = e.target as HTMLElement;
-    const stepType = t.closest('[data-step-type]');
-    if (stepType) {
-      const fields = stepType.closest('[data-step]')?.querySelector('[data-step-fields]');
-      if (fields) fields.innerHTML = stepFieldsHtml({ type: (stepType as HTMLSelectElement).value });
-      return;
-    }
-    const hookMode = t.closest('[data-hook-mode]');
-    if (hookMode) {
-      const hk = hookMode.getAttribute('data-hook-mode');
-      const body = root.querySelector(`[data-hook-body="${hk}"]`);
-      const mode = (hookMode as HTMLSelectElement).value;
-      if (body) body.innerHTML = mode === 'command'
-        ? '<textarea class="ov-textarea" data-hook-cmd style="min-height:56px;"></textarea>'
-        : mode === 'pipeline' ? pipelineEditorHtml([]) : '';
-    }
-  });
-}
+/** Always-visible core fields (minimal default). */
+const PERSONA_CORE_ALWAYS = ['engine', 'model', 'cwd', 'icon'] as const;
+/** Core fields shown only when populated (still structured widgets when shown). */
+const PERSONA_CORE_GATED = ['group', 'thinking', 'permissions', 'account', 'proxy', 'teams'] as const;
 
 export async function openEditPersonaModal(agentName: string): Promise<void> {
-  // Load persona: parsed frontmatter (→ structured fields), raw (→ advanced
-  // fallback), body, and whether the bespoke editor can faithfully represent it.
-  let fm: Record<string, unknown> = {};
-  let frontmatterRaw = '';
+  // RFC-005: server returns `core` (single-line widget values) + `passthroughRaw`
+  // (every other frontmatter line, verbatim) + body.
+  let core: Record<string, unknown> = {};
+  let passthroughRaw = '';
   let body = '';
-  let renderable = false;
   try {
     const res = await fetch(`/api/personas/${encodeURIComponent(agentName)}`, { headers: authHeaders() });
     if (res.ok) {
-      const data = await res.json() as { frontmatter?: Record<string, unknown>; frontmatterRaw?: string; body?: string; content?: string; structuredRenderable?: boolean };
-      fm = data.frontmatter ?? {};
-      frontmatterRaw = data.frontmatterRaw ?? '';
+      const data = await res.json() as { core?: Record<string, unknown>; passthroughRaw?: string; body?: string; content?: string };
+      core = data.core ?? {};
+      passthroughRaw = data.passthroughRaw ?? '';
       body = data.body ?? data.content ?? '';
-      renderable = data.structuredRenderable ?? false;
     }
   } catch {}
 
-  const sv = (k: string) => (typeof fm[k] === 'string' ? fm[k] as string : '');
-  const curProxy = sv('proxy');
-  const curTeams: string[] = Array.isArray(fm['teams']) ? (fm['teams'] as string[]) : [];
-  const curEnv: Record<string, string> = (fm['env'] && typeof fm['env'] === 'object' && !Array.isArray(fm['env'])) ? fm['env'] as Record<string, string> : {};
-  const ENGINES = ['claude', 'codex', 'opencode'];
-  const curEngine = sv('engine');
-  const teamNames = [...new Set([...state.teams.map((t) => t.name), ...curTeams])];
-  const curButtons: Record<string, Record<string, unknown>[]> = (fm['custom_buttons'] && typeof fm['custom_buttons'] === 'object' && !Array.isArray(fm['custom_buttons'])) ? fm['custom_buttons'] as Record<string, Record<string, unknown>[]> : {};
-  const curIndicators: Record<string, unknown>[] = Array.isArray(fm['indicators']) ? fm['indicators'] as Record<string, unknown>[] : [];
-
   const esc = escapeHtml;
-  // One hook field: mode select (none/command/pipeline) + a mode-dependent body.
-  const hookFieldHtml = (hk: string): string => {
-    const v = fm[hk];
-    const mode = typeof v === 'string' && v !== '' ? 'command' : Array.isArray(v) && v.length ? 'pipeline' : 'none';
-    const modeOpts = ['none', 'command', 'pipeline'].map((m) => `<option value="${m}" ${m === mode ? 'selected' : ''}>${m}</option>`).join('');
-    const inner = mode === 'command'
-      ? `<textarea class="ov-textarea" data-hook-cmd style="min-height:56px;">${esc(v as string)}</textarea>`
-      : mode === 'pipeline' ? pipelineEditorHtml(v as Record<string, unknown>[]) : '';
-    return `<div class="ov-field"><label>${hk}</label><div><select class="ov-select" data-hook-mode="${hk}" style="max-width:140px;margin-bottom:4px;">${modeOpts}</select><div data-hook-body="${hk}">${inner}</div></div></div>`;
+  const sv = (k: string) => (typeof core[k] === 'string' ? core[k] as string : '');
+  const curTeams: string[] = Array.isArray(core['teams']) ? (core['teams'] as string[]) : [];
+  const curProxy = sv('proxy');
+  const curEngine = sv('engine');
+  const ENGINES = ['claude', 'codex', 'opencode', 'claude-with-home'];
+  const teamNames = [...new Set([...state.teams.map((t) => t.name), ...curTeams])];
+
+  const isPopulated = (k: string): boolean => (k === 'teams' ? curTeams.length > 0 : sv(k) !== '');
+  const showField = (k: string): boolean => (PERSONA_CORE_ALWAYS as readonly string[]).includes(k) || isPopulated(k);
+
+  // ── per-field renderers (only emitted when shown) — reuse existing .ov-* CSS ──
+  const fieldEngine = (): string => `<div class="ov-field" data-field="engine"><label>Engine</label>
+    <div><input class="ov-input" data-f="engine" list="persona-engines" value="${esc(curEngine)}" placeholder="claude" autocomplete="off">
+    <datalist id="persona-engines">${ENGINES.map((e) => `<option value="${esc(e)}"></option>`).join('')}</datalist></div></div>`;
+  const fieldModel = (): string => `<div class="ov-field" data-field="model"><label>Model</label><div><input class="ov-input" data-f="model" value="${esc(sv('model'))}" placeholder="(engine default)"></div></div>`;
+  const fieldThinking = (): string => {
+    const opts = ['', 'low', 'medium', 'high'];
+    const cur = sv('thinking');
+    const all = opts.includes(cur) ? opts : [...opts, cur]; // preserve an out-of-set value
+    return `<div class="ov-field" data-field="thinking"><label>Thinking</label>
+      <select class="ov-select" data-f="thinking">${all.map((t) => `<option value="${esc(t)}" ${cur === t ? 'selected' : ''}>${t || '(none)'}</option>`).join('')}</select></div>`;
   };
+  const fieldCwd = (): string => `<div class="ov-field" data-field="cwd"><label>cwd</label>
+    <div class="ov-cwd-wrap"><input class="ov-input path" type="text" data-f="cwd" value="${esc(sv('cwd'))}" placeholder="Click Browse…" readonly><button class="btn" type="button" data-browse-cwd>Browse…</button></div></div>`;
+  const fieldPermissions = (): string => `<div class="ov-field" data-field="permissions"><label>Permissions</label><div><input class="ov-input" data-f="permissions" value="${esc(sv('permissions'))}" placeholder="(default)"></div></div>`;
+  const fieldAccount = (): string => `<div class="ov-field" data-field="account"><label>Account</label><div><input class="ov-input" data-f="account" value="${esc(sv('account'))}" placeholder="(none)"></div></div>`;
+  const fieldIcon = (): string => `<div class="ov-field" data-field="icon"><label>Icon</label><div><input class="ov-input" data-f="icon" value="${esc(sv('icon'))}" placeholder="emoji"></div></div>`;
+  const fieldGroup = (): string => `<div class="ov-field" data-field="group"><label>Group</label><div><input class="ov-input" data-f="group" value="${esc(sv('group'))}" placeholder="(none)"></div></div>`;
+  const fieldProxy = (): string => `<div class="ov-field" data-field="proxy"><label>Proxy</label>
+    <div><select class="ov-select" data-f="proxy">${curProxy ? `<option value="${esc(curProxy)}" selected>${esc(curProxy)}</option>` : '<option value="" selected>Auto (first available)</option>'}</select><div class="help" data-proxy-hint></div></div></div>`;
+  const fieldTeams = (): string => `<div class="ov-field" data-field="teams" style="align-items:flex-start;"><label>Teams <span class="when">click to toggle</span></label>
+    <div style="flex:1;"><div class="ov-chips" data-teams-chips>${teamNames.map((n) => `<span class="ov-chip ${curTeams.includes(n) ? 'on' : ''}" data-team="${esc(n)}">${esc(n)}</span>`).join('') || '<span style="font-size:12px;color:var(--ink-4);font-style:italic;">No teams yet.</span>'}</div>
+    <div style="margin-top:6px;display:flex;gap:6px;"><input class="ov-input" data-new-team type="text" placeholder="new team…" style="max-width:200px;"><button class="btn" type="button" data-add-team>+ Add</button></div></div></div>`;
+
+  const RENDERERS: Record<string, () => string> = { engine: fieldEngine, model: fieldModel, thinking: fieldThinking, cwd: fieldCwd, permissions: fieldPermissions, account: fieldAccount, icon: fieldIcon, group: fieldGroup, proxy: fieldProxy, teams: fieldTeams };
+  const ALL_CORE = [...PERSONA_CORE_ALWAYS, ...PERSONA_CORE_GATED];
+  const shownFields = ALL_CORE.filter(showField);
+  const hiddenFields = PERSONA_CORE_GATED.filter((k) => !showField(k));
+  const showPassthrough = passthroughRaw.trim() !== '';
+
   const html = `
     <div class="hdr">
       <span class="ttl">Edit persona</span>
@@ -756,71 +627,18 @@ export async function openEditPersonaModal(agentName: string): Promise<void> {
       <button class="esc">esc</button>
     </div>
     <div class="body">
-      <div data-structured style="${renderable ? '' : 'display:none;'}">
-        <div class="group">
-          <div class="group-hdr">Config</div>
-          <div class="ov-field"><label>Engine</label>
-            <select class="ov-select" data-f="engine">
-              ${ENGINES.map((e) => `<option value="${e}" ${curEngine === e ? 'selected' : ''}>${e}</option>`).join('')}
-              ${curEngine && !ENGINES.includes(curEngine) ? `<option value="${esc(curEngine)}" selected>${esc(curEngine)}</option>` : ''}
-            </select>
-          </div>
-          <div class="ov-field"><label>Model</label><div><input class="ov-input" data-f="model" value="${esc(sv('model'))}" placeholder="(engine default)"></div></div>
-          <div class="ov-field"><label>Thinking</label>
-            <select class="ov-select" data-f="thinking">
-              ${['', 'low', 'medium', 'high'].map((t) => `<option value="${t}" ${sv('thinking') === t ? 'selected' : ''}>${t || '(none)'}</option>`).join('')}
-            </select>
-          </div>
-          <div class="ov-field"><label>cwd</label>
-            <div class="ov-cwd-wrap">
-              <input class="ov-input path" type="text" data-f="cwd" value="${esc(sv('cwd'))}" placeholder="Click Browse…" readonly>
-              <button class="btn" type="button" data-browse-cwd>Browse…</button>
-            </div>
-          </div>
-          <div class="ov-field"><label>Permissions</label><div><input class="ov-input" data-f="permissions" value="${esc(sv('permissions'))}" placeholder="(default)"></div></div>
-          <div class="ov-field"><label>Account</label><div><input class="ov-input" data-f="account" value="${esc(sv('account'))}" placeholder="(none)"></div></div>
-          <div class="ov-field"><label>Icon</label><div><input class="ov-input" data-f="icon" value="${esc(sv('icon'))}" placeholder="emoji"></div></div>
-          <div class="ov-field"><label>Proxy</label>
-            <div>
-              <select class="ov-select" data-f="proxy">
-                ${curProxy ? `<option value="${esc(curProxy)}" selected>${esc(curProxy)}</option>` : '<option value="" selected>Auto (first available)</option>'}
-              </select>
-              <div class="help" data-proxy-hint></div>
-            </div>
-          </div>
-        </div>
-        <div class="group">
-          <div class="group-hdr">Teams <span class="when">click to toggle membership</span></div>
-          <div class="ov-chips" data-teams-chips>${teamNames.map((n) => `<span class="ov-chip ${curTeams.includes(n) ? 'on' : ''}" data-team="${esc(n)}">${esc(n)}</span>`).join('') || '<span style="font-size:12px;color:var(--ink-4);font-style:italic;">No teams yet.</span>'}</div>
-          <div style="margin-top:6px;display:flex;gap:6px;"><input class="ov-input" data-new-team type="text" placeholder="new team name…" style="max-width:220px;"><button class="btn" type="button" data-add-team>+ Add</button></div>
-        </div>
-        <div class="group">
-          <div class="group-hdr">Env <span class="when">launch-time vars</span></div>
-          <div data-env-rows></div>
-          <button class="btn" type="button" data-add-env>+ Add var</button>
-        </div>
-        <div class="group">
-          <div class="group-hdr">Hooks <span class="when">lifecycle automation · command or pipeline</span></div>
-          ${HOOK_KEYS.map(hookFieldHtml).join('')}
-        </div>
-        <div class="group">
-          <div class="group-hdr">Custom buttons <span class="when">named action pipelines</span></div>
-          <div data-buttons>${Object.entries(curButtons).map(([n, s]) => buttonRowHtml(n, Array.isArray(s) ? s : [])).join('')}</div>
-          <button class="btn" type="button" data-button-add style="margin-top:4px;">+ button</button>
-        </div>
-        <div class="group">
-          <div class="group-hdr">Indicators <span class="when">badge + actions on output matches</span></div>
-          <div data-indicators>${curIndicators.map(indicatorRowHtml).join('')}</div>
-          <button class="btn" type="button" data-indicator-add style="margin-top:4px;">+ indicator</button>
+      <div class="group">
+        <div class="group-hdr">Config</div>
+        <div data-core-fields>${shownFields.map((k) => RENDERERS[k]!()).join('')}</div>
+        <div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          ${hiddenFields.length ? `<select class="ov-select" data-add-field-pick style="max-width:180px;"><option value="">+ Add field…</option>${hiddenFields.map((k) => `<option value="${k}">${k}</option>`).join('')}</select>` : ''}
+          <button class="btn" type="button" data-toggle-advanced style="${showPassthrough ? 'display:none;' : ''}">+ Advanced (raw frontmatter)</button>
         </div>
       </div>
-
-      <div data-advanced style="${renderable ? 'display:none;' : ''}">
-        ${renderable ? '' : '<div class="help" style="color:var(--danger,#c0392b);margin-bottom:6px;">Could not fully parse this persona into fields — edit the raw YAML below (advanced).</div>'}
-        <div class="label">Frontmatter <span class="hint">YAML · raw</span></div>
-        <textarea class="ov-textarea" data-fm style="min-height:220px;">${esc(frontmatterRaw)}</textarea>
+      <div class="group" data-advanced-group style="${showPassthrough ? '' : 'display:none;'}">
+        <div class="group-hdr">Other frontmatter <span class="when">advanced · raw YAML — hooks, indicators, env, custom keys</span></div>
+        <textarea class="ov-textarea" data-passthrough style="min-height:140px;font-family:var(--mono);font-size:12px;" placeholder="key: value">${esc(passthroughRaw)}</textarea>
       </div>
-
       <div class="group">
         <div class="group-hdr">Body <span class="when">markdown · system prompt</span></div>
         <textarea class="ov-textarea" data-body style="min-height:160px;">${esc(body)}</textarea>
@@ -836,48 +654,68 @@ export async function openEditPersonaModal(agentName: string): Promise<void> {
   `;
   const { overlay, close } = openModal(html, 'lg');
   let reloadOnSave = false;
-  wirePipelineEditors(overlay); // hooks + custom_buttons add/remove/type-change (delegated)
+  const coreHost = overlay.querySelector<HTMLElement>('[data-core-fields]');
 
-  // cwd folder picker (reuses the New-agent picker)
-  const cwdInput = overlay.querySelector<HTMLInputElement>('[data-f="cwd"]');
-  overlay.querySelector<HTMLElement>('[data-browse-cwd]')?.addEventListener('click', () => {
-    openCwdPicker(cwdInput?.value || '', (picked) => { if (cwdInput) cwdInput.value = picked; });
-  });
-  // Proxy dropdown: populate + surface drift
-  const proxySelect = overlay.querySelector<HTMLSelectElement>('[data-f="proxy"]');
-  const proxyHint = overlay.querySelector<HTMLElement>('[data-proxy-hint]');
-  const livePlacement = agentsByName.get(agentName)?.proxyId ?? null;
-  if (proxyHint && livePlacement && livePlacement !== curProxy) proxyHint.textContent = `Currently running on: ${livePlacement}`;
-  void loadProxies().then((proxies) => { if (proxySelect) proxySelect.innerHTML = proxyOptionsHtml(proxies, curProxy); });
-  // Teams chips: toggle on click; add new by name
-  const chipsHost = overlay.querySelector<HTMLElement>('[data-teams-chips]');
-  chipsHost?.addEventListener('click', (e) => {
-    const chip = (e.target as HTMLElement).closest<HTMLElement>('[data-team]');
-    if (chip) chip.classList.toggle('on');
-  });
-  overlay.querySelector<HTMLElement>('[data-add-team]')?.addEventListener('click', () => {
-    const inp = overlay.querySelector<HTMLInputElement>('[data-new-team]');
-    const name = inp?.value.trim();
-    const exists = !!chipsHost && [...chipsHost.querySelectorAll<HTMLElement>('[data-team]')].some((c) => c.dataset['team'] === name);
-    if (!name || !chipsHost || exists) { if (inp) inp.value = ''; return; }
-    const chip = document.createElement('span');
-    chip.className = 'ov-chip on';
-    chip.dataset['team'] = name;
-    chip.textContent = name;
-    chipsHost.appendChild(chip);
-    inp!.value = '';
-  });
-  // Env key/value rows
-  const envHost = overlay.querySelector<HTMLElement>('[data-env-rows]');
-  const addEnvRow = (k = '', v = '') => {
-    const row = document.createElement('div');
-    row.style.cssText = 'display:flex;gap:6px;margin-bottom:4px;';
-    row.innerHTML = `<input class="ov-input" data-env-k placeholder="KEY" value="${esc(k)}" style="max-width:200px;"><input class="ov-input" data-env-v placeholder="value" value="${esc(v)}"><button class="btn" type="button" data-env-del>×</button>`;
-    row.querySelector('[data-env-del]')?.addEventListener('click', () => row.remove());
-    envHost?.appendChild(row);
+  // cwd Browse picker — (re)bind for the current cwd input.
+  const wireCwd = (): void => {
+    const cwdInput = overlay.querySelector<HTMLInputElement>('[data-f="cwd"]');
+    overlay.querySelector<HTMLElement>('[data-browse-cwd]')?.addEventListener('click', () => {
+      openCwdPicker(cwdInput?.value || '', (picked) => { if (cwdInput) cwdInput.value = picked; });
+    });
   };
-  for (const [k, v] of Object.entries(curEnv)) addEnvRow(k, String(v));
-  overlay.querySelector<HTMLElement>('[data-add-env]')?.addEventListener('click', () => addEnvRow());
+  // Proxy dropdown: populate options + surface live-placement drift.
+  const wireProxy = (): void => {
+    const proxySelect = overlay.querySelector<HTMLSelectElement>('[data-f="proxy"]');
+    if (!proxySelect) return;
+    const proxyHint = overlay.querySelector<HTMLElement>('[data-proxy-hint]');
+    const livePlacement = agentsByName.get(agentName)?.proxyId ?? null;
+    if (proxyHint && livePlacement && livePlacement !== curProxy) proxyHint.textContent = `Currently running on: ${livePlacement}`;
+    void loadProxies().then((proxies) => { proxySelect.innerHTML = proxyOptionsHtml(proxies, curProxy); });
+  };
+  // Teams chips: toggle membership; add new by name.
+  const wireTeams = (): void => {
+    const chipsHost = overlay.querySelector<HTMLElement>('[data-teams-chips]');
+    chipsHost?.addEventListener('click', (e) => {
+      const chip = (e.target as HTMLElement).closest<HTMLElement>('[data-team]');
+      if (chip) chip.classList.toggle('on');
+    });
+    overlay.querySelector<HTMLElement>('[data-add-team]')?.addEventListener('click', () => {
+      const inp = overlay.querySelector<HTMLInputElement>('[data-new-team]');
+      const name = inp?.value.trim();
+      const exists = !!chipsHost && [...chipsHost.querySelectorAll<HTMLElement>('[data-team]')].some((c) => c.dataset['team'] === name);
+      if (!name || !chipsHost || exists) { if (inp) inp.value = ''; return; }
+      const chip = document.createElement('span');
+      chip.className = 'ov-chip on';
+      chip.dataset['team'] = name;
+      chip.textContent = name;
+      chipsHost.appendChild(chip);
+      inp!.value = '';
+    });
+  };
+  wireCwd();
+  wireProxy();
+  wireTeams();
+
+  // "+ Add field" — reveal a populated-gated widget on demand (defaulting, not hardcoding).
+  overlay.querySelector<HTMLSelectElement>('[data-add-field-pick]')?.addEventListener('change', (e) => {
+    const sel = e.currentTarget as HTMLSelectElement;
+    const k = sel.value;
+    const render = RENDERERS[k];
+    if (!k || !coreHost || !render || overlay.querySelector(`[data-field="${k}"]`)) { sel.value = ''; return; }
+    coreHost.insertAdjacentHTML('beforeend', render());
+    sel.querySelector(`option[value="${k}"]`)?.remove();
+    sel.value = '';
+    if (k === 'cwd') wireCwd();
+    if (k === 'proxy') wireProxy();
+    if (k === 'teams') wireTeams();
+  });
+
+  // Advanced (passthrough) reveal.
+  overlay.querySelector<HTMLElement>('[data-toggle-advanced]')?.addEventListener('click', (e) => {
+    const grp = overlay.querySelector<HTMLElement>('[data-advanced-group]');
+    if (grp) grp.style.display = '';
+    (e.currentTarget as HTMLElement).style.display = 'none';
+  });
 
   overlay.querySelector<HTMLElement>('[data-reload]')?.addEventListener('click', (e) => {
     reloadOnSave = !reloadOnSave;
@@ -889,73 +727,23 @@ export async function openEditPersonaModal(agentName: string): Promise<void> {
       : '';
   });
 
-  const submit = async () => {
-    const bd = overlay.querySelector<HTMLTextAreaElement>('[data-body]')?.value ?? '';
-    let payload: Record<string, unknown>;
-    if (renderable) {
-      // Structured mode → typed fields; server serializes via serializeFrontmatter.
-      const fields: Record<string, unknown> = {};
-      overlay.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-f]').forEach((el) => {
-        const val = el.value.trim();
-        if (val) fields[el.getAttribute('data-f')!] = val;
-      });
-      const teams = [...overlay.querySelectorAll<HTMLElement>('[data-team].on')].map((c) => c.dataset['team']!);
+  const submit = async (): Promise<void> => {
+    // Core widgets → fields (empty value = omit/clear). teams handled separately.
+    const fields: Record<string, unknown> = {};
+    overlay.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-f]').forEach((el) => {
+      const val = el.value.trim();
+      if (val) fields[el.getAttribute('data-f')!] = val;
+    });
+    const chipsHost = overlay.querySelector<HTMLElement>('[data-teams-chips]');
+    if (chipsHost) {
+      const teams = [...chipsHost.querySelectorAll<HTMLElement>('[data-team].on')].map((c) => c.dataset['team']!);
       if (teams.length || curTeams.length) fields['teams'] = teams; // [] clears existing memberships
-      const env: Record<string, string> = {};
-      overlay.querySelectorAll<HTMLElement>('[data-env-rows] > div').forEach((row) => {
-        const k = row.querySelector<HTMLInputElement>('[data-env-k]')?.value.trim();
-        if (k) env[k] = row.querySelector<HTMLInputElement>('[data-env-v]')?.value ?? '';
-      });
-      if (Object.keys(env).length) fields['env'] = env;
-      // Hooks: per field, mode none → omit, command → string, pipeline → PipelineStep[].
-      for (const hk of HOOK_KEYS) {
-        const mode = (overlay.querySelector<HTMLSelectElement>(`[data-hook-mode="${hk}"]`))?.value ?? 'none';
-        if (mode === 'command') {
-          const cmd = overlay.querySelector<HTMLTextAreaElement>(`[data-hook-body="${hk}"] [data-hook-cmd]`)?.value ?? '';
-          if (cmd.trim() !== '') fields[hk] = cmd;
-        } else if (mode === 'pipeline') {
-          const pl = overlay.querySelector<HTMLElement>(`[data-hook-body="${hk}"] [data-pipeline]`);
-          const steps = pl ? collectPipeline(pl) : [];
-          if (steps.length) fields[hk] = steps;
-        }
-      }
-      // custom_buttons: named → pipeline (drop unnamed / empty).
-      const buttons: Record<string, Record<string, unknown>[]> = {};
-      overlay.querySelectorAll<HTMLElement>('[data-button]').forEach((row) => {
-        const name = row.querySelector<HTMLInputElement>('[data-btn-name]')?.value.trim();
-        const pl = row.querySelector<HTMLElement>('[data-pipeline]');
-        const steps = pl ? collectPipeline(pl) : [];
-        if (name && steps.length) buttons[name] = steps;
-      });
-      if (Object.keys(buttons).length) fields['custom_buttons'] = buttons;
-      // indicators: id/regex/badge/style + named action pipelines (require id+regex+badge — the parser drops incomplete ones).
-      const indicators: Record<string, unknown>[] = [];
-      overlay.querySelectorAll<HTMLElement>('[data-indicator]').forEach((row) => {
-        const id = row.querySelector<HTMLInputElement>('[data-ind-id]')?.value.trim() ?? '';
-        const regex = row.querySelector<HTMLInputElement>('[data-ind-regex]')?.value.trim() ?? '';
-        const badge = row.querySelector<HTMLInputElement>('[data-ind-badge]')?.value.trim() ?? '';
-        const style = row.querySelector<HTMLSelectElement>('[data-ind-style]')?.value ?? 'info';
-        if (!id || !regex || !badge) return;
-        const actions: Record<string, Record<string, unknown>[]> = {};
-        row.querySelectorAll<HTMLElement>('[data-actions-map] > [data-action]').forEach((ar) => {
-          const an = ar.querySelector<HTMLInputElement>('[data-action-name]')?.value.trim();
-          const pl = ar.querySelector<HTMLElement>('[data-pipeline]');
-          const steps = pl ? collectPipeline(pl) : [];
-          if (an && steps.length) actions[an] = steps;
-        });
-        const def: Record<string, unknown> = { id, regex, badge, style };
-        if (Object.keys(actions).length) def['actions'] = actions;
-        indicators.push(def);
-      });
-      if (indicators.length) fields['indicators'] = indicators;
-      payload = { fields, body: bd };
-    } else {
-      // Advanced fallback → raw frontmatter passthrough.
-      payload = { frontmatter: overlay.querySelector<HTMLTextAreaElement>('[data-fm]')?.value ?? '', body: bd };
     }
+    const passthrough = overlay.querySelector<HTMLTextAreaElement>('[data-passthrough]')?.value ?? '';
+    const bd = overlay.querySelector<HTMLTextAreaElement>('[data-body]')?.value ?? '';
     try {
       const res = await fetch(`/api/personas/${encodeURIComponent(agentName)}`, {
-        method: 'PUT', headers: authHeaders(), body: JSON.stringify(payload),
+        method: 'PUT', headers: authHeaders(), body: JSON.stringify({ fields, passthroughRaw: passthrough, body: bd }),
       });
       if (!res.ok) { const b = await res.json().catch(() => null); toast(b?.error ?? 'Save failed', 'error'); return; }
       if (reloadOnSave) {
@@ -968,3 +756,4 @@ export async function openEditPersonaModal(agentName: string): Promise<void> {
   overlay.querySelector<HTMLElement>('[data-submit]')?.addEventListener('click', submit);
   overlay.querySelector<HTMLElement>('[data-cancel]')?.addEventListener('click', close);
 }
+

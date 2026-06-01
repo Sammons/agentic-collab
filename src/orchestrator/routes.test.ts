@@ -923,6 +923,38 @@ describe('API Routes — Personas', () => {
     } finally { rmSync(join(personasDir, 'struct-agent.md'), { force: true }); }
   });
 
+  it('PUT { fields, passthroughRaw } writes core + verbatim passthrough; GET returns core + passthroughRaw (RFC-005)', async () => {
+    try {
+      writeFileSync(join(personasDir, 'pt-agent.md'), [
+        '---', 'engine: claude-with-home', 'group: agentic-collab', 'model: opus',
+        '# rationale: keep this comment', 'poke:', ' - shell: ok',
+        'hook_prepare:', '  shell: |', '    git worktree add "$WP" HEAD',
+        '---', '', 'Body.',
+      ].join('\n') + '\n');
+      // GET splits frontmatter into core widgets + verbatim passthrough.
+      const { data: got } = await api('GET', '/api/personas/pt-agent');
+      const g = got as { core: Record<string, unknown>; passthroughRaw: string };
+      assert.equal(g.core['engine'], 'claude-with-home');
+      assert.equal(g.core['group'], 'agentic-collab');
+      assert.match(g.passthroughRaw, /# rationale: keep this comment/);
+      assert.match(g.passthroughRaw, /poke:/);
+      assert.match(g.passthroughRaw, /hook_prepare:/);
+      // Edit one core field; echo the passthrough back verbatim (as the editor does).
+      await api('PUT', '/api/personas/pt-agent', {
+        fields: { engine: 'claude-with-home', group: 'agentic-collab', model: 'opus-4-8' },
+        passthroughRaw: g.passthroughRaw,
+        body: 'Body.',
+      });
+      const raw = readFileSync(join(personasDir, 'pt-agent.md'), 'utf-8');
+      assert.match(raw, /^model: opus-4-8$/m);             // core edit applied
+      assert.match(raw, /^group: agentic-collab$/m);       // group NOT dropped
+      assert.match(raw, /# rationale: keep this comment/); // comment preserved
+      assert.match(raw, /^ {2}shell: \|$/m);                // block scalar preserved
+      assert.match(raw, /git worktree add "\$WP" HEAD/);   // block-scalar body preserved
+      assert.match(raw, /^poke:$/m);                        // unknown key preserved
+    } finally { rmSync(join(personasDir, 'pt-agent.md'), { force: true }); }
+  });
+
   it('GET reports structuredRenderable=true for a flat-string hook (PR2)', async () => {
     try {
       writeFileSync(join(personasDir, 'hooky.md'), '---\nengine: claude\ncwd: /tmp\nstart: claude --resume\n---\nb\n');

@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync, mkdirSync, symlinkSync, rmSync } from 'node
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { readFileSync } from 'node:fs';
-import { resolvePersonaPath, loadPersona, composeSystemPrompt, parseFrontmatter, scanPersonas, syncSinglePersona, syncPersonasToDb, syncPersonasWithDiff, createPersonaAndAgent, toHostPath, serializeHookValue, deserializeHookValue } from './persona.ts';
+import { resolvePersonaPath, loadPersona, composeSystemPrompt, parseFrontmatter, scanPersonas, syncSinglePersona, syncPersonasToDb, syncPersonasWithDiff, createPersonaAndAgent, toHostPath, serializeHookValue, deserializeHookValue, splitFrontmatter, serializeCore } from './persona.ts';
 import { Database } from './database.ts';
 
 describe('Persona', () => {
@@ -847,6 +847,136 @@ describe('Persona', () => {
       const raw = '---\nengine: claude\nmodel:\ncwd: /tmp\n---\nBody';
       const { frontmatter } = parseFrontmatter(raw);
       assert.equal(frontmatter.model, '');
+    });
+  });
+
+  describe('splitFrontmatter / serializeCore (RFC-005)', () => {
+    // Mirror the PUT /api/personas save path: core widgets + verbatim passthrough.
+    const save = (core: Record<string, unknown>, passthroughRaw: string, body = 'Body.'): string => {
+      const fm = [serializeCore(core).trim(), passthroughRaw.trim()].filter(Boolean).join('\n');
+      return fm ? `---\n${fm}\n---\n\n${body}` : body;
+    };
+
+    it('extracts core single-line fields; passthrough empty for a simple persona', () => {
+      const raw = '---\nengine: claude\ngroup: agentic-collab\ncwd: /x\nicon: 🎛️\nmodel: claude-opus-4-7\n---\n\nBody.';
+      const { core, passthroughRaw } = splitFrontmatter(raw);
+      assert.equal(core['engine'], 'claude');
+      assert.equal(core['group'], 'agentic-collab');
+      assert.equal(core['model'], 'claude-opus-4-7');
+      assert.equal(core['cwd'], '/x');
+      assert.equal(passthroughRaw, '');
+    });
+
+    it('preserves `group` when re-saving after a core edit (the pre-RFC data-loss bug)', () => {
+      const raw = '---\nengine: claude\ngroup: agentic-collab\nmodel: claude-opus-4-7\n---\n\nBody.';
+      const { core, passthroughRaw } = splitFrontmatter(raw);
+      core['model'] = 'claude-opus-4-8'; // simulate a widget edit
+      const fm = parseFrontmatter(save(core, passthroughRaw)).frontmatter;
+      assert.equal(fm['group'], 'agentic-collab'); // NOT dropped
+      assert.equal(fm['model'], 'claude-opus-4-8');
+      assert.equal(fm['engine'], 'claude');
+    });
+
+    it('preserves an arbitrary engine value (claude-with-home)', () => {
+      const raw = '---\nengine: claude-with-home\nmodel: claude-opus-4-7\n---\n\nBody.';
+      const { core } = splitFrontmatter(raw);
+      assert.equal(core['engine'], 'claude-with-home');
+      assert.equal(parseFrontmatter(save(core, '')).frontmatter['engine'], 'claude-with-home');
+    });
+
+    it('carries unknown keys through the passthrough verbatim', () => {
+      const raw = '---\nengine: claude\npoke:\n - shell: ok\nephemeral: true\n---\n\nBody.';
+      const { core, passthroughRaw } = splitFrontmatter(raw);
+      assert.equal(core['engine'], 'claude');
+      assert.ok(passthroughRaw.includes('poke:'));
+      assert.ok(passthroughRaw.includes(' - shell: ok'));
+      assert.ok(passthroughRaw.includes('ephemeral: true'));
+      const saved = save(core, passthroughRaw);
+      assert.ok(saved.includes('poke:\n - shell: ok')); // indentation intact
+      assert.ok(saved.includes('ephemeral: true'));
+    });
+
+    it('preserves a frontmatter comment in place (ios-recipe-lead case, B1)', () => {
+      const raw = '---\nicon: 🍳\nengine: codex\n# engine: codex — chosen for Swift codegen; revisit later\ncwd: /x\ngroup: ios-recipe\n---\n\nBody.';
+      const { core, passthroughRaw } = splitFrontmatter(raw);
+      assert.equal(core['engine'], 'codex');
+      assert.ok(passthroughRaw.includes('# engine: codex — chosen for Swift codegen'));
+      assert.ok(save(core, passthroughRaw).includes('# engine: codex — chosen for Swift codegen'));
+    });
+
+    it('preserves a block-scalar hook verbatim (shell + template vars)', () => {
+      const raw = [
+        '---', 'engine: claude-with-home', 'group: agentic-collab',
+        'hook_prepare:', '  shell: |',
+        '    mkdir -p "$(dirname "$WORKTREE_PATH")"',
+        '    git -C "$REPO_ROOT" worktree add "$WORKTREE_PATH" HEAD',
+        '---', '', 'Body.',
+      ].join('\n');
+      const { core, passthroughRaw } = splitFrontmatter(raw);
+      assert.equal(core['group'], 'agentic-collab');
+      assert.ok(passthroughRaw.includes('hook_prepare:'));
+      assert.ok(passthroughRaw.includes('  shell: |'));
+      assert.ok(passthroughRaw.includes('    git -C "$REPO_ROOT" worktree add "$WORKTREE_PATH" HEAD'));
+      assert.ok(save(core, passthroughRaw).includes('  shell: |\n    mkdir -p'));
+    });
+
+    it('preserves map-shaped indicators verbatim', () => {
+      const raw = [
+        '---', 'engine: claude-with-home', 'indicators:', '  approval:',
+        '    regex: yes', '    badge: Needs Approval', '    style: warning',
+        '---', '', 'Body.',
+      ].join('\n');
+      const { core, passthroughRaw } = splitFrontmatter(raw);
+      assert.equal(core['engine'], 'claude-with-home');
+      assert.ok(passthroughRaw.includes('indicators:'));
+      assert.ok(passthroughRaw.includes('  approval:'));
+      assert.ok(passthroughRaw.includes('    badge: Needs Approval'));
+    });
+
+    it('round-trips teams as an inline list', () => {
+      const raw = '---\nengine: claude\nteams: [alpha, beta]\n---\n\nBody.';
+      const { core, passthroughRaw } = splitFrontmatter(raw);
+      assert.deepEqual(core['teams'], ['alpha', 'beta']);
+      assert.equal(passthroughRaw, '');
+      assert.deepEqual(parseFrontmatter(save(core, passthroughRaw)).frontmatter['teams'], ['alpha', 'beta']);
+    });
+
+    it('preserves everything when editing one core field on a complex persona', () => {
+      const raw = [
+        '---', 'icon: 🎛️', 'engine: claude-with-home', 'model: claude-opus-4-7',
+        'group: agentic-collab', '# rationale: opus for reasoning depth',
+        'poke:', ' - shell: ok',
+        'hook_prepare:', '  shell: |', '    git worktree add "$WORKTREE_PATH" HEAD',
+        'indicators:', '  approval:', '    regex: yes', '    badge: Approve', '    style: warning',
+        '---', '', 'System prompt body.',
+      ].join('\n');
+      const { core, passthroughRaw } = splitFrontmatter(raw);
+      assert.equal(core['engine'], 'claude-with-home');
+      assert.equal(core['group'], 'agentic-collab');
+      core['model'] = 'claude-opus-4-8'; // edit one core field
+      const saved = save(core, passthroughRaw, 'System prompt body.');
+      const fm = parseFrontmatter(saved).frontmatter;
+      assert.equal(fm['model'], 'claude-opus-4-8');
+      assert.equal(fm['group'], 'agentic-collab'); // preserved
+      assert.equal(fm['engine'], 'claude-with-home');
+      for (const needle of ['# rationale: opus for reasoning depth', 'poke:', ' - shell: ok', 'hook_prepare:', '  shell: |', '    git worktree add "$WORKTREE_PATH" HEAD', 'indicators:', '  approval:', '    badge: Approve']) {
+        assert.ok(saved.includes(needle), `missing from passthrough: ${needle}`);
+      }
+      assert.ok(saved.includes('System prompt body.'));
+    });
+
+    it('leaves a block-scalar-valued core key in passthrough (no body split)', () => {
+      const raw = '---\nengine: claude\ncwd: |\n  /multi/line/cwd\n---\n\nBody.';
+      const { core, passthroughRaw } = splitFrontmatter(raw);
+      assert.equal(core['engine'], 'claude');
+      assert.equal(core['cwd'], undefined); // not pulled into a widget
+      assert.ok(passthroughRaw.includes('cwd: |'));
+      assert.ok(passthroughRaw.includes('  /multi/line/cwd'));
+    });
+
+    it('serializeCore emits scalars in order and teams last; skips empties', () => {
+      const out = serializeCore({ engine: 'claude', model: '', icon: '🎛️', group: 'g', teams: ['a', 'b'] });
+      assert.equal(out, 'icon: 🎛️\nengine: claude\ngroup: g\nteams: [a, b]');
     });
   });
 
