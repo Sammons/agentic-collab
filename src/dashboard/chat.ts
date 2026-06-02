@@ -633,11 +633,17 @@ function wire(root: HTMLElement): void {
   const inputWrap = root.querySelector<HTMLElement>('.composer .input-wrap');
   if (!input || !sendBtn || !hint || !inputWrap) return;
 
-  // Restore the last sent prefix so the user picks up where they left off.
-  const savedPrefix = loadPrefix();
-  if (savedPrefix && !input.value) {
-    input.value = savedPrefix;
+  // Restore an unsent draft first so text survives navigating away and back.
+  // Falls back to the last-sent channel prefix when there is no draft.
+  if (state.composerDraft && !input.value) {
+    input.value = state.composerDraft;
     input.setSelectionRange(input.value.length, input.value.length);
+  } else {
+    const savedPrefix = loadPrefix();
+    if (savedPrefix && !input.value) {
+      input.value = savedPrefix;
+      input.setSelectionRange(input.value.length, input.value.length);
+    }
   }
 
   // Consume any pending composer text from cross-route navigation (e.g. search → dashboard)
@@ -785,6 +791,10 @@ function wire(root: HTMLElement): void {
   const mention = setupMentionAutocomplete(input, inputWrap, updateHint);
 
   input.addEventListener('input', () => {
+    // Preserve the draft across navigation. After send, the input is reset to
+    // the channel prefix and an 'input' event is dispatched, so the draft
+    // collapses back to that prefix rather than the just-sent message.
+    state.composerDraft = input.value;
     mention.refresh();
     updateHint();
   });
