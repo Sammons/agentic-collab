@@ -17,7 +17,6 @@
 import type { AgentRecord } from '../shared/types.ts';
 import { state, on, authHeaders } from './state.ts';
 import { registerRoute, go, type Route } from './routing.ts';
-import { openEditPersonaModal } from './overlays.ts';
 import { escapeHtml, toast } from './util.ts';
 
 const POLL_INTERVAL_MS = 3000;
@@ -255,13 +254,9 @@ function wireHeader(root: HTMLElement, name: string): void {
     void lifecycleAction(name, 'kill', 'killing');
   });
   root.querySelector<HTMLElement>('[data-persona]')?.addEventListener('click', () => {
-    // Wrap so any unhandled rejection lands as a toast instead of a
-    // silent no-op (the earlier popover-persona bug). console.error keeps
-    // the stack in DevTools for diagnosis.
-    openEditPersonaModal(name).catch((err) => {
-      console.error('[watch] openEditPersonaModal failed', err);
-      showToast(`Persona open failed: ${(err as Error).message}`, 'error');
-    });
+    // Persona editing is now its own full-page route (RFC-007 PR-B). Back
+    // from that page returns here (the agent's Watch view).
+    go({ kind: 'persona', name });
   });
   root.querySelector<HTMLElement>('[data-delete]')?.addEventListener('click', async () => {
     if (!window.confirm(`Delete agent "${name}"? This will destroy the agent and remove it from the database.`)) return;

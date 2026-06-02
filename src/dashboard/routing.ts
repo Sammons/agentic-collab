@@ -34,6 +34,10 @@ const renderers: Record<Route['kind'], RouteRenderer> = {
     const name = r.kind === 'edit-engine' ? r.name : '(unknown)';
     placeholder(root, `Edit engine config — ${name}`, 'Loading…');
   },
+  persona: (root, r) => {
+    const name = r.kind === 'persona' ? r.name : '(unknown)';
+    placeholder(root, `Persona — ${name}`, 'Loading…');
+  },
   search:    (root) => placeholder(root, 'Search',    'Global multi-type search. Implemented in PR 8.'),
 };
 
@@ -64,6 +68,10 @@ export function parseHash(hash: string): Route {
     const name = decodeURIComponent(h.slice('edit-engine/'.length));
     if (name) return { kind: 'edit-engine', name };
   }
+  if (h.startsWith('persona/')) {
+    const name = decodeURIComponent(h.slice('persona/'.length));
+    if (name) return { kind: 'persona', name };
+  }
   // Unknown — fall back to dashboard.
   return { kind: 'dashboard' };
 }
@@ -78,6 +86,7 @@ export function go(route: Route): void {
     case 'reminders': hash = '#/reminders'; break;
     case 'settings':  hash = '#/settings'; break;
     case 'edit-engine': hash = `#/edit-engine/${encodeURIComponent(route.name)}`; break;
+    case 'persona':   hash = `#/persona/${encodeURIComponent(route.name)}`; break;
     case 'search':    hash = '#/search'; break;
   }
   if (location.hash !== hash) location.hash = hash;

@@ -25,6 +25,7 @@ export type Route =
   | { kind: 'reminders' }
   | { kind: 'settings' }
   | { kind: 'edit-engine'; name: string }
+  | { kind: 'persona'; name: string }
   | { kind: 'search' };
 
 export type ConnectionStatus = 'connecting' | 'connected' | 'disconnected';

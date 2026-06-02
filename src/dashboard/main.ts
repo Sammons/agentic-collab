@@ -20,6 +20,7 @@ import { setupApprovals } from './approvals.ts';
 import { setupReminders } from './reminders.ts';
 import { setupSettings } from './settings.ts';
 import { setupSearch } from './search.ts';
+import { setupPersona } from './persona.ts';
 import { connect } from './connection.ts';
 
 function boot(): void {
@@ -38,6 +39,7 @@ function boot(): void {
   setupReminders();
   setupSettings();
   setupSearch();
+  setupPersona();
   setupRouter();
   setupSidebar();
   setupMobileNav();
