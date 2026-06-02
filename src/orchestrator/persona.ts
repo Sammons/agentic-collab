@@ -408,7 +408,8 @@ export function serializeFrontmatter(fm: Record<string, unknown>): string {
  * in splitFrontmatter exact. */
 export const CORE_KEYS = ['engine', 'model', 'cwd', 'icon', 'thinking', 'permissions', 'account', 'proxy', 'teams'] as const;
 const CORE_KEY_SET: ReadonlySet<string> = new Set(CORE_KEYS);
-/** Emit order for serializeCore scalars (matches the legacy SERIALIZE_SCALARS order; `teams` is emitted last). */
+/** Emit order for serializeCore scalars (SERIALIZE_SCALARS order minus the
+ *  now-passthrough `group`; `teams` is emitted last). */
 const CORE_SCALARS = ['icon', 'engine', 'model', 'thinking', 'cwd', 'permissions', 'account', 'proxy'] as const;
 /** Top-level key line (no leading indent): captures `key` + inline value. */
 const TOP_LEVEL_KEY_RE = /^([A-Za-z_][\w-]*)\s*:(.*)$/;
