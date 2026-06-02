@@ -164,6 +164,108 @@
   line-height: 1.6;
 }
 
+/* ── launch command preview (RFC-007 PR-C) ───────────────────────────────
+   The pre-expansion CLI command a real spawn would paste, with the persona
+   body shown as the literal «PERSONA» token (highlighted). Greenroom: mono
+   on paper-2 like .ov-textarea / .watch-pane; one accent is the «PERSONA»
+   token underlined in clay (the page's clay moment is already the Save
+   button, so the token uses a clay underline — a purposeful second accent,
+   never a fill). */
+.pe-preview .pe-group-hdr {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.pe-preview-meta {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--ink-3);
+}
+.pe-preview-copy {
+  margin-left: auto;
+  align-self: center;
+  font-size: 11.5px;
+  padding: 3px 10px;
+}
+.pe-preview-pre {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--ink);
+  background: var(--paper-2);
+  border: 1px solid var(--rule-soft);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  max-height: 420px;
+  overflow-y: auto;
+}
+.pe-preview-pre.profile { margin-top: 6px; }
+
+/* The «PERSONA» token — where the body is interpolated. Clay underline mark
+   (matches the Search <mark> pattern: never a clay fill or clay text). */
+.pe-persona-tok {
+  color: var(--ink);
+  font-weight: 700;
+  border-bottom: 1.5px solid var(--clay);
+  padding: 0 1px;
+}
+
+.pe-preview-status { color: var(--ink-4); font-style: italic; }
+
+.pe-preview-err {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--brick);
+  background: var(--paper-2);
+  border: 1px solid var(--rule-soft);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.pe-preview-sublabel {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--ink-4);
+  margin: 12px 0 4px;
+}
+.pe-preview-sublabel .when {
+  margin-left: 6px;
+  letter-spacing: 0;
+  color: var(--ink-3);
+  text-transform: none;
+  font-style: italic;
+}
+
+.pe-preview-notes {
+  margin-top: 10px;
+  font-family: var(--sans);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--ink-3);
+}
+.pe-preview-notes > div {
+  position: relative;
+  padding-left: 14px;
+  margin-bottom: 2px;
+}
+.pe-preview-notes > div::before {
+  content: '·';
+  position: absolute;
+  left: 4px;
+  color: var(--ink-4);
+}
+
 /* ── responsive ──────────────────────────────────────────────────────── */
 @media (max-width: 768px) {
   .pe-hdr {
