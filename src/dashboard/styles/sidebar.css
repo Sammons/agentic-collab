@@ -227,29 +227,14 @@
   transition: background 140ms ease;
 }
 .member:hover { background: var(--paper-hover); }
-.member .check {
-  width: 12px; height: 12px;
-  border: 1.5px solid var(--rule-strong);
-  border-radius: 2px;
-  flex: 0 0 12px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--paper-card);
+/* Selected member — IDE-file-nav-style highlighted row, reusing the same
+   `--paper-sel` fill as `.team.selected .team-row`. Selection is a chat
+   filter, not navigation; the .status dot still conveys liveness. */
+.member.checked {
+  background: var(--paper-sel);
 }
-.member.checked .check {
-  background: var(--ink);
-  border-color: var(--ink);
-}
-.member.checked .check::after {
-  content: "";
-  width: 4px; height: 2px;
-  border-left: 1.5px solid var(--paper-card);
-  border-bottom: 1.5px solid var(--paper-card);
-  transform: rotate(-45deg);
-  margin-top: -1px;
-}
-/* status indicator — between checkbox and name. Uses SHAPE + COLOR for
+.member.checked:hover { background: var(--paper-sel); }
+/* status indicator — leads the row. Uses SHAPE + COLOR for
    accessibility: colorblind users can distinguish states by shape alone.
    - online:  solid green disc
    - busy:    orange ring (hollow) with pulse animation
@@ -312,6 +297,16 @@
 @keyframes status-pulse {
   0%, 100% { opacity: 1; }
   50%      { opacity: 0.45; }
+}
+/* Agent glyph — sits between the status dot and the name. Emoji/short glyph
+   from AgentRecord.icon; sized to align with the 12.5px row text. */
+.member .agent-icon {
+  flex: 0 0 auto;
+  font-size: 13px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 .member .nm { flex: 1; color: var(--ink-3); }
 .member.checked .nm { color: var(--ink); }

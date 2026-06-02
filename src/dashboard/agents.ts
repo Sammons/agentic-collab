@@ -165,9 +165,10 @@ function rowHtml(a: AgentRecord): string {
     ? teams.map((t) => `<span class="t-chip">${escapeHtml(t.name)}</span>`).join('')
     : `<span class="none">no team</span>`;
 
+  const iconHtml = a.icon ? `<span class="agent-icon">${escapeHtml(a.icon)}</span>` : '';
   return `
     <div class="pg-row ${failed ? 'failed-row' : ''}" data-agent="${escapeHtml(a.name)}">
-      <span class="nm">${escapeHtml(a.name)}</span>
+      <span class="nm">${iconHtml}${escapeHtml(a.name)}</span>
       <span class="kind per">persistent</span>
       <span class="teams">${teamsHtml}</span>
       <span class="state ${a.state}"><span class="dot"></span>${a.state}</span>

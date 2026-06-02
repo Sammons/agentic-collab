@@ -274,12 +274,13 @@ function resultHtml(h: Hit): string {
   switch (h.kind) {
     case 'agent': {
       const a = h.record;
+      const iconHtml = a.icon ? `<span class="agent-icon">${escapeHtml(a.icon)}</span>` : '';
       return `
         <div class="sr-result agent" data-kind="agent" data-go="${escapeHtml(a.name)}">
           <span class="dot"></span>
           <div class="body">
             <div class="hdr">
-              <span class="nm"><a>${highlight(a.name)}</a></span>
+              <span class="nm">${iconHtml}<a>${highlight(a.name)}</a></span>
               <span class="kind">${escapeHtml(a.engine ?? 'agent')}</span>
               <span class="state ${a.state}">${a.state}</span>
             </div>
