@@ -1323,6 +1323,134 @@ describe('API Routes — v3 Q3 endpoints', () => {
     const body = data as Record<string, unknown>;
     assert.equal(body['status'], 'queued');
   });
+
+  // ── RFC-006 Q2: instance read endpoints ──
+
+  /** Insert an instance row directly with an explicit started_at for deterministic ordering. */
+  function seedInstance(opts: {
+    id: string; template: string; state: string; startedAt: string;
+    suffix: string; tmuxSession: string; proxyId: string;
+    messagePath?: string; replyPath?: string; statusPath?: string;
+    completedAt?: string | null; failureReason?: string | null;
+  }): void {
+    db.rawDb.prepare(`
+      INSERT INTO agent_instances (
+        id, agent_template, spawned_from_topic, instance_addr,
+        tmux_session, worktree_path, proxy_id, state, failure_reason,
+        reply_to_addr, message_id, message_path, reply_path, status_path,
+        queue_id, monitor_of_instance, suffix, started_at, completed_at
+      ) VALUES (?, ?, NULL, ?, ?, NULL, ?, ?, ?, NULL, ?, ?, ?, ?, NULL, NULL, ?, ?, ?)
+    `).run(
+      opts.id, opts.template, `agent:${opts.template}/${opts.id}`,
+      opts.tmuxSession, opts.proxyId, opts.state, opts.failureReason ?? null,
+      opts.id, opts.messagePath ?? '/tmp/m', opts.replyPath ?? '/tmp/r', opts.statusPath ?? '/tmp/s',
+      opts.suffix, opts.startedAt, opts.completedAt ?? null,
+    );
+  }
+
+  it('GET /api/agent-templates/:id/instances returns rows newest-first', async () => {
+    db.upsertAgentTemplate({
+      id: 'list-tmpl', personaPath: null, engine: 'claude', model: null, persistent: false,
+      cwdBase: '/tmp', cwdTemplate: null, repoRoot: '/tmp',
+      hookStart: null, hookExit: null, hookPrepare: null, hookCleanup: null,
+      createdAt: '', updatedAt: '',
+    });
+    seedInstance({ id: 'inst-old', template: 'list-tmpl', state: 'completed', startedAt: '2026-01-01T00:00:00Z', suffix: 'old001', tmuxSession: 'inst-list-tmpl-old', proxyId: 'p1', completedAt: '2026-01-01T00:05:00Z' });
+    seedInstance({ id: 'inst-new', template: 'list-tmpl', state: 'running', startedAt: '2026-03-01T00:00:00Z', suffix: 'new001', tmuxSession: 'inst-list-tmpl-new', proxyId: 'p1', failureReason: null });
+
+    const { status, data } = await api('GET', '/api/agent-templates/list-tmpl/instances');
+    assert.equal(status, 200);
+    const instances = (data as { instances: Array<Record<string, unknown>> }).instances;
+    assert.equal(instances.length, 2);
+    // Newest first (started_at DESC).
+    assert.equal(instances[0]!['id'], 'inst-new');
+    assert.equal(instances[1]!['id'], 'inst-old');
+    // Shape: required fields present and camelCased.
+    assert.equal(instances[0]!['suffix'], 'new001');
+    assert.equal(instances[0]!['state'], 'running');
+    assert.equal(instances[0]!['tmuxSession'], 'inst-list-tmpl-new');
+    assert.equal(instances[0]!['proxyId'], 'p1');
+    assert.equal(instances[0]!['startedAt'], '2026-03-01T00:00:00Z');
+    assert.equal(instances[1]!['completedAt'], '2026-01-01T00:05:00Z');
+    assert.equal(instances[0]!['instanceAddr'], 'agent:list-tmpl/inst-new');
+  });
+
+  it('GET /api/agent-templates/:id/instances returns empty array for a template with no instances', async () => {
+    db.upsertAgentTemplate({
+      id: 'empty-tmpl', personaPath: null, engine: 'claude', model: null, persistent: false,
+      cwdBase: '/tmp', cwdTemplate: null, repoRoot: '/tmp',
+      hookStart: null, hookExit: null, hookPrepare: null, hookCleanup: null,
+      createdAt: '', updatedAt: '',
+    });
+    const { status, data } = await api('GET', '/api/agent-templates/empty-tmpl/instances');
+    assert.equal(status, 200);
+    assert.deepEqual((data as { instances: unknown[] }).instances, []);
+  });
+
+  it('GET /api/instances/:id/peek returns {live:true, output} for a running instance', async () => {
+    seedInstance({ id: 'peek-live', template: 'q3-tmpl', state: 'running', startedAt: '2026-04-01T00:00:00Z', suffix: 'plive1', tmuxSession: 'inst-q3-tmpl-peek-live', proxyId: 'p1' });
+    const { status, data } = await api('GET', '/api/instances/peek-live/peek?lines=10');
+    assert.equal(status, 200);
+    const body = data as Record<string, unknown>;
+    assert.equal(body['live'], true);
+    // q3Dispatch returns { ok:true, data:'' } for capture.
+    assert.equal(body['output'], '');
+    // The capture targeted the stored tmuxSession.
+    const lastCapture = [...commandsLog].reverse().find((c) => c.action === 'capture') as { action: string; sessionName?: string } | undefined;
+    assert.equal(lastCapture?.sessionName, 'inst-q3-tmpl-peek-live');
+  });
+
+  it('GET /api/instances/:id/peek returns {live:false} for a completed instance (no 500)', async () => {
+    seedInstance({ id: 'peek-done', template: 'q3-tmpl', state: 'completed', startedAt: '2026-04-02T00:00:00Z', suffix: 'pdone1', tmuxSession: 'inst-q3-tmpl-peek-done', proxyId: 'p1', completedAt: '2026-04-02T00:01:00Z' });
+    const { status, data } = await api('GET', '/api/instances/peek-done/peek');
+    assert.equal(status, 200);
+    assert.deepEqual(data, { live: false });
+  });
+
+  it('GET /api/instances/:id/peek returns 404 for an unknown instance', async () => {
+    const { status } = await api('GET', '/api/instances/never-existed/peek');
+    assert.equal(status, 404);
+  });
+
+  it('GET /api/instances/:id returns instance + message/reply/status file contents', async () => {
+    const msgPath = join(tmpDir, 'msg.txt');
+    const replyPath = join(tmpDir, 'reply.txt');
+    const statusPath = join(tmpDir, 'status.txt');
+    writeFileSync(msgPath, 'the original message');
+    writeFileSync(replyPath, 'the agent reply');
+    writeFileSync(statusPath, 'ok');
+    seedInstance({
+      id: 'read-1', template: 'q3-tmpl', state: 'completed', startedAt: '2026-04-03T00:00:00Z',
+      suffix: 'read01', tmuxSession: 'inst-q3-tmpl-read-1', proxyId: 'p1',
+      messagePath: msgPath, replyPath, statusPath, completedAt: '2026-04-03T00:02:00Z',
+    });
+    const { status, data } = await api('GET', '/api/instances/read-1');
+    assert.equal(status, 200);
+    const body = data as Record<string, unknown>;
+    assert.equal((body['instance'] as Record<string, unknown>)['id'], 'read-1');
+    assert.equal(body['message'], 'the original message');
+    assert.equal(body['reply'], 'the agent reply');
+    assert.equal(body['status'], 'ok');
+  });
+
+  it('GET /api/instances/:id tolerates missing files (nulls) and 404s for unknown id', async () => {
+    seedInstance({
+      id: 'read-missing', template: 'q3-tmpl', state: 'failed', startedAt: '2026-04-04T00:00:00Z',
+      suffix: 'rmiss1', tmuxSession: 'inst-q3-tmpl-read-missing', proxyId: 'p1',
+      messagePath: join(tmpDir, 'does-not-exist-m'), replyPath: join(tmpDir, 'does-not-exist-r'),
+      statusPath: join(tmpDir, 'does-not-exist-s'), failureReason: 'boom',
+    });
+    const { status, data } = await api('GET', '/api/instances/read-missing');
+    assert.equal(status, 200);
+    const body = data as Record<string, unknown>;
+    assert.equal(body['message'], null);
+    assert.equal(body['reply'], null);
+    assert.equal(body['status'], null);
+    assert.equal((body['instance'] as Record<string, unknown>)['failureReason'], 'boom');
+
+    const unknown = await api('GET', '/api/instances/no-such-instance');
+    assert.equal(unknown.status, 404);
+  });
 });
 
 // ── v3 Q5: approval CRUD endpoints ───────────────────────────────────────

@@ -727,6 +727,76 @@ route('POST', '/api/instances/:id/complete', async (_req, res, match, ctx) => {
   json(res, 202, { ok: true });
 });
 
+// ── RFC-006 Q2: ephemeral instance read surface (GET — Bearer-exempt) ──
+
+// List a template's instances, live + past, newest first. Backed by
+// `idx_agent_instances_template`. Returns the camelCased AgentInstanceRow
+// fields the dashboard renders (id, suffix, state, started/completed, etc.).
+route('GET', '/api/agent-templates/:id/instances', async (_req, res, match, ctx) => {
+  const id = match.pathname.groups['id'];
+  if (!id) return json(res, 400, { error: 'template id required' });
+  const instances = ctx.db.listInstancesForTemplate(id).map((i) => ({
+    id: i.id,
+    suffix: i.suffix,
+    state: i.state,
+    startedAt: i.startedAt,
+    completedAt: i.completedAt,
+    failureReason: i.failureReason,
+    instanceAddr: i.instanceAddr,
+    tmuxSession: i.tmuxSession,
+    proxyId: i.proxyId,
+  }));
+  json(res, 200, { instances });
+});
+
+// Peek a live instance's tmux pane. Mirrors the agent peek handler. A past /
+// session-less instance returns 200 `{live:false}` (NOT a 500), so the watch
+// surface degrades gracefully. Uses the STORED `tmuxSession` (sliced to 200
+// chars at spawn, `topic-delivery.ts:187`) — never reconstructed.
+route('GET', '/api/instances/:id/peek', async (req, res, match, ctx) => {
+  const id = match.pathname.groups['id'];
+  if (!id) return json(res, 400, { error: 'instance id required' });
+  const inst = ctx.db.getInstance(id);
+  if (!inst) { json(res, 404, { error: `Instance "${id}" not found` }); return; }
+
+  const isLive = (inst.state === 'spawning' || inst.state === 'running') && !!inst.tmuxSession;
+  if (!isLive) { json(res, 200, { live: false }); return; }
+
+  const url = new URL(req.url!, `http://${req.headers.host}`);
+  const linesParam = url.searchParams.get('lines');
+  const lines = linesParam ? Math.max(1, Math.min(parseInt(linesParam, 10) || 50, 1000)) : 50;
+
+  const result = await ctx.proxyDispatch(inst.proxyId, {
+    action: 'capture',
+    sessionName: inst.tmuxSession,
+    lines,
+  });
+  if (!result.ok) { json(res, 500, { error: result.error }); return; }
+  json(res, 200, { live: true, output: result.data });
+});
+
+// Read a single instance + its message/reply/status file contents (the MVP
+// past-instance view — RFC-006 Proposal.5). File reads tolerate missing/empty
+// paths; a completed instance whose IPC dir was reaped simply yields nulls.
+route('GET', '/api/instances/:id', async (_req, res, match, ctx) => {
+  const id = match.pathname.groups['id'];
+  if (!id) return json(res, 400, { error: 'instance id required' });
+  const instance = ctx.db.getInstance(id);
+  if (!instance) { json(res, 404, { error: `Instance "${id}" not found` }); return; }
+
+  const readFileOrNull = (path: string | null | undefined): string | null => {
+    if (!path) return null;
+    try { return readFileSync(path, 'utf-8'); } catch { return null; }
+  };
+
+  json(res, 200, {
+    instance,
+    message: readFileOrNull(instance.messagePath),
+    reply: readFileOrNull(instance.replyPath),
+    status: readFileOrNull(instance.statusPath),
+  });
+});
+
 route('POST', '/api/personas/reload', async (_req, res, _match, ctx) => {
   if (!ctx.reloadPersonas) {
     return json(res, 503, { error: 'persona reload not configured' });
