@@ -1,0 +1,176 @@
+/* ──────────────────────────────────────────────────────────────────────
+   Persona — full-page structured persona editor (RFC-007 PR-B).
+
+   Rehomes the former Edit-persona modal onto its own #/persona/:name route.
+   Mirrors the full-page editor chrome of .ee-page (Edit engine), and reuses
+   the shared .ov-field / .ov-input / .ov-select / .ov-textarea / .ov-chip
+   form widgets for the core fields. Greenroom: paper-card surface, one clay
+   moment (the Save button), typographic-forward borderless fields.
+   ────────────────────────────────────────────────────────────────────── */
+
+.pe-page {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--paper-card);
+  overflow: hidden;
+}
+
+/* ── header (sticky) ─────────────────────────────────────────────────── */
+.pe-hdr {
+  padding: 18px 28px 16px;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 16px;
+  align-items: center;
+  border-bottom: 1px solid var(--rule-soft);
+}
+.pe-hdr .back {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12.5px;
+  color: var(--ink-3);
+  font-weight: 500;
+  cursor: pointer;
+  padding: 5px 8px;
+  border-radius: 3px;
+  background: transparent;
+  border: 0;
+}
+.pe-hdr .back:hover { color: var(--ink); background: var(--paper-2); }
+.pe-hdr .title-block { min-width: 0; }
+.pe-hdr .super {
+  font-size: 10.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.pe-hdr .super .crumb-arrow { color: var(--ink-4); margin: 0 6px; }
+.pe-hdr .title {
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.024em;
+  line-height: 1.05;
+  color: var(--ink);
+  margin: 0 0 4px;
+}
+.pe-hdr .api-hint {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-3);
+}
+.pe-hdr .right { display: flex; align-items: center; gap: 10px; }
+
+/* "Reload persona on save" inline checkbox in the header */
+.pe-reload {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--ink-3);
+  cursor: pointer;
+  user-select: none;
+}
+.pe-reload .box {
+  width: 12px; height: 12px;
+  border: 1.5px solid var(--rule-strong);
+  border-radius: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--paper-card);
+}
+.pe-reload.on .box {
+  background: var(--pill-on-bg);
+  border-color: var(--pill-on-bg);
+  color: var(--pill-on-fg);
+}
+.pe-reload.on { color: var(--ink-2); }
+
+/* ── body (scrollable, full-width) ───────────────────────────────────── */
+.pe-body {
+  flex: 1; min-height: 0;
+  overflow-y: auto;
+  padding: 22px 28px 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  max-width: 1080px;
+  width: 100%;
+}
+
+.pe-loading, .pe-error {
+  padding: 40px 4px;
+  color: var(--ink-3);
+  font-style: italic;
+}
+.pe-error { color: var(--brick); }
+.pe-error code { font-family: var(--mono); font-size: 12px; color: var(--brick); }
+
+/* ── grouped sections ────────────────────────────────────────────────── */
+.pe-group {
+  display: flex;
+  flex-direction: column;
+}
+.pe-group-hdr {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--ink-4);
+  margin-bottom: 12px;
+}
+.pe-group-hdr .when {
+  margin-left: 8px;
+  letter-spacing: 0;
+  color: var(--ink-3);
+  text-transform: none;
+  font-style: italic;
+}
+
+/* Core fields laid out in a responsive grid to use the page real estate.
+   Each cell is a shared .ov-field (130px mono label + 1fr widget). */
+.pe-core-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 2px 36px;
+}
+/* The teams field needs the full width (chips wrap + add-row). */
+.pe-core-grid .ov-field[data-field="teams"] { grid-column: 1 / -1; }
+
+.pe-core-actions {
+  margin-top: 12px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+/* Advanced passthrough — mono, taller than the modal afforded. */
+.pe-passthrough {
+  min-height: 180px;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+/* Body editor — the headline of "full real estate": large by default. */
+.pe-body-group { flex: 1; }
+.pe-body-text {
+  min-height: 340px;
+  font-size: 13.5px;
+  line-height: 1.6;
+}
+
+/* ── responsive ──────────────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .pe-hdr {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+  .pe-hdr .right { flex-wrap: wrap; }
+  .pe-body { padding: 18px 16px 24px; }
+  .pe-core-grid { grid-template-columns: 1fr; gap: 0; }
+}

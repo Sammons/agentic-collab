@@ -8,8 +8,8 @@
  *   - agents.ts: New agent + Edit persona
  *   - sidebar.ts: New team (replaces the window.prompt fallback)
  */
-import type { AgentRecord, ProxyRegistration, Team } from '../shared/types.ts';
-import { state, authHeaders, agentsByName } from './state.ts';
+import type { ProxyRegistration, Team } from '../shared/types.ts';
+import { state, authHeaders } from './state.ts';
 import { escapeHtml, toast } from './util.ts';
 
 /* ── shared modal helpers ──────────────────────────────────────────── */
@@ -221,7 +221,7 @@ type ListDirResponse = {
  * (GET /api/proxy/list-dir). Closes with `onPick(absPath)` when the user
  * confirms; closes silently on Cancel/Esc/scrim.
  */
-function openCwdPicker(startPath: string, onPick: (absPath: string) => void): void {
+export function openCwdPicker(startPath: string, onPick: (absPath: string) => void): void {
   const html = `
     <div class="hdr">
       <span class="ttl">Choose working directory</span>
@@ -552,208 +552,8 @@ export function openEditTeamModal(team: Team): void {
 
 /* ── Edit persona ──────────────────────────────────────────────────── */
 
-// RFC-005: the editor owns a small set of single-line CORE fields as widgets;
-// every other frontmatter line (env, hooks, custom_buttons, indicators, unknown
-// keys, comments) is carried VERBATIM through the "Other frontmatter" passthrough
-// textarea. Field visibility is COMPUTED, not a hardcoded deprecated-list: a
-// field shows when it is populated OR it is one of the always-on core fields.
-
-/** Always-visible core fields (minimal default). */
-const PERSONA_CORE_ALWAYS = ['engine', 'model', 'cwd', 'icon'] as const;
-/** Core fields shown only when populated (still structured widgets when shown). */
-const PERSONA_CORE_GATED = ['group', 'thinking', 'permissions', 'account', 'proxy', 'teams'] as const;
-
-export async function openEditPersonaModal(agentName: string): Promise<void> {
-  // RFC-005: server returns `core` (single-line widget values) + `passthroughRaw`
-  // (every other frontmatter line, verbatim) + body.
-  let core: Record<string, unknown> = {};
-  let passthroughRaw = '';
-  let body = '';
-  try {
-    const res = await fetch(`/api/personas/${encodeURIComponent(agentName)}`, { headers: authHeaders() });
-    if (res.ok) {
-      const data = await res.json() as { core?: Record<string, unknown>; passthroughRaw?: string; body?: string; content?: string };
-      core = data.core ?? {};
-      passthroughRaw = data.passthroughRaw ?? '';
-      body = data.body ?? data.content ?? '';
-    }
-  } catch {}
-
-  const esc = escapeHtml;
-  const sv = (k: string) => (typeof core[k] === 'string' ? core[k] as string : '');
-  const curTeams: string[] = Array.isArray(core['teams']) ? (core['teams'] as string[]) : [];
-  const curProxy = sv('proxy');
-  const curEngine = sv('engine');
-  const ENGINES = ['claude', 'codex', 'opencode', 'claude-with-home'];
-  const teamNames = [...new Set([...state.teams.map((t) => t.name), ...curTeams])];
-
-  const isPopulated = (k: string): boolean => (k === 'teams' ? curTeams.length > 0 : sv(k) !== '');
-  const showField = (k: string): boolean => (PERSONA_CORE_ALWAYS as readonly string[]).includes(k) || isPopulated(k);
-
-  // ── per-field renderers (only emitted when shown) — reuse existing .ov-* CSS ──
-  const fieldEngine = (): string => `<div class="ov-field" data-field="engine"><label>Engine</label>
-    <div><input class="ov-input" data-f="engine" list="persona-engines" value="${esc(curEngine)}" placeholder="claude" autocomplete="off">
-    <datalist id="persona-engines">${ENGINES.map((e) => `<option value="${esc(e)}"></option>`).join('')}</datalist></div></div>`;
-  const fieldModel = (): string => `<div class="ov-field" data-field="model"><label>Model</label><div><input class="ov-input" data-f="model" value="${esc(sv('model'))}" placeholder="(engine default)"></div></div>`;
-  const fieldThinking = (): string => {
-    const opts = ['', 'low', 'medium', 'high'];
-    const cur = sv('thinking');
-    const all = opts.includes(cur) ? opts : [...opts, cur]; // preserve an out-of-set value
-    return `<div class="ov-field" data-field="thinking"><label>Thinking</label>
-      <select class="ov-select" data-f="thinking">${all.map((t) => `<option value="${esc(t)}" ${cur === t ? 'selected' : ''}>${t || '(none)'}</option>`).join('')}</select></div>`;
-  };
-  const fieldCwd = (): string => `<div class="ov-field" data-field="cwd"><label>cwd</label>
-    <div class="ov-cwd-wrap"><input class="ov-input path" type="text" data-f="cwd" value="${esc(sv('cwd'))}" placeholder="Click Browse…" readonly><button class="btn" type="button" data-browse-cwd>Browse…</button></div></div>`;
-  const fieldPermissions = (): string => `<div class="ov-field" data-field="permissions"><label>Permissions</label><div><input class="ov-input" data-f="permissions" value="${esc(sv('permissions'))}" placeholder="(default)"></div></div>`;
-  const fieldAccount = (): string => `<div class="ov-field" data-field="account"><label>Account</label><div><input class="ov-input" data-f="account" value="${esc(sv('account'))}" placeholder="(none)"></div></div>`;
-  const fieldIcon = (): string => `<div class="ov-field" data-field="icon"><label>Icon</label><div><input class="ov-input" data-f="icon" value="${esc(sv('icon'))}" placeholder="emoji"></div></div>`;
-  const fieldGroup = (): string => `<div class="ov-field" data-field="group"><label>Group</label><div><input class="ov-input" data-f="group" value="${esc(sv('group'))}" placeholder="(none)"></div></div>`;
-  const fieldProxy = (): string => `<div class="ov-field" data-field="proxy"><label>Proxy</label>
-    <div><select class="ov-select" data-f="proxy">${curProxy ? `<option value="${esc(curProxy)}" selected>${esc(curProxy)}</option>` : '<option value="" selected>Auto (first available)</option>'}</select><div class="help" data-proxy-hint></div></div></div>`;
-  const fieldTeams = (): string => `<div class="ov-field" data-field="teams" style="align-items:flex-start;"><label>Teams <span class="when">click to toggle</span></label>
-    <div style="flex:1;"><div class="ov-chips" data-teams-chips>${teamNames.map((n) => `<span class="ov-chip ${curTeams.includes(n) ? 'on' : ''}" data-team="${esc(n)}">${esc(n)}</span>`).join('') || '<span style="font-size:12px;color:var(--ink-4);font-style:italic;">No teams yet.</span>'}</div>
-    <div style="margin-top:6px;display:flex;gap:6px;"><input class="ov-input" data-new-team type="text" placeholder="new team…" style="max-width:200px;"><button class="btn" type="button" data-add-team>+ Add</button></div></div></div>`;
-
-  const RENDERERS: Record<string, () => string> = { engine: fieldEngine, model: fieldModel, thinking: fieldThinking, cwd: fieldCwd, permissions: fieldPermissions, account: fieldAccount, icon: fieldIcon, group: fieldGroup, proxy: fieldProxy, teams: fieldTeams };
-  const ALL_CORE = [...PERSONA_CORE_ALWAYS, ...PERSONA_CORE_GATED];
-  const shownFields = ALL_CORE.filter(showField);
-  const hiddenFields = PERSONA_CORE_GATED.filter((k) => !showField(k));
-  const showPassthrough = passthroughRaw.trim() !== '';
-
-  const html = `
-    <div class="hdr">
-      <span class="ttl">Edit persona</span>
-      <span class="sub">${esc(agentName)} · <code style="font-family:var(--mono);font-size:11px;color:var(--ink-2);">persistent-agents/${esc(agentName)}.md</code></span>
-      <button class="esc">esc</button>
-    </div>
-    <div class="body">
-      <div class="group">
-        <div class="group-hdr">Config</div>
-        <div data-core-fields>${shownFields.map((k) => RENDERERS[k]!()).join('')}</div>
-        <div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-          ${hiddenFields.length ? `<select class="ov-select" data-add-field-pick style="max-width:180px;"><option value="">+ Add field…</option>${hiddenFields.map((k) => `<option value="${k}">${k}</option>`).join('')}</select>` : ''}
-          <button class="btn" type="button" data-toggle-advanced style="${showPassthrough ? 'display:none;' : ''}">+ Advanced (raw frontmatter)</button>
-        </div>
-      </div>
-      <div class="group" data-advanced-group style="${showPassthrough ? '' : 'display:none;'}">
-        <div class="group-hdr">Other frontmatter <span class="when">advanced · raw YAML — hooks, indicators, env, custom keys</span></div>
-        <textarea class="ov-textarea" data-passthrough style="min-height:140px;font-family:var(--mono);font-size:12px;" placeholder="key: value">${esc(passthroughRaw)}</textarea>
-      </div>
-      <div class="group">
-        <div class="group-hdr">Body <span class="when">markdown · system prompt</span></div>
-        <textarea class="ov-textarea" data-body style="min-height:160px;">${esc(body)}</textarea>
-      </div>
-    </div>
-    <div class="foot">
-      <label class="secondary-check" data-reload><span class="box"></span>Reload persona on save</label>
-      <span class="hint" style="color: var(--ink-4); font-style: italic;">Replaces the running tmux session.</span>
-      <span class="spacer"></span>
-      <button class="btn" data-cancel>Cancel</button>
-      <button class="btn primary" data-submit>Save changes</button>
-    </div>
-  `;
-  const { overlay, close } = openModal(html, 'lg');
-  let reloadOnSave = false;
-  const coreHost = overlay.querySelector<HTMLElement>('[data-core-fields]');
-
-  // cwd Browse picker — (re)bind for the current cwd input.
-  const wireCwd = (): void => {
-    const cwdInput = overlay.querySelector<HTMLInputElement>('[data-f="cwd"]');
-    overlay.querySelector<HTMLElement>('[data-browse-cwd]')?.addEventListener('click', () => {
-      openCwdPicker(cwdInput?.value || '', (picked) => { if (cwdInput) cwdInput.value = picked; });
-    });
-  };
-  // Proxy dropdown: populate options + surface live-placement drift.
-  const wireProxy = (): void => {
-    const proxySelect = overlay.querySelector<HTMLSelectElement>('[data-f="proxy"]');
-    if (!proxySelect) return;
-    const proxyHint = overlay.querySelector<HTMLElement>('[data-proxy-hint]');
-    const livePlacement = agentsByName.get(agentName)?.proxyId ?? null;
-    if (proxyHint && livePlacement && livePlacement !== curProxy) proxyHint.textContent = `Currently running on: ${livePlacement}`;
-    void loadProxies().then((proxies) => { proxySelect.innerHTML = proxyOptionsHtml(proxies, curProxy); });
-  };
-  // Teams chips: toggle membership; add new by name.
-  const wireTeams = (): void => {
-    const chipsHost = overlay.querySelector<HTMLElement>('[data-teams-chips]');
-    chipsHost?.addEventListener('click', (e) => {
-      const chip = (e.target as HTMLElement).closest<HTMLElement>('[data-team]');
-      if (chip) chip.classList.toggle('on');
-    });
-    overlay.querySelector<HTMLElement>('[data-add-team]')?.addEventListener('click', () => {
-      const inp = overlay.querySelector<HTMLInputElement>('[data-new-team]');
-      const name = inp?.value.trim();
-      const exists = !!chipsHost && [...chipsHost.querySelectorAll<HTMLElement>('[data-team]')].some((c) => c.dataset['team'] === name);
-      if (!name || !chipsHost || exists) { if (inp) inp.value = ''; return; }
-      const chip = document.createElement('span');
-      chip.className = 'ov-chip on';
-      chip.dataset['team'] = name;
-      chip.textContent = name;
-      chipsHost.appendChild(chip);
-      inp!.value = '';
-    });
-  };
-  wireCwd();
-  wireProxy();
-  wireTeams();
-
-  // "+ Add field" — reveal a populated-gated widget on demand (defaulting, not hardcoding).
-  overlay.querySelector<HTMLSelectElement>('[data-add-field-pick]')?.addEventListener('change', (e) => {
-    const sel = e.currentTarget as HTMLSelectElement;
-    const k = sel.value;
-    const render = RENDERERS[k];
-    if (!k || !coreHost || !render || overlay.querySelector(`[data-field="${k}"]`)) { sel.value = ''; return; }
-    coreHost.insertAdjacentHTML('beforeend', render());
-    sel.querySelector(`option[value="${k}"]`)?.remove();
-    sel.value = '';
-    if (k === 'cwd') wireCwd();
-    if (k === 'proxy') wireProxy();
-    if (k === 'teams') wireTeams();
-  });
-
-  // Advanced (passthrough) reveal.
-  overlay.querySelector<HTMLElement>('[data-toggle-advanced]')?.addEventListener('click', (e) => {
-    const grp = overlay.querySelector<HTMLElement>('[data-advanced-group]');
-    if (grp) grp.style.display = '';
-    (e.currentTarget as HTMLElement).style.display = 'none';
-  });
-
-  overlay.querySelector<HTMLElement>('[data-reload]')?.addEventListener('click', (e) => {
-    reloadOnSave = !reloadOnSave;
-    const el = e.currentTarget as HTMLElement;
-    el.classList.toggle('on', reloadOnSave);
-    const box = el.querySelector<HTMLElement>('.box');
-    if (box) box.innerHTML = reloadOnSave
-      ? '<svg width="8" height="8" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="2 6 5 9 10 3"/></svg>'
-      : '';
-  });
-
-  const submit = async (): Promise<void> => {
-    // Core widgets → fields (empty value = omit/clear). teams handled separately.
-    const fields: Record<string, unknown> = {};
-    overlay.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-f]').forEach((el) => {
-      const val = el.value.trim();
-      if (val) fields[el.getAttribute('data-f')!] = val;
-    });
-    const chipsHost = overlay.querySelector<HTMLElement>('[data-teams-chips]');
-    if (chipsHost) {
-      const teams = [...chipsHost.querySelectorAll<HTMLElement>('[data-team].on')].map((c) => c.dataset['team']!);
-      if (teams.length || curTeams.length) fields['teams'] = teams; // [] clears existing memberships
-    }
-    const passthrough = overlay.querySelector<HTMLTextAreaElement>('[data-passthrough]')?.value ?? '';
-    const bd = overlay.querySelector<HTMLTextAreaElement>('[data-body]')?.value ?? '';
-    try {
-      const res = await fetch(`/api/personas/${encodeURIComponent(agentName)}`, {
-        method: 'PUT', headers: authHeaders(), body: JSON.stringify({ fields, passthroughRaw: passthrough, body: bd }),
-      });
-      if (!res.ok) { const b = await res.json().catch(() => null); toast(b?.error ?? 'Save failed', 'error'); return; }
-      if (reloadOnSave) {
-        await fetch(`/api/agents/${encodeURIComponent(agentName)}/reload`, { method: 'POST', headers: authHeaders(), body: JSON.stringify({}) });
-      }
-      toast(`Saved persona for ${agentName}`);
-      close();
-    } catch { toast('Network error', 'error'); }
-  };
-  overlay.querySelector<HTMLElement>('[data-submit]')?.addEventListener('click', submit);
-  overlay.querySelector<HTMLElement>('[data-cancel]')?.addEventListener('click', close);
-}
+// The structured persona editor moved to its own full-page route (RFC-007
+// PR-B): src/dashboard/persona.ts, reachable via go({ kind: 'persona', name }).
+// It is no longer a modal. The CWD picker it shares lives here and is exported
+// above (openCwdPicker).
 

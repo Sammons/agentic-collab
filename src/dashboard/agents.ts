@@ -13,7 +13,7 @@
 import type { AgentRecord, AgentState, Team } from '../shared/types.ts';
 import { state, on, authHeaders, emit, agentsByName, teamsByAgent } from './state.ts';
 import { registerRoute, go } from './routing.ts';
-import { openNewAgentModal, openEditPersonaModal } from './overlays.ts';
+import { openNewAgentModal } from './overlays.ts';
 import { escapeHtml, toast } from './util.ts';
 
 const STATE_PRIORITY: Record<AgentState, number> = {
@@ -198,7 +198,7 @@ function wireRow(rowEl: HTMLElement): void {
       e.stopPropagation();
       const act = btn.dataset['act']!;
       if (act === 'watch') return go({ kind: 'watch', agentName: name });
-      if (act === 'edit')  return void openEditPersonaModal(name);
+      if (act === 'edit')  return go({ kind: 'persona', name });
       if (act === 'more')  return openMenu(btn, name);
     });
   });
@@ -260,7 +260,7 @@ async function handleMenuItem(item: string, name: string): Promise<void> {
       showToast(`Copied: ${cmd}`);
       return;
     }
-    case 'edit':   return void openEditPersonaModal(name);
+    case 'edit':   go({ kind: 'persona', name }); return;
     case 'copy': {
       await navigator.clipboard?.writeText(`agent:${name}`).catch(() => {});
       showToast(`Copied agent:${name}`);
