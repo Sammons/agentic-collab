@@ -48,6 +48,10 @@ export type DashboardState = {
   token: string | null;
   /** Pending composer text to inject on next chat mount (cross-route injection). */
   pendingComposerText: string | null;
+  /** Unsent composer text, preserved across navigation so chat drafts survive
+   *  leaving and returning to the dashboard. Cleared implicitly after send
+   *  (the post-send input value re-saves it as the channel prefix). */
+  composerDraft: string | null;
 };
 
 export const state: DashboardState = {
@@ -60,6 +64,7 @@ export const state: DashboardState = {
   route: { kind: 'dashboard' },
   token: null,
   pendingComposerText: null,
+  composerDraft: null,
 };
 
 /** O(1) agent lookup by name. Rebuilt on init/agents_update/agent_destroyed. */

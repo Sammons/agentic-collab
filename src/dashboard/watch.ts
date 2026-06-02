@@ -27,6 +27,11 @@ let pollTimer: number | null = null;
 let lastPeekAt: number = 0;
 let paused = false;
 let currentAgent: string | null = null;
+// Signature of the watched agent's last-rendered header inputs. `agents-changed`
+// fires for ANY agent update; we only rebuild the header when the watched
+// agent's header-relevant state actually changed, to avoid churning (and
+// disrupting hover/click on) the header buttons on every unrelated update.
+let lastHeaderSig: string | null = null;
 let agoTimer: number | null = null;
 
 export function setupWatch(): void {
@@ -37,30 +42,11 @@ function render(root: HTMLElement, route: Route): void {
   if (route.kind !== 'watch') return;
   const name = route.agentName;
   currentAgent = name;
-  const agent = state.agents.find((a) => a.name === name);
-  // State-aware lifecycle button (matches the profile popover behavior):
-  // suspended/void/failed → Start (server folds to resume when suspended);
-  // active/idle/spawning  → Kill. Transient states hide the button entirely.
-  const isRunning = agent ? ['active', 'idle', 'spawning'].includes(agent.state) : false;
-  const isTransient = agent ? ['suspending', 'resuming'].includes(agent.state) : false;
-  const startLabel = agent?.state === 'suspended' ? 'Resume' : 'Start';
+  lastHeaderSig = headerSig(name);
 
   root.innerHTML = `
     <div class="watch-page">
-      <div class="watch-hdr">
-        <button class="back" data-back>←</button>
-        <span class="breadcrumb">Watch</span>
-        ${agent ? `<span class="state-pill ${agent.state}">${agent.state}</span>` : `<span class="state-pill failed">unknown</span>`}
-        <h1 class="title">${escapeHtml(name)}</h1>
-        <div class="right">
-          ${!isTransient && !isRunning ? `<button class="btn primary" data-start>${startLabel}</button>` : ''}
-          ${isRunning ? `<button class="btn ghost" data-kill>Kill</button>` : ''}
-          <button class="btn ghost" data-persona>Persona</button>
-          <button class="btn ghost" data-open-tmux>↗ Open in tmux</button>
-          <button class="btn ghost danger" data-delete>Delete</button>
-          <button class="btn ghost" data-stop>Stop watching</button>
-        </div>
-      </div>
+      <div class="watch-hdr">${headerInnerHtml(name)}</div>
 
       <div class="watch-ctrls">
         <button class="ctrl" data-pause>${paused ? '▶ Resume' : '⏸ Pause'}</button>
@@ -104,14 +90,20 @@ function render(root: HTMLElement, route: Route): void {
   wire(root, name);
   startPolling(name);
 
+  // Live header re-render: when an agent dies, reboots, or otherwise changes
+  // state, refresh the entire header (state-pill AND the Start/Kill action
+  // buttons, whose visibility depends on state) and re-wire it. Previously only
+  // the pill was patched, so the action buttons kept their route-entry snapshot
+  // and went stale until a full navigation. The live pane/polling is untouched.
   detachers.push(on('agents-changed', () => {
     if (currentAgent !== name) return;
-    const a = state.agents.find((x) => x.name === name);
-    const pill = document.querySelector<HTMLElement>('.watch-hdr .state-pill');
-    if (pill && a) {
-      pill.className = `state-pill ${a.state}`;
-      pill.textContent = a.state;
-    }
+    const sig = headerSig(name);
+    if (sig === lastHeaderSig) return; // watched agent's header inputs unchanged
+    lastHeaderSig = sig;
+    const hdr = document.querySelector<HTMLElement>('.watch-hdr');
+    if (!hdr) return;
+    hdr.innerHTML = headerInnerHtml(name);
+    wireHeader(hdr, name);
   }));
   detachers.push(on('route-changed', (r) => {
     if ((r as { kind?: string })?.kind !== 'watch') {
@@ -190,7 +182,48 @@ function updateAgo(): void {
 
 /* ── wiring ────────────────────────────────────────────────────────── */
 
+/** Signature of the inputs `headerInnerHtml` renders, to skip no-op rebuilds.
+ *  Extend this when the header starts rendering more agent fields (e.g. icon). */
+function headerSig(name: string): string {
+  const agent = state.agents.find((a) => a.name === name);
+  return agent ? agent.state : 'unknown';
+}
+
+/**
+ * Build the inner HTML of `.watch-hdr` from the agent's CURRENT state.
+ * Called both at initial render and on every `agents-changed` so the
+ * state-pill and the state-dependent Start/Kill buttons stay live.
+ */
+function headerInnerHtml(name: string): string {
+  const agent = state.agents.find((a) => a.name === name);
+  // State-aware lifecycle button (matches the profile popover behavior):
+  // suspended/void/failed → Start (server folds to resume when suspended);
+  // active/idle/spawning  → Kill. Transient states hide the button entirely.
+  const isRunning = agent ? ['active', 'idle', 'spawning'].includes(agent.state) : false;
+  const isTransient = agent ? ['suspending', 'resuming'].includes(agent.state) : false;
+  const startLabel = agent?.state === 'suspended' ? 'Resume' : 'Start';
+  return `
+        <button class="back" data-back>←</button>
+        <span class="breadcrumb">Watch</span>
+        ${agent ? `<span class="state-pill ${agent.state}">${agent.state}</span>` : `<span class="state-pill failed">unknown</span>`}
+        <h1 class="title">${escapeHtml(name)}</h1>
+        <div class="right">
+          ${!isTransient && !isRunning ? `<button class="btn primary" data-start>${startLabel}</button>` : ''}
+          ${isRunning ? `<button class="btn ghost" data-kill>Kill</button>` : ''}
+          <button class="btn ghost" data-persona>Persona</button>
+          <button class="btn ghost" data-open-tmux>↗ Open in tmux</button>
+          <button class="btn ghost danger" data-delete>Delete</button>
+          <button class="btn ghost" data-stop>Stop watching</button>
+        </div>`;
+}
+
 function wire(root: HTMLElement, name: string): void {
+  wireHeader(root, name);
+  wireBody(root, name);
+}
+
+/** Wire the header buttons. Safe to call repeatedly after a header re-render. */
+function wireHeader(root: HTMLElement, name: string): void {
   // Back from watch lands on chat (filtered to this agent) rather than
   // the agents grid — closer to the v2 "thread for the agent I was just
   // looking at" mental model. Stop watching does the same.
@@ -247,7 +280,10 @@ function wire(root: HTMLElement, name: string): void {
       showToast('Network error', 'error');
     }
   });
+}
 
+/** Wire the static body controls (pause/refresh/keys/type). Wired once per render. */
+function wireBody(root: HTMLElement, name: string): void {
   root.querySelector<HTMLElement>('[data-pause]')?.addEventListener('click', () => {
     paused = !paused;
     document.querySelector<HTMLElement>('[data-pause]')!.textContent = paused ? '▶ Resume' : '⏸ Pause';
