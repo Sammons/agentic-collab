@@ -401,13 +401,16 @@ export function serializeFrontmatter(fm: Record<string, unknown>): string {
  * widgets; every other frontmatter line (env, hooks, custom_buttons, indicators,
  * topics, template fields, comments, and any unknown key) is carried VERBATIM
  * through the editor's passthrough block. This guarantees the editor can never
- * drop a key it does not model (the pre-RFC structured editor silently dropped
- * `group` on save). All CORE_KEYS are single-line scalars or `teams`' inline
- * list, which keeps the line-strip in splitFrontmatter exact. */
-export const CORE_KEYS = ['engine', 'model', 'cwd', 'icon', 'group', 'thinking', 'permissions', 'account', 'proxy', 'teams'] as const;
+ * drop a key it does not model — e.g. `group`, which RFC-004 teams superseded:
+ * it is no longer a core widget and rides through verbatim in the passthrough
+ * (still parses + still syncs to agent_group via CONFIG_FIELDS). All CORE_KEYS
+ * are single-line scalars or `teams`' inline list, which keeps the line-strip
+ * in splitFrontmatter exact. */
+export const CORE_KEYS = ['engine', 'model', 'cwd', 'icon', 'thinking', 'permissions', 'account', 'proxy', 'teams'] as const;
 const CORE_KEY_SET: ReadonlySet<string> = new Set(CORE_KEYS);
-/** Emit order for serializeCore scalars (matches the legacy SERIALIZE_SCALARS order; `teams` is emitted last). */
-const CORE_SCALARS = ['icon', 'engine', 'model', 'thinking', 'cwd', 'permissions', 'group', 'account', 'proxy'] as const;
+/** Emit order for serializeCore scalars (SERIALIZE_SCALARS order minus the
+ *  now-passthrough `group`; `teams` is emitted last). */
+const CORE_SCALARS = ['icon', 'engine', 'model', 'thinking', 'cwd', 'permissions', 'account', 'proxy'] as const;
 /** Top-level key line (no leading indent): captures `key` + inline value. */
 const TOP_LEVEL_KEY_RE = /^([A-Za-z_][\w-]*)\s*:(.*)$/;
 

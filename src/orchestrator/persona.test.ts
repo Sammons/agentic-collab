@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync, mkdirSync, symlinkSync, rmSync } from 'node
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { readFileSync } from 'node:fs';
-import { resolvePersonaPath, loadPersona, composeSystemPrompt, parseFrontmatter, scanPersonas, syncSinglePersona, syncPersonasToDb, syncPersonasWithDiff, createPersonaAndAgent, toHostPath, serializeHookValue, deserializeHookValue, splitFrontmatter, serializeCore } from './persona.ts';
+import { resolvePersonaPath, loadPersona, composeSystemPrompt, parseFrontmatter, scanPersonas, syncSinglePersona, syncPersonasToDb, syncPersonasWithDiff, createPersonaAndAgent, toHostPath, serializeHookValue, deserializeHookValue, splitFrontmatter, serializeCore, structuredRenderable } from './persona.ts';
 import { Database } from './database.ts';
 
 describe('Persona', () => {
@@ -857,24 +857,33 @@ describe('Persona', () => {
       return fm ? `---\n${fm}\n---\n\n${body}` : body;
     };
 
-    it('extracts core single-line fields; passthrough empty for a simple persona', () => {
+    it('extracts core single-line fields; group rides the passthrough (RFC-004 teams superseded it)', () => {
       const raw = '---\nengine: claude\ngroup: agentic-collab\ncwd: /x\nicon: 🎛️\nmodel: claude-opus-4-7\n---\n\nBody.';
       const { core, passthroughRaw } = splitFrontmatter(raw);
       assert.equal(core['engine'], 'claude');
-      assert.equal(core['group'], 'agentic-collab');
       assert.equal(core['model'], 'claude-opus-4-7');
       assert.equal(core['cwd'], '/x');
-      assert.equal(passthroughRaw, '');
+      assert.equal(core['group'], undefined);                  // no longer a core widget
+      assert.equal(passthroughRaw, 'group: agentic-collab');   // ...carried verbatim instead
     });
 
-    it('preserves `group` when re-saving after a core edit (the pre-RFC data-loss bug)', () => {
+    it('preserves `group` via passthrough when re-saving after a core edit', () => {
       const raw = '---\nengine: claude\ngroup: agentic-collab\nmodel: claude-opus-4-7\n---\n\nBody.';
       const { core, passthroughRaw } = splitFrontmatter(raw);
+      assert.equal(core['group'], undefined);                       // not a core widget anymore
+      assert.ok(passthroughRaw.includes('group: agentic-collab'));  // rides passthrough
       core['model'] = 'claude-opus-4-8'; // simulate a widget edit
       const fm = parseFrontmatter(save(core, passthroughRaw)).frontmatter;
-      assert.equal(fm['group'], 'agentic-collab'); // NOT dropped
+      assert.equal(fm['group'], 'agentic-collab'); // STILL not dropped — RFC-005 passthrough preserves it
       assert.equal(fm['model'], 'claude-opus-4-8');
       assert.equal(fm['engine'], 'claude');
+    });
+
+    it('a persona with group: stays structured-renderable (no raw-editor fallback regression)', () => {
+      // group stays in SERIALIZE_SCALARS so structuredRenderable still round-trips it;
+      // only its core-widget classification was dropped.
+      const raw = '---\nengine: claude\ngroup: agentic-collab\nmodel: claude-opus-4-7\n---\n\nBody.';
+      assert.equal(structuredRenderable(raw), true);
     });
 
     it('preserves an arbitrary engine value (claude-with-home)', () => {
@@ -913,7 +922,7 @@ describe('Persona', () => {
         '---', '', 'Body.',
       ].join('\n');
       const { core, passthroughRaw } = splitFrontmatter(raw);
-      assert.equal(core['group'], 'agentic-collab');
+      assert.equal(core['engine'], 'claude-with-home'); // group now rides passthrough (own test)
       assert.ok(passthroughRaw.includes('hook_prepare:'));
       assert.ok(passthroughRaw.includes('  shell: |'));
       assert.ok(passthroughRaw.includes('    git -C "$REPO_ROOT" worktree add "$WORKTREE_PATH" HEAD'));
@@ -952,12 +961,12 @@ describe('Persona', () => {
       ].join('\n');
       const { core, passthroughRaw } = splitFrontmatter(raw);
       assert.equal(core['engine'], 'claude-with-home');
-      assert.equal(core['group'], 'agentic-collab');
+      assert.equal(core['group'], undefined); // group rides passthrough now, not a core widget
       core['model'] = 'claude-opus-4-8'; // edit one core field
       const saved = save(core, passthroughRaw, 'System prompt body.');
       const fm = parseFrontmatter(saved).frontmatter;
       assert.equal(fm['model'], 'claude-opus-4-8');
-      assert.equal(fm['group'], 'agentic-collab'); // preserved
+      assert.equal(fm['group'], 'agentic-collab'); // preserved via passthrough
       assert.equal(fm['engine'], 'claude-with-home');
       for (const needle of ['# rationale: opus for reasoning depth', 'poke:', ' - shell: ok', 'hook_prepare:', '  shell: |', '    git worktree add "$WORKTREE_PATH" HEAD', 'indicators:', '  approval:', '    badge: Approve']) {
         assert.ok(saved.includes(needle), `missing from passthrough: ${needle}`);
@@ -974,9 +983,9 @@ describe('Persona', () => {
       assert.ok(passthroughRaw.includes('  /multi/line/cwd'));
     });
 
-    it('serializeCore emits scalars in order and teams last; skips empties', () => {
+    it('serializeCore emits scalars in order, teams last, skips empties, and ignores the dropped group', () => {
       const out = serializeCore({ engine: 'claude', model: '', icon: '🎛️', group: 'g', teams: ['a', 'b'] });
-      assert.equal(out, 'icon: 🎛️\nengine: claude\ngroup: g\nteams: [a, b]');
+      assert.equal(out, 'icon: 🎛️\nengine: claude\nteams: [a, b]'); // no `group:` — no longer a core scalar
     });
   });
 

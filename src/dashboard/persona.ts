@@ -28,8 +28,10 @@ import { escapeHtml, toast } from './util.ts';
 
 /** Always-visible core fields (minimal default). */
 const PERSONA_CORE_ALWAYS = ['engine', 'model', 'cwd', 'icon'] as const;
-/** Core fields shown only when populated (still structured widgets when shown). */
-const PERSONA_CORE_GATED = ['group', 'thinking', 'permissions', 'account', 'proxy', 'teams'] as const;
+/** Core fields shown only when populated (still structured widgets when shown).
+ *  `group` was dropped (RFC-004 teams superseded it): it now rides through the
+ *  Advanced/passthrough block verbatim rather than a dead core widget. */
+const PERSONA_CORE_GATED = ['thinking', 'permissions', 'account', 'proxy', 'teams'] as const;
 
 const ENGINES = ['claude', 'codex', 'opencode', 'claude-with-home'];
 
@@ -188,14 +190,13 @@ async function hydrate(root: HTMLElement, agentName: string): Promise<void> {
   const fieldPermissions = (): string => `<div class="ov-field" data-field="permissions"><label>Permissions</label><div><input class="ov-input" data-f="permissions" value="${esc(sv('permissions'))}" placeholder="(default)"></div></div>`;
   const fieldAccount = (): string => `<div class="ov-field" data-field="account"><label>Account</label><div><input class="ov-input" data-f="account" value="${esc(sv('account'))}" placeholder="(none)"></div></div>`;
   const fieldIcon = (): string => `<div class="ov-field" data-field="icon"><label>Icon</label><div><input class="ov-input" data-f="icon" value="${esc(sv('icon'))}" placeholder="emoji"></div></div>`;
-  const fieldGroup = (): string => `<div class="ov-field" data-field="group"><label>Group</label><div><input class="ov-input" data-f="group" value="${esc(sv('group'))}" placeholder="(none)"></div></div>`;
   const fieldProxy = (): string => `<div class="ov-field" data-field="proxy"><label>Proxy</label>
     <div><select class="ov-select" data-f="proxy">${curProxy ? `<option value="${esc(curProxy)}" selected>${esc(curProxy)}</option>` : '<option value="" selected>Auto (first available)</option>'}</select><div class="help" data-proxy-hint></div></div></div>`;
   const fieldTeams = (): string => `<div class="ov-field stack" data-field="teams"><label>Teams <span class="when">click to toggle</span></label>
     <div><div class="ov-chips" data-teams-chips>${teamNames.map((n) => `<span class="ov-chip ${curTeams.includes(n) ? 'on' : ''}" data-team="${esc(n)}">${esc(n)}</span>`).join('') || '<span style="font-size:12px;color:var(--ink-4);font-style:italic;">No teams yet.</span>'}</div>
     <div style="margin-top:6px;display:flex;gap:6px;"><input class="ov-input" data-new-team type="text" placeholder="new team…" style="max-width:200px;"><button class="btn" type="button" data-add-team>+ Add</button></div></div></div>`;
 
-  const RENDERERS: Record<string, () => string> = { engine: fieldEngine, model: fieldModel, thinking: fieldThinking, cwd: fieldCwd, permissions: fieldPermissions, account: fieldAccount, icon: fieldIcon, group: fieldGroup, proxy: fieldProxy, teams: fieldTeams };
+  const RENDERERS: Record<string, () => string> = { engine: fieldEngine, model: fieldModel, thinking: fieldThinking, cwd: fieldCwd, permissions: fieldPermissions, account: fieldAccount, icon: fieldIcon, proxy: fieldProxy, teams: fieldTeams };
   const ALL_CORE = [...PERSONA_CORE_ALWAYS, ...PERSONA_CORE_GATED];
   const shownFields = ALL_CORE.filter(showField);
   const hiddenFields = PERSONA_CORE_GATED.filter((k) => !showField(k));
