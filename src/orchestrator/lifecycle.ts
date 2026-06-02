@@ -106,6 +106,62 @@ function wrapLaunchResult(result: HookResult, agent: AgentRecord, personaFile: s
 }
 
 /**
+ * Assemble the pre-dispatch launch command for an agent (RFC-007).
+ *
+ * This is the PURE, side-effect-free portion of spawnAgent Phase 2: it resolves
+ * the start hook (preset → adapter spawn command, shell → interpolated, pipeline
+ * → resolved steps) and wraps the result with the agent's launch env. It does NOT
+ * create tmux sessions, write codex profiles, scaffold HOME, dispatch, or touch
+ * the DB — all of those live elsewhere in Phase 2 and are unchanged.
+ *
+ * The caller composes `systemPrompt` ONCE (real persona body for spawn;
+ * «PERSONA»-bodied for the preview endpoint) and passes it here; spawn also feeds
+ * that same prompt to the side-effecting codex profile write, so the inline
+ * command and the codex profile are guaranteed to use the same prompt (review S1).
+ *
+ * Used by spawnAgent (behavior-preserving extraction) and the launch-preview
+ * endpoint, so the preview cannot drift from what actually spawns.
+ */
+export function assembleLaunchCommand(opts: {
+  /** Effective config (post resolveEffectiveConfig) — engine/hooks/launchEnv resolved. */
+  agent: AgentRecord;
+  /** Already-composed system prompt (collab injection + persona body or «PERSONA»). */
+  systemPrompt: string;
+  /** Host-side persona file path for COLLAB_PERSONA_FILE. */
+  personaFile: string;
+  /** Resolved isolated HOME (spawn scaffolds; preview passes a deterministic path or none). */
+  accountHome?: string | undefined;
+  /** Pre-generated session id (randomUUID for spawn; a fixed sample for preview). */
+  sessionId: string;
+  model?: string | undefined;
+  thinking?: string | undefined;
+  task?: string | undefined;
+}): HookResult {
+  const templateVars: TemplateVars = {
+    AGENT_NAME: opts.agent.name,
+    AGENT_CWD: opts.agent.cwd,
+    SESSION_ID: opts.sessionId,
+    PERSONA_PROMPT: opts.systemPrompt,
+    PERSONA_PROMPT_FILEPATH: opts.personaFile ?? undefined,
+    capturedVars: opts.agent.capturedVars ?? undefined,
+  };
+  const startResult = resolveHook('start', opts.agent.hookStart, opts.agent, {
+    spawnOpts: {
+      name: opts.agent.name,
+      cwd: opts.agent.cwd,
+      model: opts.model,
+      thinking: opts.thinking,
+      task: opts.task,
+      appendSystemPrompt: opts.systemPrompt,
+      dangerouslySkipPermissions: opts.agent.permissions === 'skip',
+      sessionId: opts.sessionId,
+    },
+    templateVars,
+  });
+  return wrapLaunchResult(startResult, opts.agent, opts.personaFile, opts.accountHome);
+}
+
+/**
  * Dispatch a resolved hook result to the proxy.
  * Handles paste, keys, send sequences, pipelines, and skip modes uniformly.
  *
@@ -496,8 +552,8 @@ export async function spawnAgent(
   const engineConfig = ctx.db.getEngineConfig(phase1.current.engine);
   const effectiveCurrent = resolveEffectiveConfig(phase1.current, engineConfig);
   const engine = effectiveCurrent.engine;
-  const permissions = effectiveCurrent.permissions;
-  const hookStart = effectiveCurrent.hookStart;
+  // permissions + hookStart are now derived inside assembleLaunchCommand from
+  // effectiveCurrent (RFC-007); no separate locals needed in the spawn path.
 
   const watchdog = startWatchdog(ctx, opts.name, 'spawning', SPAWN_TIMEOUT_MS, opts.proxyId, tmuxSession);
 
@@ -530,29 +586,10 @@ export async function spawnAgent(
     // 3. Generate session ID for engines that support it (Claude --session-id)
     const generatedSessionId = randomUUID();
 
-    // 4. Build and paste spawn command via hook resolver
+    // 4. Build the spawn command via the hook resolver. resolveHook is pure
+    // (no proxy dispatch), so the account scaffolding below — the only side
+    // effect between resolve and wrap — may run first without changing output.
     const personaFile = resolvePersonaFilePath(opts.name, opts.persona);
-    const templateVars: TemplateVars = {
-      AGENT_NAME: opts.name,
-      AGENT_CWD: opts.cwd,
-      SESSION_ID: generatedSessionId,
-      PERSONA_PROMPT: systemPrompt,
-      PERSONA_PROMPT_FILEPATH: personaFile ?? undefined,
-      capturedVars: phase1.current.capturedVars ?? undefined,
-    };
-    const startResult = resolveHook('start', hookStart, effectiveCurrent, {
-      spawnOpts: {
-        name: opts.name,
-        cwd: opts.cwd,
-        model: opts.model,
-        thinking: opts.thinking,
-        task: opts.task,
-        appendSystemPrompt: systemPrompt,
-        dangerouslySkipPermissions: permissions === 'skip',
-        sessionId: generatedSessionId,
-      },
-      templateVars,
-    });
 
     // Scaffold isolated HOME if agent has an account configured
     let accountHome: string | undefined;
@@ -566,8 +603,17 @@ export async function spawnAgent(
       }
     }
 
-    // Wrap launch command with agent env vars
-    const wrappedStart = wrapLaunchResult(startResult, effectiveCurrent, personaFile, accountHome);
+    // Resolve + wrap launch command with agent env vars (RFC-007: shared with preview).
+    const wrappedStart = assembleLaunchCommand({
+      agent: effectiveCurrent,
+      systemPrompt,
+      personaFile,
+      accountHome,
+      sessionId: generatedSessionId,
+      model: opts.model,
+      thinking: opts.thinking,
+      task: opts.task,
+    });
 
     await dispatchHookResult(ctx, opts.proxyId, tmuxSession, wrappedStart, { agentName: opts.name });
 
@@ -1492,7 +1538,7 @@ export async function deliverToAgent(
  * Compute peers list. Call BEFORE acquiring a lock to avoid holding
  * the lock while querying all agents.
  */
-function computePeers(ctx: LifecycleContext, agentName: string): string[] {
+export function computePeers(ctx: LifecycleContext, agentName: string): string[] {
   return ctx.db.listAgents()
     .filter((a) => a.name !== agentName && a.state !== 'void' && a.state !== 'failed')
     .map((a) => a.name);
@@ -1502,7 +1548,7 @@ function computePeers(ctx: LifecycleContext, agentName: string): string[] {
  * Resolve the host-side persona file path for an agent.
  * Used for launch-time COLLAB_PERSONA_FILE exports and custom hook wrappers.
  */
-function resolvePersonaFilePath(name: string, persona?: string | null): string {
+export function resolvePersonaFilePath(name: string, persona?: string | null): string {
   const dir = getPersonasDir();
   const filename = persona ?? name;
   return toHostPath(join(dir, `${filename}.md`));
