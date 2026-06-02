@@ -195,6 +195,13 @@
   font-size: 14px;
   color: var(--ink);
 }
+/* Agent glyph — leads the name in agent results. */
+.sr-result .hdr .nm .agent-icon {
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1;
+  margin-right: 7px;
+}
 .sr-result .hdr .nm a {
   color: var(--steel);
   text-decoration: none;

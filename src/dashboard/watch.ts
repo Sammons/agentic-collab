@@ -183,10 +183,10 @@ function updateAgo(): void {
 /* ── wiring ────────────────────────────────────────────────────────── */
 
 /** Signature of the inputs `headerInnerHtml` renders, to skip no-op rebuilds.
- *  Extend this when the header starts rendering more agent fields (e.g. icon). */
+ *  Includes the icon so a header re-render fires when the agent's icon changes. */
 function headerSig(name: string): string {
   const agent = state.agents.find((a) => a.name === name);
-  return agent ? agent.state : 'unknown';
+  return agent ? `${agent.state}|${agent.icon ?? ''}` : 'unknown';
 }
 
 /**
@@ -202,11 +202,12 @@ function headerInnerHtml(name: string): string {
   const isRunning = agent ? ['active', 'idle', 'spawning'].includes(agent.state) : false;
   const isTransient = agent ? ['suspending', 'resuming'].includes(agent.state) : false;
   const startLabel = agent?.state === 'suspended' ? 'Resume' : 'Start';
+  const iconHtml = agent?.icon ? `<span class="agent-icon">${escapeHtml(agent.icon)}</span>` : '';
   return `
         <button class="back" data-back>←</button>
         <span class="breadcrumb">Watch</span>
         ${agent ? `<span class="state-pill ${agent.state}">${agent.state}</span>` : `<span class="state-pill failed">unknown</span>`}
-        <h1 class="title">${escapeHtml(name)}</h1>
+        <h1 class="title">${iconHtml}${escapeHtml(name)}</h1>
         <div class="right">
           ${!isTransient && !isRunning ? `<button class="btn primary" data-start>${startLabel}</button>` : ''}
           ${isRunning ? `<button class="btn ghost" data-kill>Kill</button>` : ''}

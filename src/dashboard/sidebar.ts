@@ -243,11 +243,14 @@ function memberHtml(agentName: string): string {
   const stateTip = isTemplate
     ? `${agentName} — template (messaging spawns new agent)`
     : `${agentName} — ${agent.state}`;
-  // Template styling is handled via .member.is-template .nm in CSS
+  // Template styling is handled via .member.is-template .nm in CSS.
+  // Selection is an IDE-file-nav-style highlighted row (`.member.checked`),
+  // not a checkbox — see sidebar.css. The .status dot still conveys liveness.
+  const iconHtml = agent.icon ? `<span class="agent-icon">${escapeHtml(agent.icon)}</span>` : '';
   return `
     <div class="member ${checked}${isTemplate ? ' is-template' : ''}" data-member="${escapeHtml(agentName)}">
-      <span class="check"></span>
       <span class="status ${status}" title="${escapeHtml(stateTip)}">${isTemplate ? '+' : ''}</span>
+      ${iconHtml}
       <span class="nm">${escapeHtml(agentName)}</span>
       <span class="focus" data-focus="${escapeHtml(agentName)}" title="Focus on ${escapeHtml(agentName)}">${icons['focus']}</span>
       <span class="eye" data-eye="${escapeHtml(agentName)}" title="Watch ${escapeHtml(agentName)}">${icons['eye']}</span>
@@ -353,18 +356,19 @@ function wire(r: HTMLElement): void {
     });
   });
 
-  // Member-row click handler.
+  // Member-row click handler. Selection is shown as an IDE-file-nav-style
+  // highlighted row (no checkbox affordance); the whole row is the toggle
+  // target.
   //
-  //   eye icon      → watch route (handled by a separate listener below)
-  //   checkbox      → toggle selection
-  //   name (when the agent is already checked AND composer is empty)
-  //                 → inject "@<agent> " into the composer + focus.
-  //                   Saves the user from re-typing the mention they just
-  //                   confirmed in the sidebar.
-  //   anywhere else → toggle selection (the friendly fallback)
+  //   eye / focus icon → handled by separate listeners below (no toggle)
+  //   composer empty / only @mentions+#topics
+  //                    → inject "@<agent> " into the composer + focus, and
+  //                      ensure the agent is selected. Saves re-typing the
+  //                      mention just confirmed in the sidebar.
+  //   anywhere else    → toggle selection (multi-select drives chat filter)
   //
-  // Off-dashboard: any non-eye tap replaces the selection with this agent
-  // and routes to chat.
+  // Off-dashboard: any non-eye/focus tap replaces the selection with this
+  // agent and routes to chat.
   r.querySelectorAll<HTMLElement>('[data-member]').forEach((el) => {
     el.addEventListener('click', (e) => {
       const target = e.target as HTMLElement;
@@ -380,14 +384,13 @@ function wire(r: HTMLElement): void {
       }
 
       // On dashboard:
-      const clickedCheckbox = !!target.closest('.check');
       const composer = document.querySelector<HTMLTextAreaElement>('[data-composer-input]');
 
       // Smart @mention injection:
       // - If composer is empty → inject @agent
       // - If composer has only @mentions and #topics (no message body) → replace @agent, keep topics
       // - Otherwise → toggle selection as usual
-      if (!clickedCheckbox && composer) {
+      if (composer) {
         const value = composer.value.trim();
         // Check if value is empty or only contains @mentions and optional #topics (no actual message)
         const onlyPrefixes = value === '' || /^([@#][a-zA-Z0-9_\-/]+\s*)+$/.test(value);

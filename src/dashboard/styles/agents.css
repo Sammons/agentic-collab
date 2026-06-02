@@ -102,6 +102,12 @@
   letter-spacing: -0.008em;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+/* Agent glyph — leads the name. Emoji/short glyph from AgentRecord.icon. */
+.pg-row .nm .agent-icon {
+  font-size: 14px;
+  line-height: 1;
+  margin-right: 7px;
+}
 .pg-row .kind {
   font-size: 11.5px;
   font-weight: 500;
