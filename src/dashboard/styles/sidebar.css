@@ -234,7 +234,8 @@
   background: var(--paper-sel);
 }
 .member.checked:hover { background: var(--paper-sel); }
-/* status indicator — leads the row. Uses SHAPE + COLOR for
+/* status indicator — trails the row (right-aligned, after the name + hover
+   actions) so it doesn't crowd the agent-icon emoji. Uses SHAPE + COLOR for
    accessibility: colorblind users can distinguish states by shape alone.
    - online:  solid green disc
    - busy:    orange ring (hollow) with pulse animation
