@@ -280,6 +280,24 @@ export function restoreSelectionOnInit(): void {
   emit('selection-changed');
 }
 
+/**
+ * Boot-time selection restore, BEFORE the WS connects. The chat feed fetches
+ * messages filtered by `selectedAgents`; if selection were only restored on the
+ * WS `init` (restoreSelectionOnInit), a slow/failed socket leaves the feed blank
+ * on reload. Restoring at boot lets the initial feed load over REST immediately,
+ * independent of the socket. We can't intersect with known agents yet
+ * (`state.agents` is empty until init), so we restore the raw stored names — the
+ * feed fetch tolerates unknown names and restoreSelectionOnInit re-filters once
+ * the agent list arrives. No `selection-changed` emit: the initial render reads
+ * `selectedAgents` directly.
+ */
+export function restoreSelectionAtBoot(): void {
+  try {
+    const raw = localStorage.getItem(SELECTION_KEY);
+    if (raw) state.selectedAgents = new Set(JSON.parse(raw) as string[]);
+  } catch {}
+}
+
 /* ── token ─────────────────────────────────────────────────────────── */
 
 const TOKEN_KEY = 'orchestrator_token_v3';

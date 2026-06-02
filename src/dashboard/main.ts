@@ -10,7 +10,7 @@
  * The sidebar re-renders automatically on init/agents-changed/teams-changed
  * /selection-changed/route-changed events via state.ts's pub/sub bus.
  */
-import { loadToken, loadCachedThreads, state } from './state.ts';
+import { loadToken, loadCachedThreads, restoreSelectionAtBoot, state } from './state.ts';
 import { setupRouter } from './routing.ts';
 import { setupSidebar } from './sidebar.ts';
 import { setupChat } from './chat.ts';
@@ -31,6 +31,10 @@ function boot(): void {
   // the *cached* agent names too so the user lands on their last view.
   const cached = loadCachedThreads();
   state.threads = cached.threads;
+  // Restore the agent selection at boot too, so the initial chat feed loads
+  // over REST immediately instead of waiting on the WS `init` to restore it —
+  // a slow/failed socket was leaving the chat history blank on reload.
+  restoreSelectionAtBoot();
   // Register route renderers BEFORE setupRouter() so initial render uses them.
   setupChat();
   setupAgents();
