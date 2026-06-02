@@ -21,7 +21,7 @@ import { sanitizeMessage, generateMessageId } from '../shared/sanitize.ts';
 import { parseAddress } from '../shared/address.ts';
 import { getVersion, versionsMatch } from '../shared/version.ts';
 import type { LockManager } from '../shared/lock.ts';
-import { getPersonasDir, parseFrontmatter, createPersonaAndAgent, syncSinglePersona, syncPersonasWithDiff, updateFrontmatterField, resolvePersonaPath, toHostPath, writeAgentTeams, serializeFrontmatter, structuredRenderable, splitFrontmatter, serializeCore, composeSystemPrompt } from './persona.ts';
+import { getPersonasDir, parseFrontmatter, createPersonaAndAgent, syncSinglePersona, syncPersonasWithDiff, updateFrontmatterField, resolvePersonaPath, toHostPath, writeAgentTeams, serializeFrontmatter, structuredRenderable, splitFrontmatter, serializeCore, composeSystemPrompt, deserializeHookValue } from './persona.ts';
 import type { PersonaFrontmatter } from './persona.ts';
 import {
   spawnAgent, resumeAgent, suspendAgent, destroyAgent,
@@ -2218,22 +2218,28 @@ route('GET', '/api/personas/:name/launch-preview', async (_req, res, match, ctx)
   }
 
   // 10. Render the command per mode + annotate where the persona lands per engine.
+  // Classify the hook by its declared value, not just the resolved mode: a null
+  // hook AND a `preset:<engine>` / `{preset}` hook both resolve to an adapter-built
+  // paste command, so "hookStart is set" alone would mislabel presets as shell.
+  const classifyHookKind = (): 'preset' | 'shell' | 'pipeline' => {
+    if (!effective.hookStart) return 'preset';
+    const d = deserializeHookValue(effective.hookStart);
+    if (Array.isArray(d)) return 'pipeline';
+    if (d && typeof d === 'object' && 'preset' in d) return 'preset';
+    if (typeof d === 'string' && d.startsWith('preset:')) return 'preset';
+    return 'shell';
+  };
   let command: string;
-  let hookKind: 'preset' | 'shell' | 'pipeline';
+  const hookKind: 'preset' | 'shell' | 'pipeline' = result.mode === 'pipeline' ? 'pipeline' : classifyHookKind();
   if (result.mode === 'paste') {
     command = result.text;
-    // Preset (adapter-built) vs shell hook both resolve to paste; distinguish by
-    // whether an explicit hookStart string was set.
-    hookKind = effective.hookStart ? 'shell' : 'preset';
   } else if (result.mode === 'pipeline') {
     command = result.steps
       .map((s) => (s.type === 'shell' ? s.command : `[${s.type}]`))
       .join('\n');
-    hookKind = 'pipeline';
   } else {
     // keys/send/skip: no pasteable command line.
     command = '';
-    hookKind = effective.hookStart ? 'shell' : 'preset';
     notes.push(`Start hook resolved to mode "${result.mode}" — no pasteable command line.`);
   }
 
@@ -2252,7 +2258,7 @@ route('GET', '/api/personas/:name/launch-preview', async (_req, res, match, ctx)
   try {
     const adapter = getAdapter(effective.engine);
     if (adapter.usesConfigProfile) {
-      body.profilePreview = systemPrompt;
+      body['profilePreview'] = systemPrompt;
       notes.push(`${effective.engine}: the system prompt is written to a config profile at spawn (not inline); the command uses the profile. profilePreview shows that composed prompt.`);
     }
   } catch {

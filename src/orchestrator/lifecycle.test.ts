@@ -1648,5 +1648,18 @@ describe('Lifecycle', () => {
         `HOME should be wrapped after base exports; got: ${text}`,
       );
     });
+
+    it('cwd override → $AGENT_CWD uses the passed cwd, not agent.cwd', () => {
+      const hookStart = JSON.stringify({ shell: 'run.sh --cwd $AGENT_CWD' });
+      const agent = syntheticAgent({ engine: 'claude', cwd: '/stored/cwd', hookStart });
+      // Override (mirrors a /spawn body.cwd override flowing through opts.cwd).
+      const overridden = assembleLaunchCommand({ agent, systemPrompt: PROMPT, personaFile: FILE, sessionId: SID, cwd: '/override/cwd' });
+      assert.ok((overridden as { text: string }).text.includes('run.sh --cwd /override/cwd'),
+        `override cwd should win; got: ${(overridden as { text: string }).text}`);
+      // Omitting cwd falls back to agent.cwd (preview path).
+      const fallback = assembleLaunchCommand({ agent, systemPrompt: PROMPT, personaFile: FILE, sessionId: SID });
+      assert.ok((fallback as { text: string }).text.includes('run.sh --cwd /stored/cwd'),
+        `fallback should use agent.cwd; got: ${(fallback as { text: string }).text}`);
+    });
   });
 });

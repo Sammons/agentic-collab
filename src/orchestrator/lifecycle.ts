@@ -133,13 +133,18 @@ export function assembleLaunchCommand(opts: {
   accountHome?: string | undefined;
   /** Pre-generated session id (randomUUID for spawn; a fixed sample for preview). */
   sessionId: string;
+  /** Effective working dir. Spawn passes the request-resolved cwd (honoring a
+   *  body.cwd override); preview omits it so it falls back to the persona cwd.
+   *  Feeds $AGENT_CWD in shell/pipeline hooks (preset adapters ignore cwd). */
+  cwd?: string | undefined;
   model?: string | undefined;
   thinking?: string | undefined;
   task?: string | undefined;
 }): HookResult {
+  const cwd = opts.cwd ?? opts.agent.cwd;
   const templateVars: TemplateVars = {
     AGENT_NAME: opts.agent.name,
-    AGENT_CWD: opts.agent.cwd,
+    AGENT_CWD: cwd,
     SESSION_ID: opts.sessionId,
     PERSONA_PROMPT: opts.systemPrompt,
     PERSONA_PROMPT_FILEPATH: opts.personaFile ?? undefined,
@@ -148,7 +153,7 @@ export function assembleLaunchCommand(opts: {
   const startResult = resolveHook('start', opts.agent.hookStart, opts.agent, {
     spawnOpts: {
       name: opts.agent.name,
-      cwd: opts.agent.cwd,
+      cwd,
       model: opts.model,
       thinking: opts.thinking,
       task: opts.task,
@@ -610,6 +615,7 @@ export async function spawnAgent(
       personaFile,
       accountHome,
       sessionId: generatedSessionId,
+      cwd: opts.cwd,
       model: opts.model,
       thinking: opts.thinking,
       task: opts.task,
