@@ -1162,6 +1162,56 @@ describe('API Routes — v3 Q3 endpoints', () => {
       schemaPath: null,
       replySchemaPath: null,
     }]);
+
+    // Seed a second ephemeral template with TWO declared topics so bare-name
+    // sends with an ambiguous/non-matching topic must 400 (no single default).
+    db.upsertAgentTemplate({
+      id: 'q3-multi',
+      personaPath: null,
+      engine: 'claude',
+      model: null,
+      persistent: false,
+      cwdBase: '/tmp',
+      cwdTemplate: null,
+      repoRoot: '/tmp',
+      hookStart: 'echo start',
+      hookExit: null,
+      hookPrepare: null,
+      hookCleanup: null,
+      createdAt: '',
+      updatedAt: '',
+    });
+    db.replaceTopicsForTemplate('q3-multi', [
+      {
+        agentTemplate: 'q3-multi', name: 'alpha',
+        hookPrepareOverride: null, hookStartOverride: null, hookCleanupOverride: null,
+        monitorTemplate: null, concurrency: 1, schemaPath: null, replySchemaPath: null,
+      },
+      {
+        agentTemplate: 'q3-multi', name: 'beta',
+        hookPrepareOverride: null, hookStartOverride: null, hookCleanupOverride: null,
+        monitorTemplate: null, concurrency: 1, schemaPath: null, replySchemaPath: null,
+      },
+    ]);
+
+    // Seed a PERSISTENT template — bare-name sends to it must NOT be
+    // topic-routed (helper returns handled:false → caller 404s).
+    db.upsertAgentTemplate({
+      id: 'q3-persistent',
+      personaPath: null,
+      engine: 'claude',
+      model: null,
+      persistent: true,
+      cwdBase: null,
+      cwdTemplate: null,
+      repoRoot: null,
+      hookStart: null,
+      hookExit: null,
+      hookPrepare: null,
+      hookCleanup: null,
+      createdAt: '',
+      updatedAt: '',
+    });
     db.registerProxy('p1', 'tok', 'localhost:3100');
 
     const q3Locks = new LockManager(db.rawDb);
@@ -1322,6 +1372,113 @@ describe('API Routes — v3 Q3 endpoints', () => {
     assert.equal(status, 202);
     const body = data as Record<string, unknown>;
     assert.equal(body['status'], 'queued');
+  });
+
+  // ── Bug fix: @mentioning / `collab send`-ing a bare ephemeral template name
+  //    must spawn an instance via the topic pipeline instead of 404ing. ──
+
+  it('POST /api/dashboard/send to an ephemeral template name (declared topic) → 202 + enqueues', async () => {
+    const before = db.countQueuedTopicMessages('q3-tmpl', 'echo');
+    const { status, data } = await api('POST', '/api/dashboard/send', {
+      agent: 'q3-tmpl',
+      message: 'hello ephemeral',
+      topic: 'echo', // matches a declared topic
+    });
+    assert.equal(status, 202);
+    const body = data as Record<string, unknown>;
+    assert.equal(body['ok'], true);
+    assert.equal(body['status'], 'queued');
+    assert.equal(body['spawnedTemplate'], 'q3-tmpl');
+    assert.equal(body['topic'], 'echo');
+    assert.equal(typeof body['queueId'], 'number');
+    // A topic_queue row was actually published.
+    assert.equal(db.countQueuedTopicMessages('q3-tmpl', 'echo'), before + 1);
+  });
+
+  it('POST /api/agents/send to an ephemeral template name → 202 + enqueues', async () => {
+    const before = db.countQueuedTopicMessages('q3-tmpl', 'echo');
+    const { status, data } = await api('POST', '/api/agents/send', {
+      from: 'some-agent',
+      to: 'q3-tmpl',
+      message: 'hi from agent',
+      topic: 'echo',
+    });
+    assert.equal(status, 202);
+    const body = data as Record<string, unknown>;
+    assert.equal(body['ok'], true);
+    assert.equal(body['status'], 'queued');
+    assert.equal(body['spawnedTemplate'], 'q3-tmpl');
+    assert.equal(db.countQueuedTopicMessages('q3-tmpl', 'echo'), before + 1);
+  });
+
+  it('POST /api/dashboard/send: single declared topic + non-matching topic → 202 using sole topic', async () => {
+    const before = db.countQueuedTopicMessages('q3-tmpl', 'echo');
+    const { status, data } = await api('POST', '/api/dashboard/send', {
+      agent: 'q3-tmpl',
+      message: 'topic mismatch but only one declared',
+      topic: 'not-a-declared-topic', // falls back to the sole declared topic
+    });
+    assert.equal(status, 202);
+    const body = data as Record<string, unknown>;
+    assert.equal(body['topic'], 'echo');
+    assert.equal(db.countQueuedTopicMessages('q3-tmpl', 'echo'), before + 1);
+  });
+
+  it('POST /api/dashboard/send: multiple declared topics + non-matching topic → 400 with topics[]', async () => {
+    const { status, data } = await api('POST', '/api/dashboard/send', {
+      agent: 'q3-multi',
+      message: 'which topic?',
+      topic: 'nope',
+    });
+    assert.equal(status, 400);
+    const body = data as Record<string, unknown>;
+    assert.equal(body['template'], 'q3-multi');
+    assert.match(String(body['error']), /declared topic/);
+    assert.deepEqual([...(body['topics'] as string[])].sort(), ['alpha', 'beta']);
+  });
+
+  it('POST /api/agents/send: multiple declared topics + non-matching topic → 400 with topics[]', async () => {
+    const { status, data } = await api('POST', '/api/agents/send', {
+      from: 'some-agent',
+      to: 'q3-multi',
+      message: 'which topic?',
+      topic: 'nope',
+    });
+    assert.equal(status, 400);
+    const body = data as Record<string, unknown>;
+    assert.equal(body['template'], 'q3-multi');
+    assert.deepEqual([...(body['topics'] as string[])].sort(), ['alpha', 'beta']);
+  });
+
+  it('POST /api/dashboard/send: persistent template name is NOT topic-routed → 404', async () => {
+    const { status, data } = await api('POST', '/api/dashboard/send', {
+      agent: 'q3-persistent',
+      message: 'should not route',
+      topic: 'system',
+    });
+    assert.equal(status, 404);
+    assert.match(String((data as Record<string, unknown>)['error']), /not found/);
+  });
+
+  it('POST /api/dashboard/send: name that is neither agent nor template → 404 (regression guard)', async () => {
+    const { status, data } = await api('POST', '/api/dashboard/send', {
+      agent: 'totally-unknown-name',
+      message: 'nope',
+      topic: 'system',
+    });
+    assert.equal(status, 404);
+    assert.equal((data as Record<string, unknown>)['error'], 'Agent "totally-unknown-name" not found');
+  });
+
+  it('POST /api/agents/send: name that is neither agent nor template → 404 (regression guard)', async () => {
+    const { status, data } = await api('POST', '/api/agents/send', {
+      from: 'some-agent',
+      to: 'totally-unknown-name',
+      message: 'nope',
+      topic: 'system',
+    });
+    assert.equal(status, 404);
+    assert.equal((data as Record<string, unknown>)['error'], 'Target agent "totally-unknown-name" not found');
   });
 
   // ── RFC-006 Q2: instance read endpoints ──

@@ -486,6 +486,73 @@ route('DELETE', '/api/agents/:name', async (_req, res, match, ctx) => {
 
 // ── Agent Messaging ──
 
+/**
+ * Bridge a bare-name send (no `topic:`/`agent:` prefix) onto an ephemeral
+ * agent template when the name is NOT a live persistent agent. @mentioning an
+ * ephemeral template (e.g. `@agentic-collab-lead-ephemeral`) — and the
+ * equivalent `collab send <template>` — must spawn an instance via the topic
+ * pipeline rather than 404 against the `agents` table.
+ *
+ * Returns `{ handled: false }` when the name is not an ephemeral template (so
+ * the caller keeps its existing 404 behaviour). Persistent templates are NOT
+ * topic-addressable and also return `{ handled: false }`. The payload passed
+ * through is the RAW message (matching the `topic:` path), never the reply
+ * envelope used for persistent-agent enqueue.
+ */
+async function tryRouteToEphemeralTemplate(
+  ctx: RouteContext,
+  opts: {
+    name: string;
+    requestedTopic: string | null;
+    payload: string;
+    replyToAddr: string | null;
+    inReplyTo: string | null;
+  },
+): Promise<{ handled: false } | { handled: true; status: number; body: unknown }> {
+  const tmpl = ctx.db.getAgentTemplate(opts.name);
+  if (!tmpl) return { handled: false };
+  // Persistent templates are not addressable through the topic pipeline.
+  if (tmpl.persistent) return { handled: false };
+  if (!ctx.topicDelivery) {
+    return { handled: true, status: 503, body: { error: 'topic delivery not configured' } };
+  }
+
+  // Resolve which declared topic to spawn against.
+  const declared = ctx.db.getTopicsForTemplate(opts.name).map((t) => t.name);
+  let topicName: string;
+  if (opts.requestedTopic && declared.includes(opts.requestedTopic)) {
+    topicName = opts.requestedTopic;
+  } else if (declared.length === 1) {
+    topicName = declared[0]!;
+  } else {
+    return {
+      handled: true,
+      status: 400,
+      body: {
+        error: `"${opts.name}" is an ephemeral template; specify a declared topic with #<topic>`,
+        template: opts.name,
+        topics: declared,
+      },
+    };
+  }
+
+  const result = await ctx.topicDelivery.publish({
+    agentTemplate: opts.name,
+    topicName,
+    payload: opts.payload,
+    replyToAddr: opts.replyToAddr,
+    inReplyTo: opts.inReplyTo,
+  });
+  if (!result.ok) {
+    return { handled: true, status: 400, body: { error: result.reason } };
+  }
+  return {
+    handled: true,
+    status: 202,
+    body: { ok: true, queueId: result.queueId, status: 'queued', spawnedTemplate: opts.name, topic: topicName },
+  };
+}
+
 route('POST', '/api/agents/send', async (req, res, _match, ctx) => {
   const body = await readJson(req);
   if (!body.from || !body.to || !body.message || !body.topic) {
@@ -540,7 +607,17 @@ route('POST', '/api/agents/send', async (req, res, _match, ctx) => {
   body.to = addr.name;
 
   const target = ctx.db.getAgent(body.to);
-  if (!target) return json(res, 404, { error: `Target agent "${body.to}" not found` });
+  if (!target) {
+    const routed = await tryRouteToEphemeralTemplate(ctx, {
+      name: body.to as string,
+      requestedTopic: typeof body.topic === 'string' ? body.topic : null,
+      payload: typeof body.message === 'string' ? body.message : JSON.stringify(body.message ?? {}),
+      replyToAddr: typeof body.from === 'string' ? body.from : null,
+      inReplyTo: typeof body.inReplyTo === 'string' ? body.inReplyTo : null,
+    });
+    if (routed.handled) return json(res, routed.status, routed.body);
+    return json(res, 404, { error: `Target agent "${body.to}" not found` });
+  }
   if (target.state === 'void') {
     return json(res, 400, { error: `Target agent "${body.to}" is in void state (not spawned). Spawn it first with: collab spawn ${body.to}` });
   }
@@ -655,7 +732,17 @@ route('POST', '/api/dashboard/send', async (req, res, _match, ctx) => {
   body.agent = dashAddr.name;
 
   const agent = ctx.db.getAgent(body.agent);
-  if (!agent) return json(res, 404, { error: `Agent "${body.agent}" not found` });
+  if (!agent) {
+    const routed = await tryRouteToEphemeralTemplate(ctx, {
+      name: body.agent as string,
+      requestedTopic: typeof body.topic === 'string' ? body.topic : null,
+      payload: typeof body.message === 'string' ? body.message : JSON.stringify(body.message ?? {}),
+      replyToAddr: 'dashboard',
+      inReplyTo: typeof body.inReplyTo === 'string' ? body.inReplyTo : null,
+    });
+    if (routed.handled) return json(res, routed.status, routed.body);
+    return json(res, 404, { error: `Agent "${body.agent}" not found` });
+  }
 
   const sanitized = sanitizeMessage(body.message);
   const topicStr = body.topic as string;
