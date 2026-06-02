@@ -934,13 +934,14 @@ describe('API Routes — Personas', () => {
       const { data: got } = await api('GET', '/api/personas/pt-agent');
       const g = got as { core: Record<string, unknown>; passthroughRaw: string };
       assert.equal(g.core['engine'], 'claude-with-home');
-      assert.equal(g.core['group'], 'agentic-collab');
+      assert.equal(g.core['group'], undefined);                 // group is passthrough now, not a core widget
+      assert.match(g.passthroughRaw, /^group: agentic-collab$/m); // ...carried verbatim
       assert.match(g.passthroughRaw, /# rationale: keep this comment/);
       assert.match(g.passthroughRaw, /poke:/);
       assert.match(g.passthroughRaw, /hook_prepare:/);
       // Edit one core field; echo the passthrough back verbatim (as the editor does).
       await api('PUT', '/api/personas/pt-agent', {
-        fields: { engine: 'claude-with-home', group: 'agentic-collab', model: 'opus-4-8' },
+        fields: { engine: 'claude-with-home', model: 'opus-4-8' }, // editor no longer sends group; it rides passthroughRaw
         passthroughRaw: g.passthroughRaw,
         body: 'Body.',
       });
