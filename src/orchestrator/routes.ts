@@ -2086,32 +2086,60 @@ route('GET', '/api/personas/:name', async (_req, res, match) => {
   }
 });
 
-// ── RFC-007: pre-expansion CLI launch command preview (saved persona) ──
-// GET — Bearer-exempt like the other persona GETs (auth gate at routes.ts ~3041
-// exempts GET). Side-effect-free: NO tmux session, NO codex profile write, NO
-// HOME scaffolding, NO proxy dispatch, NO DB mutation. Composes the same launch
-// command spawn would, with the persona BODY replaced by the literal «PERSONA»
-// token (the operator is editing the body, so the preview wraps everything around
-// it). Reuses the real spawn-path builders (assembleLaunchCommand +
-// buildUpsertOptsFromFrontmatter + resolveEffectiveConfig) so it cannot drift.
-route('GET', '/api/personas/:name/launch-preview', async (_req, res, match, ctx) => {
-  const name = match.pathname.groups['name']!;
-  if (!NAME_RE.test(name)) return json(res, 400, { error: 'Invalid persona name' });
-
-  // 1. Load + parse the saved persona file (same loading as GET /api/personas/:name).
-  let fm: PersonaFrontmatter;
-  try {
-    const raw = readFileSync(join(getPersonasDir(), `${name}.md`), 'utf-8');
-    fm = parseFrontmatter(raw).frontmatter as PersonaFrontmatter;
-  } catch {
-    return json(res, 404, { error: 'Persona not found' });
+// SHARED (S8): reconstruct a persona file's `content` string from a request
+// payload. Used by BOTH PUT /api/personas/:name (save) and POST
+// /api/personas/:name/launch-preview (unsaved-edit preview) so save-then-spawn
+// and preview cannot diverge. Accepts (RFC-005) { fields, passthroughRaw, body }
+// (core widgets + verbatim passthrough), or legacy { content } (full file),
+// { fields, body } (structured via serializeFrontmatter), or { frontmatter, body }
+// (raw split). Returns null when no recognizable shape is present.
+function reconstructPersonaContent(payload: Record<string, unknown>): string | null {
+  if (typeof payload['content'] === 'string') {
+    return payload['content'];
   }
+  if (payload['fields'] && typeof payload['fields'] === 'object' && typeof payload['passthroughRaw'] === 'string') {
+    // RFC-005: serialize core fields, then append the verbatim passthrough block.
+    const coreFm = serializeCore(payload['fields'] as Record<string, unknown>).trim();
+    const passthrough = (payload['passthroughRaw'] as string).trim();
+    const fm = [coreFm, passthrough].filter(Boolean).join('\n');
+    const bd = String(payload['body'] ?? '').trim();
+    return fm ? `---\n${fm}\n---\n\n${bd}` : bd;
+  }
+  if (payload['fields'] && typeof payload['fields'] === 'object') {
+    const fm = serializeFrontmatter(payload['fields'] as Record<string, unknown>).trim();
+    const bd = String(payload['body'] ?? '').trim();
+    return fm ? `---\n${fm}\n---\n\n${bd}` : bd;
+  }
+  if (typeof payload['frontmatter'] === 'string' || typeof payload['body'] === 'string') {
+    const fm = String(payload['frontmatter'] ?? '').trim();
+    const bd = String(payload['body'] ?? '').trim();
+    return fm ? `---\n${fm}\n---\n\n${bd}` : bd;
+  }
+  return null;
+}
 
-  // 2. Map frontmatter → config via the SAME mapping create/sync use (S3: hooks
+// ── RFC-007: pre-expansion CLI launch command preview ──
+//
+// SHARED CORE (S1/S4): given a parsed persona frontmatter object + name, produce
+// the preview response body. Both GET (saved persona on disk) and POST (unsaved
+// editor state) call this so preview == save-then-spawn and the two paths cannot
+// drift. Side-effect-free: NO tmux session, NO codex profile write, NO HOME
+// scaffolding, NO proxy dispatch, NO DB mutation — strictly pure read + string
+// build. Composes the same launch command spawn would, with the persona BODY
+// replaced by the literal «PERSONA» token (the operator is editing the body, so
+// the preview wraps everything around it). Reuses the real spawn-path builders
+// (assembleLaunchCommand + buildUpsertOptsFromFrontmatter + resolveEffectiveConfig).
+// On a throwing hook (S2) it returns a body carrying `error` (never throws).
+function buildLaunchPreviewResponse(
+  ctx: RouteContext,
+  name: string,
+  fm: PersonaFrontmatter,
+): Record<string, unknown> {
+  // 1. Map frontmatter → config via the SAME mapping create/sync use (S3: hooks
   //    are serialized to strings via serializeHookValue, matching AgentRecord).
   const cfg = buildUpsertOptsFromFrontmatter(name, fm) as Partial<AgentRecord> & { name: string };
 
-  // 3. Synthetic AgentRecord: config opts + safe non-runtime dummies. NO DB write.
+  // 2. Synthetic AgentRecord: config opts + safe non-runtime dummies. NO DB write.
   const syntheticAgent: AgentRecord = {
     name,
     engine: (cfg.engine ?? 'claude') as EngineType,
@@ -2153,14 +2181,14 @@ route('GET', '/api/personas/:name/launch-preview', async (_req, res, match, ctx)
     isTemplate: false,
   };
 
-  // 4. S4 GATE: resolve engine-config defaults EXACTLY as spawn (lifecycle.ts:496-497).
+  // 3. S4 GATE: resolve engine-config defaults EXACTLY as spawn (lifecycle.ts:496-497).
   //    Custom engines (e.g. claude-with-home) inject flags like --add-dir via the
   //    engine_configs hook_start — NOT frontmatter. Skipping this would make the
   //    preview silently lie.
   const engineConfig = ctx.db.getEngineConfig(syntheticAgent.engine);
   const effective = resolveEffectiveConfig(syntheticAgent, engineConfig);
 
-  // 5. Compose the placeholder prompt: «PERSONA» body + live collab injection (peers
+  // 4. Compose the placeholder prompt: «PERSONA» body + live collab injection (peers
   //    are a point-in-time snapshot — S7).
   const lifecycleCtx = makeLifecycleCtx(ctx);
   const systemPrompt = composeSystemPrompt({
@@ -2170,7 +2198,7 @@ route('GET', '/api/personas/:name/launch-preview', async (_req, res, match, ctx)
     peers: computePeers(lifecycleCtx, name),
   });
 
-  // 6. accountHome (S6): deterministic path the account would scaffold to, shown
+  // 5. accountHome (S6): deterministic path the account would scaffold to, shown
   //    for display only. NO scaffolding, NO credential read. Presence of HOME= in
   //    the real spawn depends on the account resolving (scaffoldAgentHome → null
   //    otherwise); we mirror that — only include it if the account exists/has creds.
@@ -2194,7 +2222,7 @@ route('GET', '/api/personas/:name/launch-preview', async (_req, res, match, ctx)
 
   const personaFile = resolvePersonaFilePath(name, effective.persona);
 
-  // 9. Assemble the launch command via the shared spawn-path helper.
+  // 6. Assemble the launch command via the shared spawn-path helper.
   let result: ReturnType<typeof assembleLaunchCommand>;
   try {
     result = assembleLaunchCommand({
@@ -2207,17 +2235,17 @@ route('GET', '/api/personas/:name/launch-preview', async (_req, res, match, ctx)
       thinking: effective.thinking ?? undefined,
     });
   } catch (err) {
-    // 8. S2: file:/preset: hooks can throw (missing file / unknown engine). A
-    //    half-typed hook during live editing must degrade, not 500.
-    return json(res, 200, {
+    // S2: file:/preset: hooks can throw (missing file / unknown engine). A
+    //     half-typed hook during live editing must degrade, not 500.
+    return {
       error: (err as Error).message,
       engine: effective.engine,
       personaPlaceholder: PERSONA_PLACEHOLDER,
       notes,
-    });
+    };
   }
 
-  // 10. Render the command per mode + annotate where the persona lands per engine.
+  // 7. Render the command per mode + annotate where the persona lands per engine.
   // Classify the hook by its declared value, not just the resolved mode: a null
   // hook AND a `preset:<engine>` / `{preset}` hook both resolve to an adapter-built
   // paste command, so "hookStart is set" alone would mislabel presets as shell.
@@ -2266,35 +2294,69 @@ route('GET', '/api/personas/:name/launch-preview', async (_req, res, match, ctx)
     notes.push(`Engine "${effective.engine}" has no resolvable adapter for profile detection; treating system prompt as inline.`);
   }
 
-  json(res, 200, body);
+  return body;
+}
+
+// GET — saved persona on disk. Bearer-exempt like the other persona GETs (auth
+// gate at routes.ts ~3236 exempts GET). Behavior preserved: load file →
+// parseFrontmatter → buildLaunchPreviewResponse.
+route('GET', '/api/personas/:name/launch-preview', async (_req, res, match, ctx) => {
+  const name = match.pathname.groups['name']!;
+  if (!NAME_RE.test(name)) return json(res, 400, { error: 'Invalid persona name' });
+
+  // Load + parse the saved persona file (same loading as GET /api/personas/:name).
+  let fm: PersonaFrontmatter;
+  try {
+    const raw = readFileSync(join(getPersonasDir(), `${name}.md`), 'utf-8');
+    fm = parseFrontmatter(raw).frontmatter as PersonaFrontmatter;
+  } catch {
+    return json(res, 404, { error: 'Persona not found' });
+  }
+
+  json(res, 200, buildLaunchPreviewResponse(ctx, name, fm));
+});
+
+// POST — unsaved editor state. Bearer-required (non-GET is gated) but EXEMPT from
+// the strict POST rate limit (S9): it is read-only/side-effect-free and the
+// frontend hard-debounces live previews. Reconstructs the frontmatter string via
+// reconstructPersonaContent — the IDENTICAL serialization PUT /api/personas/:name
+// uses (S8) — so "preview" and "save-then-spawn" cannot disagree, then parses it
+// and runs the same shared core as GET.
+route('POST', '/api/personas/:name/launch-preview', async (req, res, match, ctx) => {
+  const name = match.pathname.groups['name']!;
+  if (!NAME_RE.test(name)) return json(res, 400, { error: 'Invalid persona name' });
+
+  const payload = await readJson(req);
+  // S8: reconstruct frontmatter+body the SAME way PUT does. The body is irrelevant
+  // to the command (it becomes «PERSONA») but harmless to include for parity.
+  const content = reconstructPersonaContent(payload);
+  if (content === null) {
+    return json(res, 400, { error: 'fields + passthroughRaw (or content/frontmatter/body) required' });
+  }
+
+  let fm: PersonaFrontmatter;
+  try {
+    fm = parseFrontmatter(content).frontmatter as PersonaFrontmatter;
+  } catch (err) {
+    // Half-typed frontmatter mid-edit must degrade gracefully, not 500.
+    return json(res, 200, {
+      error: `Could not parse frontmatter: ${(err as Error).message}`,
+      personaPlaceholder: PERSONA_PLACEHOLDER,
+      notes: [],
+    });
+  }
+
+  json(res, 200, buildLaunchPreviewResponse(ctx, name, fm));
 });
 
 route('PUT', '/api/personas/:name', async (req, res, match) => {
   const name = match.pathname.groups['name']!;
   if (!NAME_RE.test(name)) return json(res, 400, { error: 'Invalid persona name' });
   const payload = await readJson(req);
-  // Accept (RFC-005) { fields, passthroughRaw, body } (core widgets + verbatim
-  // passthrough), or legacy { content } (full file), { fields, body } (structured
-  // via serializeFrontmatter), or { frontmatter, body } (raw split).
-  let content: string;
-  if (typeof payload.content === 'string') {
-    content = payload.content;
-  } else if (payload['fields'] && typeof payload['fields'] === 'object' && typeof payload['passthroughRaw'] === 'string') {
-    // RFC-005: serialize core fields, then append the verbatim passthrough block.
-    const coreFm = serializeCore(payload['fields'] as Record<string, unknown>).trim();
-    const passthrough = (payload['passthroughRaw'] as string).trim();
-    const fm = [coreFm, passthrough].filter(Boolean).join('\n');
-    const bd = String(payload['body'] ?? '').trim();
-    content = fm ? `---\n${fm}\n---\n\n${bd}` : bd;
-  } else if (payload.fields && typeof payload.fields === 'object') {
-    const fm = serializeFrontmatter(payload.fields as Record<string, unknown>).trim();
-    const bd = (payload.body ?? '').trim();
-    content = fm ? `---\n${fm}\n---\n\n${bd}` : bd;
-  } else if (typeof payload.frontmatter === 'string' || typeof payload.body === 'string') {
-    const fm = (payload.frontmatter ?? '').trim();
-    const bd = (payload.body ?? '').trim();
-    content = fm ? `---\n${fm}\n---\n\n${bd}` : bd;
-  } else {
+  // S8: reconstruct the file content via the shared helper — the IDENTICAL
+  // serialization the launch-preview POST uses, so preview == save-then-spawn.
+  const content = reconstructPersonaContent(payload);
+  if (content === null) {
     return json(res, 400, { error: 'content, fields, or frontmatter/body required' });
   }
   try {
@@ -3241,18 +3303,27 @@ export function createRouter(ctx: RouteContext): (req: IncomingMessage, res: Ser
       }
 
       // Rate limiting for POST/DELETE — applied after auth to avoid wasting
-      // rate limit tokens on unauthenticated requests
-      const clientIp = req.socket.remoteAddress ?? 'unknown';
-      const isUpload = url.pathname === '/api/dashboard/upload';
-      const limit = isUpload ? RATE_LIMIT_UPLOAD_MAX : RATE_LIMIT_MAX;
-      const bucketKey = isUpload ? `upload:${clientIp}` : `post:${clientIp}`;
-      if (!checkRateLimit(bucketKey, limit)) {
-        res.writeHead(429, {
-          'content-type': 'application/json',
-          'retry-after': String(Math.ceil(RATE_LIMIT_WINDOW_MS / 1000)),
-        });
-        res.end(JSON.stringify({ error: 'Too many requests' }));
-        return;
+      // rate limit tokens on unauthenticated requests.
+      //
+      // S9: the RFC-007 launch-preview POST is read-only/side-effect-free (it
+      // writes nothing — no DB/tmux/proxy/profile/scaffold) and the frontend
+      // hard-debounces it (>=500ms). Exempt it from the strict POST rate limit so
+      // live editing isn't throttled. Auth is still enforced above.
+      const isPreviewPost = req.method === 'POST'
+        && /^\/api\/personas\/[^/]+\/launch-preview$/.test(url.pathname);
+      if (!isPreviewPost) {
+        const clientIp = req.socket.remoteAddress ?? 'unknown';
+        const isUpload = url.pathname === '/api/dashboard/upload';
+        const limit = isUpload ? RATE_LIMIT_UPLOAD_MAX : RATE_LIMIT_MAX;
+        const bucketKey = isUpload ? `upload:${clientIp}` : `post:${clientIp}`;
+        if (!checkRateLimit(bucketKey, limit)) {
+          res.writeHead(429, {
+            'content-type': 'application/json',
+            'retry-after': String(Math.ceil(RATE_LIMIT_WINDOW_MS / 1000)),
+          });
+          res.end(JSON.stringify({ error: 'Too many requests' }));
+          return;
+        }
       }
     }
 

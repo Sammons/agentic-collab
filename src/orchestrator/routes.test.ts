@@ -1,7 +1,7 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:http';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { Database } from './database.ts';
@@ -1285,6 +1285,137 @@ describe('API Routes — Personas', () => {
         assert.ok(!after, 'no agent should exist for a preview-only persona');
       } finally {
         rmSync(join(personasDir, 'lp-sfx.md'), { force: true });
+        probeServer.close();
+      }
+    });
+  });
+
+  // ── RFC-007 PR-C: POST /api/personas/:name/launch-preview (unsaved editor state) ──
+  describe('POST /api/personas/:name/launch-preview', () => {
+    const PLACEHOLDER = '«PERSONA»';
+
+    it('returns a command with «PERSONA» for the posted editor state', async () => {
+      // No file on disk needed: the POST previews the body's editor state.
+      const { status, data } = await api('POST', '/api/personas/pp-claude/launch-preview', {
+        fields: { engine: 'claude', model: 'opus', cwd: '/tmp/pp', permissions: 'skip' },
+        passthroughRaw: '',
+        body: 'IGNORED-BODY-SHOULD-NOT-APPEAR',
+      });
+      assert.equal(status, 200);
+      const d = data as Record<string, unknown>;
+      assert.equal(d.engine, 'claude');
+      assert.equal(d.personaPlaceholder, PLACEHOLDER);
+      const cmd = d.command as string;
+      assert.ok(cmd.includes(PLACEHOLDER), 'command must contain «PERSONA»');
+      assert.ok(!cmd.includes('IGNORED-BODY-SHOULD-NOT-APPEAR'), 'body must NOT leak (it becomes «PERSONA»)');
+      assert.ok(cmd.includes('--model opus'), 'posted model reflected');
+      assert.ok(cmd.includes('--dangerously-skip-permissions'), 'posted permissions: skip reflected');
+    });
+
+    it('reflects EDITED fields — differs from GET on the saved persona', async () => {
+      try {
+        // Saved file: claude/opus. Editor edits engine→codex-less, model→sonnet.
+        writeFileSync(join(personasDir, 'pp-edit.md'),
+          '---\nengine: claude\nmodel: opus\ncwd: /tmp/pp\n---\nsaved body');
+        const saved = await api('GET', '/api/personas/pp-edit/launch-preview');
+        const edited = await api('POST', '/api/personas/pp-edit/launch-preview', {
+          fields: { engine: 'claude', model: 'sonnet', cwd: '/tmp/pp' },
+          passthroughRaw: '',
+          body: 'saved body',
+        });
+        assert.equal(saved.status, 200);
+        assert.equal(edited.status, 200);
+        const savedCmd = (saved.data as Record<string, unknown>).command as string;
+        const editedCmd = (edited.data as Record<string, unknown>).command as string;
+        assert.ok(savedCmd.includes('--model opus'), 'GET reflects saved model');
+        assert.ok(editedCmd.includes('--model sonnet'), 'POST reflects edited model');
+        assert.notEqual(savedCmd, editedCmd, 'edited preview must differ from the saved preview');
+      } finally {
+        rmSync(join(personasDir, 'pp-edit.md'), { force: true });
+      }
+    });
+
+    it('POST == GET when the posted fields match the saved file (S8 parity)', async () => {
+      try {
+        writeFileSync(join(personasDir, 'pp-parity.md'),
+          '---\nengine: claude\nmodel: opus\ncwd: /tmp/pp\npermissions: skip\n---\nthe body');
+        const got = await api('GET', '/api/personas/pp-parity/launch-preview');
+        // Reconstruct the SAME core fields the editor would collect from that file.
+        const posted = await api('POST', '/api/personas/pp-parity/launch-preview', {
+          fields: { engine: 'claude', model: 'opus', cwd: '/tmp/pp', permissions: 'skip' },
+          passthroughRaw: '',
+          body: 'the body',
+        });
+        assert.equal(got.status, 200);
+        assert.equal(posted.status, 200);
+        const gotCmd = (got.data as Record<string, unknown>).command as string;
+        const postedCmd = (posted.data as Record<string, unknown>).command as string;
+        assert.equal(postedCmd, gotCmd, 'preview of matching fields must equal the saved preview');
+      } finally {
+        rmSync(join(personasDir, 'pp-parity.md'), { force: true });
+      }
+    });
+
+    it('S8: passthrough hooks reconstruct identically to PUT (env + hook survive)', async () => {
+      // hooks/env live in the passthrough textarea — they must survive the
+      // reconstruction the same way save (PUT) reconstructs them.
+      const { status, data } = await api('POST', '/api/personas/pp-pass/launch-preview', {
+        fields: { engine: 'claude', cwd: '/tmp/pp' },
+        passthroughRaw: 'env:\n  FOO: bar\nstart:\n  shell: run.sh --p $PERSONA_PROMPT',
+        body: 'b',
+      });
+      assert.equal(status, 200);
+      const d = data as Record<string, unknown>;
+      assert.equal(d.hookKind, 'shell');
+      const cmd = d.command as string;
+      assert.ok(cmd.includes('run.sh --p'), 'passthrough shell hook reconstructed + resolved');
+      assert.ok(cmd.includes(PLACEHOLDER), 'placeholder substituted into the passthrough hook');
+    });
+
+    it('S2: a half-typed (bad) hook returns an error field, not 500', async () => {
+      const { status, data } = await api('POST', '/api/personas/pp-bad/launch-preview', {
+        fields: { engine: 'claude', cwd: '/tmp/pp' },
+        passthroughRaw: 'start: file:/no/such/hook/file.sh',
+        body: 'b',
+      });
+      assert.equal(status, 200, 'must degrade to 200 with an error field, never 500');
+      const d = data as Record<string, unknown>;
+      assert.ok(typeof d.error === 'string' && d.error.length > 0, 'should carry an error field');
+    });
+
+    it('side-effect-free: POST preview writes NO DB row and dispatches NOTHING', async () => {
+      let dispatched = false;
+      const probeDispatch = async () => { dispatched = true; return { ok: true as const }; };
+      const probeLocks = new LockManager(db.rawDb);
+      const probeCtx = {
+        db, wss, locks: probeLocks, proxyDispatch: probeDispatch,
+        getDashboardHtml: () => '', orchestratorHost: 'http://localhost:3000',
+        orchestratorSecret: null,
+        messageDispatcher: makeTestDispatcher(db, probeLocks, probeDispatch),
+        usagePoller: { getUsageData: () => ({}), pollNow: async () => {} } as any,
+        voiceEnabled: false,
+        accountStore: new AccountStore({ accountsDir: join(tmpDir, 'accounts'), agentHomesDir: join(tmpDir, 'agent-homes'), skipAutoRegister: true }),
+      } as unknown as RouteContext;
+      const probeRouter = createRouter(probeCtx);
+      const probeServer = createServer(async (req, res) => { await probeRouter(req, res); });
+      await new Promise<void>((resolve) => probeServer.listen(0, () => resolve()));
+      const probePort = (probeServer.address() as { port: number }).port;
+      try {
+        const before = db.getAgent('pp-sfx');
+        const resp = await fetch(`http://localhost:${probePort}/api/personas/pp-sfx/launch-preview`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ fields: { engine: 'claude', cwd: '/tmp/pp' }, passthroughRaw: '', body: 'b' }),
+        });
+        assert.equal(resp.status, 200);
+        await resp.json();
+        assert.equal(dispatched, false, 'preview must NOT dispatch to the proxy');
+        const after = db.getAgent('pp-sfx');
+        assert.deepEqual(after, before, 'preview must NOT create/modify an agent row');
+        assert.ok(!after, 'no agent should exist for a preview-only persona');
+        // No file written either.
+        assert.ok(!existsSync(join(personasDir, 'pp-sfx.md')), 'preview must NOT write the persona file');
+      } finally {
         probeServer.close();
       }
     });

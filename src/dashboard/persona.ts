@@ -45,6 +45,11 @@ let returnRoute: Route = { kind: 'agents' };
 
 const detachers: Array<() => void> = [];
 
+/** Pending debounce timer for the live launch-command preview. Cleared on teardown. */
+let previewTimer: ReturnType<typeof setTimeout> | null = null;
+/** Token to discard stale preview responses (latest request wins). */
+let previewSeq = 0;
+
 export function setupPersona(): void {
   registerRoute('persona', render);
   // Track the route the user is leaving so Back/Cancel can return there.
@@ -123,6 +128,8 @@ function render(root: HTMLElement, route: Route): void {
 }
 
 function teardown(): void {
+  if (previewTimer !== null) { clearTimeout(previewTimer); previewTimer = null; }
+  previewSeq++; // invalidate any in-flight preview response
   while (detachers.length) {
     const fn = detachers.pop();
     try { fn?.(); } catch {}
@@ -211,6 +218,16 @@ async function hydrate(root: HTMLElement, agentName: string): Promise<void> {
       <div class="pe-group-hdr">Body <span class="when">markdown · system prompt</span></div>
       <textarea class="ov-textarea pe-body-text" data-body-text>${esc(body)}</textarea>
     </div>
+    <div class="pe-group pe-preview" data-preview-group>
+      <div class="pe-group-hdr">Launch command preview
+        <span class="when">pre-expansion · default spawn · live as you edit</span>
+        <span class="pe-preview-meta" data-preview-meta></span>
+        <button class="btn pe-preview-copy" type="button" data-preview-copy title="Copy command">Copy</button>
+      </div>
+      <div data-preview-out>
+        <pre class="pe-preview-pre"><span class="pe-preview-status">Loading preview…</span></pre>
+      </div>
+    </div>
   `;
 
   let reloadOnSave = false;
@@ -288,7 +305,10 @@ async function hydrate(root: HTMLElement, agentName: string): Promise<void> {
       : '';
   });
 
-  const submit = async (): Promise<void> => {
+  // Single source of truth for the editor's current state. BOTH the save (PUT)
+  // and the live launch-preview (POST) read from this exact collection so the
+  // preview cannot diverge from save-then-spawn.
+  const collectEditorState = (): { fields: Record<string, unknown>; passthroughRaw: string; body: string } => {
     // Core widgets → fields (empty value = omit/clear). teams handled separately.
     const fields: Record<string, unknown> = {};
     bodyHost.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-f]').forEach((el) => {
@@ -300,8 +320,13 @@ async function hydrate(root: HTMLElement, agentName: string): Promise<void> {
       const teams = [...chipsHost.querySelectorAll<HTMLElement>('[data-team].on')].map((c) => c.dataset['team']!);
       if (teams.length || curTeams.length) fields['teams'] = teams; // [] clears existing memberships
     }
-    const passthrough = bodyHost.querySelector<HTMLTextAreaElement>('[data-passthrough]')?.value ?? '';
-    const bd = bodyHost.querySelector<HTMLTextAreaElement>('[data-body-text]')?.value ?? '';
+    const passthroughRaw = bodyHost.querySelector<HTMLTextAreaElement>('[data-passthrough]')?.value ?? '';
+    const body = bodyHost.querySelector<HTMLTextAreaElement>('[data-body-text]')?.value ?? '';
+    return { fields, passthroughRaw, body };
+  };
+
+  const submit = async (): Promise<void> => {
+    const { fields, passthroughRaw: passthrough, body: bd } = collectEditorState();
     try {
       const res = await fetch(`/api/personas/${encodeURIComponent(agentName)}`, {
         method: 'PUT', headers: authHeaders(), body: JSON.stringify({ fields, passthroughRaw: passthrough, body: bd }),
@@ -315,6 +340,106 @@ async function hydrate(root: HTMLElement, agentName: string): Promise<void> {
     } catch { toast('Network error', 'error'); }
   };
   root.querySelector<HTMLElement>('[data-submit]')?.addEventListener('click', () => void submit());
+
+  // ── Launch command preview (RFC-007 PR-C) ──────────────────────────────
+  // POSTs the CURRENT editor state to /api/personas/:name/launch-preview, which
+  // reuses the SAME frontmatter reconstruction as save (PUT) so "preview" and
+  // "save-then-spawn" cannot disagree. Debounced ≥500ms; latest request wins.
+  const previewOut = bodyHost.querySelector<HTMLElement>('[data-preview-out]');
+  const previewMeta = bodyHost.querySelector<HTMLElement>('[data-preview-meta]');
+  let lastCopyText = '';
+
+  // Highlight the «PERSONA» placeholder inside an otherwise-escaped string so it
+  // is obvious that's where the persona body lands. Escape EVERYTHING first, then
+  // swap the (escaped — but guillemets aren't escaped) placeholder for a span.
+  const highlightPlaceholder = (raw: string, placeholder: string): string => {
+    const escaped = escapeHtml(raw);
+    const escPlaceholder = escapeHtml(placeholder);
+    return escaped.split(escPlaceholder).join(`<span class="pe-persona-tok">${escPlaceholder}</span>`);
+  };
+
+  const renderPreview = (data: {
+    command?: string; engine?: string; hookKind?: string; personaPlaceholder?: string;
+    notes?: string[]; profilePreview?: string; error?: string;
+  }): void => {
+    if (!previewOut) return;
+    const placeholder = data.personaPlaceholder ?? '«PERSONA»';
+    if (previewMeta) {
+      previewMeta.textContent = data.engine
+        ? `${data.engine}${data.hookKind ? ` · ${data.hookKind} hook` : ''}`
+        : '';
+    }
+    if (data.error) {
+      // Degrade gracefully while mid-edit (e.g. a half-typed hook): muted clay.
+      lastCopyText = '';
+      previewOut.innerHTML = `<div class="pe-preview-err">${escapeHtml(data.error)}</div>`;
+      if (data.notes && data.notes.length) {
+        previewOut.innerHTML += `<div class="pe-preview-notes">${data.notes.map((n) => `<div>${escapeHtml(n)}</div>`).join('')}</div>`;
+      }
+      return;
+    }
+    const command = data.command ?? '';
+    lastCopyText = command;
+    let html = command
+      ? `<pre class="pe-preview-pre">${highlightPlaceholder(command, placeholder)}</pre>`
+      : `<pre class="pe-preview-pre"><span class="pe-preview-status">(no pasteable command line)</span></pre>`;
+    if (typeof data.profilePreview === 'string') {
+      html += `<div class="pe-preview-sublabel">codex config profile <span class="when">written at spawn</span></div>`;
+      html += `<pre class="pe-preview-pre profile">${highlightPlaceholder(data.profilePreview, placeholder)}</pre>`;
+    }
+    if (data.notes && data.notes.length) {
+      html += `<div class="pe-preview-notes">${data.notes.map((n) => `<div>${escapeHtml(n)}</div>`).join('')}</div>`;
+    }
+    previewOut.innerHTML = html;
+  };
+
+  const fetchPreview = async (): Promise<void> => {
+    const seq = ++previewSeq;
+    const { fields, passthroughRaw, body: bd } = collectEditorState();
+    try {
+      const res = await fetch(`/api/personas/${encodeURIComponent(agentName)}/launch-preview`, {
+        method: 'POST', headers: authHeaders(),
+        body: JSON.stringify({ fields, passthroughRaw, body: bd }),
+      });
+      if (seq !== previewSeq) return; // a newer request superseded this one
+      if (!res.ok) {
+        const b = await res.json().catch(() => null);
+        renderPreview({ error: b?.error ?? `Preview failed (${res.status}).` });
+        return;
+      }
+      renderPreview(await res.json());
+    } catch {
+      if (seq !== previewSeq) return;
+      renderPreview({ error: 'Network error loading preview.' });
+    }
+  };
+
+  const schedulePreview = (): void => {
+    if (previewTimer !== null) clearTimeout(previewTimer);
+    previewTimer = setTimeout(() => { previewTimer = null; void fetchPreview(); }, 500);
+  };
+
+  // Re-preview on changes to any preview-relevant control. Core widgets (engine/
+  // model/thinking/permissions/account/…) live under [data-f]; hooks/env live in
+  // the passthrough textarea; teams chips affect membership. The body is harmless
+  // (it becomes «PERSONA») but cheap to include. 'input' covers typing; 'change'
+  // covers <select> + datalist commits.
+  const onEdit = (): void => schedulePreview();
+  bodyHost.addEventListener('input', onEdit);
+  bodyHost.addEventListener('change', onEdit);
+  // Teams toggle clicks don't emit input/change on the chips container.
+  bodyHost.querySelector<HTMLElement>('[data-teams-chips]')?.addEventListener('click', onEdit);
+  bodyHost.querySelector<HTMLElement>('[data-add-team]')?.addEventListener('click', onEdit);
+
+  bodyHost.querySelector<HTMLElement>('[data-preview-copy]')?.addEventListener('click', () => {
+    if (!lastCopyText) { toast('Nothing to copy', 'error'); return; }
+    void navigator.clipboard.writeText(lastCopyText)
+      .then(() => toast('Command copied'))
+      .catch(() => toast('Copy failed', 'error'));
+  });
+
+  // Initial preview for the loaded persona (no debounce — render immediately).
+  void fetchPreview();
 
   // ⌘/Ctrl+↵ saves from anywhere on the page.
   bodyHost.addEventListener('keydown', (e) => {
