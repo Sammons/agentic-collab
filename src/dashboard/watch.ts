@@ -27,6 +27,11 @@ let pollTimer: number | null = null;
 let lastPeekAt: number = 0;
 let paused = false;
 let currentAgent: string | null = null;
+// Signature of the watched agent's last-rendered header inputs. `agents-changed`
+// fires for ANY agent update; we only rebuild the header when the watched
+// agent's header-relevant state actually changed, to avoid churning (and
+// disrupting hover/click on) the header buttons on every unrelated update.
+let lastHeaderSig: string | null = null;
 let agoTimer: number | null = null;
 
 export function setupWatch(): void {
@@ -37,6 +42,7 @@ function render(root: HTMLElement, route: Route): void {
   if (route.kind !== 'watch') return;
   const name = route.agentName;
   currentAgent = name;
+  lastHeaderSig = headerSig(name);
 
   root.innerHTML = `
     <div class="watch-page">
@@ -91,6 +97,9 @@ function render(root: HTMLElement, route: Route): void {
   // and went stale until a full navigation. The live pane/polling is untouched.
   detachers.push(on('agents-changed', () => {
     if (currentAgent !== name) return;
+    const sig = headerSig(name);
+    if (sig === lastHeaderSig) return; // watched agent's header inputs unchanged
+    lastHeaderSig = sig;
     const hdr = document.querySelector<HTMLElement>('.watch-hdr');
     if (!hdr) return;
     hdr.innerHTML = headerInnerHtml(name);
@@ -172,6 +181,13 @@ function updateAgo(): void {
 }
 
 /* ── wiring ────────────────────────────────────────────────────────── */
+
+/** Signature of the inputs `headerInnerHtml` renders, to skip no-op rebuilds.
+ *  Extend this when the header starts rendering more agent fields (e.g. icon). */
+function headerSig(name: string): string {
+  const agent = state.agents.find((a) => a.name === name);
+  return agent ? agent.state : 'unknown';
+}
 
 /**
  * Build the inner HTML of `.watch-hdr` from the agent's CURRENT state.
