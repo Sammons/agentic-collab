@@ -606,18 +606,23 @@ route('POST', '/api/agents/send', async (req, res, _match, ctx) => {
   // addr.class === 'agent' — use bare name for storage / lookup.
   body.to = addr.name;
 
+  // An ephemeral template is authoritative over any (possibly stale shadow)
+  // `agents` row of the same name: a name backed by a non-persistent template
+  // must spawn an instance, never deliver to a leftover persistent row.
+  // reconcile-roots only clears shadows in void/suspended/failed states and
+  // not before the server accepts requests, so we cannot rely on getAgent()
+  // returning null — check the template first.
+  const routed = await tryRouteToEphemeralTemplate(ctx, {
+    name: body.to as string,
+    requestedTopic: typeof body.topic === 'string' ? body.topic : null,
+    payload: typeof body.message === 'string' ? body.message : JSON.stringify(body.message ?? {}),
+    replyToAddr: typeof body.from === 'string' ? body.from : null,
+    inReplyTo: typeof body.inReplyTo === 'string' ? body.inReplyTo : null,
+  });
+  if (routed.handled) return json(res, routed.status, routed.body);
+
   const target = ctx.db.getAgent(body.to);
-  if (!target) {
-    const routed = await tryRouteToEphemeralTemplate(ctx, {
-      name: body.to as string,
-      requestedTopic: typeof body.topic === 'string' ? body.topic : null,
-      payload: typeof body.message === 'string' ? body.message : JSON.stringify(body.message ?? {}),
-      replyToAddr: typeof body.from === 'string' ? body.from : null,
-      inReplyTo: typeof body.inReplyTo === 'string' ? body.inReplyTo : null,
-    });
-    if (routed.handled) return json(res, routed.status, routed.body);
-    return json(res, 404, { error: `Target agent "${body.to}" not found` });
-  }
+  if (!target) return json(res, 404, { error: `Target agent "${body.to}" not found` });
   if (target.state === 'void') {
     return json(res, 400, { error: `Target agent "${body.to}" is in void state (not spawned). Spawn it first with: collab spawn ${body.to}` });
   }
@@ -731,18 +736,21 @@ route('POST', '/api/dashboard/send', async (req, res, _match, ctx) => {
   }
   body.agent = dashAddr.name;
 
+  // An ephemeral template is authoritative over any (possibly stale shadow)
+  // `agents` row of the same name — see the matching note in /api/agents/send.
+  // Checked before getAgent() so a live-state shadow or the boot-window race
+  // can't silently enqueue the mention to a dead persistent agent.
+  const routed = await tryRouteToEphemeralTemplate(ctx, {
+    name: body.agent as string,
+    requestedTopic: typeof body.topic === 'string' ? body.topic : null,
+    payload: typeof body.message === 'string' ? body.message : JSON.stringify(body.message ?? {}),
+    replyToAddr: 'dashboard',
+    inReplyTo: typeof body.inReplyTo === 'string' ? body.inReplyTo : null,
+  });
+  if (routed.handled) return json(res, routed.status, routed.body);
+
   const agent = ctx.db.getAgent(body.agent);
-  if (!agent) {
-    const routed = await tryRouteToEphemeralTemplate(ctx, {
-      name: body.agent as string,
-      requestedTopic: typeof body.topic === 'string' ? body.topic : null,
-      payload: typeof body.message === 'string' ? body.message : JSON.stringify(body.message ?? {}),
-      replyToAddr: 'dashboard',
-      inReplyTo: typeof body.inReplyTo === 'string' ? body.inReplyTo : null,
-    });
-    if (routed.handled) return json(res, routed.status, routed.body);
-    return json(res, 404, { error: `Agent "${body.agent}" not found` });
-  }
+  if (!agent) return json(res, 404, { error: `Agent "${body.agent}" not found` });
 
   const sanitized = sanitizeMessage(body.message);
   const topicStr = body.topic as string;

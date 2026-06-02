@@ -1377,8 +1377,12 @@ describe('API Routes — v3 Q3 endpoints', () => {
   // ── Bug fix: @mentioning / `collab send`-ing a bare ephemeral template name
   //    must spawn an instance via the topic pipeline instead of 404ing. ──
 
+  // Note on assertions: `queueId` is the real topic_queue row id returned by
+  // publish() AFTER the synchronous enqueue, so a positive numeric id is
+  // race-free proof the message was published. We deliberately do NOT assert a
+  // status='queued' count: publish() fires tryDispatch() fire-and-forget, which
+  // can claim the row (queued→claimed) before the assertion runs.
   it('POST /api/dashboard/send to an ephemeral template name (declared topic) → 202 + enqueues', async () => {
-    const before = db.countQueuedTopicMessages('q3-tmpl', 'echo');
     const { status, data } = await api('POST', '/api/dashboard/send', {
       agent: 'q3-tmpl',
       message: 'hello ephemeral',
@@ -1390,13 +1394,10 @@ describe('API Routes — v3 Q3 endpoints', () => {
     assert.equal(body['status'], 'queued');
     assert.equal(body['spawnedTemplate'], 'q3-tmpl');
     assert.equal(body['topic'], 'echo');
-    assert.equal(typeof body['queueId'], 'number');
-    // A topic_queue row was actually published.
-    assert.equal(db.countQueuedTopicMessages('q3-tmpl', 'echo'), before + 1);
+    assert.ok(typeof body['queueId'] === 'number' && (body['queueId'] as number) > 0);
   });
 
   it('POST /api/agents/send to an ephemeral template name → 202 + enqueues', async () => {
-    const before = db.countQueuedTopicMessages('q3-tmpl', 'echo');
     const { status, data } = await api('POST', '/api/agents/send', {
       from: 'some-agent',
       to: 'q3-tmpl',
@@ -1408,11 +1409,10 @@ describe('API Routes — v3 Q3 endpoints', () => {
     assert.equal(body['ok'], true);
     assert.equal(body['status'], 'queued');
     assert.equal(body['spawnedTemplate'], 'q3-tmpl');
-    assert.equal(db.countQueuedTopicMessages('q3-tmpl', 'echo'), before + 1);
+    assert.ok(typeof body['queueId'] === 'number' && (body['queueId'] as number) > 0);
   });
 
   it('POST /api/dashboard/send: single declared topic + non-matching topic → 202 using sole topic', async () => {
-    const before = db.countQueuedTopicMessages('q3-tmpl', 'echo');
     const { status, data } = await api('POST', '/api/dashboard/send', {
       agent: 'q3-tmpl',
       message: 'topic mismatch but only one declared',
@@ -1421,7 +1421,7 @@ describe('API Routes — v3 Q3 endpoints', () => {
     assert.equal(status, 202);
     const body = data as Record<string, unknown>;
     assert.equal(body['topic'], 'echo');
-    assert.equal(db.countQueuedTopicMessages('q3-tmpl', 'echo'), before + 1);
+    assert.ok(typeof body['queueId'] === 'number' && (body['queueId'] as number) > 0);
   });
 
   it('POST /api/dashboard/send: multiple declared topics + non-matching topic → 400 with topics[]', async () => {
@@ -1448,6 +1448,36 @@ describe('API Routes — v3 Q3 endpoints', () => {
     const body = data as Record<string, unknown>;
     assert.equal(body['template'], 'q3-multi');
     assert.deepEqual([...(body['topics'] as string[])].sort(), ['alpha', 'beta']);
+  });
+
+  it('ephemeral template shadowed by a LIVE agents row → still spawns instance (template is authoritative)', async () => {
+    // Simulate a stale persistent `agents` row left from when this persona was
+    // persistent, stuck in a live state that reconcile-roots will NOT clean
+    // (it only clears void/suspended/failed). If the send handler checked
+    // getAgent() first it would deliver the mention into this dead agent's
+    // queue and never spawn. The ephemeral template must win.
+    const shadow = db.createAgent({ name: 'q3-shadow', engine: 'claude', cwd: '/tmp' });
+    db.updateAgentState('q3-shadow', 'active', shadow.version, {});
+    db.upsertAgentTemplate({
+      id: 'q3-shadow', personaPath: null, engine: 'claude', model: null,
+      persistent: false, cwdBase: '/tmp', cwdTemplate: null, repoRoot: '/tmp',
+      hookStart: 'echo start', hookExit: null, hookPrepare: null, hookCleanup: null,
+      createdAt: '', updatedAt: '',
+    });
+    db.replaceTopicsForTemplate('q3-shadow', [{
+      agentTemplate: 'q3-shadow', name: 'echo',
+      hookPrepareOverride: null, hookStartOverride: null, hookCleanupOverride: null,
+      monitorTemplate: null, concurrency: 1, schemaPath: null, replySchemaPath: null,
+    }]);
+
+    // Both send paths must route to the ephemeral spawn, not the live shadow.
+    const dash = await api('POST', '/api/dashboard/send', { agent: 'q3-shadow', message: 'hi', topic: 'echo' });
+    assert.equal(dash.status, 202);
+    assert.equal((dash.data as Record<string, unknown>)['spawnedTemplate'], 'q3-shadow');
+
+    const agentSend = await api('POST', '/api/agents/send', { from: 'x', to: 'q3-shadow', message: 'hi', topic: 'echo' });
+    assert.equal(agentSend.status, 202);
+    assert.equal((agentSend.data as Record<string, unknown>)['spawnedTemplate'], 'q3-shadow');
   });
 
   it('POST /api/dashboard/send: persistent template name is NOT topic-routed → 404', async () => {
