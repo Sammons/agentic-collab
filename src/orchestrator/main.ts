@@ -20,6 +20,7 @@ import { shutdownAgents, restoreAllAgents } from './network.ts';
 import type { LifecycleContext } from './lifecycle.ts';
 import { syncPersonasToDb, syncPersonasWithDiff, getPersonasDir } from './persona.ts';
 import { backfillFrontmatterFromDb } from './persona-backfill.ts';
+import { reconcileEphemeralRoots } from './reconcile-roots.ts';
 import { TopicDelivery } from './topic-delivery.ts';
 import { InstanceReaper } from './instance-reaper.ts';
 import { ApprovalService } from './approvals.ts';
@@ -130,6 +131,25 @@ async function proxyDispatch(proxyId: string, command: ProxyCommand): Promise<Pr
   }
 
   return { ok: false, error: `Proxy unreachable after ${PROXY_RETRY_COUNT + 1} attempts: ${lastError}` };
+}
+
+// ── RFC-006 Q1: stale-root reconciliation ──
+//
+// A `persistent: false` persona becomes an `agent_templates` row, but a leftover
+// `agents` row of the same name (from when it was persistent) shadows it, so the
+// root mis-renders as a suspended agent. Tear that stale row down session-safely
+// (kill any live tmux pane FIRST, then delete + broadcast `agent_destroyed`).
+// Idempotent + safe to call repeatedly — runs on boot, on persona reload, and on
+// each persona-watch poll. Defined at module scope so it has db/wss/proxyDispatch
+// in scope; delegates to the unit-tested `reconcileEphemeralRoots`.
+async function reconcileRoots(): Promise<void> {
+  await reconcileEphemeralRoots({
+    db,
+    proxyDispatch,
+    broadcast: (name) => wss.broadcast(JSON.stringify({ type: 'agent_destroyed', name })),
+  }).catch((err) => {
+    console.error('[reconcile-roots] failed:', (err as Error).message);
+  });
 }
 
 // ── Dashboard HTML ──
@@ -388,6 +408,9 @@ const routeCtx: RouteContext = {
     // Q4: forward `template_updated` events to WS subscribers so the Q9
     // dashboard can refresh the templates tree without a full reload.
     const diff = syncPersonasWithDiff(db, undefined, (event) => wss.broadcastEvent(event));
+    // RFC-006 Q1: a persona that just flipped to `persistent: false` may leave a
+    // stale `agents` row shadowing its new template — reconcile it away.
+    void reconcileRoots();
     return {
       synced: diff.created.length + diff.updated.length,
       created: diff.created,
@@ -654,6 +677,13 @@ server.listen(PORT, '0.0.0.0', async () => {
     console.error('[orchestrator] Persona sync failed:', err);
   }
 
+  // RFC-006 Q1: one-time boot backfill — remove any stale `agents` row that
+  // shadows an ephemeral template (e.g. the existing
+  // `agentic-collab-lead-ephemeral`). Session-safe (kills a live pane first)
+  // and idempotent. WS subscribers may already be connected, so the gated
+  // `agent_destroyed` broadcast drops the stale sidebar row live.
+  await reconcileRoots();
+
   // Poll persona directory for changes (fs.watch unreliable on Docker bind mounts)
   const personasDir = getPersonasDir();
   if (existsSync(personasDir)) {
@@ -670,6 +700,11 @@ server.listen(PORT, '0.0.0.0', async () => {
         lastPersonaHash = hash;
 
         const diff = syncPersonasWithDiff(db, undefined, (event) => wss.broadcastEvent(event));
+        // RFC-006 Q1: reconcile any stale `agents` row shadowing an ephemeral
+        // template (e.g. a persona just flipped to `persistent: false`). mtime-
+        // gated by the watch above, so this only runs when a file actually
+        // changed — no thrash. Idempotent (no-op when nothing is stale).
+        void reconcileRoots();
         const changed = [...diff.created, ...diff.updated];
         if (changed.length > 0) {
           console.log(`[persona-watch] Hot-reloaded: ${changed.join(', ')}`);

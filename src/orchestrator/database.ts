@@ -989,6 +989,24 @@ export class Database {
     return mapAgentInstanceRow(row);
   }
 
+  /** RFC-006: alias for `getAgentInstance` — reads one instance row by id. */
+  getInstance(id: string): AgentInstanceRow | null {
+    return this.getAgentInstance(id);
+  }
+
+  /**
+   * RFC-006: list every instance (live + past) for a template, newest first.
+   * Unlike `listLiveAgentInstances`, this includes terminal rows so the
+   * dashboard can render instance history. Backed by the
+   * `idx_agent_instances_template` index.
+   */
+  listInstancesForTemplate(templateId: string): AgentInstanceRow[] {
+    const rows = this.db.prepare(
+      'SELECT * FROM agent_instances WHERE agent_template = ? ORDER BY started_at DESC',
+    ).all(templateId) as Array<Record<string, unknown>>;
+    return rows.map(mapAgentInstanceRow);
+  }
+
   getAgentInstanceByAddr(addr: string): AgentInstanceRow | null {
     const row = this.db.prepare(
       'SELECT * FROM agent_instances WHERE instance_addr = ?',
