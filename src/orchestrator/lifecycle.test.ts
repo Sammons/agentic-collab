@@ -10,8 +10,9 @@ import { shellQuote } from '../shared/utils.ts';
 import {
   spawnAgent, resumeAgent, suspendAgent, destroyAgent,
   reloadAgent, interruptAgent, compactAgent, killAgent, startWatchdog,
-  executeCustomButton, type LifecycleContext,
+  executeCustomButton, assembleLaunchCommand, type LifecycleContext,
 } from './lifecycle.ts';
+import type { AgentRecord } from '../shared/types.ts';
 
 describe('Lifecycle', () => {
   let db: Database;
@@ -1560,6 +1561,105 @@ describe('Lifecycle', () => {
       // Custom env should be present and shell-quoted
       assert.ok(paste.text.includes('MY_VAR='), 'custom env should be present');
       assert.ok(paste.text.includes("'hello world'"), 'custom env values should be shell-quoted');
+    });
+  });
+
+  // ── RFC-007 PR-A: assembleLaunchCommand spawn-parity ──
+  // These pin the byte-exact output the (now-extracted) string-building region of
+  // spawnAgent Phase 2 produced inline. If the extraction drifted, these break.
+  describe('assembleLaunchCommand — spawn parity', () => {
+    function syntheticAgent(over: Partial<AgentRecord>): AgentRecord {
+      return {
+        name: 'parity', engine: 'claude', model: null, thinking: null, cwd: '/tmp',
+        persona: 'parity', permissions: null, agentGroup: null, launchEnv: null,
+        account: null, proxyPin: null, sortOrder: 0,
+        hookStart: null, hookResume: null, hookCompact: null, hookExit: null,
+        hookInterrupt: null, hookReload: null, hookSubmit: null,
+        state: 'void', stateBeforeShutdown: null, currentSessionId: null,
+        tmuxSession: null, proxyId: null, lastActivity: null, lastContextPct: null,
+        reloadQueued: 0, reloadTask: null, failedAt: null, failureReason: null,
+        capturedVars: null, customButtons: null, indicators: null, icon: null,
+        version: 0, spawnCount: 0, createdAt: '', isTemplate: false,
+        ...over,
+      };
+    }
+
+    const SID = '00000000-0000-0000-0000-000000000000';
+    const PROMPT = '«PERSONA»\n---\nCOLLAB INJECTION';
+    const FILE = '/data/persistent-agents/parity.md';
+
+    it('claude preset hook → byte-identical export + claude --append-system-prompt', () => {
+      const agent = syntheticAgent({ engine: 'claude', permissions: 'skip' });
+      const result = assembleLaunchCommand({
+        agent, systemPrompt: PROMPT, personaFile: FILE, sessionId: SID,
+        model: 'opus', thinking: 'high', task: 'fix the bug',
+      });
+      assert.equal(result.mode, 'paste');
+      const expectedCmd =
+        `claude --dangerously-skip-permissions --model opus --effort high ` +
+        `--session-id ${SID} --append-system-prompt ${shellQuote(PROMPT)} ${shellQuote('fix the bug')}`;
+      const expected =
+        `export COLLAB_AGENT=${shellQuote('parity')} COLLAB_PERSONA_FILE=${shellQuote(FILE)} && ${expectedCmd}`;
+      assert.equal((result as { mode: 'paste'; text: string }).text, expected);
+    });
+
+    it('claude preset hook, minimal (no model/thinking/task/skip)', () => {
+      const agent = syntheticAgent({ engine: 'claude' });
+      const result = assembleLaunchCommand({ agent, systemPrompt: PROMPT, personaFile: FILE, sessionId: SID });
+      const expectedCmd = `claude --session-id ${SID} --append-system-prompt ${shellQuote(PROMPT)}`;
+      const expected = `export COLLAB_AGENT=${shellQuote('parity')} COLLAB_PERSONA_FILE=${shellQuote(FILE)} && ${expectedCmd}`;
+      assert.equal((result as { mode: 'paste'; text: string }).text, expected);
+    });
+
+    it('shell hook → $PERSONA_PROMPT interpolated (shell-quoted) + env wrap', () => {
+      const hookStart = JSON.stringify({ shell: 'run.sh --prompt $PERSONA_PROMPT', env: { MY_VAR: 'hello world' } });
+      const agent = syntheticAgent({ engine: 'claude', hookStart });
+      const result = assembleLaunchCommand({ agent, systemPrompt: PROMPT, personaFile: FILE, sessionId: SID });
+      assert.equal(result.mode, 'paste');
+      // $PERSONA_PROMPT is a SHELL_QUOTE_VAR → interpolated as shellQuote(PROMPT).
+      const inner = `export MY_VAR=${shellQuote('hello world')} && run.sh --prompt ${shellQuote(PROMPT)}`;
+      const expected = `export COLLAB_AGENT=${shellQuote('parity')} COLLAB_PERSONA_FILE=${shellQuote(FILE)} && ${inner}`;
+      assert.equal((result as { mode: 'paste'; text: string }).text, expected);
+    });
+
+    it('pipeline hook → first shell step env-wrapped, $SESSION_ID interpolated', () => {
+      const hookStart = JSON.stringify([
+        { type: 'shell', command: 'echo $SESSION_ID' },
+        { type: 'keys', keys: ['Enter'] },
+      ]);
+      const agent = syntheticAgent({ engine: 'claude', hookStart });
+      const result = assembleLaunchCommand({ agent, systemPrompt: PROMPT, personaFile: FILE, sessionId: SID });
+      assert.equal(result.mode, 'pipeline');
+      const steps = (result as { mode: 'pipeline'; steps: Array<Record<string, unknown>> }).steps;
+      // SESSION_ID is NOT a shell-quote var → raw interpolation.
+      const expectedShell = `export COLLAB_AGENT=${shellQuote('parity')} COLLAB_PERSONA_FILE=${shellQuote(FILE)} && echo ${SID}`;
+      assert.equal(steps[0]!['command'], expectedShell);
+      assert.deepEqual(steps[1], { type: 'keys', keys: ['Enter'] });
+    });
+
+    it('accountHome present → HOME= injected between base exports and command', () => {
+      const agent = syntheticAgent({ engine: 'claude', account: 'work' });
+      const result = assembleLaunchCommand({
+        agent, systemPrompt: PROMPT, personaFile: FILE, sessionId: SID, accountHome: '/data/agent-homes/parity',
+      });
+      const text = (result as { mode: 'paste'; text: string }).text;
+      assert.ok(
+        text.startsWith(`export COLLAB_AGENT=${shellQuote('parity')} COLLAB_PERSONA_FILE=${shellQuote(FILE)} HOME=${shellQuote('/data/agent-homes/parity')} && `),
+        `HOME should be wrapped after base exports; got: ${text}`,
+      );
+    });
+
+    it('cwd override → $AGENT_CWD uses the passed cwd, not agent.cwd', () => {
+      const hookStart = JSON.stringify({ shell: 'run.sh --cwd $AGENT_CWD' });
+      const agent = syntheticAgent({ engine: 'claude', cwd: '/stored/cwd', hookStart });
+      // Override (mirrors a /spawn body.cwd override flowing through opts.cwd).
+      const overridden = assembleLaunchCommand({ agent, systemPrompt: PROMPT, personaFile: FILE, sessionId: SID, cwd: '/override/cwd' });
+      assert.ok((overridden as { text: string }).text.includes('run.sh --cwd /override/cwd'),
+        `override cwd should win; got: ${(overridden as { text: string }).text}`);
+      // Omitting cwd falls back to agent.cwd (preview path).
+      const fallback = assembleLaunchCommand({ agent, systemPrompt: PROMPT, personaFile: FILE, sessionId: SID });
+      assert.ok((fallback as { text: string }).text.includes('run.sh --cwd /stored/cwd'),
+        `fallback should use agent.cwd; got: ${(fallback as { text: string }).text}`);
     });
   });
 });

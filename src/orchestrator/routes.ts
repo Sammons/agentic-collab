@@ -15,19 +15,23 @@ import { renderMarkdown, wrapInHtml, DOC_PAGES } from '../docs/render.ts';
 import { hostname } from 'node:os';
 import type { Database } from './database.ts';
 import type { WebSocketServer } from '../shared/websocket-server.ts';
-import type { AgentState, DashboardMessage, DestinationRecord, EngineType, FileRecord, PendingMessage, ProxyCommand, ProxyResponse, ProxyRegistration } from '../shared/types.ts';
+import type { AgentRecord, AgentState, DashboardMessage, DestinationRecord, EngineType, FileRecord, PendingMessage, ProxyCommand, ProxyResponse, ProxyRegistration } from '../shared/types.ts';
 import type { TelegramDispatcher } from './telegram.ts';
 import { sanitizeMessage, generateMessageId } from '../shared/sanitize.ts';
 import { parseAddress } from '../shared/address.ts';
 import { getVersion, versionsMatch } from '../shared/version.ts';
 import type { LockManager } from '../shared/lock.ts';
-import { getPersonasDir, parseFrontmatter, createPersonaAndAgent, syncSinglePersona, syncPersonasWithDiff, updateFrontmatterField, resolvePersonaPath, toHostPath, writeAgentTeams, serializeFrontmatter, structuredRenderable, splitFrontmatter, serializeCore } from './persona.ts';
+import { getPersonasDir, parseFrontmatter, createPersonaAndAgent, syncSinglePersona, syncPersonasWithDiff, updateFrontmatterField, resolvePersonaPath, toHostPath, writeAgentTeams, serializeFrontmatter, structuredRenderable, splitFrontmatter, serializeCore, composeSystemPrompt, deserializeHookValue } from './persona.ts';
+import type { PersonaFrontmatter } from './persona.ts';
 import {
   spawnAgent, resumeAgent, suspendAgent, destroyAgent,
   reloadAgent, recoverAgent, interruptAgent, compactAgent, killAgent,
   executeCustomButton, executeIndicatorAction,
+  assembleLaunchCommand, computePeers, resolvePersonaFilePath,
   type LifecycleContext,
 } from './lifecycle.ts';
+import { buildUpsertOptsFromFrontmatter } from './field-registry.ts';
+import { resolveEffectiveConfig } from './engine-config-resolver.ts';
 import { getAdapter } from './adapters/index.ts';
 import { shutdownAgents, restoreAllAgents } from './network.ts';
 import { sessionName, ProxyUnavailableError } from '../shared/agent-entity.ts';
@@ -41,6 +45,15 @@ import { transcribe as whisperTranscribe, type WhisperOptions } from './whisper-
 
 /** Validates agent and persona names: 1-63 chars, alphanumeric start, [a-zA-Z0-9_-]. */
 const NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$/;
+
+/**
+ * RFC-007 launch-preview tokens. «PERSONA» (guillemets) stands in for the persona
+ * body — visually distinct, shell-safe inside single-quoted --append-system-prompt,
+ * and not a real template/shell token (distinct from $PERSONA_PROMPT, which is the
+ * WHOLE composed prompt). PREVIEW_SESSION_ID is an illustrative placeholder UUID.
+ */
+const PERSONA_PLACEHOLDER = '«PERSONA»';
+const PREVIEW_SESSION_ID = '00000000-0000-0000-0000-000000000000';
 
 /**
  * Shared context injected into all route handlers.
@@ -2071,6 +2084,189 @@ route('GET', '/api/personas/:name', async (_req, res, match) => {
   } catch {
     json(res, 404, { error: 'Persona not found' });
   }
+});
+
+// ── RFC-007: pre-expansion CLI launch command preview (saved persona) ──
+// GET — Bearer-exempt like the other persona GETs (auth gate at routes.ts ~3041
+// exempts GET). Side-effect-free: NO tmux session, NO codex profile write, NO
+// HOME scaffolding, NO proxy dispatch, NO DB mutation. Composes the same launch
+// command spawn would, with the persona BODY replaced by the literal «PERSONA»
+// token (the operator is editing the body, so the preview wraps everything around
+// it). Reuses the real spawn-path builders (assembleLaunchCommand +
+// buildUpsertOptsFromFrontmatter + resolveEffectiveConfig) so it cannot drift.
+route('GET', '/api/personas/:name/launch-preview', async (_req, res, match, ctx) => {
+  const name = match.pathname.groups['name']!;
+  if (!NAME_RE.test(name)) return json(res, 400, { error: 'Invalid persona name' });
+
+  // 1. Load + parse the saved persona file (same loading as GET /api/personas/:name).
+  let fm: PersonaFrontmatter;
+  try {
+    const raw = readFileSync(join(getPersonasDir(), `${name}.md`), 'utf-8');
+    fm = parseFrontmatter(raw).frontmatter as PersonaFrontmatter;
+  } catch {
+    return json(res, 404, { error: 'Persona not found' });
+  }
+
+  // 2. Map frontmatter → config via the SAME mapping create/sync use (S3: hooks
+  //    are serialized to strings via serializeHookValue, matching AgentRecord).
+  const cfg = buildUpsertOptsFromFrontmatter(name, fm) as Partial<AgentRecord> & { name: string };
+
+  // 3. Synthetic AgentRecord: config opts + safe non-runtime dummies. NO DB write.
+  const syntheticAgent: AgentRecord = {
+    name,
+    engine: (cfg.engine ?? 'claude') as EngineType,
+    model: cfg.model ?? null,
+    thinking: cfg.thinking ?? null,
+    cwd: cfg.cwd ?? '/tmp',
+    persona: cfg.persona ?? name,
+    permissions: cfg.permissions ?? null,
+    agentGroup: cfg.agentGroup ?? null,
+    launchEnv: cfg.launchEnv ?? null,
+    account: cfg.account ?? null,
+    proxyPin: cfg.proxyPin ?? null,
+    sortOrder: 0,
+    hookStart: cfg.hookStart ?? null,
+    hookResume: cfg.hookResume ?? null,
+    hookCompact: cfg.hookCompact ?? null,
+    hookExit: cfg.hookExit ?? null,
+    hookInterrupt: cfg.hookInterrupt ?? null,
+    hookReload: cfg.hookReload ?? null,
+    hookSubmit: cfg.hookSubmit ?? null,
+    state: 'void',
+    stateBeforeShutdown: null,
+    currentSessionId: null,
+    tmuxSession: null,
+    proxyId: null,
+    lastActivity: null,
+    lastContextPct: null,
+    reloadQueued: 0,
+    reloadTask: null,
+    failedAt: null,
+    failureReason: null,
+    capturedVars: null,
+    customButtons: cfg.customButtons ?? null,
+    indicators: cfg.indicators ?? null,
+    icon: cfg.icon ?? null,
+    version: 0,
+    spawnCount: 0,
+    createdAt: '',
+    isTemplate: false,
+  };
+
+  // 4. S4 GATE: resolve engine-config defaults EXACTLY as spawn (lifecycle.ts:496-497).
+  //    Custom engines (e.g. claude-with-home) inject flags like --add-dir via the
+  //    engine_configs hook_start — NOT frontmatter. Skipping this would make the
+  //    preview silently lie.
+  const engineConfig = ctx.db.getEngineConfig(syntheticAgent.engine);
+  const effective = resolveEffectiveConfig(syntheticAgent, engineConfig);
+
+  // 5. Compose the placeholder prompt: «PERSONA» body + live collab injection (peers
+  //    are a point-in-time snapshot — S7).
+  const lifecycleCtx = makeLifecycleCtx(ctx);
+  const systemPrompt = composeSystemPrompt({
+    agentName: name,
+    personaContent: PERSONA_PLACEHOLDER,
+    orchestratorHost: ctx.orchestratorHost,
+    peers: computePeers(lifecycleCtx, name),
+  });
+
+  // 6. accountHome (S6): deterministic path the account would scaffold to, shown
+  //    for display only. NO scaffolding, NO credential read. Presence of HOME= in
+  //    the real spawn depends on the account resolving (scaffoldAgentHome → null
+  //    otherwise); we mirror that — only include it if the account exists/has creds.
+  const notes: string[] = [];
+  notes.push('Default spawn (no ad-hoc /spawn task/cwd/model overrides) — S5.');
+  notes.push('Known peers are a live snapshot, re-read at spawn time — S7.');
+  notes.push(`Session id is illustrative ('${PREVIEW_SESSION_ID}'); a fresh UUID is generated per spawn.`);
+
+  let accountHome: string | undefined;
+  if (effective.account) {
+    accountHome = join(ctx.accountStore.agentHomesDir, name);
+    const acct = ctx.accountStore.getAccountInfo(effective.account);
+    if (acct && acct.hasCredentials) {
+      notes.push(`HOME=${accountHome} is scaffolded at spawn (account "${effective.account}" has credentials).`);
+    } else {
+      // Account declared but unresolved → real spawn omits HOME. Mirror that.
+      accountHome = undefined;
+      notes.push(`Account "${effective.account}" is declared but not resolvable (no credentials); HOME is omitted, exactly as spawn would.`);
+    }
+  }
+
+  const personaFile = resolvePersonaFilePath(name, effective.persona);
+
+  // 9. Assemble the launch command via the shared spawn-path helper.
+  let result: ReturnType<typeof assembleLaunchCommand>;
+  try {
+    result = assembleLaunchCommand({
+      agent: effective,
+      systemPrompt,
+      personaFile,
+      accountHome,
+      sessionId: PREVIEW_SESSION_ID,
+      model: effective.model ?? undefined,
+      thinking: effective.thinking ?? undefined,
+    });
+  } catch (err) {
+    // 8. S2: file:/preset: hooks can throw (missing file / unknown engine). A
+    //    half-typed hook during live editing must degrade, not 500.
+    return json(res, 200, {
+      error: (err as Error).message,
+      engine: effective.engine,
+      personaPlaceholder: PERSONA_PLACEHOLDER,
+      notes,
+    });
+  }
+
+  // 10. Render the command per mode + annotate where the persona lands per engine.
+  // Classify the hook by its declared value, not just the resolved mode: a null
+  // hook AND a `preset:<engine>` / `{preset}` hook both resolve to an adapter-built
+  // paste command, so "hookStart is set" alone would mislabel presets as shell.
+  const classifyHookKind = (): 'preset' | 'shell' | 'pipeline' => {
+    if (!effective.hookStart) return 'preset';
+    const d = deserializeHookValue(effective.hookStart);
+    if (Array.isArray(d)) return 'pipeline';
+    if (d && typeof d === 'object' && 'preset' in d) return 'preset';
+    if (typeof d === 'string' && d.startsWith('preset:')) return 'preset';
+    return 'shell';
+  };
+  let command: string;
+  const hookKind: 'preset' | 'shell' | 'pipeline' = result.mode === 'pipeline' ? 'pipeline' : classifyHookKind();
+  if (result.mode === 'paste') {
+    command = result.text;
+  } else if (result.mode === 'pipeline') {
+    command = result.steps
+      .map((s) => (s.type === 'shell' ? s.command : `[${s.type}]`))
+      .join('\n');
+  } else {
+    // keys/send/skip: no pasteable command line.
+    command = '';
+    notes.push(`Start hook resolved to mode "${result.mode}" — no pasteable command line.`);
+  }
+
+  const body: Record<string, unknown> = {
+    command,
+    engine: effective.engine,
+    hookKind,
+    personaPlaceholder: PERSONA_PLACEHOLDER,
+    notes,
+  };
+
+  // codex writes the system prompt to a config profile at spawn rather than inline;
+  // surface the composed profile contents (with «PERSONA») so the preview is faithful.
+  // Guard the adapter lookup: a custom engine whose adapter isn't resolvable must
+  // not 500 the preview (the command above already rendered successfully).
+  try {
+    const adapter = getAdapter(effective.engine);
+    if (adapter.usesConfigProfile) {
+      body['profilePreview'] = systemPrompt;
+      notes.push(`${effective.engine}: the system prompt is written to a config profile at spawn (not inline); the command uses the profile. profilePreview shows that composed prompt.`);
+    }
+  } catch {
+    // Unknown/unresolvable engine adapter — annotate but still return the command.
+    notes.push(`Engine "${effective.engine}" has no resolvable adapter for profile detection; treating system prompt as inline.`);
+  }
+
+  json(res, 200, body);
 });
 
 route('PUT', '/api/personas/:name', async (req, res, match) => {

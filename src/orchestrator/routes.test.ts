@@ -1,7 +1,7 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:http';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { Database } from './database.ts';
@@ -10,6 +10,7 @@ import { WebSocketServer } from '../shared/websocket-server.ts';
 import { LockManager } from '../shared/lock.ts';
 import { MessageDispatcher } from './message-dispatcher.ts';
 import { AccountStore } from './accounts.ts';
+import { setCustomEngineResolver } from './adapters/index.ts';
 import type { ProxyCommand, ProxyResponse } from '../shared/types.ts';
 
 /** Helper to build a MessageDispatcher for tests */
@@ -786,8 +787,6 @@ describe('API Routes — Personas', () => {
     tmpDir = mkdtempSync(join(tmpdir(), 'agentic-persona-route-test-'));
     personasDir = join(tmpDir, 'personas');
     process.env['PERSONAS_DIR'] = personasDir;
-    mkdtempSync; // force eval
-    const { mkdirSync } = await import('node:fs');
     mkdirSync(personasDir, { recursive: true });
 
     writeFileSync(join(personasDir, 'researcher.md'), '# Researcher\nYou are a research agent.');
@@ -1114,6 +1113,181 @@ describe('API Routes — Personas', () => {
     // Verify engine was updated in DB regardless of reload outcome
     const { data: after } = await api('GET', '/api/agents/sync-test-agent');
     assert.equal((after as Record<string, unknown>).engine, 'codex');
+  });
+
+  // ── RFC-007 PR-A: GET /api/personas/:name/launch-preview ──
+  describe('GET /api/personas/:name/launch-preview', () => {
+    const PLACEHOLDER = '«PERSONA»';
+    const SECRET_BODY = 'TOP-SECRET-PERSONA-BODY-12345';
+
+    it('404 for unknown persona', async () => {
+      const { status } = await api('GET', '/api/personas/does-not-exist-xyz/launch-preview');
+      assert.equal(status, 404);
+    });
+
+    it('returns «PERSONA» placeholder and does NOT leak the real persona body', async () => {
+      try {
+        writeFileSync(join(personasDir, 'lp-claude.md'),
+          `---\nengine: claude\nmodel: opus\ncwd: /tmp/lp\npermissions: skip\n---\n${SECRET_BODY}`);
+        const { status, data } = await api('GET', '/api/personas/lp-claude/launch-preview');
+        assert.equal(status, 200);
+        const d = data as Record<string, unknown>;
+        assert.equal(d.engine, 'claude');
+        assert.equal(d.personaPlaceholder, PLACEHOLDER);
+        assert.equal(d.hookKind, 'preset');
+        const cmd = d.command as string;
+        assert.ok(cmd.includes(PLACEHOLDER), 'command must contain the «PERSONA» placeholder');
+        assert.ok(!cmd.includes(SECRET_BODY), 'command must NOT contain the real persona body');
+        // Faithful spawn-path output: env wrap + claude flags.
+        assert.ok(cmd.startsWith("export COLLAB_AGENT='lp-claude'"), 'should have env export prefix');
+        assert.ok(cmd.includes('--append-system-prompt'), 'should inline the system prompt for claude');
+        assert.ok(cmd.includes('--model opus'), 'should reflect model from frontmatter');
+        assert.ok(cmd.includes('--dangerously-skip-permissions'), 'should reflect permissions: skip');
+      } finally {
+        rmSync(join(personasDir, 'lp-claude.md'), { force: true });
+      }
+    });
+
+    it('S4: custom engine_config hook_start (--add-dir) survives into the preview', async () => {
+      // Mirror production (main.ts): resolve custom engine names to underlying adapters.
+      setCustomEngineResolver((n) => (db.getEngineConfig(n)?.engine as any) ?? null);
+      try {
+        // Seed an engine_config whose hook_start (a shell hook) injects --add-dir.
+        // This mirrors claude-with-home: the flag lives in engine_configs, NOT frontmatter.
+        db.createEngineConfig({
+          name: 'claude-with-home',
+          engine: 'claude',
+          hookStart: JSON.stringify({
+            shell: 'claude --add-dir /home/op/claude-home --append-system-prompt $PERSONA_PROMPT',
+          }),
+        });
+        writeFileSync(join(personasDir, 'lp-custom.md'),
+          '---\nengine: claude-with-home\ncwd: /tmp/lp\n---\nbody');
+        const { status, data } = await api('GET', '/api/personas/lp-custom/launch-preview');
+        assert.equal(status, 200);
+        const d = data as Record<string, unknown>;
+        assert.equal(d.engine, 'claude-with-home');
+        const cmd = d.command as string;
+        assert.ok(cmd.includes('--add-dir /home/op/claude-home'),
+          `engine-config hook_start --add-dir must appear; got: ${cmd}`);
+        assert.ok(cmd.includes(PLACEHOLDER), 'placeholder still present in the interpolated $PERSONA_PROMPT');
+      } finally {
+        rmSync(join(personasDir, 'lp-custom.md'), { force: true });
+        db.deleteEngineConfig('claude-with-home');
+        setCustomEngineResolver(() => null); // reset global resolver
+      }
+    });
+
+    it('S3: structured shell hook resolves with placeholder in the right place', async () => {
+      try {
+        writeFileSync(join(personasDir, 'lp-shell.md'),
+          '---\nengine: claude\ncwd: /tmp/lp\nstart:\n  shell: run.sh --p $PERSONA_PROMPT\n---\nbody');
+        const { status, data } = await api('GET', '/api/personas/lp-shell/launch-preview');
+        assert.equal(status, 200);
+        const d = data as Record<string, unknown>;
+        assert.equal(d.hookKind, 'shell');
+        const cmd = d.command as string;
+        assert.ok(cmd.includes('run.sh --p'), 'shell hook command present');
+        assert.ok(cmd.includes(PLACEHOLDER), 'placeholder substituted into $PERSONA_PROMPT');
+        assert.ok(!cmd.includes('TOP-SECRET'), 'no body leak');
+      } finally {
+        rmSync(join(personasDir, 'lp-shell.md'), { force: true });
+      }
+    });
+
+    it('S3: pipeline hook resolves without error and reports hookKind pipeline', async () => {
+      try {
+        writeFileSync(join(personasDir, 'lp-pipe.md'),
+          '---\nengine: claude\ncwd: /tmp/lp\nstart:\n  - shell: echo $SESSION_ID\n  - keystroke: Enter\n---\nbody');
+        const { status, data } = await api('GET', '/api/personas/lp-pipe/launch-preview');
+        assert.equal(status, 200);
+        const d = data as Record<string, unknown>;
+        assert.equal(d.hookKind, 'pipeline');
+        assert.ok((d.command as string).includes('echo'), 'pipeline shell step rendered');
+      } finally {
+        rmSync(join(personasDir, 'lp-pipe.md'), { force: true });
+      }
+    });
+
+    it('codex: includes profilePreview with the placeholder (system prompt → profile)', async () => {
+      try {
+        writeFileSync(join(personasDir, 'lp-codex.md'),
+          '---\nengine: codex\ncwd: /tmp/lp\n---\nbody');
+        const { status, data } = await api('GET', '/api/personas/lp-codex/launch-preview');
+        assert.equal(status, 200);
+        const d = data as Record<string, unknown>;
+        assert.equal(d.engine, 'codex');
+        assert.ok(typeof d.profilePreview === 'string', 'codex must include profilePreview');
+        assert.ok((d.profilePreview as string).includes(PLACEHOLDER), 'profilePreview carries «PERSONA»');
+        assert.ok((d.command as string).includes('codex'), 'command is the codex launch line');
+      } finally {
+        rmSync(join(personasDir, 'lp-codex.md'), { force: true });
+      }
+    });
+
+    it('S2: file: hook pointing at a nonexistent path returns error field, not 500', async () => {
+      try {
+        writeFileSync(join(personasDir, 'lp-badfile.md'),
+          '---\nengine: claude\ncwd: /tmp/lp\nstart: file:/no/such/hook/file.sh\n---\nbody');
+        const { status, data } = await api('GET', '/api/personas/lp-badfile/launch-preview');
+        assert.equal(status, 200);
+        const d = data as Record<string, unknown>;
+        assert.ok(typeof d.error === 'string' && d.error.length > 0, 'should return an error field');
+      } finally {
+        rmSync(join(personasDir, 'lp-badfile.md'), { force: true });
+      }
+    });
+
+    it('S6: account with credentials → HOME= deterministic path appears', async () => {
+      const accountDir = join(tmpDir, 'accounts', 'lp-work');
+      try {
+        mkdirSync(accountDir, { recursive: true });
+        writeFileSync(join(accountDir, 'credentials.json'), JSON.stringify({ access_token: 'x' }));
+        writeFileSync(join(personasDir, 'lp-acct.md'),
+          '---\nengine: claude\ncwd: /tmp/lp\naccount: lp-work\n---\nbody');
+        const { status, data } = await api('GET', '/api/personas/lp-acct/launch-preview');
+        assert.equal(status, 200);
+        const cmd = (data as Record<string, unknown>).command as string;
+        assert.ok(cmd.includes(`HOME=${"'"}${join(tmpDir, 'agent-homes', 'lp-acct')}${"'"}`),
+          `HOME should be the deterministic agent-home path; got: ${cmd}`);
+      } finally {
+        rmSync(join(personasDir, 'lp-acct.md'), { force: true });
+        rmSync(accountDir, { recursive: true, force: true });
+      }
+    });
+
+    it('side-effect-free: no tmux/proxy/DB write, getAgent unaffected', async () => {
+      let dispatched = false;
+      const probeDispatch = async () => { dispatched = true; return { ok: true as const }; };
+      const probeLocks = new LockManager(db.rawDb);
+      const probeCtx = {
+        db, wss, locks: probeLocks, proxyDispatch: probeDispatch,
+        getDashboardHtml: () => '', orchestratorHost: 'http://localhost:3000',
+        orchestratorSecret: null,
+        messageDispatcher: makeTestDispatcher(db, probeLocks, probeDispatch),
+        usagePoller: { getUsageData: () => ({}), pollNow: async () => {} } as any,
+        voiceEnabled: false,
+        accountStore: new AccountStore({ accountsDir: join(tmpDir, 'accounts'), agentHomesDir: join(tmpDir, 'agent-homes'), skipAutoRegister: true }),
+      } as unknown as RouteContext;
+      const probeRouter = createRouter(probeCtx);
+      const probeServer = createServer(async (req, res) => { await probeRouter(req, res); });
+      await new Promise<void>((resolve) => probeServer.listen(0, () => resolve()));
+      const probePort = (probeServer.address() as { port: number }).port;
+      try {
+        writeFileSync(join(personasDir, 'lp-sfx.md'), '---\nengine: claude\ncwd: /tmp/lp\n---\nbody');
+        const before = db.getAgent('lp-sfx');
+        const resp = await fetch(`http://localhost:${probePort}/api/personas/lp-sfx/launch-preview`);
+        assert.equal(resp.status, 200);
+        await resp.json();
+        assert.equal(dispatched, false, 'preview must NOT dispatch to the proxy');
+        const after = db.getAgent('lp-sfx');
+        assert.deepEqual(after, before, 'preview must NOT create/modify an agent row');
+        assert.ok(!after, 'no agent should exist for a preview-only persona');
+      } finally {
+        rmSync(join(personasDir, 'lp-sfx.md'), { force: true });
+        probeServer.close();
+      }
+    });
   });
 });
 
