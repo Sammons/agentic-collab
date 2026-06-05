@@ -21,6 +21,7 @@ import { setupReminders } from './reminders.ts';
 import { setupSettings } from './settings.ts';
 import { setupSearch } from './search.ts';
 import { setupPersona } from './persona.ts';
+import { setupTitle } from './title.ts';
 import { connect } from './connection.ts';
 
 function boot(): void {
@@ -45,6 +46,8 @@ function boot(): void {
   setupSearch();
   setupPersona();
   setupRouter();
+  // After setupRouter() so the initial update() reads the parsed route.
+  setupTitle();
   setupSidebar();
   setupMobileNav();
   connect();
