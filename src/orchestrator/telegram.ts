@@ -14,10 +14,21 @@ export type InboundTelegramMessage = {
   text: string;
 };
 
+/**
+ * Per-key polling state. Each entry owns its OWN abort controller and offset
+ * (`lastUpdateId`) so multiple bots can long-poll concurrently without sharing
+ * an offset. `token` is recorded so a loop can be inspected/restarted by key.
+ */
+type PollingState = {
+  abort: AbortController;
+  promise: Promise<void>;
+  lastUpdateId: number;
+  token: string;
+};
+
 export class TelegramDispatcher {
-  private pollingAbort: AbortController | null = null;
-  private pollingPromise: Promise<void> | null = null;
-  private lastUpdateId = 0;
+  /** key (agent name in the eventual feature; an opaque string here) → loop. */
+  private polls = new Map<string, PollingState>();
 
   /**
    * Send a message to a Telegram chat via Bot API.
@@ -53,22 +64,23 @@ export class TelegramDispatcher {
   }
 
   /**
-   * Start long polling for inbound messages.
-   * Calls onMessage for each text message received.
-   * Retries on error after 5s delay.
+   * Start long polling for inbound messages under `key`.
+   * Stops any existing loop for `key` first, then starts a fresh per-key loop
+   * with its own offset. Multiple keys poll concurrently (one bot per key).
+   * Calls onMessage for each text message received. Retries on error after 5s.
    */
-  startPolling(botToken: string, onMessage: (chatId: string, text: string) => void): void {
-    if (this.pollingAbort) {
-      this.stopPolling();
-    }
-    this.pollingAbort = new AbortController();
-    this.lastUpdateId = 0;
+  startPolling(key: string, botToken: string, onMessage: (chatId: string, text: string) => void): void {
+    // Replace any prior loop for this key with a fresh one (resets the offset).
+    this.stopPolling(key);
+
+    const abort = new AbortController();
+    const state: PollingState = { abort, promise: Promise.resolve(), lastUpdateId: 0, token: botToken };
 
     const poll = async (): Promise<void> => {
-      const signal = this.pollingAbort!.signal;
+      const signal = abort.signal;
       while (!signal.aborted) {
         try {
-          const url = `${TELEGRAM_API}/bot${botToken}/getUpdates?offset=${this.lastUpdateId + 1}&timeout=30`;
+          const url = `${TELEGRAM_API}/bot${botToken}/getUpdates?offset=${state.lastUpdateId + 1}&timeout=30`;
           const resp = await fetch(url, {
             signal: AbortSignal.any([signal, AbortSignal.timeout(35_000)]),
           });
@@ -84,7 +96,7 @@ export class TelegramDispatcher {
             continue;
           }
           for (const update of data.result) {
-            this.lastUpdateId = Math.max(this.lastUpdateId, update.update_id);
+            state.lastUpdateId = Math.max(state.lastUpdateId, update.update_id);
             if (update.message?.text) {
               const chatId = String(update.message.chat.id);
               onMessage(chatId, update.message.text);
@@ -98,17 +110,25 @@ export class TelegramDispatcher {
       }
     };
 
-    this.pollingPromise = poll();
-    console.log('[telegram] Long polling started');
+    state.promise = poll();
+    this.polls.set(key, state);
+    console.log(`[telegram] Long polling started for "${key}"`);
   }
 
-  /** Stop polling gracefully. */
-  stopPolling(): void {
-    if (this.pollingAbort) {
-      this.pollingAbort.abort();
-      this.pollingAbort = null;
-      this.pollingPromise = null;
-      console.log('[telegram] Long polling stopped');
+  /** Stop the polling loop for `key` gracefully (no-op if none). */
+  stopPolling(key: string): void {
+    const state = this.polls.get(key);
+    if (state) {
+      state.abort.abort();
+      this.polls.delete(key);
+      console.log(`[telegram] Long polling stopped for "${key}"`);
+    }
+  }
+
+  /** Stop every running polling loop. */
+  stopAll(): void {
+    for (const key of [...this.polls.keys()]) {
+      this.stopPolling(key);
     }
   }
 }
