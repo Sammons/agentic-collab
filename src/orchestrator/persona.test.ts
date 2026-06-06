@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { readFileSync } from 'node:fs';
 import { resolvePersonaPath, loadPersona, composeSystemPrompt, parseFrontmatter, scanPersonas, syncSinglePersona, syncPersonasToDb, syncPersonasWithDiff, createPersonaAndAgent, toHostPath, serializeHookValue, deserializeHookValue, splitFrontmatter, serializeCore, structuredRenderable } from './persona.ts';
+import { CONFIG_FIELDS } from './field-registry.ts';
 import { Database } from './database.ts';
 
 describe('Persona', () => {
@@ -1407,6 +1408,221 @@ Body
       assert.equal(topics.length, 2);
       assert.equal(topics[0]!['monitor_template'], 'a-monitor');
       assert.equal(topics[1]!['name'], 'b');
+    });
+  });
+
+  // ── RFC-008 PR-B: telegram persona frontmatter field ─────────────────────
+  // Mirrors the `env` nested-map precedent. The field carries ONLY non-secret
+  // binding config (chatId/inbound/routing) — never a token. The nested parser
+  // keeps scalar sub-values as STRINGS (so `inbound: true` → "true"); coercion
+  // and validation live in the field-registry serialize/deserialize.
+  describe('telegram field (RFC-008)', () => {
+    let db: Database;
+    let personasDir: string;
+
+    before(() => {
+      personasDir = mkdtempSync(join(tmpdir(), 'persona-telegram-'));
+      db = new Database(join(personasDir, 'tg.db'));
+    });
+
+    after(() => {
+      db.close();
+      rmSync(personasDir, { recursive: true, force: true });
+    });
+
+    it('parses the nested telegram block (sub-values are strings, like env)', () => {
+      const { frontmatter } = parseFrontmatter([
+        '---',
+        'engine: claude',
+        'cwd: /tg',
+        'telegram:',
+        '  chatId: "-100123456"',
+        '  inbound: true',
+        '  routing: self',
+        '---',
+        '# Body',
+      ].join('\n'));
+      const tg = frontmatter['telegram'] as Record<string, unknown>;
+      assert.equal(tg['chatId'], '"-100123456"');
+      // Nested parser keeps scalars as strings — NOT a boolean.
+      assert.equal(tg['inbound'], 'true');
+      assert.equal(typeof tg['inbound'], 'string');
+      assert.equal(tg['routing'], 'self');
+    });
+
+    it('syncs telegram to agentTelegram with inbound coerced to a boolean', () => {
+      writeFileSync(join(personasDir, 'tg-self.md'), [
+        '---',
+        'engine: claude',
+        'cwd: /tg-self',
+        'telegram:',
+        '  chatId: -100123456',
+        '  inbound: true',
+        '  routing: prefix',
+        '---',
+        '# Self',
+      ].join('\n'));
+
+      assert.equal(syncSinglePersona(db, 'tg-self', personasDir), true);
+      const agent = db.getAgent('tg-self');
+      assert.ok(agent);
+      assert.deepEqual(agent.agentTelegram, {
+        chatId: '-100123456',
+        inbound: true,
+        routing: 'prefix',
+      });
+      // Coerced to a real boolean, not the string "true".
+      assert.equal(agent.agentTelegram!.inbound, true);
+      assert.equal(typeof agent.agentTelegram!.inbound, 'boolean');
+    });
+
+    it('coerces inbound:false (the string-coercion gotcha) to false', () => {
+      writeFileSync(join(personasDir, 'tg-out.md'), [
+        '---',
+        'engine: claude',
+        'cwd: /tg-out',
+        'telegram:',
+        '  chatId: "-100999"',
+        '  inbound: false',
+        '---',
+        '# Outbound-only',
+      ].join('\n'));
+
+      assert.equal(syncSinglePersona(db, 'tg-out', personasDir), true);
+      const agent = db.getAgent('tg-out');
+      assert.ok(agent);
+      assert.equal(agent.agentTelegram!.inbound, false);
+    });
+
+    it('defaults inbound to true when absent and routing to self when invalid', () => {
+      writeFileSync(join(personasDir, 'tg-def.md'), [
+        '---',
+        'engine: claude',
+        'cwd: /tg-def',
+        'telegram:',
+        '  chatId: "12345"',
+        '  routing: bogus',
+        '  secretToken: should-be-dropped',
+        '---',
+        '# Defaults',
+      ].join('\n'));
+
+      assert.equal(syncSinglePersona(db, 'tg-def', personasDir), true);
+      const agent = db.getAgent('tg-def');
+      assert.ok(agent);
+      // inbound defaults true; invalid routing falls back to self; unknown
+      // sub-keys (incl. anything token-like) are dropped.
+      assert.deepEqual(agent.agentTelegram, {
+        chatId: '12345',
+        inbound: true,
+        routing: 'self',
+      });
+      assert.ok(!('secretToken' in (agent.agentTelegram as Record<string, unknown>)));
+    });
+
+    it('leaves agentTelegram null for personas without a telegram block', () => {
+      writeFileSync(join(personasDir, 'tg-none.md'), [
+        '---',
+        'engine: claude',
+        'cwd: /tg-none',
+        'env:',
+        '  FOO: bar',
+        '---',
+        '# No telegram',
+      ].join('\n'));
+
+      assert.equal(syncSinglePersona(db, 'tg-none', personasDir), true);
+      const agent = db.getAgent('tg-none');
+      assert.ok(agent);
+      assert.equal(agent.agentTelegram, null);
+      // Regression guard: unrelated config still parses unchanged.
+      assert.deepEqual(agent.launchEnv, { FOO: 'bar' });
+    });
+
+    it('clears agentTelegram when the block is removed on re-sync', () => {
+      writeFileSync(join(personasDir, 'tg-clear.md'), [
+        '---',
+        'engine: claude',
+        'cwd: /tg-clear',
+        'telegram:',
+        '  chatId: "777"',
+        '---',
+        '# v1',
+      ].join('\n'));
+      syncSinglePersona(db, 'tg-clear', personasDir);
+      assert.deepEqual(db.getAgent('tg-clear')!.agentTelegram, {
+        chatId: '777', inbound: true, routing: 'self',
+      });
+
+      writeFileSync(join(personasDir, 'tg-clear.md'), '---\nengine: claude\ncwd: /tg-clear\n---\n# v2');
+      syncSinglePersona(db, 'tg-clear', personasDir);
+      assert.equal(db.getAgent('tg-clear')!.agentTelegram, null);
+    });
+
+    it('round-trips serialize → deserialize stably via the registry descriptor', () => {
+      const field = CONFIG_FIELDS.find((f) => f.name === 'agentTelegram')!;
+      assert.ok(field);
+      assert.equal(field.column, 'agent_telegram');
+      assert.equal(field.personaKey, 'telegram');
+      assert.equal(field.nested, true);
+
+      // Parsed-frontmatter shape (strings) → JSON → AgentTelegramConfig.
+      const json = field.serialize!({ chatId: '-100123456', inbound: 'false', routing: 'passthrough' });
+      assert.equal(typeof json, 'string');
+      const first = field.deserialize!(json) as Record<string, unknown>;
+      assert.deepEqual(first, { chatId: '-100123456', inbound: false, routing: 'passthrough' });
+
+      // Re-serializing the deserialized value yields the identical JSON (stable).
+      const json2 = field.serialize!(first);
+      assert.equal(json2, json);
+      assert.deepEqual(field.deserialize!(json2), first);
+
+      // No usable chatId → null (both directions).
+      assert.equal(field.serialize!({ inbound: 'true' }), null);
+      assert.equal(field.serialize!(null), null);
+      assert.equal(field.deserialize!(null), null);
+      assert.equal(field.deserialize!(''), null);
+    });
+
+    it('detects telegram changes (deep equals) in syncPersonasWithDiff', () => {
+      const diffDir = mkdtempSync(join(tmpdir(), 'persona-tg-diff-'));
+      const diffDb = new Database(join(diffDir, 'd.db'));
+      try {
+        writeFileSync(join(diffDir, 'd.md'), [
+          '---', 'engine: claude', 'cwd: /d',
+          'telegram:', '  chatId: "1"', '---', '# d',
+        ].join('\n'));
+        assert.deepEqual(syncPersonasWithDiff(diffDb, diffDir).created, ['d']);
+        // Identical re-sync = unchanged (equals deep-compares the parsed object).
+        assert.deepEqual(syncPersonasWithDiff(diffDb, diffDir).unchanged, ['d']);
+
+        writeFileSync(join(diffDir, 'd.md'), [
+          '---', 'engine: claude', 'cwd: /d',
+          'telegram:', '  chatId: "2"', '---', '# d',
+        ].join('\n'));
+        assert.deepEqual(syncPersonasWithDiff(diffDb, diffDir).updated, ['d']);
+      } finally {
+        diffDb.close();
+        rmSync(diffDir, { recursive: true, force: true });
+      }
+    });
+
+    it('carries telegram through splitFrontmatter passthrough (RFC-005 editor)', () => {
+      const raw = [
+        '---',
+        'engine: claude',
+        'cwd: /tg',
+        'telegram:',
+        '  chatId: "-100123456"',
+        '  inbound: true',
+        '---',
+        '# Body',
+      ].join('\n');
+      const { core, passthroughRaw } = splitFrontmatter(raw);
+      // telegram is not a CORE widget — it rides verbatim in the passthrough.
+      assert.equal(core['telegram'], undefined);
+      assert.ok(passthroughRaw.includes('telegram:'));
+      assert.ok(passthroughRaw.includes('chatId: "-100123456"'));
     });
   });
 });

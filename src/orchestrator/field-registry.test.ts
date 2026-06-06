@@ -17,8 +17,8 @@ import {
 
 describe('field-registry', () => {
   describe('CONFIG_FIELDS', () => {
-    it('has 20 entries covering all config fields', () => {
-      assert.equal(CONFIG_FIELDS.length, 20);
+    it('has 21 entries covering all config fields', () => {
+      assert.equal(CONFIG_FIELDS.length, 21);
     });
 
     it('includes proxyPin mapped to proxy_pin (personaKey proxy, upsertable, not createOnly)', () => {
@@ -72,8 +72,10 @@ describe('field-registry', () => {
   describe('nestedPersonaKeys', () => {
     it('produces the same set as current NESTED_FIELDS (minus spawn)', () => {
       const keys = nestedPersonaKeys();
-      // Registry produces all hook fields except 'env' (json kind, not hook) and 'spawn' (legacy alias, not in registry)
-      const expected = new Set(['start', 'resume', 'compact', 'exit', 'interrupt', 'submit']);
+      // Registry produces all hook fields plus 'telegram' (json kind, nested:true,
+      // RFC-008). It excludes 'env' (json kind, nested:false — added manually to
+      // NESTED_FIELDS) and 'spawn' (legacy alias, not in registry).
+      const expected = new Set(['start', 'resume', 'compact', 'exit', 'interrupt', 'submit', 'telegram']);
       assert.deepEqual(keys, expected);
     });
 
@@ -174,6 +176,7 @@ describe('field-registry', () => {
         'proxy_id', 'agent_group', 'account', 'proxy_pin', 'launch_env',
         'hook_start', 'hook_resume', 'hook_compact', 'hook_exit',
         'hook_interrupt', 'hook_submit', 'custom_buttons', 'indicators', 'icon',
+        'agent_telegram',
       ];
       assert.deepEqual(cols, expected);
     });
@@ -192,6 +195,7 @@ describe('field-registry', () => {
         'agent_group', 'account', 'proxy_pin', 'launch_env',
         'hook_start', 'hook_resume', 'hook_compact', 'hook_exit',
         'hook_interrupt', 'hook_submit', 'custom_buttons', 'indicators', 'icon',
+        'agent_telegram',
       ];
       assert.deepEqual(cols, expected);
     });
@@ -218,10 +222,11 @@ describe('field-registry', () => {
         customButtons: undefined,
         indicators: undefined,
         icon: undefined,
+        agentTelegram: undefined,
       };
 
       const params = serializeConfigParams(opts);
-      assert.equal(params.length, 20); // 20 config fields
+      assert.equal(params.length, 21); // 21 config fields
       assert.equal(params[0], 'claude'); // engine
       assert.equal(params[1], null);    // model
       assert.equal(params[2], null);    // thinking
@@ -321,7 +326,7 @@ describe('field-registry', () => {
       };
 
       const params = serializeUpsertParams(opts);
-      assert.equal(params.length, 19); // 20 - 1 (proxyId)
+      assert.equal(params.length, 20); // 21 - 1 (proxyId)
       // proxyId value 'p1' should NOT appear
       assert.ok(!params.includes('p1'));
     });

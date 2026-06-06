@@ -11,6 +11,7 @@ import type {
   AgentState,
   AgentTemplateRow,
   ApprovalEventRow,
+  AgentTelegramConfig,
   ApprovalRow,
   ApprovalState,
   DashboardMessage,
@@ -527,6 +528,7 @@ export class Database {
     hookSubmit?: string;
     customButtons?: string;
     indicators?: string;
+    agentTelegram?: AgentTelegramConfig | null;
   }): AgentRecord {
     const cols = configInsertColumns();
     const allCols = ['name', ...cols, 'state'].join(', ');
@@ -560,6 +562,7 @@ export class Database {
     hookSubmit?: string;
     customButtons?: string;
     indicators?: string;
+    agentTelegram?: AgentTelegramConfig | null;
     teams?: string[];
   }): AgentRecord {
     const existing = this.getAgent(opts.name);
@@ -799,6 +802,7 @@ export class Database {
       customButtons: null,
       indicators: null,
       icon: null,
+      agentTelegram: null,
       version: 0,
       spawnCount: 0,
       createdAt: t.createdAt,

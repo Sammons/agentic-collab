@@ -8,7 +8,7 @@
 import { readFileSync, readdirSync, realpathSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join, resolve, relative, isAbsolute } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
-import type { StructuredHook, HookValue, SendAction, LaunchEnv, PipelineStep, IndicatorDefinition } from '../shared/types.ts';
+import type { StructuredHook, HookValue, SendAction, LaunchEnv, PipelineStep, IndicatorDefinition, AgentTelegramConfig } from '../shared/types.ts';
 
 export const PERSONAS_DIR = process.env['PERSONAS_DIR'] ?? join(process.env['HOME'] ?? '/data', 'persistent-agents');
 
@@ -68,6 +68,13 @@ export type PersonaFrontmatter = {
   indicators?: IndicatorDefinition[];
   /** Emoji or short text shown on agent cards and in page title. */
   icon?: string;
+  /**
+   * Per-agent Telegram binding config (RFC-008). Nested map (parsed like `env`),
+   * so scalar sub-values arrive as STRINGS (e.g. `inbound: true` → "true"); the
+   * field-registry serialize/deserialize coerce them. Non-secret only — the bot
+   * token is never in frontmatter (it lives encrypted in SQLite; see RFC-008 §2).
+   */
+  telegram?: AgentTelegramConfig;
 
   // ── v3 template fields (ephemeral-agent only; persistent agents ignore these). ──
 

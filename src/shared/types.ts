@@ -13,6 +13,21 @@ export type EngineType = 'claude' | 'codex' | 'opencode';
 /** Launch-time environment variables injected into the agent process. */
 export type LaunchEnv = Record<string, string>;
 
+/**
+ * Per-agent Telegram binding config (RFC-008), declared in persona frontmatter
+ * under `telegram:`. Carries ONLY non-secret binding/routing config — the bot
+ * token is NEVER stored here; it lives AES-256-GCM-encrypted in SQLite, set via
+ * a write-only API and decrypted at reconcile time (RFC-008 §2).
+ */
+export type AgentTelegramConfig = {
+  /** Default outbound chat id (not secret). */
+  chatId: string;
+  /** When false, the bot is outbound-only. Defaults to true. */
+  inbound?: boolean;
+  /** Inbound routing mode. self (default) = bot↔agent 1:1. */
+  routing?: 'self' | 'prefix' | 'passthrough';
+};
+
 // ── Hook Schema ──
 
 /** A single action in a send sequence. Exactly one of keystroke/text/paste must be set. */
@@ -204,6 +219,8 @@ export type AgentRecord = {
   customButtons: string | null;
   indicators: string | null;
   icon: string | null;
+  /** Per-agent Telegram binding config (RFC-008). Non-secret; token stored encrypted separately. */
+  agentTelegram: AgentTelegramConfig | null;
   version: number;
   spawnCount: number;
   createdAt: string;

@@ -2175,6 +2175,7 @@ function buildLaunchPreviewResponse(
     customButtons: cfg.customButtons ?? null,
     indicators: cfg.indicators ?? null,
     icon: cfg.icon ?? null,
+    agentTelegram: cfg.agentTelegram ?? null,
     version: 0,
     spawnCount: 0,
     createdAt: '',
