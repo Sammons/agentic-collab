@@ -270,13 +270,21 @@ export function updateFocusTargets(agents: string[]): void {
  * keeping the merged-feed DOM tractable even with many agents.
  */
 export function restoreSelectionOnInit(): void {
-  let stored: string[] = [];
-  try {
-    const raw = localStorage.getItem(SELECTION_KEY);
-    if (raw) stored = JSON.parse(raw) as string[];
-  } catch {}
-  const known = new Set(state.agents.map((a) => a.name));
-  state.selectedAgents = new Set(stored.filter((n) => known.has(n)));
+  let raw: string | null = null;
+  try { raw = localStorage.getItem(SELECTION_KEY); } catch {}
+  const known = state.agents.map((a) => a.name);
+  if (raw === null) {
+    // Cold load — nothing was ever persisted. Default to ALL agents so the feed
+    // shows everything instead of the empty "check an agent" state. An EXPLICIT
+    // empty selection persists as "[]" (not null) and is respected by the else.
+    state.selectedAgents = new Set(known);
+  } else {
+    let stored: unknown;
+    try { stored = JSON.parse(raw); } catch {}
+    const list = Array.isArray(stored) ? (stored as string[]) : [];
+    const knownSet = new Set(known);
+    state.selectedAgents = new Set(list.filter((n) => knownSet.has(n)));
+  }
   emit('selection-changed');
 }
 
@@ -290,12 +298,23 @@ export function restoreSelectionOnInit(): void {
  * feed fetch tolerates unknown names and restoreSelectionOnInit re-filters once
  * the agent list arrives. No `selection-changed` emit: the initial render reads
  * `selectedAgents` directly.
+ *
+ * Cold load (nothing persisted): default to the cached thread agents as the
+ * boot-time "all" proxy, so a returning all-agents user doesn't flash the empty
+ * feed; restoreSelectionOnInit then re-defaults to the authoritative full agent
+ * list once the WS init arrives. An EXPLICIT empty selection ("[]") is respected.
  */
 export function restoreSelectionAtBoot(): void {
-  try {
-    const raw = localStorage.getItem(SELECTION_KEY);
-    if (raw) state.selectedAgents = new Set(JSON.parse(raw) as string[]);
-  } catch {}
+  let raw: string | null = null;
+  try { raw = localStorage.getItem(SELECTION_KEY); } catch {}
+  if (raw === null) {
+    state.selectedAgents = new Set(Object.keys(state.threads));
+  } else {
+    try {
+      const v = JSON.parse(raw);
+      if (Array.isArray(v)) state.selectedAgents = new Set(v as string[]);
+    } catch {}
+  }
 }
 
 /* ── token ─────────────────────────────────────────────────────────── */
