@@ -273,18 +273,18 @@ export function restoreSelectionOnInit(): void {
   let raw: string | null = null;
   try { raw = localStorage.getItem(SELECTION_KEY); } catch {}
   const known = state.agents.map((a) => a.name);
-  if (raw === null) {
-    // Cold load — nothing was ever persisted. Default to ALL agents so the feed
-    // shows everything instead of the empty "check an agent" state. An EXPLICIT
-    // empty selection persists as "[]" (not null) and is respected by the else.
-    state.selectedAgents = new Set(known);
-  } else {
-    let stored: unknown;
-    try { stored = JSON.parse(raw); } catch {}
-    const list = Array.isArray(stored) ? (stored as string[]) : [];
-    const knownSet = new Set(known);
-    state.selectedAgents = new Set(list.filter((n) => knownSet.has(n)));
-  }
+  let stored: unknown;
+  if (raw !== null) { try { stored = JSON.parse(raw); } catch {} }
+  const list = Array.isArray(stored) ? (stored as string[]) : [];
+  const knownSet = new Set(known);
+  let sel = new Set(list.filter((n) => knownSet.has(n)));
+  // Never land on a blank feed at load: ANY empty selection — cold load (null),
+  // a persisted deselect-all ("[]"), or a stored set whose agents were all
+  // deleted — defaults to ALL agents. A non-empty specific selection persists.
+  // (Deselect-all still works in-session; it resets to all on the next load —
+  // a persisted "show nothing" state is never what the operator wants.)
+  if (sel.size === 0) sel = new Set(known);
+  state.selectedAgents = sel;
   emit('selection-changed');
 }
 
@@ -299,22 +299,22 @@ export function restoreSelectionOnInit(): void {
  * the agent list arrives. No `selection-changed` emit: the initial render reads
  * `selectedAgents` directly.
  *
- * Cold load (nothing persisted): default to the cached thread agents as the
- * boot-time "all" proxy, so a returning all-agents user doesn't flash the empty
- * feed; restoreSelectionOnInit then re-defaults to the authoritative full agent
- * list once the WS init arrives. An EXPLICIT empty selection ("[]") is respected.
+ * Any empty selection (nothing persisted, a persisted deselect-all "[]", or
+ * garbage): default to the cached thread agents as the boot-time "all" proxy, so
+ * the feed isn't blank on load and a returning all-agents user doesn't flash the
+ * empty state; restoreSelectionOnInit then re-defaults to the authoritative full
+ * agent list once the WS init arrives. Mirrors restoreSelectionOnInit — there is
+ * no persisted "show nothing" state on load. A non-empty specific selection is
+ * restored as-is for an immediate REST feed.
  */
 export function restoreSelectionAtBoot(): void {
   let raw: string | null = null;
   try { raw = localStorage.getItem(SELECTION_KEY); } catch {}
-  if (raw === null) {
-    state.selectedAgents = new Set(Object.keys(state.threads));
-  } else {
-    try {
-      const v = JSON.parse(raw);
-      if (Array.isArray(v)) state.selectedAgents = new Set(v as string[]);
-    } catch {}
-  }
+  let stored: unknown;
+  if (raw !== null) { try { stored = JSON.parse(raw); } catch {} }
+  let sel = Array.isArray(stored) ? new Set(stored as string[]) : new Set<string>();
+  if (sel.size === 0) sel = new Set(Object.keys(state.threads));
+  state.selectedAgents = sel;
 }
 
 /* ── token ─────────────────────────────────────────────────────────── */
