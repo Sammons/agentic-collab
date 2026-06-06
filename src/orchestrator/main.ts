@@ -598,7 +598,7 @@ const staleProxyTimer = setInterval(() => {
 async function shutdown(): Promise<void> {
   console.log('[orchestrator] Shutting down...');
   clearInterval(staleProxyTimer);
-  telegramDispatcher.stopPolling();
+  telegramDispatcher.stopAll();
   healthMonitor.stop();
   messageDispatcher.stop();
   usagePoller.stop();

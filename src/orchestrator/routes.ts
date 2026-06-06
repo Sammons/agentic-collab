@@ -2006,7 +2006,7 @@ route('DELETE', '/api/destinations/:name', async (_req, res, match, ctx) => {
 
   // Stop polling if telegram
   if (existing.type === 'telegram') {
-    ctx.telegramDispatcher.stopPolling();
+    ctx.telegramDispatcher.stopPolling(existing.name);
   }
 
   const deleted = ctx.db.deleteDestination(name);
@@ -3571,7 +3571,7 @@ function makeLifecycleCtx(ctx: RouteContext): LifecycleContext {
 export function startTelegramPolling(ctx: RouteContext, dest: DestinationRecord): void {
   const botToken = dest.config.botToken as string;
 
-  ctx.telegramDispatcher.startPolling(botToken, (incomingChatId: string, text: string) => {
+  ctx.telegramDispatcher.startPolling(dest.name, botToken, (incomingChatId: string, text: string) => {
     console.log(`[telegram] Inbound from chat ${incomingChatId}: ${text.slice(0, 100)}`);
 
     // Parse @agent-name prefixes — supports multiple: @agent1 @agent2 message
