@@ -185,6 +185,8 @@
 }
 .st-item .meta .num { color: var(--ink-2); font-weight: 600; }
 .st-item .meta .who { color: var(--plum); }
+.st-item .meta .vok { color: var(--moss); font-weight: 600; }
+.st-item .meta .vwarn { color: var(--clay); font-weight: 600; }
 .st-item .meta .sep { color: var(--ink-4); margin: 0 7px; }
 .st-item .meta .lbl { color: var(--ink-4); }
 .st-item .meta .val { color: var(--ink-2); }

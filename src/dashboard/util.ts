@@ -51,6 +51,20 @@ export function setFrontmatterProxy(raw: string, value: string): string {
 }
 
 /**
+ * Whether a proxy counts as online given its last heartbeat.
+ *
+ * Mirrors the orchestrator's stale-proxy reaper, which drops a proxy after
+ * 3 missed 15s heartbeats (`listStaleProxies(45)` in orchestrator/main.ts).
+ * Computing the same client-side keeps the dot honest when the reaper lags
+ * between its poll cycles. An unparseable timestamp counts as offline.
+ */
+export function proxyOnline(lastHeartbeat: string, nowMs: number, staleSeconds = 45): boolean {
+  const ts = new Date(lastHeartbeat).getTime();
+  if (Number.isNaN(ts)) return false;
+  return nowMs - ts <= staleSeconds * 1000;
+}
+
+/**
  * Show a toast notification that auto-dismisses after 3 seconds.
  */
 export function toast(msg: string, kind: 'info' | 'error' = 'info'): void {
