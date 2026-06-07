@@ -426,6 +426,17 @@ export class Database {
       )
     `);
 
+    // RFC-008: per-agent Telegram bot tokens, AES-256-GCM-encrypted at rest.
+    // The DB layer stores ONLY ciphertext — never the plaintext token.
+    // Encryption/decryption happens in the route/resolver layer (secret-crypto.ts).
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS agent_telegram_tokens (
+        agent_name TEXT PRIMARY KEY,
+        token_enc  TEXT NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+      )
+    `);
+
     // Teams (v3 UI grouping) — many-to-many with agents, no kernel behavior.
     // Used as a filter source in the v3 dashboard sidebar.
     this.db.exec(`
@@ -2237,6 +2248,46 @@ export class Database {
   deleteDestination(name: string): boolean {
     const result = this.db.prepare('DELETE FROM destinations WHERE name = ?').run(name);
     return result.changes > 0;
+  }
+
+  // ── Agent Telegram tokens (RFC-008, encrypted at rest) ──
+  //
+  // This layer stores ONLY ciphertext. Encryption/decryption lives in the
+  // route/resolver layer (secret-crypto.ts) — the DB never sees the plaintext
+  // token. `ciphertext` is the self-describing AES-256-GCM blob from
+  // encryptSecret().
+
+  /** Upsert the encrypted token blob for an agent. Stores ciphertext only. */
+  setTelegramToken(agentName: string, ciphertext: string): void {
+    this.db.prepare(`
+      INSERT INTO agent_telegram_tokens (agent_name, token_enc, updated_at)
+      VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+      ON CONFLICT(agent_name) DO UPDATE SET
+        token_enc  = excluded.token_enc,
+        updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+    `).run(agentName, ciphertext);
+  }
+
+  /** Return the stored ciphertext blob for an agent, or null if none. */
+  getTelegramTokenCiphertext(agentName: string): string | null {
+    const row = this.db.prepare(
+      'SELECT token_enc FROM agent_telegram_tokens WHERE agent_name = ?',
+    ).get(agentName) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    return (row['token_enc'] as string | null) ?? null;
+  }
+
+  /** Remove an agent's stored token (no-op if absent). */
+  deleteTelegramToken(agentName: string): void {
+    this.db.prepare('DELETE FROM agent_telegram_tokens WHERE agent_name = ?').run(agentName);
+  }
+
+  /** Whether an encrypted token is stored for the agent. */
+  hasTelegramToken(agentName: string): boolean {
+    const row = this.db.prepare(
+      'SELECT 1 AS one FROM agent_telegram_tokens WHERE agent_name = ?',
+    ).get(agentName) as Record<string, unknown> | undefined;
+    return row !== undefined;
   }
 
   // ── Teams (v3 UI grouping) ──

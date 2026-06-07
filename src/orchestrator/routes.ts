@@ -42,6 +42,7 @@ import type { InstanceReaper } from './instance-reaper.ts';
 import type { ApprovalService } from './approvals.ts';
 import type { BootReconciler, ProxyReconnectHandler, OrphanedWorktreeSweep } from './recovery.ts';
 import { transcribe as whisperTranscribe, type WhisperOptions } from './whisper-stt.ts';
+import { encryptSecret, decryptSecret } from './secret-crypto.ts';
 
 /** Validates agent and persona names: 1-63 chars, alphanumeric start, [a-zA-Z0-9_-]. */
 const NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$/;
@@ -2055,6 +2056,53 @@ route('POST', '/api/destinations/:name/test', async (_req, res, match, ctx) => {
   }
 });
 
+// ── Agent Telegram tokens (RFC-008, write-only encrypted store) ──
+//
+// The bot token is set via a write-only endpoint, encrypted at rest with
+// AES-256-GCM (secret-crypto.ts), and NEVER returned in plaintext by any read.
+// The GET only exposes a boolean (hasToken) — the dashboard status. POST/DELETE
+// are Bearer-gated by the global auth middleware (non-GET); the GET boolean is
+// safe to expose.
+
+route('POST', '/api/agents/:name/telegram-token', async (req, res, match, ctx) => {
+  const name = match.pathname.groups['name']!;
+  const agent = ctx.db.getAgent(name);
+  if (!agent) return json(res, 404, { error: 'Agent not found' });
+
+  const body = await readJson(req);
+  const token = body.token;
+  if (typeof token !== 'string' || token.length === 0) {
+    return json(res, 400, { error: 'token required (non-empty string)' });
+  }
+
+  // Encrypt before it ever touches the DB. 503 when the shared secret is
+  // unavailable (no key material → cannot encrypt). The token is never logged.
+  const ciphertext = encryptSecret(token);
+  if (ciphertext === null) {
+    return json(res, 503, { error: 'shared secret unavailable; cannot encrypt token' });
+  }
+
+  ctx.db.setTelegramToken(name, ciphertext);
+  // Never echo the token (or its ciphertext) back.
+  json(res, 200, { ok: true });
+});
+
+route('DELETE', '/api/agents/:name/telegram-token', async (_req, res, match, ctx) => {
+  const name = match.pathname.groups['name']!;
+  const agent = ctx.db.getAgent(name);
+  if (!agent) return json(res, 404, { error: 'Agent not found' });
+  ctx.db.deleteTelegramToken(name);
+  json(res, 200, { ok: true });
+});
+
+route('GET', '/api/agents/:name/telegram-token', async (_req, res, match, ctx) => {
+  const name = match.pathname.groups['name']!;
+  const agent = ctx.db.getAgent(name);
+  if (!agent) return json(res, 404, { error: 'Agent not found' });
+  // Status only — NEVER the token or its ciphertext.
+  json(res, 200, { hasToken: ctx.db.hasTelegramToken(name) });
+});
+
 // ── Personas ──
 
 
@@ -3394,6 +3442,24 @@ async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> 
   } catch {
     throw new Error('Invalid JSON body');
   }
+}
+
+/**
+ * RFC-008 resolver (exported for PR-C reconcile). Reads the agent's stored
+ * ciphertext and decrypts it just-in-time. Returns the plaintext bot token, or
+ * null when no token is stored OR decryption fails (missing/rotated shared
+ * secret, tampering). PR-C's `reconcileTelegramBots` calls this when
+ * (re)starting an agent's poll loop; the plaintext lives only in memory.
+ *
+ * Never throws and never logs the token.
+ */
+export function getTelegramToken(
+  db: Pick<Database, 'getTelegramTokenCiphertext'>,
+  agentName: string,
+): string | null {
+  const ciphertext = db.getTelegramTokenCiphertext(agentName);
+  if (ciphertext === null) return null;
+  return decryptSecret(ciphertext);
 }
 
 function formatBytes(bytes: number): string {
