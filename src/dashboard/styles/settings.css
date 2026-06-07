@@ -168,6 +168,15 @@
 .st-item .state.enabled { color: var(--moss); }
 .st-item .state.enabled .dot { background: var(--dot-active); }
 .st-item .state.disabled .dot { background: var(--dot-idle); }
+/* RFC-008 PR-E: Telegram bot-status states. running=active green, idle=neutral,
+   token-missing=clay warn, disabled=muted idle. Reuses the dot vocabulary. */
+.st-item .state.running { color: var(--moss); }
+.st-item .state.running .dot { background: var(--dot-active); }
+.st-item .state.idle { color: var(--ink-3); }
+.st-item .state.idle .dot { background: var(--dot-idle); }
+.st-item .state.token-missing { color: var(--clay); }
+.st-item .state.token-missing .dot { background: var(--clay); }
+.st-item .state.disabled { color: var(--ink-4); }
 .st-item .badge-usage {
   font-family: var(--mono);
   font-size: 11px;

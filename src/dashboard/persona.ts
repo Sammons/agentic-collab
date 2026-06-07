@@ -24,7 +24,7 @@ import type { ProxyRegistration } from '../shared/types.ts';
 import { state, on, authHeaders, agentsByName } from './state.ts';
 import { registerRoute, go, type Route } from './routing.ts';
 import { openCwdPicker } from './overlays.ts';
-import { escapeHtml, toast } from './util.ts';
+import { escapeHtml, toast, parseFrontmatterTelegram, setFrontmatterTelegram, type TelegramFrontmatter } from './util.ts';
 
 /** Always-visible core fields (minimal default). */
 const PERSONA_CORE_ALWAYS = ['engine', 'model', 'cwd', 'icon'] as const;
@@ -170,6 +170,13 @@ async function hydrate(root: HTMLElement, agentName: string): Promise<void> {
   const curEngine = sv('engine');
   const teamNames = [...new Set([...state.teams.map((t) => t.name), ...curTeams])];
 
+  // RFC-008 PR-E: the `telegram:` nested block is surfaced as a structured group
+  // (chatId / inbound / routing widgets) instead of riding the raw passthrough.
+  // Lift it OUT of passthroughRaw so the textarea never double-renders it; the
+  // group's collectTelegram() writes it back via setFrontmatterTelegram on save.
+  const curTelegram = parseFrontmatterTelegram(passthroughRaw);
+  passthroughRaw = setFrontmatterTelegram(passthroughRaw, null).trim();
+
   const isPopulated = (k: string): boolean => (k === 'teams' ? curTeams.length > 0 : sv(k) !== '');
   const showField = (k: string): boolean => (PERSONA_CORE_ALWAYS as readonly string[]).includes(k) || isPopulated(k);
 
@@ -202,6 +209,38 @@ async function hydrate(root: HTMLElement, agentName: string): Promise<void> {
   const hiddenFields = PERSONA_CORE_GATED.filter((k) => !showField(k));
   const showPassthrough = passthroughRaw.trim() !== '';
 
+  // ── Telegram group (RFC-008 PR-E) — chatId / inbound / routing widgets that
+  // serialize into the `telegram:` frontmatter block, plus a write-only token
+  // field (POSTs to the encrypted set-token API; never displays the token). ──
+  const tg = curTelegram;
+  const tgRouting = tg?.routing ?? 'self';
+  const tgInbound = tg ? tg.inbound : true;
+  const ROUTINGS: ReadonlyArray<TelegramFrontmatter['routing']> = ['self', 'prefix', 'passthrough'];
+  const checkSvg = '<svg width="8" height="8" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="2 6 5 9 10 3"/></svg>';
+  const telegramGroupHtml = `
+    <div class="pe-group" data-telegram-group>
+      <div class="pe-group-hdr">Telegram bot <span class="when">RFC-008 · per-agent bot binding (non-secret) + write-only token</span></div>
+      <div class="pe-core-grid">
+        <div class="ov-field" data-field="tg-chatId"><label>Chat ID</label>
+          <div><input class="ov-input" data-tg="chatId" value="${esc(tg?.chatId ?? '')}" placeholder="-1001234567890"><div class="help">Default outbound chat. Leave empty to remove the bot binding.</div></div></div>
+        <div class="ov-field" data-field="tg-routing"><label>Routing</label>
+          <div><select class="ov-select" data-tg="routing">${ROUTINGS.map((r) => `<option value="${r}" ${r === tgRouting ? 'selected' : ''}>${r}</option>`).join('')}</select>
+          <div class="help">self = bot↔agent 1:1 · prefix = honor @agent · passthrough = dashboard thread</div></div></div>
+        <div class="ov-field" data-field="tg-inbound"><label>Inbound</label>
+          <div><label class="pe-reload ${tgInbound ? 'on' : ''}" data-tg-inbound><span class="box">${tgInbound ? checkSvg : ''}</span>Deliver inbound messages to this agent</label>
+          <div class="help">Off = outbound-only (the bot sends but does not poll).</div></div></div>
+        <div class="ov-field" data-field="tg-token"><label>Bot token</label>
+          <div>
+            <div style="display:flex;gap:6px;align-items:center;">
+              <input class="ov-input" data-tg-token type="password" autocomplete="off" placeholder="123456:ABC-DEF… (write-only)">
+              <button class="btn" type="button" data-tg-token-clear>Clear</button>
+            </div>
+            <div class="help" data-tg-token-status>Token status: <span class="num">…</span></div>
+            <div class="help">Stored AES-256-GCM-encrypted; never displayed or returned. Typing a new value and saving rotates it.</div>
+          </div></div>
+      </div>
+    </div>`;
+
   bodyHost.innerHTML = `
     <div class="pe-group">
       <div class="pe-group-hdr">Config</div>
@@ -211,6 +250,7 @@ async function hydrate(root: HTMLElement, agentName: string): Promise<void> {
         <button class="btn" type="button" data-toggle-advanced style="${showPassthrough ? 'display:none;' : ''}">+ Advanced (raw frontmatter)</button>
       </div>
     </div>
+    ${telegramGroupHtml}
     <div class="pe-group" data-advanced-group style="${showPassthrough ? '' : 'display:none;'}">
       <div class="pe-group-hdr">Other frontmatter <span class="when">advanced · raw YAML — hooks, indicators, env, custom keys</span></div>
       <textarea class="ov-textarea pe-passthrough" data-passthrough placeholder="key: value">${esc(passthroughRaw)}</textarea>
@@ -274,6 +314,73 @@ async function hydrate(root: HTMLElement, agentName: string): Promise<void> {
   wireProxy();
   wireTeams();
 
+  // ── Telegram group wiring (RFC-008 PR-E) ──────────────────────────────────
+  // inbound toggle (checkbox-shaped, reuses the .pe-reload control), the token
+  // write-only field (POST on save / DELETE on explicit clear), and the live
+  // "token set ✓ / not set" status from GET /api/agents/:name/telegram-token.
+  let tgInboundOn = tgInbound;
+  let tgTokenCleared = false;
+  let tgHasToken = false;
+
+  const inboundEl = bodyHost.querySelector<HTMLElement>('[data-tg-inbound]');
+  inboundEl?.addEventListener('click', () => {
+    tgInboundOn = !tgInboundOn;
+    inboundEl.classList.toggle('on', tgInboundOn);
+    const box = inboundEl.querySelector<HTMLElement>('.box');
+    if (box) box.innerHTML = tgInboundOn ? checkSvg : '';
+  });
+
+  const tokenStatusEl = bodyHost.querySelector<HTMLElement>('[data-tg-token-status]');
+  const renderTokenStatus = (): void => {
+    if (!tokenStatusEl) return;
+    if (tgTokenCleared) { tokenStatusEl.innerHTML = 'Token status: <span class="vwarn">will be cleared on save</span>'; return; }
+    tokenStatusEl.innerHTML = tgHasToken
+      ? 'Token status: <span class="vok">set ✓</span>'
+      : 'Token status: <span class="num">not set</span>';
+  };
+  renderTokenStatus();
+  void (async (): Promise<void> => {
+    try {
+      const res = await fetch(`/api/agents/${encodeURIComponent(agentName)}/telegram-token`, { headers: authHeaders() });
+      if (res.ok) { const b = await res.json() as { hasToken?: boolean }; tgHasToken = !!b.hasToken; renderTokenStatus(); }
+    } catch { /* status stays "not set"; harmless */ }
+  })();
+
+  const tokenInput = bodyHost.querySelector<HTMLInputElement>('[data-tg-token]');
+  tokenInput?.addEventListener('input', () => { if (tokenInput.value) { tgTokenCleared = false; renderTokenStatus(); } });
+  bodyHost.querySelector<HTMLElement>('[data-tg-token-clear]')?.addEventListener('click', () => {
+    if (tokenInput) tokenInput.value = '';
+    tgTokenCleared = true;
+    renderTokenStatus();
+  });
+
+  /** Read the Telegram widgets into an AgentTelegramConfig (or null to clear). */
+  const collectTelegram = (): TelegramFrontmatter | null => {
+    const chatId = bodyHost.querySelector<HTMLInputElement>('[data-tg="chatId"]')?.value.trim() ?? '';
+    if (chatId === '') return null; // empty chatId clears the binding
+    const routing = (bodyHost.querySelector<HTMLSelectElement>('[data-tg="routing"]')?.value ?? 'self') as TelegramFrontmatter['routing'];
+    return { chatId, inbound: tgInboundOn, routing };
+  };
+
+  /** POST a new token / DELETE on explicit clear. Called from submit() after the
+   *  persona PUT succeeds, so a token write never lands on a failed save. */
+  const persistTelegramToken = async (): Promise<void> => {
+    const newToken = tokenInput?.value.trim() ?? '';
+    if (newToken) {
+      const res = await fetch(`/api/agents/${encodeURIComponent(agentName)}/telegram-token`, {
+        method: 'POST', headers: authHeaders(), body: JSON.stringify({ token: newToken }),
+      });
+      if (!res.ok) { const b = await res.json().catch(() => null); toast(b?.error ?? 'Token save failed', 'error'); return; }
+      tgHasToken = true; tgTokenCleared = false;
+      if (tokenInput) tokenInput.value = '';
+      renderTokenStatus();
+    } else if (tgTokenCleared) {
+      await fetch(`/api/agents/${encodeURIComponent(agentName)}/telegram-token`, { method: 'DELETE', headers: authHeaders() });
+      tgHasToken = false; tgTokenCleared = false;
+      renderTokenStatus();
+    }
+  };
+
   // "+ Add field" — reveal a populated-gated widget on demand (defaulting, not hardcoding).
   bodyHost.querySelector<HTMLSelectElement>('[data-add-field-pick]')?.addEventListener('change', (e) => {
     const sel = e.currentTarget as HTMLSelectElement;
@@ -321,7 +428,11 @@ async function hydrate(root: HTMLElement, agentName: string): Promise<void> {
       const teams = [...chipsHost.querySelectorAll<HTMLElement>('[data-team].on')].map((c) => c.dataset['team']!);
       if (teams.length || curTeams.length) fields['teams'] = teams; // [] clears existing memberships
     }
-    const passthroughRaw = bodyHost.querySelector<HTMLTextAreaElement>('[data-passthrough]')?.value ?? '';
+    // The Telegram block is owned by the structured group, not the textarea.
+    // Strip any stray block from the textarea, then re-emit from the widgets so
+    // the saved frontmatter carries exactly one `telegram:` block (or none).
+    const textareaRaw = bodyHost.querySelector<HTMLTextAreaElement>('[data-passthrough]')?.value ?? '';
+    const passthroughRaw = setFrontmatterTelegram(textareaRaw, collectTelegram());
     const body = bodyHost.querySelector<HTMLTextAreaElement>('[data-body-text]')?.value ?? '';
     return { fields, passthroughRaw, body };
   };
@@ -333,6 +444,8 @@ async function hydrate(root: HTMLElement, agentName: string): Promise<void> {
         method: 'PUT', headers: authHeaders(), body: JSON.stringify({ fields, passthroughRaw: passthrough, body: bd }),
       });
       if (!res.ok) { const b = await res.json().catch(() => null); toast(b?.error ?? 'Save failed', 'error'); return; }
+      // Persona PUT succeeded → persist the (write-only) token change, if any.
+      await persistTelegramToken();
       if (reloadOnSave) {
         await fetch(`/api/agents/${encodeURIComponent(agentName)}/reload`, { method: 'POST', headers: authHeaders(), body: JSON.stringify({}) });
       }

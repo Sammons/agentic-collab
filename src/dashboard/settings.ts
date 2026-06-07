@@ -3,10 +3,11 @@
  *
  *   1. Engine configs   /api/engine-configs
  *   2. Proxies          /api/proxies (read-only; live via ws:proxy_update)
- *   3. Preferences      localStorage (per-device)
- *   4. Published pages  /api/pages
- *   5. Data stores      /api/stores
- *   6. Destinations     /api/destinations
+ *   3. Telegram bots    /api/telegram/status (read-only per-agent bot status)
+ *   4. Preferences      localStorage (per-device)
+ *   5. Published pages  /api/pages
+ *   6. Data stores      /api/stores
+ *   7. Destinations     /api/destinations
  *
  * Sticky horizontal sub-nav at top, anchor-scrolled. Engine configs render
  * with a meta summary + collapsed/expanded/edit states. Preferences use
@@ -25,11 +26,25 @@ import { registerRoute, go } from './routing.ts';
 import type { Route } from './state.ts';
 import { escapeHtml, toast, proxyOnline } from './util.ts';
 
+/** One agent's Telegram bot status (RFC-008 PR-E) — mirrors GET /api/telegram/status.
+ *  Token-free by construction: the server never returns the token, only `hasToken`. */
+type TelegramAgentStatus = {
+  agent: string;
+  configured: boolean;
+  inbound: boolean;
+  routing: string | null;
+  chatId: string | null;
+  hasToken: boolean;
+  polling: boolean;
+  status: 'running' | 'idle' | 'token-missing' | 'disabled';
+};
+
 let configs: EngineConfigRecord[] = [];
 let proxies: ProxyRegistration[] = [];
 let pages: PageRecord[] = [];
 let stores: DataStoreRecord[] = [];
 let destinations: DestinationRecord[] = [];
+let telegramBots: TelegramAgentStatus[] = [];
 const detachers: Array<() => void> = [];
 
 export function setupSettings(): void {
@@ -54,6 +69,7 @@ function render(root: HTMLElement): void {
       <div class="st-subnav" data-subnav>
         <span class="jump on" data-jump="engines">Engine configs <span class="ct" data-c-engines>0</span></span>
         <span class="jump" data-jump="proxies">Proxies <span class="ct" data-c-proxies>0</span></span>
+        <span class="jump" data-jump="telegram">Telegram bots <span class="ct" data-c-telegram>0</span></span>
         <span class="jump" data-jump="prefs">Preferences</span>
         <span class="jump" data-jump="pages">Published pages <span class="ct" data-c-pages>0</span></span>
         <span class="jump" data-jump="stores">Data stores <span class="ct" data-c-stores>0</span></span>
@@ -68,6 +84,10 @@ function render(root: HTMLElement): void {
   detachers.push(on('ws:engine_config_update', () => void loadAll()));
   detachers.push(on('ws:engine_config_deleted', () => void loadAll()));
   detachers.push(on('ws:proxy_update', () => void loadAll()));
+  // Agent create/delete/reload can change which per-agent bots are configured
+  // or polling — refresh the Telegram bots status section in step.
+  detachers.push(on('ws:agent_update', () => void loadTelegramBots().then(rerender)));
+  detachers.push(on('ws:agent_destroyed', () => void loadTelegramBots().then(rerender)));
   detachers.push(on('ws:pages_update', () => void loadAll()));
   detachers.push(on('ws:stores_update', () => void loadAll()));
   detachers.push(on('ws:destinations_update', () => void loadAll()));
@@ -87,6 +107,7 @@ async function loadAll(): Promise<void> {
   await Promise.all([
     loadConfigs(),
     loadProxies(),
+    loadTelegramBots(),
     loadPages(),
     loadStores(),
     loadDestinations(),
@@ -104,6 +125,12 @@ async function loadProxies(): Promise<void> {
   try {
     const res = await fetch('/api/proxies', { headers: authHeaders() });
     if (res.ok) proxies = await res.json() as ProxyRegistration[];
+  } catch {}
+}
+async function loadTelegramBots(): Promise<void> {
+  try {
+    const res = await fetch('/api/telegram/status', { headers: authHeaders() });
+    if (res.ok) telegramBots = await res.json() as TelegramAgentStatus[];
   } catch {}
 }
 async function loadPages(): Promise<void> {
@@ -129,9 +156,11 @@ function rerender(): void {
   const root = document.querySelector<HTMLElement>('.st-page');
   if (!root) return;
 
-  // Counts in chips
+  // Counts in chips. Telegram chip counts CONFIGURED bots (not all agents).
+  const tgConfigured = telegramBots.filter((b) => b.configured).length;
   setText('[data-c-engines]', String(configs.length));
   setText('[data-c-proxies]', String(proxies.length));
+  setText('[data-c-telegram]', String(tgConfigured));
   setText('[data-c-pages]', String(pages.length));
   setText('[data-c-stores]', String(stores.length));
   setText('[data-c-destinations]', String(destinations.length));
@@ -140,6 +169,8 @@ function rerender(): void {
     <span class="num">${configs.length}</span> engine configs
     <span class="sep">·</span>
     <span class="num">${proxies.length}</span> proxies
+    <span class="sep">·</span>
+    <span class="num">${tgConfigured}</span> telegram bots
     <span class="sep">·</span>
     <span class="num">${pages.length}</span> pages
     <span class="sep">·</span>
@@ -153,6 +184,7 @@ function rerender(): void {
   scroll.innerHTML = `
     ${enginesSectionHtml()}
     ${proxiesSectionHtml()}
+    ${telegramBotsSectionHtml()}
     ${prefsSectionHtml()}
     ${pagesSectionHtml()}
     ${storesSectionHtml()}
@@ -290,6 +322,48 @@ function proxiesSectionHtml(): string {
             ${versionBit}
             <span class="sep">·</span>
             heartbeat ${escapeHtml(ago(p.lastHeartbeat))} ago
+          </div>
+        </div>`;
+        }).join('')}
+    </section>
+  `;
+}
+
+/* ── telegram bots (read-only status) ──────────────────────────────── */
+
+/** Human label + dot-state class for a derived bot status. */
+const TG_STATUS_META: Record<TelegramAgentStatus['status'], { label: string; cls: string }> = {
+  running: { label: 'running', cls: 'running' },
+  idle: { label: 'idle', cls: 'idle' },
+  'token-missing': { label: 'token missing', cls: 'token-missing' },
+  disabled: { label: 'disabled', cls: 'disabled' },
+};
+
+function telegramBotsSectionHtml(): string {
+  // Only agents with a `telegram:` block are bots; the rest are "disabled" noise.
+  const bots = telegramBots.filter((b) => b.configured);
+  return `
+    <section class="st-section" id="sec-telegram">
+      <div class="st-section-hdr"><div class="title-block"><h3>Telegram bots</h3><span class="label">per-agent bot status · RFC-008</span></div></div>
+      <p class="lede">Each agent can be its own Telegram bot, configured in the agent's persona (<code>telegram:</code> block) with the token set write-only. Status is derived from the persona binding, whether a token is set, and whether a poll loop is live. Read-only.</p>
+      ${bots.length === 0
+        ? `<div class="st-empty">No per-agent Telegram bots configured. Add a <code>telegram:</code> block in an agent's persona.</div>`
+        : bots.map((b) => {
+          const meta = TG_STATUS_META[b.status];
+          return `
+        <div class="st-item">
+          <div class="st-item-hdr">
+            <span class="nm">${escapeHtml(b.agent)}</span>
+            <span class="kind telegram">telegram</span>
+            <span class="state ${meta.cls}"><span class="dot"></span>${meta.label}</span>
+          </div>
+          <div class="meta">
+            ${b.chatId ? `chat <span class="val">${escapeHtml(b.chatId)}</span><span class="sep">·</span>` : ''}
+            routing <span class="val">${escapeHtml(b.routing ?? 'self')}</span>
+            <span class="sep">·</span>
+            inbound <span class="val">${b.inbound ? 'on' : 'off'}</span>
+            <span class="sep">·</span>
+            token ${b.hasToken ? '<span class="vok">set ✓</span>' : '<span class="vwarn">not set</span>'}
           </div>
         </div>`;
         }).join('')}

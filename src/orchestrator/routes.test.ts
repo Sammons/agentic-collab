@@ -10,6 +10,7 @@ import { WebSocketServer } from '../shared/websocket-server.ts';
 import { LockManager } from '../shared/lock.ts';
 import { MessageDispatcher } from './message-dispatcher.ts';
 import { AccountStore } from './accounts.ts';
+import { TelegramDispatcher } from './telegram.ts';
 import { setCustomEngineResolver } from './adapters/index.ts';
 import type { ProxyCommand, ProxyResponse } from '../shared/types.ts';
 
@@ -25,12 +26,14 @@ describe('API Routes', () => {
   let port: number;
   let tmpDir: string;
   let proxyCommands: ProxyCommand[];
+  let telegramDispatcher: TelegramDispatcher;
 
   before(async () => {
     tmpDir = mkdtempSync(join(tmpdir(), 'agentic-routes-test-'));
     db = new Database(join(tmpDir, 'test.db'));
     wss = new WebSocketServer();
     proxyCommands = [];
+    telegramDispatcher = new TelegramDispatcher();
 
     const mockProxyDispatch = async (_proxyId: string, command: ProxyCommand): Promise<ProxyResponse> => {
       proxyCommands.push(command);
@@ -59,6 +62,7 @@ describe('API Routes', () => {
       usagePoller: { getUsageData: () => ({}), pollNow: async () => {} } as any,
       voiceEnabled: false,
       accountStore: new AccountStore({ accountsDir: join(tmpDir, 'accounts'), agentHomesDir: join(tmpDir, 'agent-homes'), skipAutoRegister: true }),
+      telegramDispatcher,
     };
 
     const router = createRouter(ctx);
@@ -682,6 +686,93 @@ describe('API Routes', () => {
       } finally {
         process.env['ORCHESTRATOR_SECRET'] = 'routes-test-shared-secret-xyz';
       }
+    });
+  });
+
+  // ── RFC-008 PR-E: GET /api/telegram/status (bot-status read surface) ──
+  describe('GET /api/telegram/status', () => {
+    const TG_STATUS_TOKEN = '987:STATUS-BOT-TOKEN-do-not-leak';
+    const savedSecret = process.env['ORCHESTRATOR_SECRET'];
+    const realFetch = globalThis.fetch;
+
+    before(() => {
+      process.env['ORCHESTRATOR_SECRET'] = 'routes-test-shared-secret-xyz';
+      // Stub ONLY the Telegram API so a started poll loop never hits the network
+      // (getUpdates blocks until aborted). Every other request — crucially the
+      // local-server `api()` calls in setup + the test bodies — passes through to
+      // the real fetch, so the suite doesn't deadlock on a never-resolving stub.
+      globalThis.fetch = ((input: Parameters<typeof fetch>[0], init?: RequestInit): Promise<Response> => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url.startsWith('https://api.telegram.org')) {
+          return new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true });
+          });
+        }
+        return realFetch(input, init);
+      }) as typeof fetch;
+    });
+    after(() => {
+      telegramDispatcher.stopAll();
+      globalThis.fetch = realFetch;
+      if (savedSecret === undefined) delete process.env['ORCHESTRATOR_SECRET'];
+      else process.env['ORCHESTRATOR_SECRET'] = savedSecret;
+    });
+
+    type StatusRow = {
+      agent: string; configured: boolean; inbound: boolean; routing: string | null;
+      chatId: string | null; hasToken: boolean; polling: boolean; status: string;
+    };
+    const rowFor = (rows: StatusRow[], name: string): StatusRow | undefined => rows.find((r) => r.agent === name);
+
+    before(async () => {
+      // Configured + inbound, no token → token-missing.
+      db.createAgent({ name: 'tg-status-missing', engine: 'claude', cwd: '/tmp', agentTelegram: { chatId: '-100missing', routing: 'self', inbound: true } });
+
+      // Configured + inbound:false → disabled (outbound-only).
+      db.createAgent({ name: 'tg-status-outbound', engine: 'claude', cwd: '/tmp', agentTelegram: { chatId: '-100out', routing: 'self', inbound: false } });
+
+      // Configured + inbound + token + polling → running.
+      db.createAgent({ name: 'tg-status-running', engine: 'claude', cwd: '/tmp', agentTelegram: { chatId: '-100run', routing: 'prefix', inbound: true } });
+      await api('POST', '/api/agents/tg-status-running/telegram-token', { token: TG_STATUS_TOKEN });
+      telegramDispatcher.startPolling('tg-status-running', TG_STATUS_TOKEN, () => {});
+    });
+
+    it('returns one row per agent with the derived status', async () => {
+      const { status, data } = await api('GET', '/api/telegram/status');
+      assert.equal(status, 200);
+      const rows = data as StatusRow[];
+      assert.ok(Array.isArray(rows));
+
+      // One row per agent in the DB (status route is sourced from listAgents()).
+      assert.equal(rows.length, db.listAgents().length);
+
+      assert.equal(rowFor(rows, 'tg-status-missing')?.status, 'token-missing');
+      assert.equal(rowFor(rows, 'tg-status-outbound')?.status, 'disabled');
+      assert.equal(rowFor(rows, 'tg-status-running')?.status, 'running');
+
+      // An agent with no telegram block at all is disabled.
+      const plain = rowFor(rows, 'api-agent-1');
+      assert.equal(plain?.configured, false);
+      assert.equal(plain?.status, 'disabled');
+    });
+
+    it('echoes non-secret binding config and NEVER the token', async () => {
+      const resp = await fetch(`http://localhost:${port}/api/telegram/status`);
+      const text = await resp.text();
+      assert.equal(resp.status, 200);
+      // The raw response body must not leak the token or its ciphertext.
+      assert.ok(!text.includes(TG_STATUS_TOKEN), 'response must not contain the bot token');
+      const ciphertext = db.getTelegramTokenCiphertext('tg-status-running')!;
+      assert.ok(!text.includes(ciphertext), 'response must not contain the token ciphertext');
+
+      const rows = JSON.parse(text) as StatusRow[];
+      const running = rowFor(rows, 'tg-status-running')!;
+      assert.deepEqual(
+        { chatId: running.chatId, routing: running.routing, inbound: running.inbound, hasToken: running.hasToken },
+        { chatId: '-100run', routing: 'prefix', inbound: true, hasToken: true },
+      );
+      // No row carries a `token` field.
+      assert.ok(rows.every((r) => !('token' in r)), 'no status row may carry a token field');
     });
   });
 });

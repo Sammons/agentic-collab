@@ -43,6 +43,7 @@ import type { ApprovalService } from './approvals.ts';
 import type { BootReconciler, ProxyReconnectHandler, OrphanedWorktreeSweep } from './recovery.ts';
 import { transcribe as whisperTranscribe, type WhisperOptions } from './whisper-stt.ts';
 import { encryptSecret, decryptSecret } from './secret-crypto.ts';
+import { deriveTelegramStatus } from './telegram-status.ts';
 
 /** Validates agent and persona names: 1-63 chars, alphanumeric start, [a-zA-Z0-9_-]. */
 const NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$/;
@@ -2124,6 +2125,24 @@ route('GET', '/api/agents/:name/telegram-token', async (_req, res, match, ctx) =
   if (!agent) return json(res, 404, { error: 'Agent not found' });
   // Status only — NEVER the token or its ciphertext.
   json(res, 200, { hasToken: ctx.db.hasTelegramToken(name) });
+});
+
+// ── RFC-008 PR-E: per-agent Telegram bot-status read surface ──
+//
+// One row per agent, derived from the persona's non-secret binding config
+// (agentTelegram), whether an encrypted token row exists (hasTelegramToken —
+// a boolean, NEVER the token), and whether a poll loop is live (isPolling).
+// Bearer-exempt like the other read routes. The token is never resolved or
+// returned here; deriveTelegramStatus only consumes the `hasToken` boolean.
+route('GET', '/api/telegram/status', async (_req, res, _match, ctx) => {
+  const rows = ctx.db.listAgents().map((agent) =>
+    deriveTelegramStatus(
+      agent,
+      ctx.db.hasTelegramToken(agent.name),
+      ctx.telegramDispatcher.isPolling(agent.name),
+    ),
+  );
+  json(res, 200, rows);
 });
 
 // ── Personas ──
