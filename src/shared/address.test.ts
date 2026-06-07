@@ -35,6 +35,14 @@ describe('parseAddress', () => {
       raw: 'approval:aws_account_provision',
       expected: { class: 'approval', channel: 'aws_account_provision' },
     },
+    {
+      raw: 'telegram:almanac',
+      expected: { class: 'telegram', agentName: 'almanac' },
+    },
+    {
+      raw: 'telegram:my_agent-2',
+      expected: { class: 'telegram', agentName: 'my_agent-2' },
+    },
   ];
 
   for (const { raw, expected } of validCases) {
@@ -60,6 +68,9 @@ describe('parseAddress', () => {
     { raw: 'approval:', description: 'approval: with empty channel' },
     { raw: 'approval:bad chan', description: 'approval: with whitespace' },
     { raw: 'approval:BAD!', description: 'approval: with invalid chars' },
+    { raw: 'telegram:', description: 'telegram: with empty agent name' },
+    { raw: 'telegram:bad name', description: 'telegram: with whitespace' },
+    { raw: 'telegram:BAD!', description: 'telegram: with invalid chars' },
     { raw: 'weird:foo', description: 'unknown prefix' },
     { raw: 'http://foo/bar', description: 'unrelated URL-looking string' },
     { raw: '-leading-dash', description: 'bare name starting with dash' },
@@ -137,6 +148,11 @@ describe('addressToString', () => {
 
   it('round-trips approval', () => {
     const raw = 'approval:my-channel';
+    assert.equal(addressToString(parseAddress(raw)), raw);
+  });
+
+  it('round-trips telegram', () => {
+    const raw = 'telegram:almanac';
     assert.equal(addressToString(parseAddress(raw)), raw);
   });
 

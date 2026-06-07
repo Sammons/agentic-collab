@@ -224,17 +224,11 @@ function parseSendArgs(args, implicitTarget = null) {
   };
 }
 
-async function resolveDestination(target) {
-  // Check if target is a destination: "telegram" (first of type) or "telegram:name" (by name)
-  const colonIdx = target.indexOf(':');
-  if (colonIdx > 0) {
-    const type = target.slice(0, colonIdx);
-    const name = target.slice(colonIdx + 1);
-    if (type === 'telegram') {
-      return name;
-    }
-  }
-  // Check if target matches a destination type (e.g. "telegram" → first telegram dest)
+// `telegram:<name>` (with a name) is NO LONGER resolved here — it routes through
+// /api/agents/send so the orchestrator disambiguates agent-bot vs destination
+// (RFC-008 PR-D). This helper only resolves BARE `telegram` (no name → the
+// default/first enabled telegram destination), preserving the legacy shorthand.
+async function resolveDefaultTelegramDestination(target) {
   if (target === 'telegram') {
     const dests = await api('GET', '/api/destinations');
     const match = dests.find(d => d.type === 'telegram' && d.enabled);
@@ -243,6 +237,13 @@ async function resolveDestination(target) {
     process.exit(1);
   }
   return null;
+}
+
+/** True for a `telegram:<name>` target (with a non-empty name). */
+function isTelegramAgentTarget(target) {
+  const colonIdx = target.indexOf(':');
+  if (colonIdx <= 0) return false;
+  return target.slice(0, colonIdx) === 'telegram' && target.slice(colonIdx + 1).length > 0;
 }
 
 async function dispatchSend({ target, topic, message, replyReminder, inReplyTo, notify, files }) {
@@ -256,8 +257,37 @@ async function dispatchSend({ target, topic, message, replyReminder, inReplyTo, 
     }
   }
 
-  // Destination routing: "telegram" or "telegram:name"
-  const destName = await resolveDestination(target);
+  // Per-agent telegram outbound (RFC-008 PR-D): "telegram:<name>" routes through
+  // /api/agents/send so the orchestrator picks the agent-bot path (replying to
+  // the originating chat) and falls back to a same-named destination otherwise.
+  if (isTelegramAgentTarget(target)) {
+    if (!message && fileIds.length === 0) {
+      console.error('usage: collab send telegram:<agent> "message"');
+      process.exit(1);
+    }
+    const formattedMessage = formatReplyContext(message || '(file attachment)', inReplyTo);
+    // Agent-issued replies carry the agent identity (COLLAB_AGENT). A host running
+    // this manually (e.g. `telegram:<destname>` for a legacy destination) has no
+    // agent set — default `from` to 'dashboard' so the send still works rather than
+    // hard-failing, matching the legacy destination path's tolerance for no agent.
+    const from = agentName() || 'dashboard';
+    // /api/agents/send requires a topic; default to 'telegram' for the round-trip
+    // reply when the caller did not pass one.
+    await api('POST', '/api/agents/send', {
+      from,
+      to: target,
+      message: formattedMessage,
+      topic: topic || 'telegram',
+    });
+    console.log('sent to telegram');
+    if (notify) {
+      await api('POST', '/api/notify', { agent: from, message: formattedMessage, priority: notify }).catch(() => {});
+    }
+    return;
+  }
+
+  // Bare-`telegram` destination shorthand: "telegram" → default telegram dest.
+  const destName = await resolveDefaultTelegramDestination(target);
   if (destName) {
     if (!message && fileIds.length === 0) {
       console.error('usage: collab send telegram "message"');
