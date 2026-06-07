@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { setFrontmatterProxy } from './util.ts';
+import { setFrontmatterProxy, proxyOnline } from './util.ts';
 
 describe('setFrontmatterProxy', () => {
   it('replaces an existing top-level proxy: line', () => {
@@ -43,5 +43,40 @@ describe('setFrontmatterProxy', () => {
   it('does not leave a dangling blank line before an appended proxy', () => {
     const out = setFrontmatterProxy('engine: claude\n', 'p1');
     assert.equal(out, 'engine: claude\nproxy: p1');
+  });
+});
+
+describe('proxyOnline', () => {
+  const now = new Date('2026-06-07T12:00:00.000Z').getTime();
+
+  it('is online when the heartbeat is within the stale window', () => {
+    const hb = new Date(now - 10_000).toISOString(); // 10s ago
+    assert.equal(proxyOnline(hb, now), true);
+  });
+
+  it('is offline once the heartbeat exceeds the default 45s window', () => {
+    const hb = new Date(now - 46_000).toISOString(); // 46s ago
+    assert.equal(proxyOnline(hb, now), false);
+  });
+
+  it('treats exactly the stale boundary as online', () => {
+    const hb = new Date(now - 45_000).toISOString(); // 45s ago, inclusive
+    assert.equal(proxyOnline(hb, now), true);
+  });
+
+  it('honors a custom stale window', () => {
+    const hb = new Date(now - 20_000).toISOString(); // 20s ago
+    assert.equal(proxyOnline(hb, now, 15), false);
+    assert.equal(proxyOnline(hb, now, 30), true);
+  });
+
+  it('counts an unparseable timestamp as offline', () => {
+    assert.equal(proxyOnline('not-a-date', now), false);
+    assert.equal(proxyOnline('', now), false);
+  });
+
+  it('counts a future heartbeat as online (clock skew tolerance)', () => {
+    const hb = new Date(now + 5_000).toISOString(); // 5s in the future
+    assert.equal(proxyOnline(hb, now), true);
   });
 });

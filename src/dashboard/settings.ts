@@ -1,28 +1,32 @@
 /**
- * Settings — five sections in a single scrolling pane.
+ * Settings — six sections in a single scrolling pane.
  *
  *   1. Engine configs   /api/engine-configs
- *   2. Preferences      localStorage (per-device)
- *   3. Published pages  /api/pages
- *   4. Data stores      /api/stores
- *   5. Destinations     /api/destinations
+ *   2. Proxies          /api/proxies (read-only; live via ws:proxy_update)
+ *   3. Preferences      localStorage (per-device)
+ *   4. Published pages  /api/pages
+ *   5. Data stores      /api/stores
+ *   6. Destinations     /api/destinations
  *
  * Sticky horizontal sub-nav at top, anchor-scrolled. Engine configs render
  * with a meta summary + collapsed/expanded/edit states. Preferences use
- * radio + checkbox controls; saves on change to localStorage.
+ * radio + checkbox controls; saves on change to localStorage. Proxies is a
+ * read-only roster of the tmux proxy hosts registered with the orchestrator.
  */
 import type {
   EngineConfigRecord,
   PageRecord,
   DataStoreRecord,
   DestinationRecord,
+  ProxyRegistration,
 } from '../shared/types.ts';
 import { on, authHeaders } from './state.ts';
 import { registerRoute, go } from './routing.ts';
 import type { Route } from './state.ts';
-import { escapeHtml, toast } from './util.ts';
+import { escapeHtml, toast, proxyOnline } from './util.ts';
 
 let configs: EngineConfigRecord[] = [];
+let proxies: ProxyRegistration[] = [];
 let pages: PageRecord[] = [];
 let stores: DataStoreRecord[] = [];
 let destinations: DestinationRecord[] = [];
@@ -41,13 +45,15 @@ function render(root: HTMLElement): void {
           <h1 class="pg-title">Settings</h1>
           <div class="pg-stats" data-stats>—</div>
           <span class="lede">
-            Engine defaults applied to agents, client-side preferences for this device,
-            published page surfaces, agent-writable data stores, and outbound destinations.
+            Engine defaults applied to agents, the tmux proxy hosts registered with the
+            orchestrator, client-side preferences for this device, published page surfaces,
+            agent-writable data stores, and outbound destinations.
           </span>
         </div>
       </div>
       <div class="st-subnav" data-subnav>
         <span class="jump on" data-jump="engines">Engine configs <span class="ct" data-c-engines>0</span></span>
+        <span class="jump" data-jump="proxies">Proxies <span class="ct" data-c-proxies>0</span></span>
         <span class="jump" data-jump="prefs">Preferences</span>
         <span class="jump" data-jump="pages">Published pages <span class="ct" data-c-pages>0</span></span>
         <span class="jump" data-jump="stores">Data stores <span class="ct" data-c-stores>0</span></span>
@@ -61,6 +67,7 @@ function render(root: HTMLElement): void {
 
   detachers.push(on('ws:engine_config_update', () => void loadAll()));
   detachers.push(on('ws:engine_config_deleted', () => void loadAll()));
+  detachers.push(on('ws:proxy_update', () => void loadAll()));
   detachers.push(on('ws:pages_update', () => void loadAll()));
   detachers.push(on('ws:stores_update', () => void loadAll()));
   detachers.push(on('ws:destinations_update', () => void loadAll()));
@@ -79,6 +86,7 @@ function teardown(): void {
 async function loadAll(): Promise<void> {
   await Promise.all([
     loadConfigs(),
+    loadProxies(),
     loadPages(),
     loadStores(),
     loadDestinations(),
@@ -90,6 +98,12 @@ async function loadConfigs(): Promise<void> {
   try {
     const res = await fetch('/api/engine-configs', { headers: authHeaders() });
     if (res.ok) configs = await res.json() as EngineConfigRecord[];
+  } catch {}
+}
+async function loadProxies(): Promise<void> {
+  try {
+    const res = await fetch('/api/proxies', { headers: authHeaders() });
+    if (res.ok) proxies = await res.json() as ProxyRegistration[];
   } catch {}
 }
 async function loadPages(): Promise<void> {
@@ -117,12 +131,15 @@ function rerender(): void {
 
   // Counts in chips
   setText('[data-c-engines]', String(configs.length));
+  setText('[data-c-proxies]', String(proxies.length));
   setText('[data-c-pages]', String(pages.length));
   setText('[data-c-stores]', String(stores.length));
   setText('[data-c-destinations]', String(destinations.length));
   const stats = root.querySelector<HTMLElement>('[data-stats]');
   if (stats) stats.innerHTML = `
     <span class="num">${configs.length}</span> engine configs
+    <span class="sep">·</span>
+    <span class="num">${proxies.length}</span> proxies
     <span class="sep">·</span>
     <span class="num">${pages.length}</span> pages
     <span class="sep">·</span>
@@ -135,6 +152,7 @@ function rerender(): void {
   if (!scroll) return;
   scroll.innerHTML = `
     ${enginesSectionHtml()}
+    ${proxiesSectionHtml()}
     ${prefsSectionHtml()}
     ${pagesSectionHtml()}
     ${storesSectionHtml()}
@@ -241,6 +259,43 @@ function prefsSectionHtml(): string {
 }
 
 /* ── pages / stores / destinations ─────────────────────────────────── */
+
+/* ── proxies (read-only) ───────────────────────────────────────────── */
+
+function proxiesSectionHtml(): string {
+  const now = Date.now();
+  return `
+    <section class="st-section" id="sec-proxies">
+      <div class="st-section-hdr"><div class="title-block"><h3>Proxies</h3><span class="label">tmux hosts registered with the orchestrator</span></div></div>
+      <p class="lede">Each proxy runs on a host, manages its tmux sessions, and heartbeats every 15s. A proxy with no heartbeat for 45s is dropped automatically. Read-only.</p>
+      ${proxies.length === 0
+        ? `<div class="st-empty">No proxies registered. Start one with <code>./start.sh</code> on a host.</div>`
+        : proxies.map((p) => {
+          const online = proxyOnline(p.lastHeartbeat, now);
+          const versionBit = p.version
+            ? `version <span class="num">${escapeHtml(p.version)}</span> ${p.versionMatch
+                ? '<span class="vok">✓ match</span>'
+                : '<span class="vwarn">⚠ mismatch</span>'}`
+            : 'version <span class="num">unknown</span>';
+          return `
+        <div class="st-item">
+          <div class="st-item-hdr">
+            <span class="nm">${escapeHtml(p.proxyId)}</span>
+            <span class="kind">proxy</span>
+            <span class="state ${online ? 'enabled' : 'disabled'}"><span class="dot"></span>${online ? 'online' : 'stale'}</span>
+          </div>
+          <div class="meta">
+            <span class="who">${escapeHtml(p.host)}</span>
+            <span class="sep">·</span>
+            ${versionBit}
+            <span class="sep">·</span>
+            heartbeat ${escapeHtml(ago(p.lastHeartbeat))} ago
+          </div>
+        </div>`;
+        }).join('')}
+    </section>
+  `;
+}
 
 function pagesSectionHtml(): string {
   return `
