@@ -595,6 +595,95 @@ describe('API Routes', () => {
     assert.equal(status, 200);
     assert.ok(typeof (data as Record<string, unknown>).restored === 'number');
   });
+
+  // ── RFC-008: per-agent Telegram token (write-only encrypted store) ──
+  // The crypto helper keys off resolveSecret() (env/file), independent of
+  // ctx.orchestratorSecret. We set ORCHESTRATOR_SECRET so encryption succeeds.
+  // For the "no secret" case we also point ORCHESTRATOR_SECRET_FILE at a missing
+  // path (it outranks the default ~/.config file) so a host secret can't leak in.
+  describe('telegram-token endpoints', () => {
+    const TG_TOKEN = '123456789:SECRET-BOT-TOKEN-do-not-leak';
+    const savedSecret = process.env['ORCHESTRATOR_SECRET'];
+    const savedSecretFile = process.env['ORCHESTRATOR_SECRET_FILE'];
+    const MISSING_SECRET_FILE = join(tmpdir(), 'routes-tg-nonexistent-' + process.pid);
+
+    before(() => {
+      process.env['ORCHESTRATOR_SECRET_FILE'] = MISSING_SECRET_FILE;
+      process.env['ORCHESTRATOR_SECRET'] = 'routes-test-shared-secret-xyz';
+    });
+    after(() => {
+      if (savedSecret === undefined) delete process.env['ORCHESTRATOR_SECRET'];
+      else process.env['ORCHESTRATOR_SECRET'] = savedSecret;
+      if (savedSecretFile === undefined) delete process.env['ORCHESTRATOR_SECRET_FILE'];
+      else process.env['ORCHESTRATOR_SECRET_FILE'] = savedSecretFile;
+    });
+
+    it('GET defaults to { hasToken: false }', async () => {
+      const { status, data } = await api('GET', '/api/agents/api-agent-1/telegram-token');
+      assert.equal(status, 200);
+      assert.deepEqual(data, { hasToken: false });
+    });
+
+    it('POST stores the token as CIPHERTEXT (not plaintext) and never echoes it', async () => {
+      const { status, data } = await api('POST', '/api/agents/api-agent-1/telegram-token', { token: TG_TOKEN });
+      assert.equal(status, 200);
+      assert.deepEqual(data, { ok: true });
+      // Response must not contain the token anywhere.
+      assert.ok(!JSON.stringify(data).includes(TG_TOKEN));
+
+      // What's stored must be ciphertext, not the plaintext token.
+      const stored = db.getTelegramTokenCiphertext('api-agent-1');
+      assert.ok(stored, 'a ciphertext blob was stored');
+      assert.notEqual(stored, TG_TOKEN);
+      assert.ok(!stored!.includes(TG_TOKEN));
+    });
+
+    it('GET returns { hasToken: true } and does NOT contain the token anywhere', async () => {
+      const resp = await fetch(`http://localhost:${port}/api/agents/api-agent-1/telegram-token`);
+      const text = await resp.text();
+      assert.equal(resp.status, 200);
+      assert.deepEqual(JSON.parse(text), { hasToken: true });
+      // The raw response body must not leak the token or ciphertext.
+      assert.ok(!text.includes(TG_TOKEN));
+      const ciphertext = db.getTelegramTokenCiphertext('api-agent-1')!;
+      assert.ok(!text.includes(ciphertext));
+    });
+
+    it('DELETE clears the token (hasToken → false)', async () => {
+      const { status, data } = await api('DELETE', '/api/agents/api-agent-1/telegram-token');
+      assert.equal(status, 200);
+      assert.deepEqual(data, { ok: true });
+      const after = await api('GET', '/api/agents/api-agent-1/telegram-token');
+      assert.deepEqual(after.data, { hasToken: false });
+    });
+
+    it('POST to an unknown agent → 404', async () => {
+      const { status } = await api('POST', '/api/agents/no-such-agent/telegram-token', { token: TG_TOKEN });
+      assert.equal(status, 404);
+    });
+
+    it('GET for an unknown agent → 404', async () => {
+      const { status } = await api('GET', '/api/agents/no-such-agent/telegram-token');
+      assert.equal(status, 404);
+    });
+
+    it('POST with empty/missing token → 400', async () => {
+      const a = await api('POST', '/api/agents/api-agent-1/telegram-token', { token: '' });
+      assert.equal(a.status, 400);
+      const b = await api('POST', '/api/agents/api-agent-1/telegram-token', {});
+      assert.equal(b.status, 400);
+    });
+
+    it('POST → 503 when the shared secret is unavailable', async () => {
+      delete process.env['ORCHESTRATOR_SECRET'];
+      try {
+        const { status } = await api('POST', '/api/agents/api-agent-1/telegram-token', { token: TG_TOKEN });
+        assert.equal(status, 503);
+      } finally {
+        process.env['ORCHESTRATOR_SECRET'] = 'routes-test-shared-secret-xyz';
+      }
+    });
+  });
 });
 
 describe('API Routes — Auth', () => {

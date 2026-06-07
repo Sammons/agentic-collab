@@ -1206,4 +1206,55 @@ describe('Database', () => {
       assert.equal(msg.fileIds, null);
     });
   });
+
+  // RFC-008: encrypted Telegram bot-token store. The DB layer stores ONLY
+  // ciphertext; these tests treat the blob as opaque (encryption is covered in
+  // secret-crypto.test.ts) and only verify storage semantics.
+  describe('agent_telegram_tokens', () => {
+    it('set/get/has/delete round-trip', () => {
+      const agent = 'tg-agent-1';
+      const blob = 'opaque-ciphertext-blob-aaaa';
+
+      assert.equal(db.hasTelegramToken(agent), false);
+      assert.equal(db.getTelegramTokenCiphertext(agent), null);
+
+      db.setTelegramToken(agent, blob);
+      assert.equal(db.hasTelegramToken(agent), true);
+      assert.equal(db.getTelegramTokenCiphertext(agent), blob);
+
+      db.deleteTelegramToken(agent);
+      assert.equal(db.hasTelegramToken(agent), false);
+      assert.equal(db.getTelegramTokenCiphertext(agent), null);
+    });
+
+    it('upserts (second set overwrites)', () => {
+      const agent = 'tg-agent-2';
+      db.setTelegramToken(agent, 'first-blob');
+      db.setTelegramToken(agent, 'second-blob');
+      assert.equal(db.getTelegramTokenCiphertext(agent), 'second-blob');
+    });
+
+    it('stores ciphertext, NOT the plaintext token', () => {
+      // Mirror what the route layer does: encrypt, then store. The raw row must
+      // never contain the plaintext token.
+      const agent = 'tg-agent-3';
+      const plaintext = 'PLAINTEXT-BOT-TOKEN-do-not-store';
+      const ciphertext = 'enc::' + Buffer.from(plaintext).toString('base64') + '::wrapped';
+      db.setTelegramToken(agent, ciphertext);
+
+      const stored = db.getTelegramTokenCiphertext(agent);
+      assert.equal(stored, ciphertext);
+      assert.notEqual(stored, plaintext);
+
+      // The raw SQLite row also must not contain the plaintext anywhere.
+      const row = db.rawDb
+        .prepare('SELECT * FROM agent_telegram_tokens WHERE agent_name = ?')
+        .get(agent) as Record<string, unknown>;
+      assert.ok(!JSON.stringify(row).includes(plaintext));
+    });
+
+    it('delete is a no-op for an unknown agent', () => {
+      assert.doesNotThrow(() => db.deleteTelegramToken('no-such-agent'));
+    });
+  });
 });
