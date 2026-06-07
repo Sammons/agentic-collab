@@ -65,6 +65,19 @@ export type TelegramFrontmatter = {
 const TELEGRAM_ROUTINGS = ['self', 'prefix', 'passthrough'] as const;
 
 /**
+ * A valid Telegram chatId is EITHER a numeric id (optionally negative, e.g.
+ * `-1001234567890`) OR an `@channelusername` (alphanumeric + underscore).
+ * Anything else — and in particular anything carrying a `"` or newline — is
+ * rejected. Persona frontmatter is parsed by a flat line parser (NOT real YAML),
+ * so a chatId with an embedded quote/newline could otherwise inject arbitrary
+ * top-level frontmatter keys. This is the single source of truth the editor's
+ * field validation AND the `setFrontmatterTelegram` backstop both consult.
+ */
+export function isValidTelegramChatId(chatId: string): boolean {
+  return /^(-?\d+|@[A-Za-z0-9_]+)$/.test(chatId.trim());
+}
+
+/**
  * Read the nested `telegram:` block out of a raw frontmatter passthrough string.
  *
  * Recognizes the block precedent set by `env` (a top-level `telegram:` line with
@@ -108,6 +121,14 @@ export function parseFrontmatterTelegram(raw: string): TelegramFrontmatter | nul
  * Pure string op so it round-trips losslessly through the raw-passthrough
  * `PUT /api/personas/:name` exactly like `setFrontmatterProxy`. The token is NOT
  * a frontmatter field and is never touched here.
+ *
+ * Backstop (defense-in-depth): a chatId carrying a `"`, newline, or any other
+ * YAML-breaking character would let an attacker inject arbitrary top-level
+ * frontmatter keys (the orchestrator parses frontmatter with a flat line parser,
+ * not real YAML). The editor's field validation is the primary guard; here we
+ * REFUSE to emit a block for an invalid chatId — the block is dropped rather than
+ * a corrupt/injectable frontmatter line written. `isValidTelegramChatId` is the
+ * shared gate.
  */
 export function setFrontmatterTelegram(raw: string, cfg: TelegramFrontmatter | null): string {
   const lines = raw.split('\n');
@@ -127,7 +148,11 @@ export function setFrontmatterTelegram(raw: string, cfg: TelegramFrontmatter | n
     kept.push(line);
   }
 
-  if (cfg && cfg.chatId.trim() !== '') {
+  // Backstop: only emit a block for a chatId that passes the shared validator.
+  // An invalid chatId (`"`/newline/other YAML-breaking char) drops the block
+  // entirely rather than writing an injectable line. The editor validates first,
+  // so a well-behaved caller never trips this — it is the corruption backstop.
+  if (cfg && isValidTelegramChatId(cfg.chatId)) {
     while (kept.length && kept[kept.length - 1]!.trim() === '') kept.pop();
     kept.push('telegram:');
     kept.push(`  chatId: "${cfg.chatId.trim()}"`);

@@ -24,7 +24,7 @@ import type { ProxyRegistration } from '../shared/types.ts';
 import { state, on, authHeaders, agentsByName } from './state.ts';
 import { registerRoute, go, type Route } from './routing.ts';
 import { openCwdPicker } from './overlays.ts';
-import { escapeHtml, toast, parseFrontmatterTelegram, setFrontmatterTelegram, type TelegramFrontmatter } from './util.ts';
+import { escapeHtml, toast, parseFrontmatterTelegram, setFrontmatterTelegram, isValidTelegramChatId, type TelegramFrontmatter } from './util.ts';
 
 /** Always-visible core fields (minimal default). */
 const PERSONA_CORE_ALWAYS = ['engine', 'model', 'cwd', 'icon'] as const;
@@ -222,7 +222,7 @@ async function hydrate(root: HTMLElement, agentName: string): Promise<void> {
       <div class="pe-group-hdr">Telegram bot <span class="when">RFC-008 · per-agent bot binding (non-secret) + write-only token</span></div>
       <div class="pe-core-grid">
         <div class="ov-field" data-field="tg-chatId"><label>Chat ID</label>
-          <div><input class="ov-input" data-tg="chatId" value="${esc(tg?.chatId ?? '')}" placeholder="-1001234567890"><div class="help">Default outbound chat. Leave empty to remove the bot binding.</div></div></div>
+          <div><input class="ov-input" data-tg="chatId" value="${esc(tg?.chatId ?? '')}" placeholder="-1001234567890"><div class="help">Default outbound chat. Leave empty to remove the bot binding.</div><div class="help vwarn" data-tg-chatId-error style="display:none;"></div></div></div>
         <div class="ov-field" data-field="tg-routing"><label>Routing</label>
           <div><select class="ov-select" data-tg="routing">${ROUTINGS.map((r) => `<option value="${r}" ${r === tgRouting ? 'selected' : ''}>${r}</option>`).join('')}</select>
           <div class="help">self = bot↔agent 1:1 · prefix = honor @agent · passthrough = dashboard thread</div></div></div>
@@ -362,23 +362,54 @@ async function hydrate(root: HTMLElement, agentName: string): Promise<void> {
     return { chatId, inbound: tgInboundOn, routing };
   };
 
+  const chatIdErrorEl = bodyHost.querySelector<HTMLElement>('[data-tg-chatId-error]');
+  const setChatIdError = (msg: string): void => {
+    if (!chatIdErrorEl) return;
+    chatIdErrorEl.textContent = msg;
+    chatIdErrorEl.style.display = msg ? '' : 'none';
+  };
+  // Clear the inline error the moment the operator edits the field.
+  bodyHost.querySelector<HTMLInputElement>('[data-tg="chatId"]')?.addEventListener('input', () => setChatIdError(''));
+
+  /** Validate the Telegram chatId before save. Empty = "no binding" (handled by
+   *  collectTelegram → null) so it is always valid here. A non-empty chatId must
+   *  pass the shared `isValidTelegramChatId` gate (numeric id or @channelusername);
+   *  anything carrying a `"`/newline/other YAML-breaker is rejected so it cannot
+   *  inject frontmatter keys. On failure: surface an inline message + toast and
+   *  abort the save (mirrors how submit() bails on other invalid fields). */
+  const validateTelegram = (): boolean => {
+    const chatId = bodyHost.querySelector<HTMLInputElement>('[data-tg="chatId"]')?.value.trim() ?? '';
+    if (chatId === '' || isValidTelegramChatId(chatId)) { setChatIdError(''); return true; }
+    setChatIdError('Invalid chat ID — use a numeric id (e.g. -1001234567890) or @channelusername.');
+    toast('Invalid Telegram chat ID', 'error');
+    return false;
+  };
+
   /** POST a new token / DELETE on explicit clear. Called from submit() after the
-   *  persona PUT succeeds, so a token write never lands on a failed save. */
-  const persistTelegramToken = async (): Promise<void> => {
+   *  persona PUT succeeds, so a token write never lands on a failed save.
+   *  Returns true on success — INCLUDING the no-op "nothing to do" case — and
+   *  false when the POST or DELETE failed (so submit() can withhold the green
+   *  success toast + navigation and leave the operator on the failure state). */
+  const persistTelegramToken = async (): Promise<boolean> => {
     const newToken = tokenInput?.value.trim() ?? '';
     if (newToken) {
       const res = await fetch(`/api/agents/${encodeURIComponent(agentName)}/telegram-token`, {
         method: 'POST', headers: authHeaders(), body: JSON.stringify({ token: newToken }),
       });
-      if (!res.ok) { const b = await res.json().catch(() => null); toast(b?.error ?? 'Token save failed', 'error'); return; }
+      if (!res.ok) { const b = await res.json().catch(() => null); toast(b?.error ?? 'Token save failed', 'error'); return false; }
       tgHasToken = true; tgTokenCleared = false;
       if (tokenInput) tokenInput.value = '';
       renderTokenStatus();
-    } else if (tgTokenCleared) {
-      await fetch(`/api/agents/${encodeURIComponent(agentName)}/telegram-token`, { method: 'DELETE', headers: authHeaders() });
+      return true;
+    }
+    if (tgTokenCleared) {
+      const res = await fetch(`/api/agents/${encodeURIComponent(agentName)}/telegram-token`, { method: 'DELETE', headers: authHeaders() });
+      if (!res.ok) { const b = await res.json().catch(() => null); toast(b?.error ?? 'Token clear failed', 'error'); return false; }
       tgHasToken = false; tgTokenCleared = false;
       renderTokenStatus();
+      return true;
     }
+    return true; // nothing to do
   };
 
   // "+ Add field" — reveal a populated-gated widget on demand (defaulting, not hardcoding).
@@ -438,6 +469,10 @@ async function hydrate(root: HTMLElement, agentName: string): Promise<void> {
   };
 
   const submit = async (): Promise<void> => {
+    // Validate the Telegram chatId BEFORE touching the network — an invalid id
+    // could inject frontmatter keys (the backstop in setFrontmatterTelegram would
+    // silently drop the block, but we want the operator to know, not to lose it).
+    if (!validateTelegram()) return;
     const { fields, passthroughRaw: passthrough, body: bd } = collectEditorState();
     try {
       const res = await fetch(`/api/personas/${encodeURIComponent(agentName)}`, {
@@ -445,7 +480,12 @@ async function hydrate(root: HTMLElement, agentName: string): Promise<void> {
       });
       if (!res.ok) { const b = await res.json().catch(() => null); toast(b?.error ?? 'Save failed', 'error'); return; }
       // Persona PUT succeeded → persist the (write-only) token change, if any.
-      await persistTelegramToken();
+      // If the token write fails, the persona DID save but the token did not:
+      // do NOT show the green success toast and do NOT navigate away, so the
+      // operator sees the token-failure state (persistTelegramToken already
+      // toasted the specific error + the status line still reads its real state).
+      const tokenOk = await persistTelegramToken();
+      if (!tokenOk) return;
       if (reloadOnSave) {
         await fetch(`/api/agents/${encodeURIComponent(agentName)}/reload`, { method: 'POST', headers: authHeaders(), body: JSON.stringify({}) });
       }

@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { setFrontmatterProxy, proxyOnline, setFrontmatterTelegram, parseFrontmatterTelegram } from './util.ts';
+import { setFrontmatterProxy, proxyOnline, setFrontmatterTelegram, parseFrontmatterTelegram, isValidTelegramChatId } from './util.ts';
 
 describe('setFrontmatterProxy', () => {
   it('replaces an existing top-level proxy: line', () => {
@@ -145,5 +145,61 @@ describe('setFrontmatterTelegram / parseFrontmatterTelegram', () => {
     assert.equal(parseFrontmatterTelegram(raw), null);
     // setFrontmatterTelegram(null) must leave the lookalike alone.
     assert.match(setFrontmatterTelegram(raw, null), /^telegramFoo: bar$/m);
+  });
+
+  // ── chatId frontmatter-injection backstop (RFC-008 PR-E review fix) ──────────
+  it('refuses to emit a block for a chatId carrying an embedded double-quote', () => {
+    // A chatId that closes the quoted scalar and opens a new top-level key would,
+    // without the backstop, write an injectable line. The block must be dropped.
+    const inject = { chatId: '-1"\nisAdmin: true\nx: "', inbound: true, routing: 'self' as const };
+    const out = setFrontmatterTelegram('engine: claude', inject);
+    assert.equal(out, 'engine: claude');           // no block emitted at all
+    assert.doesNotMatch(out, /telegram:/);
+    assert.doesNotMatch(out, /isAdmin/);            // the injected key never lands
+    assert.equal(parseFrontmatterTelegram(out), null);
+  });
+
+  it('refuses to emit a block for a chatId carrying an embedded newline', () => {
+    const inject = { chatId: '-1\nrootKey: pwned', inbound: true, routing: 'prefix' as const };
+    const out = setFrontmatterTelegram('engine: claude', inject);
+    assert.equal(out, 'engine: claude');
+    assert.doesNotMatch(out, /rootKey/);
+  });
+
+  it('round-trips a valid numeric chatId cleanly', () => {
+    const out = setFrontmatterTelegram('engine: claude', { chatId: '-1001234567890', inbound: true, routing: 'self' });
+    assert.deepEqual(parseFrontmatterTelegram(out), { chatId: '-1001234567890', inbound: true, routing: 'self' });
+  });
+
+  it('round-trips a valid @channelusername chatId cleanly', () => {
+    const out = setFrontmatterTelegram('engine: claude', { chatId: '@my_channel_01', inbound: false, routing: 'passthrough' });
+    assert.match(out, /^ {2}chatId: "@my_channel_01"$/m);
+    assert.deepEqual(parseFrontmatterTelegram(out), { chatId: '@my_channel_01', inbound: false, routing: 'passthrough' });
+  });
+});
+
+describe('isValidTelegramChatId', () => {
+  it('accepts a numeric id (positive and negative)', () => {
+    assert.equal(isValidTelegramChatId('12345'), true);
+    assert.equal(isValidTelegramChatId('-1001234567890'), true);
+  });
+
+  it('accepts an @channelusername (alphanumeric + underscore)', () => {
+    assert.equal(isValidTelegramChatId('@my_channel'), true);
+    assert.equal(isValidTelegramChatId('@Channel_01'), true);
+  });
+
+  it('trims surrounding whitespace before validating', () => {
+    assert.equal(isValidTelegramChatId('  -100  '), true);
+  });
+
+  it('rejects YAML-breaking and otherwise-malformed chatIds', () => {
+    assert.equal(isValidTelegramChatId(''), false);
+    assert.equal(isValidTelegramChatId('-1"\nisAdmin: true'), false); // embedded quote + newline
+    assert.equal(isValidTelegramChatId('-1\nrootKey: x'), false);     // embedded newline
+    assert.equal(isValidTelegramChatId('@bad name'), false);          // space in username
+    assert.equal(isValidTelegramChatId('@bad-name'), false);          // dash not allowed
+    assert.equal(isValidTelegramChatId('foo'), false);                // bare word, no @
+    assert.equal(isValidTelegramChatId('12.5'), false);               // not an integer
   });
 });
