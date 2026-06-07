@@ -2077,7 +2077,10 @@ route('POST', '/api/agents/:name/telegram-token', async (req, res, match, ctx) =
 
   // Encrypt before it ever touches the DB. 503 when the shared secret is
   // unavailable (no key material → cannot encrypt). The token is never logged.
-  const ciphertext = encryptSecret(token);
+  // AAD = the agent name (RFC-008 PR-Bsec NIT) so a row copied to another agent
+  // won't decrypt under that agent's name; getTelegramToken decrypts with the
+  // same AAD.
+  const ciphertext = encryptSecret(token, name);
   if (ciphertext === null) {
     return json(res, 503, { error: 'shared secret unavailable; cannot encrypt token' });
   }
@@ -3459,7 +3462,20 @@ export function getTelegramToken(
 ): string | null {
   const ciphertext = db.getTelegramTokenCiphertext(agentName);
   if (ciphertext === null) return null;
-  return decryptSecret(ciphertext);
+  // AAD = the agent name: the row decrypts ONLY under the name it was set for
+  // (the POST handler encrypts with the same AAD). A row copied to another
+  // agent's name fails the GCM auth-tag check → null.
+  const token = decryptSecret(ciphertext, agentName);
+  if (token === null) {
+    // A token row EXISTS but won't decrypt — rotated ORCHESTRATOR_SECRET,
+    // tampering, or a pre-AAD legacy row. Without this the bot silently never
+    // starts while GET /telegram-token still reports hasToken:true. Surface it
+    // (token itself is never logged) so the operator can re-set the token.
+    console.warn(
+      `[telegram] token row present for "${agentName}" but failed to decrypt (rotated secret, tampering, or a pre-AAD legacy row) — bot will not start; re-set the token via the set-token API.`,
+    );
+  }
+  return token;
 }
 
 function formatBytes(bytes: number): string {
@@ -3691,4 +3707,200 @@ export function startTelegramPolling(ctx: RouteContext, dest: DestinationRecord)
       console.log('[telegram] Routed message to dashboard');
     }
   });
+}
+
+// ── RFC-008 PR-C: per-agent Telegram bot reconcile + inbound routing ──
+//
+// reconcileTelegramBots() owns the per-agent poll set: it diffs the DESIRED set
+// (agents with non-null agentTelegram, inbound !== false, and a resolvable token)
+// against the dispatcher's running loops, then starts/stops/restarts to converge.
+// It runs on boot (after persona sync) and on every persona reload, and it does
+// NOT touch the 3-phase lifecycle locking — it only manages long-poll loops.
+//
+// Coexistence: the LEGACY destinations-based polling loop (main.ts) and
+// startTelegramPolling above are kept. To avoid two consumers on one token (which
+// Telegram answers with 409), reconcile seeds its dedup set with the tokens the
+// destination loops already poll and skips any per-agent bot that would collide.
+
+/**
+ * Last-applied desired config per agent name. Lets reconcile detect a
+ * token/chatId/routing change and restart only the affected loop (the dispatcher
+ * itself only remembers the token). Module-scoped because reconcile is called
+ * from multiple entry points (boot + reload) and must remember across calls.
+ */
+type DesiredBot = { token: string; chatId: string; routing: string; inbound: boolean };
+const lastAppliedBots = new Map<string, DesiredBot>();
+
+/**
+ * In-memory map of agent name → last originating chatId seen on an inbound
+ * Telegram message. PR-D's outbound reply targets this chat (falling back to the
+ * persona's default chatId). Lives only in process memory.
+ */
+const lastInboundChat = new Map<string, string>();
+
+/** Test-only accessor for the last-inbound-chat map (PR-D primes outbound from this). */
+export function getLastInboundChat(agentName: string): string | undefined {
+  return lastInboundChat.get(agentName);
+}
+
+/** Test-only reset of reconcile module state so suites don't bleed into each other. */
+export function _resetTelegramReconcileState(): void {
+  lastAppliedBots.clear();
+  lastInboundChat.clear();
+}
+
+function normalizeRouting(routing: string | undefined): 'self' | 'prefix' | 'passthrough' {
+  return routing === 'prefix' || routing === 'passthrough' ? routing : 'self';
+}
+
+/**
+ * Build the (chatId, text) handler for one agent's bot, honoring the agent's
+ * `routing` mode. Captures the token so it can reply on the bot when the agent
+ * is offline (operator's reply-on-offline policy).
+ */
+export function onMessageFor(
+  ctx: RouteContext,
+  agentName: string,
+  token: string,
+): (chatId: string, text: string) => void {
+  return (incomingChatId: string, text: string): void => {
+    console.log(`[telegram] Inbound for ${agentName} from chat ${incomingChatId}: ${text.slice(0, 100)}`);
+    // Record the originating chat for PR-D's reply target (last-chat per agent).
+    lastInboundChat.set(agentName, incomingChatId);
+
+    const agent = ctx.db.getAgent(agentName);
+    const routing = normalizeRouting(agent?.agentTelegram?.routing);
+
+    // passthrough: land in the telegram:<agent> dashboard thread; no agent delivery.
+    if (routing === 'passthrough') {
+      const msg = ctx.db.addDashboardMessage(`telegram:${agentName}`, 'from_agent', text, {
+        sourceAgent: `telegram:${agentName}`,
+      });
+      broadcastMessage(ctx, msg);
+      console.log(`[telegram] Routed message to dashboard thread telegram:${agentName}`);
+      return;
+    }
+
+    // prefix: honor @agent prefixes; fall back to THIS agent (self) when none.
+    let targetAgent = agentName;
+    let messageText = text;
+    if (routing === 'prefix') {
+      const tagPattern = /^@([a-zA-Z0-9_-]+)\s+([\s\S]+)$/;
+      const tagMatch = text.match(tagPattern);
+      if (tagMatch) {
+        targetAgent = tagMatch[1]!;
+        messageText = tagMatch[2]!.trim();
+      }
+    }
+
+    // self (default) or resolved prefix target → deliver to the owning agent.
+    const target = ctx.db.getAgent(targetAgent);
+
+    // VOID / unspawned agent: do NOT silently queue forever. Reply on the bot
+    // that the agent is offline (operator's reply-on-offline policy). Suspended
+    // agents fall through to the normal enqueue/drain path (messages queue).
+    if (!target || target.state === 'void') {
+      ctx.telegramDispatcher.send(token, incomingChatId, `${targetAgent} is offline`).catch(() => {});
+      console.log(`[telegram] ${targetAgent} offline (void/missing) — replied on bot, no enqueue`);
+      return;
+    }
+
+    // Telegram-aware envelope: the pane shows the message is from Telegram AND how
+    // to reply (collab send telegram:<agent>). The reply address lands in PR-D;
+    // the hint primes it. Mirrors buildReplyEnvelope/replyHint.
+    const from = `telegram:${targetAgent}`;
+    const envelope = `[from: ${from}: reply with collab send ${from}]: '${messageText}'`;
+    enqueueAndDeliver(ctx, {
+      agentName: targetAgent,
+      displayMessage: messageText,
+      envelope,
+      topic: 'telegram',
+      sourceAgent: from,
+    });
+    console.log(`[telegram] Delivered inbound to ${targetAgent} (routing=${routing})`);
+  };
+}
+
+/**
+ * Reconcile the per-agent Telegram bot poll set against the dispatcher.
+ *
+ * DESIRED = each agent whose `agentTelegram` is non-null AND `inbound !== false`
+ * AND `getTelegramToken` resolves to a non-null token. Each poll is keyed by the
+ * AGENT NAME.
+ *
+ * DEDUPE ON RESOLVED TOKEN (not name): two agents resolving to the same token
+ * would be two getUpdates consumers on one bot → Telegram 409. We start exactly
+ * one and console.warn the conflict. The dedup set is also seeded with the tokens
+ * the LEGACY destination loops already poll, so a per-agent bot never double-starts
+ * a token a destination owns (warn + skip).
+ *
+ * Does NOT touch 3-phase lifecycle locking; it only starts/stops poll loops.
+ */
+export function reconcileTelegramBots(ctx: RouteContext): void {
+  const agents = ctx.db.listAgents();
+
+  // Seed the dedup set with tokens the legacy destination loops already poll, so
+  // a per-agent bot doesn't become a second consumer of a destination's token.
+  const claimedTokens = new Map<string, string>(); // token → owner label (for warns)
+  try {
+    for (const dest of ctx.db.listDestinations()) {
+      if (dest.type === 'telegram' && dest.enabled) {
+        const destToken = dest.config['botToken'];
+        if (typeof destToken === 'string' && destToken.length > 0) {
+          claimedTokens.set(destToken, `destination:${dest.name}`);
+        }
+      }
+    }
+  } catch {
+    // listDestinations failure shouldn't block per-agent reconcile.
+  }
+
+  // Compute the desired per-agent bot set, deduping on the resolved token.
+  const desired = new Map<string, DesiredBot>(); // agentName → desired config
+  for (const agent of agents) {
+    const cfg = agent.agentTelegram;
+    if (!cfg) continue;
+    if (cfg.inbound === false) continue; // outbound-only; PR-D handles its sends
+    const token = getTelegramToken(ctx.db, agent.name);
+    if (!token) continue; // no resolvable token → not pollable
+
+    const owner = claimedTokens.get(token);
+    if (owner) {
+      console.warn(
+        `[telegram] reconcile: agent "${agent.name}" resolves to a token already polled by ${owner} — skipping (one getUpdates consumer per token; would 409).`,
+      );
+      continue;
+    }
+    claimedTokens.set(token, `agent:${agent.name}`);
+    desired.set(agent.name, {
+      token,
+      chatId: cfg.chatId,
+      routing: normalizeRouting(cfg.routing),
+      inbound: true,
+    });
+  }
+
+  // Stop running-not-desired (the loop is keyed by agent name; only stop loops we
+  // previously started — i.e. tracked in lastAppliedBots — so we never stop a
+  // destination loop that happens to be keyed by a destination name).
+  for (const key of ctx.telegramDispatcher.runningKeys()) {
+    if (!desired.has(key) && lastAppliedBots.has(key)) {
+      ctx.telegramDispatcher.stopPolling(key);
+      lastAppliedBots.delete(key);
+    }
+  }
+
+  // Start desired-not-running; restart on token/chatId/routing change.
+  for (const [name, want] of desired) {
+    const prev = lastAppliedBots.get(name);
+    const running = ctx.telegramDispatcher.isPolling(name);
+    const changed =
+      !prev || prev.token !== want.token || prev.chatId !== want.chatId || prev.routing !== want.routing;
+    if (running && !changed) continue; // already converged
+
+    // startPolling stops any prior loop for this key first, so start covers both
+    // the start and restart cases.
+    ctx.telegramDispatcher.startPolling(name, want.token, onMessageFor(ctx, name, want.token));
+    lastAppliedBots.set(name, want);
+  }
 }

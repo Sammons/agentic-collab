@@ -8,7 +8,7 @@ import { readFileSync, mkdirSync, readdirSync, statSync, existsSync } from 'node
 import { join, dirname } from 'node:path';
 import { timingSafeEqual } from 'node:crypto';
 import { Database } from './database.ts';
-import { createRouter, startTelegramPolling, warmDashboardAssets, type RouteContext } from './routes.ts';
+import { createRouter, startTelegramPolling, reconcileTelegramBots, warmDashboardAssets, type RouteContext } from './routes.ts';
 import { TelegramDispatcher } from './telegram.ts';
 import { WebSocketServer } from '../shared/websocket-server.ts';
 import { LockManager } from '../shared/lock.ts';
@@ -411,6 +411,13 @@ const routeCtx: RouteContext = {
     // RFC-006 Q1: a persona that just flipped to `persistent: false` may leave a
     // stale `agents` row shadowing its new template — reconcile it away.
     void reconcileRoots();
+    // RFC-008 PR-C: re-reconcile per-agent Telegram bots on persona reload —
+    // start new bots, stop removed ones, restart on token/chatId/routing change.
+    try {
+      reconcileTelegramBots(routeCtx);
+    } catch (err) {
+      console.error('[telegram] Per-agent bot reconcile (reload) failed:', err);
+    }
     return {
       synced: diff.created.length + diff.updated.length,
       created: diff.created,
@@ -737,11 +744,23 @@ server.listen(PORT, '0.0.0.0', async () => {
   // `agent_instances.worktree_path` entry.
   orphanedWorktreeSweep.start();
 
-  // Start Telegram polling for enabled destinations
+  // LEGACY (RFC-008 coexistence): keep the destinations-based polling loop for
+  // global/non-agent telegram destinations. reconcileTelegramBots (below) seeds
+  // its dedup set with these destination tokens so a per-agent bot never becomes
+  // a second consumer of a token a destination already polls (else Telegram 409).
   const telegramDests = db.listDestinations().filter(d => d.type === 'telegram' && d.enabled);
   for (const dest of telegramDests) {
     startTelegramPolling(routeCtx, dest);
     console.log(`[telegram] Started polling for destination: ${dest.name}`);
+  }
+
+  // RFC-008 PR-C: reconcile per-agent Telegram bots AFTER persona sync (done
+  // above) and AFTER the legacy destination loops start (so their tokens are in
+  // the dedup set). Does NOT touch 3-phase lifecycle locking — only poll loops.
+  try {
+    reconcileTelegramBots(routeCtx);
+  } catch (err) {
+    console.error('[telegram] Per-agent bot reconcile failed:', err);
   }
 
   // Attempt network restore for agents that were running before last shutdown/crash

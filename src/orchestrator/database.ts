@@ -676,6 +676,12 @@ export class Database {
 
   deleteAgent(name: string): boolean {
     const result = this.db.prepare('DELETE FROM agents WHERE name = ?').run(name);
+    // Cascade the per-agent Telegram token (no FK cascade on agent_telegram_tokens).
+    // The token blob is AAD-bound to the agent NAME, so leaving it behind means a
+    // later agent created with a recycled name would decrypt and poll the old
+    // bot's token (token-reuse-across-identity). RFC-008 PR-C resolver makes this
+    // live, so deletion must clean it up.
+    this.deleteTelegramToken(name);
     return result.changes > 0;
   }
 
