@@ -27,6 +27,7 @@ import {
   reconcileTelegramBots,
   onMessageFor,
   getLastInboundChat,
+  getTelegramToken,
   _resetTelegramReconcileState,
   type RouteContext,
 } from './routes.ts';
@@ -89,10 +90,13 @@ describe('reconcileTelegramBots + inbound (RFC-008 PR-C)', () => {
   });
 
   after(() => {
+    dispatcher.stopAll();
+    // Cancel scheduled drain timers so no enqueueAndDeliver→tryDeliver drain fires
+    // after the DB closes ("database is not open" noise).
+    ctx.messageDispatcher.stop();
     globalThis.fetch = realFetch;
     if (ORIG_SECRET === undefined) delete process.env['ORCHESTRATOR_SECRET'];
     else process.env['ORCHESTRATOR_SECRET'] = ORIG_SECRET;
-    dispatcher.stopAll();
     wss.close();
     db.close();
     rmSync(tmpDir, { recursive: true, force: true });
@@ -101,6 +105,9 @@ describe('reconcileTelegramBots + inbound (RFC-008 PR-C)', () => {
   /** Fresh state per test: stop loops, clear reconcile memory, drop all rows, reset fetch. */
   beforeEach(() => {
     dispatcher.stopAll();
+    // Cancel any drain timers left scheduled by the previous test so they don't
+    // fire mid-next-test against just-deleted rows.
+    ctx.messageDispatcher.stop();
     _resetTelegramReconcileState();
     db.rawDb.exec('DELETE FROM agents; DELETE FROM destinations; DELETE FROM agent_telegram_tokens; DELETE FROM dashboard_messages; DELETE FROM pending_messages;');
     sendCalls = [];
@@ -353,6 +360,40 @@ describe('reconcileTelegramBots + inbound (RFC-008 PR-C)', () => {
 
       const pending = db.listPendingMessages().filter((p) => p.targetAgent === 'paused');
       assert.equal(pending.length, 1);
+    });
+  });
+
+  describe('token hardening', () => {
+    it('getTelegramToken warns + returns null when a present token row will not decrypt', () => {
+      // Encrypt under a DIFFERENT name → AAD mismatch → decrypt fails under 'mismatch'.
+      const ct = encryptSecret('TOK', 'someone-else');
+      assert.ok(ct, 'encryptSecret should produce ciphertext');
+      db.setTelegramToken('mismatch', ct!);
+
+      const warns: string[] = [];
+      const origWarn = console.warn;
+      console.warn = (...a: unknown[]) => { warns.push(a.join(' ')); };
+      let token: string | null;
+      try {
+        token = getTelegramToken(db, 'mismatch');
+      } finally {
+        console.warn = origWarn;
+      }
+
+      assert.equal(token, null, 'AAD mismatch must not decrypt');
+      assert.ok(
+        warns.some((w) => w.includes('mismatch') && w.includes('failed to decrypt')),
+        `expected an undecryptable-token warn, got: ${warns.join('|')}`,
+      );
+    });
+
+    it('deleteAgent cascades the per-agent telegram token row', () => {
+      makeAgent('doomed', { chatId: '-1' });
+      setToken('doomed', 'TOK-DOOMED');
+      assert.notEqual(db.getTelegramTokenCiphertext('doomed'), null, 'token should exist pre-delete');
+
+      db.deleteAgent('doomed');
+      assert.equal(db.getTelegramTokenCiphertext('doomed'), null, 'token row must be cascaded on agent delete');
     });
   });
 });

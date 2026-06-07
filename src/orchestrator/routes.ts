@@ -3465,7 +3465,17 @@ export function getTelegramToken(
   // AAD = the agent name: the row decrypts ONLY under the name it was set for
   // (the POST handler encrypts with the same AAD). A row copied to another
   // agent's name fails the GCM auth-tag check → null.
-  return decryptSecret(ciphertext, agentName);
+  const token = decryptSecret(ciphertext, agentName);
+  if (token === null) {
+    // A token row EXISTS but won't decrypt — rotated ORCHESTRATOR_SECRET,
+    // tampering, or a pre-AAD legacy row. Without this the bot silently never
+    // starts while GET /telegram-token still reports hasToken:true. Surface it
+    // (token itself is never logged) so the operator can re-set the token.
+    console.warn(
+      `[telegram] token row present for "${agentName}" but failed to decrypt (rotated secret, tampering, or a pre-AAD legacy row) — bot will not start; re-set the token via the set-token API.`,
+    );
+  }
+  return token;
 }
 
 function formatBytes(bytes: number): string {

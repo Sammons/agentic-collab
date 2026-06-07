@@ -86,7 +86,16 @@ export class TelegramDispatcher {
           });
           if (!resp.ok) {
             const body = await resp.text().catch(() => '');
-            console.error(`[telegram] getUpdates failed (${resp.status}): ${body}`);
+            if (resp.status === 409) {
+              // 409 Conflict = another getUpdates consumer holds this token.
+              // Expected transiently after a reconcile restart (token rotation /
+              // config change) until Telegram releases the prior consumer; the
+              // retry self-heals. Warn (not error) so a rotation doesn't spam the
+              // error log (RFC-008 §183).
+              console.warn(`[telegram] getUpdates 409 for "${key}" — transient consumer conflict (likely a reconcile restart); retrying.`);
+            } else {
+              console.error(`[telegram] getUpdates failed (${resp.status}): ${body}`);
+            }
             if (!signal.aborted) await delay(5000, signal);
             continue;
           }
