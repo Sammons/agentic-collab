@@ -1,6 +1,6 @@
 # RFC-008: Per-Agent Telegram Bots (persona-configured)
 
-**Status:** Draft — pending operator decision on secrets (see §Key Decision)
+**Status:** Draft — secrets decided 2026-06-06 (token AES-256-GCM-encrypted in SQLite; see §2)
 **Author:** agentic-collab-lead
 **Created:** 2026-06-06
 **Supersedes/absorbs:** `docs/rfc-telegram-per-bot-config.md` (the destinations-table variant — its multi-bot polling design is reused here; its config-location is replaced)
@@ -32,28 +32,51 @@ Add an optional nested field, parsed exactly like `env` (the existing nested-map
 
 ```yaml
 telegram:
-  bot: almanac-bot          # NAME of a secret/destination holding the token (NOT the token itself)
   chatId: "-100123456"      # default outbound chat (not secret)
   inbound: true             # default true; false = outbound-only
   routing: self             # self (default) | prefix | passthrough
 ```
+
+> No `bot:` / `botToken:` — the token lives AES-256-GCM-encrypted in SQLite and
+> is set via a write-only API (see §2). The persona carries only non-secret
+> binding config; this is what PR-B implements.
 
 - `routing: self` — every inbound message goes to THIS agent (the bot is the agent). Default.
 - `routing: prefix` — honor `@agent` prefixes (route to others), falling back to self.
 - `routing: passthrough` — inbound lands in a `telegram:<agent>` dashboard thread (no agent delivery).
 - Optional later: `allowedChatIds` / `allowedUserIds` (access control, carried over from the old RFC).
 
-### 2. Secrets — the token is referenced, never inlined (recommended)
+### 2. Secrets — token AES-256-GCM-encrypted in SQLite (OPERATOR DECISION, 2026-06-06)
 
-**Personas are committed to git** (`claude-home/persistent-personas/*.md`), and the agents table stores config columns in plaintext. Inlining `botToken` would commit a live secret. So the persona declares `bot: <name>` and the **token is resolved at runtime** from a secret store, looked up by that name. Resolution order (first hit wins):
+**Decision (supersedes the by-reference design below):** the bot token is stored
+**AES-256-GCM-encrypted in SQLite**, NOT in the persona and NOT in any plaintext
+column. Specifics:
 
-1. Env var `TELEGRAM_BOT_<NAME_UPPER>` (e.g. `TELEGRAM_BOT_ALMANAC_BOT`).
-2. A `destinations` row `type=telegram`, `name=<bot>` (existing table; token already lives here out-of-git) — this also bridges the old model.
-3. (Optional) the age-encrypted `secrets/` store the house already uses.
+- **Key derivation:** the AES-256 key is derived from the orchestrator shared
+  secret (`~/.config/agentic-collab/secret` / `ORCHESTRATOR_SECRET`) — the same
+  secret the API already trusts. No new key material to manage.
+- **Write-only API:** the token is set via a write-only endpoint. It is never
+  placed in frontmatter (so it never enters git) and never returned in plaintext
+  by any read endpoint (`GET /api/agents`, persona reads, etc.).
+- **Decrypted at reconcile time:** `reconcileTelegramBots` decrypts the token
+  just-in-time when (re)starting an agent's poll loop; the plaintext lives only
+  in memory for the lifetime of the loop.
+- **Persona field carries ONLY non-secret binding config:** `chatId`, `inbound`,
+  `routing`. No `bot:` reference, no `botToken:` — the persona has no secret and
+  no secret pointer.
+- **Also fixes the existing leak:** `GET /api/destinations` returns the telegram
+  `botToken` in plaintext today; moving the token to the encrypted-at-rest,
+  write-only store closes that plaintext `destinations` token leak too.
 
-If unresolved → the agent's bot doesn't start; a clear warning is logged + surfaced (dashboard indicator). This keeps the *binding + routing* in the persona (operator's ask) while the *secret* stays out of git.
+This is delivered as a later PR (token store + write-only API + reconcile
+decryption); **PR-B (this field) is token-free by construction.**
 
-> **This is the Key Decision (below): reference vs inline.** The alternative — inline `botToken` in the persona — is simpler but commits a secret to the persona git repo. Recommended: reference.
+> **Superseded — by-reference design (kept for history):** earlier this RFC
+> proposed declaring `bot: <name>` in the persona and resolving the token at
+> runtime from env (`TELEGRAM_BOT_<NAME_UPPER>`) / a `destinations` row /
+> age-secrets. That kept the token out of *git* but NOT out of the *API*
+> (`destinations` still returns it plaintext) and offered no clean operator
+> path to set a token. The encrypted-in-SQLite decision above replaces it.
 
 ### 3. Multi-bot dispatcher (reuse the old RFC's design)
 
@@ -126,23 +149,29 @@ PR-0 first (de-risk). A+B independent after. C depends on A+B+0. D productionize
 ## Constraints honored
 
 - Zero-dep; no lock change; persona-frontmatter change handled as an additive schema migration (RFC + all personas keep parsing).
-- Tokens kept out of git via the by-reference design (the whole point of §2).
+- Tokens kept out of git AND out of plaintext at rest: AES-256-GCM-encrypted in SQLite, set via a write-only API (see §2).
 
 ## Risks / open questions
 
-- **Secrets (THE decision):** reference vs inline — see Key Decision.
+- **Secrets:** RESOLVED 2026-06-06 — token AES-256-GCM-encrypted in SQLite, key from the orchestrator shared secret, set via a write-only API (§2).
 - **Reply target:** per-conversation chatId vs persona default `chatId` (§5) — proposal: originating chat when known.
 - **Bot uniqueness:** two personas referencing the same `bot` name = two agents polling one token → Telegram only allows ONE getUpdates consumer per token (the second gets 409 Conflict). Reconcile must reject/warn on duplicate bot refs.
 - **Suspended agents:** keep or stop polling — proposal: keep (queue messages), stop only on removal/disable.
 - **Migration of the existing single bot:** the current `destinations` telegram entry keeps working (resolution option 2 bridges it); we can later convert it to a persona-declared bot.
 
-## Key Decision (needs operator sign-off before implementation)
+## Key Decision — RESOLVED (2026-06-06)
 
-**Where does the bot token live?**
-- **(A) By reference (recommended):** persona has `bot: <name>`; token resolved from env/destinations/secrets at runtime. Keeps secrets out of the persona git repo; the persona still owns the binding + routing.
-- **(B) Inline:** persona has `botToken: <token>` directly. Simplest, matches "all config in the persona" literally — but commits a live secret to `claude-home` git. Not recommended; if chosen, we should at least `.gitignore` those personas or store them outside the repo.
+**Where does the bot token live?** Operator decision: **neither in the persona
+(inline) nor by-reference** — the token is **AES-256-GCM-encrypted in SQLite**,
+keyed off the orchestrator shared secret, set via a write-only API, decrypted at
+reconcile time (full detail in §2). The persona carries only non-secret binding
+config (`chatId`/`inbound`/`routing`). The two options below are kept for history:
 
-Everything else above is my recommended default; flag any you'd change (esp. routing default `self`, and the reply-target behavior).
+- ~~**(A) By reference:** persona has `bot: <name>`; token resolved from env/destinations/secrets at runtime.~~ Superseded — kept the token out of git but not out of the API, and had no clean operator set-path.
+- ~~**(B) Inline:** persona has `botToken: <token>` directly.~~ Rejected — commits a live secret to `claude-home` git.
+
+Everything else above is the recommended default; flag any you'd change (esp.
+routing default `self`, and the reply-target behavior).
 
 ## Adversarial review resolutions (2026-06-06)
 
@@ -159,7 +188,7 @@ Verdict: **sound-with-changes; the outbound round-trip (now PR-0/PR-D) is the re
 
 ## Decisions needed from the operator
 
-1. **Secrets:** by-reference (recommended) vs inline token-in-persona. (§Key Decision)
+1. **Secrets:** RESOLVED — token AES-256-GCM-encrypted in SQLite (§2 / §Key Decision).
 2. **Routing default:** `self` (bot↔agent 1:1) — confirm, or prefer `prefix`.
 3. **`void`/unspawned agent gets a Telegram message:** reject-with-reply, or auto-spawn the agent?
 4. **Reply target:** originating chat (per-conversation, recommended) vs the persona's static `chatId`.

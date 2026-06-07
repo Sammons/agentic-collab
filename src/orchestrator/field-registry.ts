@@ -6,7 +6,7 @@
  * Runtime fields (state, version, capturedVars, etc.) are NOT in the registry.
  */
 
-import type { LaunchEnv, EngineType, HookValue, PipelineStep, IndicatorDefinition } from '../shared/types.ts';
+import type { LaunchEnv, EngineType, HookValue, PipelineStep, IndicatorDefinition, AgentTelegramConfig } from '../shared/types.ts';
 import type { PersonaFrontmatter } from './persona.ts';
 
 // ── Field Descriptor ──
@@ -71,6 +71,80 @@ function launchEnvEquals(a: unknown, b: unknown): boolean {
   return true;
 }
 
+// ── Telegram (RFC-008) ──
+// Non-secret binding config only — NEVER a token (the token lives AES-256-GCM
+// encrypted in SQLite, set via a write-only API; see RFC-008 §2). The nested
+// frontmatter parser keeps scalar sub-values as STRINGS (like `env`), so
+// `inbound` arrives as "true"/"false"; coerce here, don't assume booleans.
+
+const TELEGRAM_ROUTINGS = new Set(['self', 'prefix', 'passthrough']);
+
+/** Strip a single matching pair of surrounding single/double quotes. */
+function stripQuotes(s: string): string {
+  if (s.length >= 2 && (s[0] === '"' || s[0] === "'") && s[s.length - 1] === s[0]) {
+    return s.slice(1, -1);
+  }
+  return s;
+}
+
+/** Normalize a raw telegram block (parsed frontmatter OR deserialized JSON) to
+ *  a validated AgentTelegramConfig, or null when there's no usable chatId. */
+function normalizeTelegram(value: unknown): AgentTelegramConfig | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const obj = value as Record<string, unknown>;
+
+  // chatId is required (non-secret default outbound chat). Coerce numbers →
+  // string (chat ids can be large negative ints in YAML) and strip the matching
+  // surrounding quotes the flat nested parser leaves on quoted scalars.
+  const rawChat = obj['chatId'];
+  let chatId: string;
+  if (typeof rawChat === 'string') chatId = stripQuotes(rawChat.trim());
+  else if (typeof rawChat === 'number') chatId = String(rawChat);
+  else return null;
+  if (chatId === '') return null;
+
+  // inbound defaults true when the block exists; only the literal false/"false"
+  // disables it (handles the string-coercion gotcha from the nested parser).
+  const rawInbound = obj['inbound'];
+  const inbound = !(rawInbound === false || rawInbound === 'false');
+
+  // routing must be one of the known modes; anything else (incl. absent) → self.
+  const rawRouting = obj['routing'];
+  const routing: 'self' | 'prefix' | 'passthrough' =
+    typeof rawRouting === 'string' && TELEGRAM_ROUTINGS.has(rawRouting)
+      ? (rawRouting as 'self' | 'prefix' | 'passthrough')
+      : 'self';
+
+  // Drop unknown sub-keys; a token (if ever present) is intentionally discarded.
+  return { chatId, inbound, routing };
+}
+
+/** serialize: parsed frontmatter telegram block → validated JSON string | null. */
+function serializeTelegram(value: unknown): string | null {
+  const cfg = normalizeTelegram(value);
+  return cfg ? JSON.stringify(cfg) : null;
+}
+
+/** deserialize: stored JSON string → AgentTelegramConfig | null (same validation). */
+function deserializeTelegram(value: unknown): AgentTelegramConfig | null {
+  if (typeof value !== 'string' || value.length === 0) return null;
+  try {
+    return normalizeTelegram(JSON.parse(value));
+  } catch {
+    return null;
+  }
+}
+
+/** equals: deep compare two telegram configs (null-safe). */
+function telegramEquals(a: unknown, b: unknown): boolean {
+  const left = (a ?? null) as AgentTelegramConfig | null;
+  const right = (b ?? null) as AgentTelegramConfig | null;
+  if (left === null || right === null) return left === right;
+  return left.chatId === right.chatId
+    && (left.inbound ?? true) === (right.inbound ?? true)
+    && (left.routing ?? 'self') === (right.routing ?? 'self');
+}
+
 function serializeHookValue(value: unknown): string | null {
   if (value == null) return null;
   if (typeof value === 'string') return value;
@@ -115,6 +189,7 @@ export const CONFIG_FIELDS: readonly FieldDef[] = [
   { name: 'customButtons',      column: 'custom_buttons',        personaKey: 'custom_buttons',        kind: 'json',   nested: false, upsertable: true,  createOnly: false, serialize: serializeCustomButtons },
   { name: 'indicators',         column: 'indicators',            personaKey: 'indicators',            kind: 'json',   nested: false, upsertable: true,  createOnly: false, serialize: serializeIndicators },
   { name: 'icon',               column: 'icon',                  personaKey: 'icon',                  kind: 'scalar', nested: false, upsertable: true,  createOnly: false },
+  { name: 'agentTelegram',      column: 'agent_telegram',        personaKey: 'telegram',              kind: 'json',   nested: true,  upsertable: true,  createOnly: false, serialize: serializeTelegram, deserialize: deserializeTelegram, equals: telegramEquals },
 ];
 
 // ── Derived Utilities ──
@@ -265,10 +340,14 @@ export function buildUpsertOptsFromFrontmatter(
     }
 
     // Apply serialization based on kind.
-    // launchEnv is special: buildUpsertOpts returns the normalized object,
-    // not the JSON string — serialization happens later in createAgent/upsert.
+    // launchEnv/agentTelegram are special: buildUpsertOpts returns the normalized
+    // OBJECT (not the JSON string) so configFieldsChanged can deep-compare it
+    // against the deserialized AgentRecord value; serialization to a string
+    // happens later in serializeConfigParams/serializeUpsertParams.
     if (f.name === 'launchEnv') {
       opts[f.name] = normalizeLaunchEnv(value);
+    } else if (f.name === 'agentTelegram') {
+      opts[f.name] = normalizeTelegram(value);
     } else if (f.kind === 'json' && f.serialize) {
       opts[f.name] = f.serialize(value);
     } else if (f.kind === 'hook') {

@@ -715,6 +715,7 @@ function buildSyntheticAgent(template: AgentTemplateRow): AgentRecord {
     customButtons: null,
     indicators: null,
     icon: null,
+    agentTelegram: null,
     version: 0,
     spawnCount: 0,
     createdAt: '',

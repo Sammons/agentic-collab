@@ -943,10 +943,10 @@ describe('Database', () => {
       // Hard-coded snapshot of the `agents` column set from main (database.ts
       // base schema + sort_order/hook_spawn/hook_start/captured_vars special
       // cases + field-registry config columns: launch_env, account, custom_buttons,
-      // indicators, agent_group, icon). If any field-registry change adds a
-      // new column, this gate trips so we know the Q2 BC contract was broken.
+      // indicators, agent_group, icon, agent_telegram). If any field-registry change
+      // adds a new column, this gate trips so we know the Q2 BC contract was broken.
       const expected = [
-        'account', 'agent_group', 'captured_vars', 'created_at',
+        'account', 'agent_group', 'agent_telegram', 'captured_vars', 'created_at',
         'current_session_id', 'custom_buttons', 'cwd', 'engine', 'failed_at',
         'failure_reason', 'hook_compact', 'hook_exit', 'hook_interrupt',
         'hook_resume', 'hook_spawn', 'hook_start', 'hook_submit', 'icon',
