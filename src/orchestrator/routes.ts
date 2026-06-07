@@ -617,6 +617,14 @@ route('POST', '/api/agents/send', async (req, res, _match, ctx) => {
     }
     return json(res, 200, { ok: true });
   }
+  if (addr.class === 'telegram') {
+    // RFC-008 PR-D: route the reply out through THIS agent's bot (closing the
+    // round-trip the inbound envelope set up). Agent-first disambiguation: when
+    // the name is a per-agent bot we send via its token to the originating chat;
+    // otherwise we fall back to the LEGACY `telegram:<destname>` destination path
+    // so every pre-existing `collab send telegram:<destname>` keeps working.
+    return handleTelegramOutbound(res, ctx, addr.agentName, body);
+  }
   // addr.class === 'agent' — use bare name for storage / lookup.
   body.to = addr.name;
 
@@ -747,6 +755,17 @@ route('POST', '/api/dashboard/send', async (req, res, _match, ctx) => {
       return json(res, 503, { error: 'instance not deliverable', reason: deliveryResult.reason, ...(deliveryResult.error ? { details: deliveryResult.error } : {}) });
     }
     return json(res, 200, { ok: true });
+  }
+  if (dashAddr.class === 'telegram') {
+    // telegram:<agent> is the agent-bot outbound channel (RFC-008 PR-D); it is
+    // driven by `/api/agents/send`, not the dashboard reply surface. Reject here
+    // so the dashboard path never falls through to `dashAddr.name` (undefined
+    // for the telegram class).
+    return json(res, 400, {
+      error: 'telegram:<agent> is not a dashboard-sendable address; use POST /api/agents/send',
+      class: 'telegram',
+      agentName: dashAddr.agentName,
+    });
   }
   body.agent = dashAddr.name;
 
@@ -2018,25 +2037,26 @@ route('DELETE', '/api/destinations/:name', async (_req, res, match, ctx) => {
 
 route('POST', '/api/destinations/:name/send', async (req, res, match, ctx) => {
   const name = match.pathname.groups['name']!;
-  const dest = ctx.db.getDestination(name);
-  if (!dest) return json(res, 404, { error: 'Destination not found' });
-  if (!dest.enabled) return json(res, 400, { error: 'Destination is disabled' });
 
   const body = await readJson(req);
-  const message = body.message as string | undefined;
+  const message = body['message'] as string | undefined;
   if (!message) return json(res, 400, { error: 'message required' });
 
-  const fromAgent = body.fromAgent as string | undefined;
+  const fromAgent = body['fromAgent'] as string | undefined;
   const text = fromAgent ? `[${fromAgent}] ${message}` : message;
 
-  if (dest.type === 'telegram') {
-    const botToken = dest.config.botToken as string;
-    const chatId = dest.config.chatId as string;
-    const ok = await ctx.telegramDispatcher.send(botToken, chatId, text);
-    if (!ok) return json(res, 502, { error: 'Telegram send failed' });
-    json(res, 200, { ok: true });
-  } else {
-    json(res, 400, { error: `Unsupported destination type: ${dest.type}` });
+  const result = await sendToTelegramDestination(ctx, name, text);
+  switch (result.kind) {
+    case 'ok':
+      return json(res, 200, { ok: true });
+    case 'not_found':
+      return json(res, 404, { error: 'Destination not found' });
+    case 'disabled':
+      return json(res, 400, { error: 'Destination is disabled' });
+    case 'unsupported':
+      return json(res, 400, { error: `Unsupported destination type: ${result.type}` });
+    case 'send_failed':
+      return json(res, 502, { error: 'Telegram send failed' });
   }
 });
 
@@ -3448,6 +3468,43 @@ async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> 
 }
 
 /**
+ * Outcome of sending to a named destination's telegram bot. Tagged so the two
+ * call sites (the `/api/destinations/:name/send` route and the
+ * `telegram:<destname>` fallback in `/api/agents/send`) map it to HTTP status
+ * consistently without duplicating the dispatch logic. The bot token is never
+ * carried in this value (and never logged) — only the outcome.
+ */
+type TelegramDestinationSendResult =
+  | { kind: 'ok' }
+  | { kind: 'not_found' }
+  | { kind: 'disabled' }
+  | { kind: 'unsupported'; type: string }
+  | { kind: 'send_failed' };
+
+/**
+ * Send `text` to a destination's telegram bot (the LEGACY destination path).
+ * Shared by the destination send route and the per-agent outbound fallback so
+ * `telegram:<destname>` keeps working when `<destname>` is a destination, not an
+ * agent. `text` is the already-composed message (callers prepend any
+ * `[fromAgent]` prefix). The destination's static `chatId` is the target.
+ */
+export async function sendToTelegramDestination(
+  ctx: Pick<RouteContext, 'db' | 'telegramDispatcher'>,
+  destName: string,
+  text: string,
+): Promise<TelegramDestinationSendResult> {
+  const dest = ctx.db.getDestination(destName);
+  if (!dest) return { kind: 'not_found' };
+  if (!dest.enabled) return { kind: 'disabled' };
+  if (dest.type !== 'telegram') return { kind: 'unsupported', type: dest.type };
+
+  const botToken = dest.config['botToken'] as string;
+  const chatId = dest.config['chatId'] as string;
+  const ok = await ctx.telegramDispatcher.send(botToken, chatId, text);
+  return ok ? { kind: 'ok' } : { kind: 'send_failed' };
+}
+
+/**
  * RFC-008 resolver (exported for PR-C reconcile). Reads the agent's stored
  * ciphertext and decrypts it just-in-time. Returns the plaintext bot token, or
  * null when no token is stored OR decryption fails (missing/rotated shared
@@ -3747,6 +3804,100 @@ export function getLastInboundChat(agentName: string): string | undefined {
 export function _resetTelegramReconcileState(): void {
   lastAppliedBots.clear();
   lastInboundChat.clear();
+}
+
+/**
+ * RFC-008 PR-D: handle a `collab send telegram:<name>` outbound send.
+ *
+ * Agent-first disambiguation:
+ *   - If `<name>` is an agent with `agentTelegram` config AND a resolvable
+ *     token → send via THAT agent's bot to the originating chat (the
+ *     last-inbound chat, falling back to the persona default `chatId`). This is
+ *     the per-agent outbound channel that closes the inbound→reply round-trip.
+ *   - Otherwise → fall back to the LEGACY destination path (`<name>` is a
+ *     destination, not an agent) so every pre-existing
+ *     `collab send telegram:<destname>` keeps working.
+ *   - If BOTH an agent and a destination match, prefer the agent and warn the
+ *     ambiguity.
+ *   - If neither matches → 404.
+ *
+ * The bot token plaintext is NEVER logged or returned in any response.
+ */
+async function handleTelegramOutbound(
+  res: ServerResponse,
+  ctx: RouteContext,
+  agentName: string,
+  body: Record<string, unknown>,
+): Promise<void> {
+  const rawMessage = body['message'];
+  const message = typeof rawMessage === 'string' ? rawMessage : '';
+  if (message.length === 0) {
+    return json(res, 400, { error: 'message required' });
+  }
+  const text = sanitizeMessage(message);
+  const rawFrom = body['from'];
+  const sender = typeof rawFrom === 'string' ? rawFrom : 'dashboard';
+
+  const agent = ctx.db.getAgent(agentName);
+  const token = agent && agent.agentTelegram ? getTelegramToken(ctx.db, agentName) : null;
+
+  // Per-agent outbound: the agent exists, carries telegram binding config, AND a
+  // token resolves. Anything short of all three falls through to the legacy path.
+  if (agent && agent.agentTelegram && token) {
+    // Ambiguity: a destination of the same name also exists. Prefer the agent
+    // (per the RFC) and surface the collision. The token is NEVER logged.
+    if (ctx.db.getDestination(agentName)) {
+      console.warn(
+        `[telegram] outbound "telegram:${agentName}" matches BOTH an agent and a destination — preferring the per-agent bot (RFC-008 PR-D).`,
+      );
+    }
+
+    // Reply target: the chat that last messaged this agent, falling back to the
+    // persona's default chatId. Neither present → nothing to reply to. The field
+    // registry's normalizeTelegram guarantees a non-empty chatId whenever
+    // agentTelegram is non-null, so this guard is defensive (unreachable under
+    // the current schema) — it survives a future schema that relaxes the chatId
+    // requirement. Coverage-excluded per the defensive-branch rule.
+    const chatId = getLastInboundChat(agentName) ?? agent.agentTelegram.chatId;
+    /* node:coverage disable */
+    if (!chatId) {
+      return json(res, 400, { error: `no chat to reply to for telegram:${agentName} (no inbound chat seen and no default chatId configured)` });
+    }
+    /* node:coverage enable */
+
+    const ok = await ctx.telegramDispatcher.send(token, chatId, text);
+    if (!ok) {
+      return json(res, 502, { error: 'Telegram send failed' });
+    }
+
+    // Record the outbound message in the telegram:<agent> dashboard thread so the
+    // operator sees outbound traffic (mirrors how inbound passthrough writes a
+    // dashboard message). sourceAgent = the sender; the bot is the agent.
+    const msg = ctx.db.addDashboardMessage(`telegram:${agentName}`, 'from_agent', text, {
+      topic: 'telegram',
+      sourceAgent: sender,
+      targetAgent: `telegram:${agentName}`,
+    });
+    broadcastMessage(ctx, msg);
+    return json(res, 200, { ok: true });
+  }
+
+  // Fallback: legacy destination path. `<name>` is treated as a destination
+  // name. Reuse the SHARED helper so the dispatch logic is not duplicated.
+  const composed = `[${sender}] ${text}`;
+  const result = await sendToTelegramDestination(ctx, agentName, composed);
+  switch (result.kind) {
+    case 'ok':
+      return json(res, 200, { ok: true });
+    case 'not_found':
+      return json(res, 404, { error: `no agent or destination named "${agentName}" for telegram outbound` });
+    case 'disabled':
+      return json(res, 400, { error: 'Destination is disabled' });
+    case 'unsupported':
+      return json(res, 400, { error: `Unsupported destination type: ${result.type}` });
+    case 'send_failed':
+      return json(res, 502, { error: 'Telegram send failed' });
+  }
 }
 
 function normalizeRouting(routing: string | undefined): 'self' | 'prefix' | 'passthrough' {

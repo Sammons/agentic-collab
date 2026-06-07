@@ -1,12 +1,15 @@
 /**
  * Address parsing for agentic-collab v3.
  *
- * Four address classes plus a malformed sentinel:
+ * Five address classes plus a malformed sentinel:
  *  - `agent:<name>` — persistent agent inbox. Bare names (no prefix) are
  *    treated as `agent:<name>` for 2.x compatibility.
  *  - `agent:<template>/<instance-id>` — live ephemeral agent instance.
  *  - `topic:<template>/<topic>` — ephemeral-agent topic queue (spawns work).
  *  - `approval:<channel>` — human-decision queue (categorisation only).
+ *  - `telegram:<agent>` — an agent's per-agent Telegram bot outbound channel
+ *    (RFC-008 PR-D). `collab send telegram:<agent>` routes a reply back out
+ *    through that agent's bot to the originating chat.
  *
  * Parsing is total: every input yields a discriminated union value. Malformed
  * inputs carry a `reason` string so the entry layer can return a clear 400.
@@ -22,13 +25,14 @@ export const NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$/;
 const INSTANCE_ID_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/;
 
 /** Known address class prefixes. */
-const KNOWN_PREFIXES = new Set(['agent', 'topic', 'approval']);
+const KNOWN_PREFIXES = new Set(['agent', 'topic', 'approval', 'telegram']);
 
 export type Address =
   | { class: 'agent'; name: string }
   | { class: 'agent-instance'; template: string; instanceId: string }
   | { class: 'topic'; template: string; topic: string }
   | { class: 'approval'; channel: string }
+  | { class: 'telegram'; agentName: string }
   | { class: 'malformed'; raw: string; reason: string };
 
 /**
@@ -58,7 +62,7 @@ export function parseAddress(raw: unknown): Address {
   const rest = raw.slice(colonIdx + 1);
 
   if (!KNOWN_PREFIXES.has(prefix)) {
-    return { class: 'malformed', raw, reason: `unknown address prefix "${prefix}" (expected agent:, topic:, or approval:)` };
+    return { class: 'malformed', raw, reason: `unknown address prefix "${prefix}" (expected agent:, topic:, approval:, or telegram:)` };
   }
 
   if (prefix === 'agent') {
@@ -102,6 +106,20 @@ export function parseAddress(raw: unknown): Address {
     return { class: 'topic', template, topic };
   }
 
+  if (prefix === 'telegram') {
+    // telegram:<agent> — the agent's per-agent bot outbound channel. Bare
+    // `telegram` (empty name) is malformed: the CLI keeps bare `telegram`
+    // (no colon) as a destination shorthand, so a `telegram:` with nothing
+    // after the colon is a real error, not a destination fallback.
+    if (rest.length === 0) {
+      return { class: 'malformed', raw, reason: 'telegram: prefix with empty agent name' };
+    }
+    if (!NAME_RE.test(rest)) {
+      return { class: 'malformed', raw, reason: `telegram agent name "${rest}" does not match ${NAME_RE.source}` };
+    }
+    return { class: 'telegram', agentName: rest };
+  }
+
   // prefix === 'approval'
   if (rest.length === 0) {
     return { class: 'malformed', raw, reason: 'approval: prefix with empty channel' };
@@ -128,6 +146,8 @@ export function addressToString(addr: Address): string {
       return `topic:${addr.template}/${addr.topic}`;
     case 'approval':
       return `approval:${addr.channel}`;
+    case 'telegram':
+      return `telegram:${addr.agentName}`;
     case 'malformed':
       return addr.raw;
   }
