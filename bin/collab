@@ -266,7 +266,11 @@ async function dispatchSend({ target, topic, message, replyReminder, inReplyTo, 
       process.exit(1);
     }
     const formattedMessage = formatReplyContext(message || '(file attachment)', inReplyTo);
-    const from = requireAgentName();
+    // Agent-issued replies carry the agent identity (COLLAB_AGENT). A host running
+    // this manually (e.g. `telegram:<destname>` for a legacy destination) has no
+    // agent set — default `from` to 'dashboard' so the send still works rather than
+    // hard-failing, matching the legacy destination path's tolerance for no agent.
+    const from = agentName() || 'dashboard';
     // /api/agents/send requires a topic; default to 'telegram' for the round-trip
     // reply when the caller did not pass one.
     await api('POST', '/api/agents/send', {
