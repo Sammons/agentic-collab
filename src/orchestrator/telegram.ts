@@ -115,6 +115,21 @@ export class TelegramDispatcher {
     console.log(`[telegram] Long polling started for "${key}"`);
   }
 
+  /** Keys with a currently-running poll loop (for reconcile diffing). */
+  runningKeys(): string[] {
+    return [...this.polls.keys()];
+  }
+
+  /** True if a poll loop is running for `key`. */
+  isPolling(key: string): boolean {
+    return this.polls.has(key);
+  }
+
+  /** The token a running loop is polling under `key`, or null if none. */
+  getPollToken(key: string): string | null {
+    return this.polls.get(key)?.token ?? null;
+  }
+
   /** Stop the polling loop for `key` gracefully (no-op if none). */
   stopPolling(key: string): void {
     const state = this.polls.get(key);

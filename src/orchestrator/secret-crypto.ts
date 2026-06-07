@@ -41,9 +41,15 @@ function deriveKey(secret: string, salt: Buffer): Buffer {
  * self-describing base64 blob, or null when the shared secret is unavailable
  * (no key material → cannot encrypt).
  *
+ * `aad` (optional, RFC-008 PR-Bsec review NIT) binds the ciphertext to a context
+ * string (the agent name) via GCM Additional Authenticated Data. The AAD is NOT
+ * stored in the blob — the caller must supply the SAME `aad` to `decryptSecret`,
+ * else the GCM auth-tag check fails and decrypt returns null. This makes a token
+ * row copied to a different agent undecryptable under that agent's name.
+ *
  * Never logs or returns the plaintext.
  */
-export function encryptSecret(plaintext: string): string | null {
+export function encryptSecret(plaintext: string, aad?: string): string | null {
   const secret = resolveSecret();
   if (!secret) return null;
   try {
@@ -51,6 +57,7 @@ export function encryptSecret(plaintext: string): string | null {
     const iv = randomBytes(IV_LEN);
     const key = deriveKey(secret, salt);
     const cipher = createCipheriv(ALGO, key, iv);
+    if (aad !== undefined) cipher.setAAD(Buffer.from(aad, 'utf8'));
     const ct = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
     const tag = cipher.getAuthTag();
     return Buffer.concat([salt, iv, tag, ct]).toString('base64');
@@ -63,8 +70,13 @@ export function encryptSecret(plaintext: string): string | null {
  * Decrypt a blob produced by `encryptSecret`. Returns the original plaintext, or
  * null on ANY failure: missing shared secret, malformed/empty blob, truncated
  * buffer, or GCM auth-tag mismatch (tampering or wrong/rotated key). Never throws.
+ *
+ * `aad` must match the value passed to `encryptSecret` (the agent name). A blob
+ * encrypted with AAD=A but decrypted with AAD=B (or no AAD) fails the auth-tag
+ * check → null. The AAD is not stored in the blob; it is reconstructed by the
+ * caller from the context (the agent name the row belongs to).
  */
-export function decryptSecret(blob: string): string | null {
+export function decryptSecret(blob: string, aad?: string): string | null {
   if (typeof blob !== 'string' || blob.length === 0) return null;
   const secret = resolveSecret();
   if (!secret) return null;
@@ -80,6 +92,7 @@ export function decryptSecret(blob: string): string | null {
     const ct = buf.subarray(offset);
     const key = deriveKey(secret, Buffer.from(salt));
     const decipher = createDecipheriv(ALGO, key, iv);
+    if (aad !== undefined) decipher.setAAD(Buffer.from(aad, 'utf8'));
     decipher.setAuthTag(tag);
     const pt = Buffer.concat([decipher.update(ct), decipher.final()]);
     return pt.toString('utf8');

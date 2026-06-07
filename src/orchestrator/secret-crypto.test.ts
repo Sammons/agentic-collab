@@ -105,6 +105,36 @@ describe('secret-crypto (AES-256-GCM)', () => {
       process.env['ORCHESTRATOR_SECRET'] = 'a-completely-different-secret';
       assert.equal(decryptSecret(blob), null);
     });
+
+    // RFC-008 PR-C: AAD binds a token to its agent name. A row encrypted under
+    // agent A must NOT decrypt under agent B's name, even though both share the
+    // same shared secret. This is what makes a copied token-row useless.
+    describe('AAD binding (agent name)', () => {
+      it('encrypt(aad=A) then decrypt(aad=A) → original token', () => {
+        const token = '987654321:AAtokenForAgentA';
+        const blob = encryptSecret(token, 'agent-a');
+        assert.ok(blob);
+        assert.equal(decryptSecret(blob!, 'agent-a'), token);
+      });
+
+      it('encrypt(aad=A) then decrypt(aad=B) → null (copied row is useless)', () => {
+        const blob = encryptSecret('shared-secret-token', 'agent-a');
+        assert.ok(blob);
+        assert.equal(decryptSecret(blob!, 'agent-b'), null);
+      });
+
+      it('encrypt(aad=A) then decrypt with NO aad → null', () => {
+        const blob = encryptSecret('aad-only-token', 'agent-a');
+        assert.ok(blob);
+        assert.equal(decryptSecret(blob!), null);
+      });
+
+      it('encrypt with NO aad then decrypt(aad=A) → null', () => {
+        const blob = encryptSecret('no-aad-token');
+        assert.ok(blob);
+        assert.equal(decryptSecret(blob!, 'agent-a'), null);
+      });
+    });
   });
 
   describe('with NO shared secret', () => {
