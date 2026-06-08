@@ -962,11 +962,21 @@ describe('API Routes — Personas', () => {
   let port: number;
   let tmpDir: string;
   let personasDir: string;
+  let prevPersonasHostDir: string | undefined;
 
   before(async () => {
     tmpDir = mkdtempSync(join(tmpdir(), 'agentic-persona-route-test-'));
     personasDir = join(tmpDir, 'personas');
     process.env['PERSONAS_DIR'] = personasDir;
+    // Isolate PERSONAS_HOST_DIR: when set (it is in the dev/orchestrator shell),
+    // toHostPath() rewrites the returned filePath's PERSONAS_DIR prefix to the
+    // host dir, so the filePath would carry the host dir's basename (e.g.
+    // 'persistent-agents') instead of this temp dir's. Clearing it makes
+    // toHostPath an identity here, so the filePath assertions below are
+    // deterministic regardless of the ambient env (this suite tests the persona
+    // read-response shape, not container→host path mapping).
+    prevPersonasHostDir = process.env['PERSONAS_HOST_DIR'];
+    delete process.env['PERSONAS_HOST_DIR'];
     mkdirSync(personasDir, { recursive: true });
 
     writeFileSync(join(personasDir, 'researcher.md'), '# Researcher\nYou are a research agent.');
@@ -1007,6 +1017,8 @@ describe('API Routes — Personas', () => {
 
   after(() => {
     delete process.env['PERSONAS_DIR'];
+    if (prevPersonasHostDir === undefined) delete process.env['PERSONAS_HOST_DIR'];
+    else process.env['PERSONAS_HOST_DIR'] = prevPersonasHostDir;
     wss.close();
     server.close();
     db.close();
