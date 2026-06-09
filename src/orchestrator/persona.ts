@@ -1315,8 +1315,12 @@ Approvals (request human sign-off before taking sensitive actions):
   collab approval get <id>                      # check status
   collab approval withdraw <id>                 # cancel pending request
 
-  Use approvals for: destructive operations, external API calls, spending money,
-  sending emails, publishing content, or anything the operator should review first.
+  Use approvals for ANY persistent outstanding input you need from a human/the
+  operator — a question sent in chat scrolls away and gets lost, but a pending
+  approval stays visible on the dashboard until it's answered. That includes
+  sensitive actions to review first (destructive operations, external API calls,
+  spending money, sending emails, publishing content) AND any decision you're
+  blocked on (which option to take, whether to proceed, a value you need).
   The operator sees pending approvals on the dashboard and can approve/reject them.
 
 Tmux (routed through orchestrator to the correct proxy):
