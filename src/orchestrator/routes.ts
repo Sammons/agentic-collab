@@ -477,14 +477,15 @@ route('DELETE', '/api/agents/:name', async (_req, res, match, ctx) => {
   const agent = ctx.db.getAgent(name);
   if (!agent) return json(res, 404, { error: 'Agent not found' });
 
-  // Clean up config profile for engines that use it (e.g. Codex)
+  // Clean up config profile for engines that use it (e.g. Codex, OpenCode)
   if (agent.proxyId) {
     const adapter = getAdapter(agent.engine);
-    if (adapter.usesConfigProfile) {
-      await ctx.proxyDispatch(agent.proxyId, {
-        action: 'remove_codex_profile',
-        profileName: name,
-      }).catch((err) => { console.warn('[cleanup] Config profile removal failed:', (err as Error).message); });
+    const removeCommand = adapter.usesConfigProfile
+      ? adapter.buildProfileRemoveCommand?.(name)
+      : undefined;
+    if (removeCommand) {
+      await ctx.proxyDispatch(agent.proxyId, removeCommand)
+        .catch((err) => { console.warn('[cleanup] Config profile removal failed:', (err as Error).message); });
     }
   }
 

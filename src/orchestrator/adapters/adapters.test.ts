@@ -273,6 +273,23 @@ describe('Engine Adapters', () => {
       assert.equal(adapter.usesConfigProfile, true);
     });
 
+    it('builds write_codex_profile profile write command', () => {
+      const command = adapter.buildProfileWriteCommand('codex-agent', 'You are agent codex-agent');
+      assert.deepEqual(command, {
+        action: 'write_codex_profile',
+        profileName: 'codex-agent',
+        developerInstructions: 'You are agent codex-agent',
+      });
+    });
+
+    it('builds remove_codex_profile profile remove command', () => {
+      const command = adapter.buildProfileRemoveCommand('codex-agent');
+      assert.deepEqual(command, {
+        action: 'remove_codex_profile',
+        profileName: 'codex-agent',
+      });
+    });
+
     it('omits optional flags when undefined', () => {
       const cmd = adapter.buildSpawnCommand({
         name: 'codex-agent',
@@ -575,6 +592,75 @@ describe('Engine Adapters', () => {
 
     it('buildDetectSessionCommand returns null (OpenCode uses pane parsing)', () => {
       assert.equal(adapter.buildDetectSessionCommand('/some/cwd'), null);
+    });
+
+    it('has usesConfigProfile set to true', () => {
+      assert.equal(adapter.usesConfigProfile, true);
+    });
+
+    it('prefixes spawn with OPENCODE_CONFIG_CONTENT when appendSystemPrompt is set', () => {
+      const cmd = adapter.buildSpawnCommand({
+        name: 'oc-agent',
+        cwd: '/tmp',
+        model: 'claude-3.5',
+        appendSystemPrompt: 'You are a helpful assistant',
+      });
+      // Persona is injected via the instructions file the proxy wrote — the
+      // prompt body itself must NOT appear in the shell command.
+      assert.equal(
+        cmd,
+        'OPENCODE_CONFIG_CONTENT=\'{"instructions":["~/.config/opencode/collab/oc-agent.md"]}\' opencode -m claude-3.5',
+      );
+      assert.ok(!cmd.includes('You are a helpful assistant'));
+    });
+
+    it('omits OPENCODE_CONFIG_CONTENT when appendSystemPrompt is undefined', () => {
+      const cmd = adapter.buildSpawnCommand({
+        name: 'oc-agent',
+        cwd: '/tmp',
+      });
+      assert.equal(cmd, 'opencode');
+      assert.ok(!cmd.includes('OPENCODE_CONFIG_CONTENT'));
+    });
+
+    it('prefixes resume with OPENCODE_CONFIG_CONTENT when appendSystemPrompt is set', () => {
+      const cmd = adapter.buildResumeCommand({
+        name: 'oc-agent',
+        sessionId: 'ses_abc123',
+        cwd: '/tmp',
+        appendSystemPrompt: 'You are a code reviewer',
+      });
+      assert.equal(
+        cmd,
+        'OPENCODE_CONFIG_CONTENT=\'{"instructions":["~/.config/opencode/collab/oc-agent.md"]}\' opencode -s ses_abc123',
+      );
+      assert.ok(!cmd.includes('You are a code reviewer'));
+    });
+
+    it('omits OPENCODE_CONFIG_CONTENT on resume when appendSystemPrompt is undefined', () => {
+      const cmd = adapter.buildResumeCommand({
+        name: 'oc-agent',
+        sessionId: 'ses_abc123',
+        cwd: '/tmp',
+      });
+      assert.equal(cmd, 'opencode -s ses_abc123');
+    });
+
+    it('builds write_opencode_instructions profile write command', () => {
+      const command = adapter.buildProfileWriteCommand('oc-agent', 'You are agent oc-agent');
+      assert.deepEqual(command, {
+        action: 'write_opencode_instructions',
+        agentName: 'oc-agent',
+        content: 'You are agent oc-agent',
+      });
+    });
+
+    it('builds remove_opencode_instructions profile remove command', () => {
+      const command = adapter.buildProfileRemoveCommand('oc-agent');
+      assert.deepEqual(command, {
+        action: 'remove_opencode_instructions',
+        agentName: 'oc-agent',
+      });
     });
   });
 });

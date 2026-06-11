@@ -46,11 +46,25 @@ export interface EngineAdapter {
 
   /**
    * Whether this engine uses a config profile for system prompt injection.
-   * When true, the orchestrator must dispatch a write_codex_profile action
-   * to the proxy BEFORE pasting the spawn/resume command.
+   * When true, the orchestrator must dispatch the adapter's
+   * buildProfileWriteCommand() to the proxy BEFORE pasting the spawn/resume
+   * command (Codex: TOML profile; OpenCode: instructions file).
    * Defaults to false when not implemented.
    */
   readonly usesConfigProfile?: boolean;
+
+  /**
+   * Build the proxy command that persists the system prompt for engines with
+   * usesConfigProfile = true. Dispatched BEFORE the spawn/resume command is
+   * pasted, so the launched CLI finds the profile on disk.
+   */
+  buildProfileWriteCommand?(profileName: string, systemPrompt: string): import('../../shared/types.ts').ProxyCommand;
+
+  /**
+   * Build the proxy command that removes the persisted profile.
+   * Dispatched on agent destroy so stale profiles don't accumulate.
+   */
+  buildProfileRemoveCommand?(profileName: string): import('../../shared/types.ts').ProxyCommand;
 
   /** Build the shell command to spawn a new agent session */
   buildSpawnCommand(opts: SpawnOptions): string;

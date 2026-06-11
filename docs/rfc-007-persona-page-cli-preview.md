@@ -93,7 +93,7 @@ No tmux, no profile write, no scaffolding, no proxy, no DB mutation — strictly
 
 - **claude / claude-with-home**: persona is inline in `--append-system-prompt '«PERSONA»\n---\n<collab injection…>'`. The whole composed prompt (placeholder + scaffolding) is shell-quoted as one unit — exactly faithful.
 - **codex**: the system prompt is written to a config profile at spawn, not inline; the command uses `-p <name>`. Preview shows the command AND a secondary "codex profile (written at spawn)" block containing the composed prompt with `«PERSONA»`, annotated.
-- **opencode**: ignores the system prompt; preview shows the command and annotates that the persona is not injected via flag for this engine.
+- **opencode**: ~~ignores the system prompt~~ (updated 2026-06, opencode persona injection): the system prompt is written to `~/.config/opencode/collab/<name>.md` at spawn and the command carries an `OPENCODE_CONFIG_CONTENT` env prefix pointing at it. Preview shows the command AND a `profilePreview` block, same as codex.
 
 ### 4. Frontend: full-page route
 

@@ -8,6 +8,26 @@
  *   - `opencode -m <model>` — selects model at launch
  *   - `opencode --variant <thinking>` — selects thinking variant
  *
+ * System prompt injection (validated 2026-06-11 against the sst/opencode
+ * v1.17.3 release binary via `opencode debug config`):
+ *   - The proxy writes the composed prompt to
+ *     ~/.config/opencode/collab/<agent-name>.md (write_opencode_instructions).
+ *   - The spawn/resume command carries an env-var prefix:
+ *     OPENCODE_CONFIG_CONTENT='{"instructions":["~/.config/opencode/collab/<name>.md"]}'
+ *   - OpenCode merges OPENCODE_CONFIG_CONTENT LAST over global + project
+ *     config, CONCATENATING `instructions` arrays (config.ts mergeConfigConcatArrays,
+ *     https://github.com/sst/opencode/blob/v1.17.3/packages/opencode/src/config/config.ts#L467).
+ *   - Instruction files are APPENDED to the system prompt after the provider
+ *     default; `~/` expands to $HOME (session/instruction.ts#L138,
+ *     session/llm/request.ts#L58 at the same tag).
+ *   - Custom agents (`~/.config/opencode/agents/<name>.md` + `--agent`) were
+ *     REJECTED for persona injection: an agent's `prompt` REPLACES the
+ *     provider default system prompt (llm/request.ts:
+ *     `input.agent.prompt ? [input.agent.prompt] : SystemPrompt.provider(...)`),
+ *     which is replace semantics, not the append semantics appendSystemPrompt
+ *     promises. AGENTS.md / project opencode.json were rejected because they
+ *     leak across every session in the cwd instead of binding to one agent.
+ *
  * TUI interaction patterns (all via tmux send-keys):
  *   - Input: type message + Enter to submit
  *   - Compact: Ctrl-X then C (chord sequence)
@@ -29,10 +49,47 @@
  */
 
 import { SPINNER_REGEX, type EngineAdapter, type SpawnOptions, type ResumeOptions, type IdleState, type ContextResult } from './types.ts';
+import { shellQuote, OPENCODE_COLLAB_INSTRUCTIONS_DIR } from '../../shared/utils.ts';
+import type { ProxyCommand } from '../../shared/types.ts';
 
 export class OpenCodeAdapter implements EngineAdapter {
   readonly engine = 'opencode';
   readonly supportsResumePrompt = false;
+
+  /**
+   * System prompt injection via per-agent instructions file + env-var prefix
+   * (see header). The orchestrator dispatches buildProfileWriteCommand() to
+   * the proxy BEFORE pasting the spawn/resume command.
+   */
+  readonly usesConfigProfile = true;
+
+  buildProfileWriteCommand(profileName: string, systemPrompt: string) {
+    return {
+      action: 'write_opencode_instructions',
+      agentName: profileName,
+      content: systemPrompt,
+    } as const satisfies ProxyCommand;
+  }
+
+  buildProfileRemoveCommand(profileName: string) {
+    return {
+      action: 'remove_opencode_instructions',
+      agentName: profileName,
+    } as const satisfies ProxyCommand;
+  }
+
+  /**
+   * Env-var prefix pointing OpenCode at the per-agent instructions file the
+   * proxy wrote. The JSON only embeds the agent name (validated [a-zA-Z0-9_-]
+   * by the proxy writer), so shellQuote covers every quoting hazard; the
+   * prompt body itself never passes through the shell.
+   */
+  #instructionsEnvPrefix(agentName: string): string {
+    const configContent = JSON.stringify({
+      instructions: [`~/${OPENCODE_COLLAB_INSTRUCTIONS_DIR}/${agentName}.md`],
+    });
+    return `OPENCODE_CONFIG_CONTENT=${shellQuote(configContent)}`;
+  }
 
   buildSpawnCommand(opts: SpawnOptions): string {
     const parts = ['opencode'];
@@ -43,6 +100,10 @@ export class OpenCodeAdapter implements EngineAdapter {
 
     if (opts.thinking) {
       parts.push('--variant', opts.thinking);
+    }
+
+    if (opts.appendSystemPrompt) {
+      parts.unshift(this.#instructionsEnvPrefix(opts.name));
     }
 
     return parts.join(' ');
@@ -58,6 +119,10 @@ export class OpenCodeAdapter implements EngineAdapter {
       // Without a session ID, launch a fresh TUI. The orchestrator should always
       // have a session ID from extractSessionId() after exit.
       // Fall through to plain 'opencode' — better than a broken -c resume.
+    }
+
+    if (opts.appendSystemPrompt) {
+      parts.unshift(this.#instructionsEnvPrefix(opts.name));
     }
 
     return parts.join(' ');
