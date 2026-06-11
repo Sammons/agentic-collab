@@ -3,6 +3,8 @@
  * Used for initial seeding and the "Reset Defaults" action.
  */
 
+import type { IndicatorDefinition } from '../shared/types.ts';
+
 export type DefaultEngineConfig = {
   name: string;
   engine: string;
@@ -21,57 +23,61 @@ export type DefaultEngineConfig = {
   launchEnv?: Record<string, string> | null;
 };
 
-// Shared indicator definitions
-const UNSAFE_INDICATOR = { id: 'unsafe', regex: '.', badge: 'Unsafe', style: 'danger' };
-const LOW_CONTEXT_INDICATOR = { id: 'low-context', regex: 'Context left until', badge: 'Low Context', style: 'danger' };
-const CONTEXT_LIMIT_INDICATOR = { id: 'context-limit', regex: 'Context limit reached', badge: 'Context Limit', style: 'danger' };
+// Shared indicator definitions.
+// `satisfies IndicatorDefinition` makes the compiler enforce the canonical
+// pipeline-step shape — keystroke steps are `{ type: 'keystroke', key: '...' }`
+// per shared/types.ts. A `keystroke:` field here previously dispatched
+// `keys: undefined` at runtime (lifecycle.ts read `step.key` only).
+const UNSAFE_INDICATOR = { id: 'unsafe', regex: '.', badge: 'Unsafe', style: 'danger' } satisfies IndicatorDefinition;
+const LOW_CONTEXT_INDICATOR = { id: 'low-context', regex: 'Context left until', badge: 'Low Context', style: 'danger' } satisfies IndicatorDefinition;
+const CONTEXT_LIMIT_INDICATOR = { id: 'context-limit', regex: 'Context limit reached', badge: 'Context Limit', style: 'danger' } satisfies IndicatorDefinition;
 const CLAUDE_APPROVAL_INDICATOR = {
   id: 'approval',
   regex: '(Yes)\\s*/\\s*(No)\\s*/\\s*(Always allow)',
   badge: 'Needs Approval',
   style: 'warning',
   actions: {
-    '$1': [{ type: 'keystroke', keystroke: '$1' }],
-    '$2': [{ type: 'keystroke', keystroke: '$2' }],
-    '$3': [{ type: 'keystroke', keystroke: '$3' }],
+    '$1': [{ type: 'keystroke', key: '$1' }],
+    '$2': [{ type: 'keystroke', key: '$2' }],
+    '$3': [{ type: 'keystroke', key: '$3' }],
   },
-};
+} satisfies IndicatorDefinition;
 const CLAUDE_FILE_PERMISSION_INDICATOR = {
   id: 'file-permission',
   regex: 'Do you want to .+\\?',
   badge: 'Needs Approval',
   style: 'warning',
   actions: {
-    'Yes': [{ type: 'keystroke', keystroke: '1' }],
-    'Allow All': [{ type: 'keystroke', keystroke: '2' }],
-    'No': [{ type: 'keystroke', keystroke: '3' }],
+    'Yes': [{ type: 'keystroke', key: '1' }],
+    'Allow All': [{ type: 'keystroke', key: '2' }],
+    'No': [{ type: 'keystroke', key: '3' }],
   },
-};
+} satisfies IndicatorDefinition;
 const CLAUDE_PLAN_INDICATOR = {
   id: 'plan-review',
   regex: '(approve)\\s*/\\s*(deny)\\s*/\\s*(edit)',
   badge: 'Plan Review',
   style: 'warning',
   actions: {
-    '$1': [{ type: 'keystroke', keystroke: '$1' }],
-    '$2': [{ type: 'keystroke', keystroke: '$2' }],
-    '$3': [{ type: 'keystroke', keystroke: '$3' }],
+    '$1': [{ type: 'keystroke', key: '$1' }],
+    '$2': [{ type: 'keystroke', key: '$2' }],
+    '$3': [{ type: 'keystroke', key: '$3' }],
   },
-};
+} satisfies IndicatorDefinition;
 const CLAUDE_RESUME_PROMPT_INDICATOR = {
   id: 'resume-prompt',
   regex: 'Resume from summary',
   badge: 'Resume Prompt',
   style: 'warning',
   actions: {
-    'Summary': [{ type: 'keystroke', keystroke: 'Enter' }],
-    'Full': [{ type: 'keystroke', keystroke: 'Down' }, { type: 'keystroke', keystroke: 'Enter' }],
+    'Summary': [{ type: 'keystroke', key: 'Enter' }],
+    'Full': [{ type: 'keystroke', key: 'Down' }, { type: 'keystroke', key: 'Enter' }],
   },
-};
-const LOGGED_OUT_INDICATOR = { id: 'logged-out', regex: 'Not logged in', badge: 'Logged Out', style: 'danger' };
-const LOCAL_AGENTS_INDICATOR = { id: 'local-agents', regex: '\\u00b7\\s*(\\d+) local agents?', badge: '$1 Local Agents', style: 'info' };
-const BACKGROUND_SHELLS_INDICATOR = { id: 'bg-shells', regex: '\\u00b7\\s*(\\d+) shells?', badge: '$1 Shells', style: 'info' };
-const BACKGROUND_TASKS_INDICATOR = { id: 'bg-tasks', regex: '\\u00b7\\s*(\\d+) background tasks?', badge: '$1 Background', style: 'info' };
+} satisfies IndicatorDefinition;
+const LOGGED_OUT_INDICATOR = { id: 'logged-out', regex: 'Not logged in', badge: 'Logged Out', style: 'danger' } satisfies IndicatorDefinition;
+const LOCAL_AGENTS_INDICATOR = { id: 'local-agents', regex: '\\u00b7\\s*(\\d+) local agents?', badge: '$1 Local Agents', style: 'info' } satisfies IndicatorDefinition;
+const BACKGROUND_SHELLS_INDICATOR = { id: 'bg-shells', regex: '\\u00b7\\s*(\\d+) shells?', badge: '$1 Shells', style: 'info' } satisfies IndicatorDefinition;
+const BACKGROUND_TASKS_INDICATOR = { id: 'bg-tasks', regex: '\\u00b7\\s*(\\d+) background tasks?', badge: '$1 Background', style: 'info' } satisfies IndicatorDefinition;
 
 // Detection configs per engine — regex patterns for idle/active state detection
 const CLAUDE_DETECTION = {
