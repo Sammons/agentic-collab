@@ -423,6 +423,7 @@ const CLONEABLE_KEYS = [
   'model', 'thinking', 'permissions',
   'hookStart', 'hookResume', 'hookCompact', 'hookExit', 'hookInterrupt',
   'hookReload', 'hookSubmit', 'indicators', 'detection', 'customButtons',
+  'launchEnv',
 ] as const;
 
 function openNewEngineForm(): void {
@@ -468,7 +469,11 @@ function openNewEngineForm(): void {
     if (src && engineSel) engineSel.value = src.engine;
   });
 
-  overlay.querySelector<HTMLElement>('[data-submit]')?.addEventListener('click', async () => {
+  const submitBtn = overlay.querySelector<HTMLButtonElement>('[data-submit]');
+  submitBtn?.addEventListener('click', async () => {
+    if (submitBtn.disabled) {
+      return;
+    }
     const name = overlay.querySelector<HTMLInputElement>('[data-in-name]')?.value.trim() ?? '';
     const engine = engineSel?.value ?? 'claude';
     const cloneFrom = cloneSel?.value ?? '';
@@ -488,6 +493,7 @@ function openNewEngineForm(): void {
       }
     }
 
+    submitBtn.disabled = true;
     try {
       const res = await fetch('/api/engine-configs', {
         method: 'POST',
@@ -502,8 +508,9 @@ function openNewEngineForm(): void {
       close();
       showToast('Engine config created');
       // Land on the editor so the operator can fine-tune the new config.
-      navigate({ kind: 'edit-engine', name });
+      go({ kind: 'edit-engine', name });
     } catch { showToast('Network error', 'error'); }
+    finally { submitBtn.disabled = false; }
   });
 }
 
