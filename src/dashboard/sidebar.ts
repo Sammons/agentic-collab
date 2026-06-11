@@ -14,6 +14,7 @@
  * the Watch eye icon DO navigate (via routing.ts).
  */
 import { state, on, toggleAgentSelected, toggleTeam, toggleAllAgents, agentsByName, enterFocusMode } from './state.ts';
+import { pendingCounts } from './pending-counts.ts';
 import { go } from './routing.ts';
 import { openNewTeamModal, openEditTeamModal } from './overlays.ts';
 import type { Team } from '../shared/types.ts';
@@ -75,6 +76,7 @@ export function setupSidebar(): void {
   on('teams-changed', scheduleRender);
   on('selection-changed', render); // selection changes render immediately for responsiveness
   on('route-changed', render); // route changes render immediately
+  on('pending-counts-changed', scheduleRender);
   render();
 }
 
@@ -106,7 +108,8 @@ function render(): void {
 
 function navActionsHtml(): string {
   const active = (kind: string) => (state.route.kind === kind ? 'active' : '');
-  // TODO PR 5/6: real approvals + reminders pending counts.
+  // Hidden at zero — an empty badge is noise, not signal.
+  const badge = (count: number) => (count > 0 ? `<span class="badge">${count}</span>` : '');
   return `
     <div class="nav-actions">
       <button class="nav-action ${active('dashboard')}" data-go="dashboard">
@@ -124,10 +127,12 @@ function navActionsHtml(): string {
       <button class="nav-action ${active('approvals')}" data-go="approvals">
         <span class="ico">${icons['approvals']}</span>
         <span class="label">Approvals</span>
+        ${badge(pendingCounts.approvals)}
       </button>
       <button class="nav-action ${active('reminders')}" data-go="reminders">
         <span class="ico">${icons['clock']}</span>
         <span class="label">Reminders</span>
+        ${badge(pendingCounts.reminders)}
       </button>
     </div>
   `;

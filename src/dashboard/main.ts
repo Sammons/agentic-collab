@@ -22,6 +22,7 @@ import { setupSettings } from './settings.ts';
 import { setupSearch } from './search.ts';
 import { setupPersona } from './persona.ts';
 import { setupTitle } from './title.ts';
+import { setupPendingCounts } from './pending-counts.ts';
 import { connect } from './connection.ts';
 
 function boot(): void {
@@ -49,6 +50,8 @@ function boot(): void {
   // After setupRouter() so the initial update() reads the parsed route.
   setupTitle();
   setupSidebar();
+  // Before connect() so the init listener is wired when the WS init lands.
+  setupPendingCounts();
   setupMobileNav();
   connect();
 }
