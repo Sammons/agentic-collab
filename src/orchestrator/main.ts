@@ -369,6 +369,8 @@ const bootReconciler = new BootReconciler({
 const proxyReconnectHandler = new ProxyReconnectHandler({
   db,
   proxyDispatch,
+  // HIGH-1: status-ready rows are finalised via the reaper, never failed.
+  instanceReaper,
   onEvent: (event) => wss.broadcastEvent(event),
 });
 

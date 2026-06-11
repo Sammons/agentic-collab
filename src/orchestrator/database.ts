@@ -1214,26 +1214,97 @@ export class Database {
   }
 
   /**
-   * Q8: requeue a `topic_queue` row whose claim got orphaned by a crash or
-   * proxy disconnect. Resets `status` back to `'queued'` and clears the
-   * `claimed_by_instance` / `worktree_path` columns so a fresh `claimAndSpawn`
-   * pass can grab it. Idempotent: only acts on rows currently in `'claimed'`
-   * or `'failed'`. Returns true if a row was actually requeued.
+   * Q8 hardening (HIGH-2): atomically mark an instance failed AND settle its
+   * `topic_queue` row in ONE `BEGIN IMMEDIATE` transaction, with
+   * compare-and-set guards on both writes:
    *
-   * Gated by env `V3_RECOVERY_QUEUE_POLICY=requeue`; the default policy is
-   * `'fail'` (terminal), matching the original Q8 spec.
+   *  - The instance write applies only while the row's state is in
+   *    `expectedStates`. A delayed recovery write therefore cannot overwrite
+   *    a terminal state the reaper committed first — when the CAS misses,
+   *    the queue row is left UNTOUCHED and `instanceUpdated: false` is
+   *    returned so the caller skips its `instance_failed` event.
+   *  - Queue writes are guarded by `status = 'claimed'` AND
+   *    `claimed_by_instance = <instanceId>` so stale recovery can never
+   *    requeue or fail a row that was already settled, or re-claimed by a
+   *    NEWER instance (which would cause double delivery).
+   *
+   * The single transaction closes the crash window the old two-statement
+   * shape had: instance flipped to 'failed' but the queue row stranded in
+   * 'claimed' forever.
    */
-  requeueTopicQueueRow(id: number): boolean {
-    const result = this.db.prepare(`
-      UPDATE topic_queue
-         SET status = 'queued',
-             claimed_by_instance = NULL,
-             worktree_path = NULL,
-             completed_at = NULL
-       WHERE id = ?
-         AND status IN ('claimed', 'failed')
-    `).run(id);
-    return result.changes > 0;
+  failInstanceAndSettleQueue(opts: {
+    instanceId: string;
+    expectedStates: AgentInstanceState[];
+    failureReason: string;
+    queueId: number | null;
+    queuePolicy: 'fail' | 'requeue';
+  }): { instanceUpdated: boolean; queueAction: 'requeued' | 'failed' | 'none' } {
+    const begin = this.db.prepare('BEGIN IMMEDIATE');
+    const commit = this.db.prepare('COMMIT');
+    const rollback = this.db.prepare('ROLLBACK');
+    begin.run();
+    try {
+      const placeholders = opts.expectedStates.map(() => '?').join(', ');
+      const updated = this.db.prepare(`
+        UPDATE agent_instances
+           SET state = 'failed',
+               completed_at = ?,
+               failure_reason = ?
+         WHERE id = ?
+           AND state IN (${placeholders})
+      `).run(
+        new Date().toISOString(),
+        opts.failureReason,
+        opts.instanceId,
+        ...opts.expectedStates,
+      );
+      if (updated.changes === 0) {
+        rollback.run();
+        return { instanceUpdated: false, queueAction: 'none' };
+      }
+
+      let queueAction: 'requeued' | 'failed' | 'none' = 'none';
+      if (opts.queueId != null) {
+        if (opts.queuePolicy === 'requeue') {
+          const requeued = this.db.prepare(`
+            UPDATE topic_queue
+               SET status = 'queued',
+                   claimed_by_instance = NULL,
+                   worktree_path = NULL,
+                   completed_at = NULL
+             WHERE id = ?
+               AND status = 'claimed'
+               AND claimed_by_instance = ?
+          `).run(opts.queueId, opts.instanceId);
+          if (requeued.changes > 0) {
+            queueAction = 'requeued';
+          }
+        }
+        if (queueAction === 'none') {
+          const failed = this.db.prepare(`
+            UPDATE topic_queue
+               SET status = 'failed',
+                   completed_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+             WHERE id = ?
+               AND status = 'claimed'
+               AND claimed_by_instance = ?
+          `).run(opts.queueId, opts.instanceId);
+          if (failed.changes > 0) {
+            queueAction = 'failed';
+          }
+        }
+      }
+
+      commit.run();
+      return { instanceUpdated: true, queueAction };
+    } catch (err) {
+      try {
+        rollback.run();
+      } catch {
+        /* already rolled back */
+      }
+      throw err;
+    }
   }
 
   // ── Approvals (v3 Q5) ──

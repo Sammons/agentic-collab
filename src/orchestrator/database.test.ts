@@ -1033,6 +1033,135 @@ describe('Database', () => {
     });
   });
 
+  // Q8 hardening (HIGH-2): atomic, CAS-guarded fail + queue settle.
+  describe('failInstanceAndSettleQueue (Q8 hardening)', () => {
+    let qDir: string;
+    let qDb: Database;
+    let counter = 0;
+
+    before(() => {
+      qDir = mkdtempSync(join(tmpdir(), 'agentic-collab-q8-'));
+      qDb = new Database(join(qDir, 'q8.db'));
+      qDb.upsertAgentTemplate({
+        id: 'q8t', personaPath: null, engine: 'claude', model: null, persistent: false,
+        cwdBase: '/tmp', cwdTemplate: null, repoRoot: '/tmp',
+        hookStart: 'echo start', hookExit: null, hookPrepare: null, hookCleanup: null,
+        createdAt: '', updatedAt: '',
+      });
+    });
+
+    after(() => {
+      qDb.close();
+      rmSync(qDir, { recursive: true, force: true });
+    });
+
+    /** Enqueue + claim one message, returning the claim (state 'spawning'). */
+    function claimOne() {
+      counter += 1;
+      const instanceId = `q8-inst-${counter}`;
+      qDb.enqueueTopicMessage({ agentTemplate: 'q8t', topicName: 'echo', payload: '{}' });
+      const claim = qDb.claimAndCreateInstance({
+        agentTemplate: 'q8t',
+        topicName: 'echo',
+        instanceId,
+        instanceAddr: `agent:q8t/${instanceId}`,
+        tmuxSession: `inst-q8t-${counter}`,
+        proxyId: 'p1',
+        messageId: instanceId,
+        messagePath: `/tmp/${instanceId}-msg`,
+        replyPath: `/tmp/${instanceId}-reply`,
+        statusPath: `/tmp/${instanceId}-status`,
+        worktreePath: null,
+        suffix: `s${counter}00000`.slice(0, 6),
+      });
+      assert.ok(claim, 'claim succeeded');
+      return claim!;
+    }
+
+    function queueRow(id: number) {
+      return qDb.rawDb.prepare(
+        'SELECT status, claimed_by_instance FROM topic_queue WHERE id = ?',
+      ).get(id) as { status: string; claimed_by_instance: string | null };
+    }
+
+    it('fails the instance and the queue row together (fail policy)', () => {
+      const claim = claimOne();
+      const result = qDb.failInstanceAndSettleQueue({
+        instanceId: claim.instance.id,
+        expectedStates: ['spawning'],
+        failureReason: 'crash recovery',
+        queueId: claim.queue.id,
+        queuePolicy: 'fail',
+      });
+      assert.deepEqual(result, { instanceUpdated: true, queueAction: 'failed' });
+
+      const row = qDb.getAgentInstance(claim.instance.id)!;
+      assert.equal(row.state, 'failed');
+      assert.equal(row.failureReason, 'crash recovery');
+      assert.ok(row.completedAt, 'completed_at stamped');
+      assert.equal(queueRow(claim.queue.id).status, 'failed');
+    });
+
+    it('requeue policy resets the queue row and clears the claim', () => {
+      const claim = claimOne();
+      const result = qDb.failInstanceAndSettleQueue({
+        instanceId: claim.instance.id,
+        expectedStates: ['spawning'],
+        failureReason: 'crash recovery',
+        queueId: claim.queue.id,
+        queuePolicy: 'requeue',
+      });
+      assert.deepEqual(result, { instanceUpdated: true, queueAction: 'requeued' });
+      const q = queueRow(claim.queue.id);
+      assert.equal(q.status, 'queued');
+      assert.equal(q.claimed_by_instance, null);
+    });
+
+    it('CAS refuses to overwrite a terminal state and leaves the queue untouched', () => {
+      const claim = claimOne();
+      // The reaper finalised the row + queue first.
+      qDb.updateInstanceState(claim.instance.id, 'completed', { completedAt: 'now' });
+      qDb.markTopicQueueCompleted(claim.queue.id, 'completed');
+
+      const result = qDb.failInstanceAndSettleQueue({
+        instanceId: claim.instance.id,
+        expectedStates: ['running'],
+        failureReason: 'delayed recovery write',
+        queueId: claim.queue.id,
+        queuePolicy: 'requeue',
+      });
+      assert.deepEqual(result, { instanceUpdated: false, queueAction: 'none' });
+
+      const row = qDb.getAgentInstance(claim.instance.id)!;
+      assert.equal(row.state, 'completed', 'reaper outcome stands');
+      assert.equal(queueRow(claim.queue.id).status, 'completed', 'no requeue → no double delivery');
+    });
+
+    it('queue row claimed by a NEWER instance is never touched (claim guard)', () => {
+      const claim = claimOne();
+      // Simulate: the row was requeued and re-claimed by a newer instance
+      // before this stale recovery write landed.
+      qDb.rawDb.prepare(
+        `UPDATE topic_queue SET claimed_by_instance = 'newer-instance' WHERE id = ?`,
+      ).run(claim.queue.id);
+
+      const result = qDb.failInstanceAndSettleQueue({
+        instanceId: claim.instance.id,
+        expectedStates: ['spawning'],
+        failureReason: 'stale recovery',
+        queueId: claim.queue.id,
+        queuePolicy: 'requeue',
+      });
+      // The stale instance itself still fails (it IS dead) ...
+      assert.equal(result.instanceUpdated, true);
+      // ... but the queue row belongs to someone else now.
+      assert.equal(result.queueAction, 'none');
+      const q = queueRow(claim.queue.id);
+      assert.equal(q.status, 'claimed', 'newer claim untouched');
+      assert.equal(q.claimed_by_instance, 'newer-instance');
+    });
+  });
+
   // Carries v2 `agents.agent_group` values forward to the v3 teams schema.
   // Pre-existing groups got stranded because the v3 cutover added the new
   // tables but never seeded them from the old column.
