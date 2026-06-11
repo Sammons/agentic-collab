@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install mise
+        run: |
+          curl https://mise.run | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Install toolchain
+        run: mise install
+
+      # Runs `node --test 'src/**/*.test.ts'` (~1317 tests) via the mise task
+      # so CI and the local dev loop execute the identical command.
+      #
+      # `pnpm typecheck` is intentionally NOT a gate here: it reports ~686
+      # baseline errors (TS5097/TS4111) by design. Type health is judged by
+      # per-file delta during review, not by an absolute error count.
+      - name: Run tests
+        run: mise run test
