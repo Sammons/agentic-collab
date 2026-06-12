@@ -7,7 +7,10 @@
  * /api/approvals/:id/set and /api/approvals/:id/withdraw endpoints.
  *
  * Amend opens a side-by-side payload editor as an overlay; submitting POSTs
- * { state: 'amended', payload } and broadcasts via WS.
+ * { state: 'amended', payload } and broadcasts via WS. Amending IS the
+ * decision: 'amended' is a terminal state (approved with the modified
+ * payload), so there is no follow-up approve step — the server 409s any
+ * further setState.
  *
  * Subscribes to `ws:approval_changed` (existing WS event) so live updates
  * reflect on both master and detail panes.
@@ -213,7 +216,7 @@ function renderDetail(a: ApprovalRow): void {
         ` : `
           <button class="btn primary" data-decide="approved">Approve</button>
           <button class="btn danger" data-decide="rejected">Reject</button>
-          <button class="btn" data-decide="amended">Amend…</button>
+          <button class="btn" data-decide="amended">Amend &amp; approve…</button>
           <button class="btn ghost" data-withdraw>Withdraw</button>
           <span style="margin-left:auto;display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:11.5px;color:var(--ink-3);">
             also notify
@@ -255,12 +258,19 @@ function renderDetail(a: ApprovalRow): void {
   }
 }
 
+/**
+ * 'ok' = decision recorded; 'terminal' = a 409 said someone already decided
+ * (pane is force-refreshed); 'failed' = validation/network error — the caller
+ * may keep its UI (e.g. the amend modal) open so operator input isn't lost.
+ */
+type DecideResult = 'ok' | 'terminal' | 'failed';
+
 async function decide(
   id: string,
   newState: 'approved' | 'rejected' | 'amended',
   payload?: string,
   notifyAgent?: string | null,
-): Promise<void> {
+): Promise<DecideResult> {
   try {
     const body: Record<string, unknown> = { state: newState };
     if (payload !== undefined) body['payload'] = payload;
@@ -270,14 +280,23 @@ async function decide(
       body: JSON.stringify(body),
     });
     if (!res.ok) {
+      if (res.status === 409) {
+        // Approval states are one-shot terminal; a 409 means another decision
+        // already landed. Refresh so the pane re-renders the terminal state.
+        showToast('Already decided — refreshing', 'error');
+        void loadAll();
+        return 'terminal';
+      }
       const b = await res.json().catch(() => null);
       showToast(b?.error ?? 'Decision failed', 'error');
-      return;
+      return 'failed';
     }
     if (notifyAgent) await notifyAgentOfDecision(notifyAgent, id, newState);
     void loadAll();
+    return 'ok';
   } catch {
     showToast('Network error', 'error');
+    return 'failed';
   }
 }
 
@@ -346,10 +365,12 @@ function openAmendModal(a: ApprovalRow, notifyAgent?: string | null): void {
   overlay.innerHTML = `
     <div class="amend-modal" style="position:static;width:880px;max-width:95vw;max-height:90vh;overflow:hidden;display:flex;flex-direction:column;">
       <div class="amh">
-        <div class="ttl">Amend approval<span class="id">${escapeHtml(a.id)}</span></div>
+        <div class="ttl">Amend &amp; approve<span class="id">${escapeHtml(a.id)}</span></div>
         <div class="lead">
-          Submitting an amend transitions the state to <em>amended</em> and records a new
-          payload version. Edit the right side. JSON is preferred but any text is accepted.
+          Amending <em>is</em> the decision: submitting approves the request with the
+          modified payload and the approval becomes terminal (<em>amended</em> = approved
+          with amendments — no separate approve step follows). Edit the right side.
+          JSON is preferred but any text is accepted.
         </div>
       </div>
       <div class="amb" style="overflow-y:auto;">
@@ -370,7 +391,7 @@ function openAmendModal(a: ApprovalRow, notifyAgent?: string | null): void {
         <span class="hint"><kbd>⌘</kbd> <kbd>↵</kbd> submit · <kbd>esc</kbd> cancel</span>
         <span class="spacer"></span>
         <button class="btn" data-amend-cancel>Cancel</button>
-        <button class="btn primary" data-amend-submit>Submit amend</button>
+        <button class="btn primary" data-amend-submit>Amend &amp; approve</button>
       </div>
     </div>
   `;
@@ -379,15 +400,29 @@ function openAmendModal(a: ApprovalRow, notifyAgent?: string | null): void {
   const close = () => overlay.remove();
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
   overlay.querySelector<HTMLElement>('[data-amend-cancel]')?.addEventListener('click', close);
-  overlay.querySelector<HTMLElement>('[data-amend-submit]')?.addEventListener('click', async () => {
+  const submitBtn = overlay.querySelector<HTMLButtonElement>('[data-amend-submit]');
+  submitBtn?.addEventListener('click', async () => {
+    if (submitBtn.disabled) {
+      return;
+    }
     const ta = overlay.querySelector<HTMLTextAreaElement>('[data-amend-payload]');
     const payload = ta?.value ?? '';
     if (!payload.trim()) {
       showToast('Payload required', 'error');
       return;
     }
-    await decide(a.id, 'amended', payload, notifyAgent);
-    close();
+    submitBtn.disabled = true;
+    try {
+      const result = await decide(a.id, 'amended', payload, notifyAgent);
+      // Close on success (decide already refreshed the pane) and on 409
+      // (already terminal — the stale editor must not stay up). Stay open on
+      // validation/network failures so the operator's edits aren't lost.
+      if (result !== 'failed') {
+        close();
+      }
+    } finally {
+      submitBtn.disabled = false;
+    }
   });
   document.addEventListener('keydown', function esc(e) {
     if (e.key === 'Escape') { close(); document.removeEventListener('keydown', esc); }
