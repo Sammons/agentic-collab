@@ -167,6 +167,30 @@ export function assembleLaunchCommand(opts: {
 }
 
 /**
+ * Normalize pipeline steps loaded from JSON (DB indicators, engine configs,
+ * custom buttons) to the canonical PipelineStep shape.
+ *
+ * The canonical keystroke step is `{ type: 'keystroke', key: 'Enter' }`
+ * (shared/types.ts), but the default indicator actions and the archived v2
+ * dashboard wrote `{ type: 'keystroke', keystroke: 'Enter' }`. Both spellings
+ * exist in seeded DB rows, so the executor accepts both: when `key` is absent
+ * the legacy `keystroke` field is copied into `key`.
+ */
+export function normalizePipelineSteps(steps: PipelineStep[]): PipelineStep[] {
+  return steps.map(step => {
+    if (step && typeof step === 'object' && step.type === 'keystroke' && typeof step.key !== 'string') {
+      // JSON-sourced steps may carry the legacy `keystroke` spelling, which
+      // the declared PipelineStep type cannot see — hence the cast.
+      const legacy = (step as { keystroke?: unknown }).keystroke;
+      if (typeof legacy === 'string') {
+        return { ...step, key: legacy };
+      }
+    }
+    return step;
+  });
+}
+
+/**
  * Dispatch a resolved hook result to the proxy.
  * Handles paste, keys, send sequences, pipelines, and skip modes uniformly.
  *
@@ -223,10 +247,16 @@ export async function dispatchHookResult(
   }
 
   if (result.mode === 'pipeline') {
-    for (const step of result.steps) {
+    for (const step of normalizePipelineSteps(result.steps)) {
       if (step.type === 'keystrokes') {
         await dispatchHookResult(ctx, proxyId, tmuxSession, { mode: 'send', actions: step.actions }, opts);
       } else if (step.type === 'keystroke') {
+        if (typeof step.key !== 'string') {
+          // Malformed step (neither `key` nor `keystroke`) — skip instead of
+          // dispatching `keys: undefined` to the proxy.
+          console.warn(`[lifecycle] skipping malformed keystroke step (no key/keystroke field): ${JSON.stringify(step)}`);
+          continue;
+        }
         await ctx.proxyDispatch(proxyId, {
           action: 'send_keys',
           sessionName: tmuxSession,
@@ -1452,17 +1482,23 @@ export async function executeIndicatorAction(
       } catch { /* best effort */ }
     }
 
-    // Find the action — try exact match first, then try interpolated match
-    let steps = indicator.actions[actionName] as PipelineStep[] | undefined;
-    if ((!steps || !Array.isArray(steps)) && match) {
+    // Find the action — try exact match first, then try interpolated match.
+    // Steps come from JSON in the DB, so normalize legacy `keystroke` spelling
+    // to the canonical `key` before any field access (the cast is the
+    // JSON.parse boundary — the data is unvalidated).
+    const rawSteps = indicator.actions[actionName];
+    let steps = Array.isArray(rawSteps) ? normalizePipelineSteps(rawSteps as PipelineStep[]) : undefined;
+    if (!steps && match) {
       // The action key in the DB may be $1, $2, etc. — find the matching definition key
       for (const [key, val] of Object.entries(indicator.actions)) {
         const interpolatedKey = key.replace(/\$(\d+)/g, (_m, idx) => match![parseInt(idx, 10)] ?? '');
         if (interpolatedKey === actionName && Array.isArray(val)) {
-          // Interpolate $N in the pipeline steps too
-          steps = (val as PipelineStep[]).map(step => {
-            if (step.type === 'keystroke') return { ...step, key: step.key.replace(/\$(\d+)/g, (_m, idx) => match![parseInt(idx, 10)] ?? '') };
-            if (step.type === 'shell') return { ...step, command: step.command.replace(/\$(\d+)/g, (_m, idx) => match![parseInt(idx, 10)] ?? '') };
+          // Interpolate $N in the pipeline steps too. Guard field types so a
+          // malformed step passes through (and is logged + skipped at
+          // dispatch) instead of throwing mid-pipeline on undefined.replace.
+          steps = normalizePipelineSteps(val as PipelineStep[]).map(step => {
+            if (step.type === 'keystroke' && typeof step.key === 'string') return { ...step, key: step.key.replace(/\$(\d+)/g, (_m, idx) => match![parseInt(idx, 10)] ?? '') };
+            if (step.type === 'shell' && typeof step.command === 'string') return { ...step, command: step.command.replace(/\$(\d+)/g, (_m, idx) => match![parseInt(idx, 10)] ?? '') };
             return step;
           });
           break;
@@ -1470,7 +1506,7 @@ export async function executeIndicatorAction(
       }
     }
 
-    if (!steps || !Array.isArray(steps)) {
+    if (!steps) {
       throw new Error(`Action "${actionName}" not found on indicator "${indicatorId}" for agent "${name}"`);
     }
 
