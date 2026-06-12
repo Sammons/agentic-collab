@@ -33,7 +33,7 @@ describe('serializeFrontmatter round-trip (M1: scalars, teams, env)', () => {
     assert.equal(structuredRenderable('---\nengine: claude\ncwd: /x\nweird_custom_key: foo\n---\nb\n'), false);
     // a structured-hook object (preset/shell/send/keystrokes) — not handled by the editor
     assert.equal(structuredRenderable('---\nengine: claude\ncwd: /x\nstart:\n  shell: /compact\n---\nb\n'), false);
-    // topics is template-only — stays advanced
+    // topics is an unknown nested key (RFC-009 removed its parser) — stays advanced
     assert.equal(structuredRenderable('---\nengine: claude\ncwd: /x\ntopics:\n  - name: foo\n    concurrency: 3\n---\nb\n'), false);
   });
 });

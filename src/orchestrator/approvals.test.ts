@@ -19,7 +19,7 @@ import type { ProxyCommand, ProxyResponse, WsApprovalChangedEvent, AgentState } 
  *     requester via the message dispatcher (we capture both)
  *   - `await(id)` returns at terminal state, including pending timeout
  *   - Channel name must match NAME_RE
- *   - Auto-notify routes by address class (agent / agent-instance / others)
+ *   - Auto-notify routes by address class (agent / others)
  */
 describe('ApprovalService (Q5)', () => {
   let db: Database;
@@ -312,98 +312,6 @@ describe('ApprovalService (Q5)', () => {
     assert.equal(rows.length, 2);
     assert.ok(rows[1]!.envelope.includes(`Approval ${second.approval.id} APPROVED (terminal`));
     dispatcher.stop();
-  });
-
-  it('Auto-notify routes via deliverToInstance for agent-instance addresses', async () => {
-    // Spy on deliverToInstance to assert it received the PARSED instanceId
-    // ('inst-1'), not the raw `agent:tmpl-a/inst-1` requester string.
-    const dispatcher = new MessageDispatcher({
-      db,
-      locks: new LockManager(db.rawDb),
-      proxyDispatch: async (_id, command) => {
-        proxyCommands.push(command);
-        return { ok: true, data: '' } as ProxyResponse;
-      },
-      orchestratorHost: 'http://localhost:3000',
-    });
-    const deliverCalls: Array<{ instanceId: string; envelope: string }> = [];
-    const originalDeliverToInstance = dispatcher.deliverToInstance.bind(dispatcher);
-    dispatcher.deliverToInstance = async (instanceId: string, envelope: string) => {
-      deliverCalls.push({ instanceId, envelope });
-      return originalDeliverToInstance(instanceId, envelope);
-    };
-    const svc = new ApprovalService({
-      db,
-      messageDispatcher: dispatcher,
-      onEvent: (e) => events.push(e),
-    });
-
-    // Seed an ephemeral instance row in `running` state so deliverToInstance
-    // resolves to a paste.
-    db.upsertAgentTemplate({
-      id: 'tmpl-a',
-      personaPath: null,
-      engine: 'claude',
-      model: null,
-      persistent: false,
-      cwdBase: '/tmp',
-      cwdTemplate: null,
-      repoRoot: '/tmp',
-      hookStart: 'echo',
-      hookExit: null,
-      hookPrepare: null,
-      hookCleanup: null,
-      createdAt: '',
-      updatedAt: '',
-    });
-    db.replaceTopicsForTemplate('tmpl-a', [{
-      agentTemplate: 'tmpl-a',
-      name: 'echo',
-      hookPrepareOverride: null,
-      hookStartOverride: null,
-      hookCleanupOverride: null,
-      monitorTemplate: null,
-      concurrency: 1,
-      schemaPath: null,
-      replySchemaPath: null,
-    }]);
-    db.enqueueTopicMessage({ agentTemplate: 'tmpl-a', topicName: 'echo', payload: '{}' });
-    const claim = db.claimAndCreateInstance({
-      agentTemplate: 'tmpl-a', topicName: 'echo',
-      instanceId: 'inst-1', instanceAddr: 'agent:tmpl-a/inst-1',
-      tmuxSession: 'tmux-inst-1', proxyId: 'p1',
-      messageId: 'msg-1', messagePath: '/tmp/m', replyPath: '/tmp/r', statusPath: '/tmp/s',
-      worktreePath: null, suffix: 'test01',
-    });
-    assert.ok(claim);
-    db.updateInstanceState('inst-1', 'running');
-
-    const created = svc.create({
-      requesterAddr: 'agent:tmpl-a/inst-1',
-      channel: 'reviews',
-      payload: '{}',
-    });
-    if (!created.ok) throw new Error('create failed');
-    const id = created.approval.id;
-
-    const updated = await svc.setState(id, 'approved');
-    assert.equal(updated.ok, true);
-
-    // setState fires notifyRequester asynchronously — wait briefly.
-    await new Promise((r) => setTimeout(r, 50));
-
-    // Invariant: deliverToInstance was called exactly once with the PARSED
-    // instanceId. A regression that forwarded `agent:tmpl-a/inst-1` would
-    // be caught here — the resolver expects the trailing segment only.
-    assert.equal(deliverCalls.length, 1, `expected one deliverToInstance call; got ${deliverCalls.length}`);
-    assert.equal(deliverCalls[0]!.instanceId, 'inst-1');
-    assert.notEqual(deliverCalls[0]!.instanceId, 'agent:tmpl-a/inst-1');
-    assert.match(deliverCalls[0]!.envelope, new RegExp(`Approval ${id} APPROVED \\(terminal`));
-
-    const pastes = proxyCommands.filter(c => c.action === 'paste');
-    assert.ok(pastes.length >= 1, 'expected at least one paste from deliverToInstance');
-    const text = (pastes[0]! as { text: string }).text;
-    assert.match(text, new RegExp(`Approval ${id} APPROVED \\(terminal`));
   });
 
   it('await() returns at terminal state', async () => {

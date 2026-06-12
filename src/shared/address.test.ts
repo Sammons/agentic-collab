@@ -12,22 +12,6 @@ describe('parseAddress', () => {
     { raw: 'agent:foo', expected: { class: 'agent', name: 'foo' } },
     { raw: 'agent:my_agent-2', expected: { class: 'agent', name: 'my_agent-2' } },
     {
-      raw: 'agent:foo/inst-123',
-      expected: { class: 'agent-instance', template: 'foo', instanceId: 'inst-123' },
-    },
-    {
-      raw: 'agent:aws-account-lead/01h-abcdef',
-      expected: { class: 'agent-instance', template: 'aws-account-lead', instanceId: '01h-abcdef' },
-    },
-    {
-      raw: 'topic:foo/bar',
-      expected: { class: 'topic', template: 'foo', topic: 'bar' },
-    },
-    {
-      raw: 'topic:aws-account-lead/provision',
-      expected: { class: 'topic', template: 'aws-account-lead', topic: 'provision' },
-    },
-    {
       raw: 'approval:my-channel',
       expected: { class: 'approval', channel: 'my-channel' },
     },
@@ -56,15 +40,14 @@ describe('parseAddress', () => {
   const malformedCases: Array<{ raw: unknown; description: string }> = [
     { raw: '', description: 'empty string' },
     { raw: 'agent:', description: 'agent: with empty name' },
-    { raw: 'agent:/inst-1', description: 'agent: with empty template before slash' },
-    { raw: 'agent:foo/', description: 'agent: with empty instance-id after slash' },
+    { raw: 'agent:/inst-1', description: 'agent: with slash (instance form removed by RFC-009)' },
+    { raw: 'agent:foo/', description: 'agent: with trailing slash' },
+    { raw: 'agent:foo/bar', description: 'agent: slash form (instance addressing removed by RFC-009)' },
     { raw: 'agent:UPPER!', description: 'agent: with invalid chars' },
     { raw: 'agent:foo bar', description: 'agent: with whitespace' },
-    { raw: 'topic:', description: 'topic: with empty body' },
-    { raw: 'topic:foo', description: 'topic: missing /topic' },
-    { raw: 'topic:foo/', description: 'topic: empty topic name' },
-    { raw: 'topic:/bar', description: 'topic: empty template' },
-    { raw: 'topic:foo/BAD!', description: 'topic: with invalid topic chars' },
+    { raw: 'topic:', description: 'topic: prefix (removed by RFC-009)' },
+    { raw: 'topic:foo', description: 'topic: prefix with name (removed by RFC-009)' },
+    { raw: 'topic:foo/bar', description: 'topic: slash form (removed by RFC-009)' },
     { raw: 'approval:', description: 'approval: with empty channel' },
     { raw: 'approval:bad chan', description: 'approval: with whitespace' },
     { raw: 'approval:BAD!', description: 'approval: with invalid chars' },
@@ -101,26 +84,23 @@ describe('parseAddress', () => {
     }
   });
 
-  it('rejects agent:foo/INSTANCE! with invalid instance-id chars', () => {
-    const result = parseAddress('agent:foo/inst!');
+  // RFC-009: instance addressing removed. `agent:<tmpl>/<id>` now fails
+  // NAME_RE (slash is not a name char) and `topic:` is an unknown prefix.
+  it('marks agent:foo/bar malformed with a name-shape reason', () => {
+    const result = parseAddress('agent:foo/bar');
     assert.equal(result.class, 'malformed');
-  });
-
-  it('accepts a 128-char instance-id', () => {
-    const long = 'a' + 'b'.repeat(127);
-    assert.equal(long.length, 128);
-    const result = parseAddress(`agent:foo/${long}`);
-    assert.equal(result.class, 'agent-instance');
-    if (result.class === 'agent-instance') {
-      assert.equal(result.instanceId, long);
+    if (result.class === 'malformed') {
+      assert.match(result.reason, /does not match/);
     }
   });
 
-  it('rejects a 129-char instance-id', () => {
-    const long = 'a' + 'b'.repeat(128);
-    assert.equal(long.length, 129);
-    const result = parseAddress(`agent:foo/${long}`);
+  it('marks topic:foo/bar malformed with an unknown-prefix reason', () => {
+    const result = parseAddress('topic:foo/bar');
     assert.equal(result.class, 'malformed');
+    if (result.class === 'malformed') {
+      assert.match(result.reason, /unknown address prefix/);
+      assert.ok(!result.reason.includes('topic:'), 'expected-prefix list must not advertise topic:');
+    }
   });
 });
 
@@ -134,16 +114,6 @@ describe('addressToString', () => {
     // Bare name parses to {class:'agent', name:'foo'}; canonical render is `agent:foo`.
     const addr = parseAddress('foo');
     assert.equal(addressToString(addr), 'agent:foo');
-  });
-
-  it('round-trips agent-instance', () => {
-    const raw = 'agent:foo/inst-123';
-    assert.equal(addressToString(parseAddress(raw)), raw);
-  });
-
-  it('round-trips topic', () => {
-    const raw = 'topic:foo/bar';
-    assert.equal(addressToString(parseAddress(raw)), raw);
   });
 
   it('round-trips approval', () => {

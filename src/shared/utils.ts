@@ -13,13 +13,6 @@ export function sleep(ms: number): Promise<void> {
 }
 
 /**
- * Default on-disk prefix used by the v3 worktree convention (`wt-<id>`).
- * Shared so Q3 (spawn-side) and Q8 (sweep-side) stay in sync if the prefix
- * ever changes.
- */
-export const DEFAULT_WORKTREE_PREFIX = /^wt-/;
-
-/**
  * HOME-relative directory where the proxy persists per-agent OpenCode
  * instruction files (`<agent-name>.md`). Cross-process contract: the
  * OpenCode adapter (orchestrator) references the file as

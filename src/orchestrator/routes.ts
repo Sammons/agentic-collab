@@ -37,10 +37,7 @@ import { shutdownAgents, restoreAllAgents } from './network.ts';
 import { sessionName, ProxyUnavailableError } from '../shared/agent-entity.ts';
 import type { MessageDispatcher } from './message-dispatcher.ts';
 import type { UsagePoller } from './usage-poller.ts';
-import type { TopicDelivery } from './topic-delivery.ts';
-import type { InstanceReaper } from './instance-reaper.ts';
 import type { ApprovalService } from './approvals.ts';
-import type { BootReconciler, ProxyReconnectHandler, OrphanedWorktreeSweep } from './recovery.ts';
 import { transcribe as whisperTranscribe, type WhisperOptions } from './whisper-stt.ts';
 import { encryptSecret, decryptSecret } from './secret-crypto.ts';
 import { deriveTelegramStatus } from './telegram-status.ts';
@@ -99,31 +96,12 @@ export type RouteContext = {
   filesDir: string;
   telegramDispatcher: TelegramDispatcher;
   /**
-   * v3 Q3 ephemeral surface — optional so test fixtures that don't exercise
-   * topic delivery don't need to construct one. Production `main.ts` always
-   * populates both. Endpoints that depend on these return 503 when absent.
-   */
-  topicDelivery?: TopicDelivery;
-  instanceReaper?: InstanceReaper;
-  /**
    * v3 Q5 approvals — optional so test fixtures that don't exercise the
    * approval surface don't need to construct one. Production `main.ts`
    * always populates it. Endpoints return 503 when absent.
    */
   approvals?: ApprovalService;
-  /**
-   * v3 Q8 crash recovery — optional. The boot reconciler runs once at
-   * startup (before `server.listen`) so it's not exposed via routes; the
-   * reconnect handler is invoked from `/api/proxy/register` to fail
-   * orphaned instances on a freshly-returning proxy; the orphan sweep is
-   * driven by an interval, not a route. Populated by production `main.ts`.
-   */
-  recovery?: {
-    reconciler: BootReconciler;
-    reconnectHandler: ProxyReconnectHandler;
-    orphanSweep: OrphanedWorktreeSweep;
-  };
-  /** Reload personas from disk; populated alongside `topicDelivery`. */
+  /** Reload personas from disk; populated by production `main.ts`. */
   reloadPersonas?: () => { synced: number; created: string[]; updated: string[]; skipped: string[] };
 };
 
@@ -502,103 +480,16 @@ route('DELETE', '/api/agents/:name', async (_req, res, match, ctx) => {
 
 // ── Agent Messaging ──
 
-/**
- * Bridge a bare-name send (no `topic:`/`agent:` prefix) onto an ephemeral
- * agent template when the name is NOT a live persistent agent. @mentioning an
- * ephemeral template (e.g. `@agentic-collab-lead-ephemeral`) — and the
- * equivalent `collab send <template>` — must spawn an instance via the topic
- * pipeline rather than 404 against the `agents` table.
- *
- * Returns `{ handled: false }` when the name is not an ephemeral template (so
- * the caller keeps its existing 404 behaviour). Persistent templates are NOT
- * topic-addressable and also return `{ handled: false }`. The payload passed
- * through is the RAW message (matching the `topic:` path), never the reply
- * envelope used for persistent-agent enqueue.
- */
-async function tryRouteToEphemeralTemplate(
-  ctx: RouteContext,
-  opts: {
-    name: string;
-    requestedTopic: string | null;
-    payload: string;
-    replyToAddr: string | null;
-    inReplyTo: string | null;
-  },
-): Promise<{ handled: false } | { handled: true; status: number; body: unknown }> {
-  const tmpl = ctx.db.getAgentTemplate(opts.name);
-  if (!tmpl) return { handled: false };
-  // Persistent templates are not addressable through the topic pipeline.
-  if (tmpl.persistent) return { handled: false };
-  if (!ctx.topicDelivery) {
-    return { handled: true, status: 503, body: { error: 'topic delivery not configured' } };
-  }
-
-  // Resolve which declared topic to spawn against.
-  const declared = ctx.db.getTopicsForTemplate(opts.name).map((t) => t.name);
-  let topicName: string;
-  if (opts.requestedTopic && declared.includes(opts.requestedTopic)) {
-    topicName = opts.requestedTopic;
-  } else if (declared.length === 1) {
-    topicName = declared[0]!;
-  } else {
-    return {
-      handled: true,
-      status: 400,
-      body: {
-        error: `"${opts.name}" is an ephemeral template; specify a declared topic with #<topic>`,
-        template: opts.name,
-        topics: declared,
-      },
-    };
-  }
-
-  const result = await ctx.topicDelivery.publish({
-    agentTemplate: opts.name,
-    topicName,
-    payload: opts.payload,
-    replyToAddr: opts.replyToAddr,
-    inReplyTo: opts.inReplyTo,
-  });
-  if (!result.ok) {
-    return { handled: true, status: 400, body: { error: result.reason } };
-  }
-  return {
-    handled: true,
-    status: 202,
-    body: { ok: true, queueId: result.queueId, status: 'queued', spawnedTemplate: opts.name, topic: topicName },
-  };
-}
-
 route('POST', '/api/agents/send', async (req, res, _match, ctx) => {
   const body = await readJson(req);
   if (!body.from || !body.to || !body.message || !body.topic) {
     return json(res, 400, { error: 'from, to, message, topic required' });
   }
 
-  // Q1: address-prefix routing. `topic:` is wired through ctx.topicDelivery
-  // (Q3); `agent-instance:` dispatches synchronously through the message
-  // dispatcher's `deliverToInstance` (Q3 — never persists to pending_messages).
-  // `approval:` is wired by Q5.
+  // Q1: address-prefix routing. `approval:` is wired by Q5.
   const addr = parseAddress(body.to);
   if (addr.class === 'malformed') {
     return json(res, 400, { error: 'malformed address', reason: addr.reason });
-  }
-  if (addr.class === 'topic') {
-    if (!ctx.topicDelivery) {
-      return json(res, 503, { error: 'topic delivery not configured' });
-    }
-    const payload = typeof body.message === 'string' ? body.message : JSON.stringify(body.message ?? {});
-    const result = await ctx.topicDelivery.publish({
-      agentTemplate: addr.template,
-      topicName: addr.topic,
-      payload,
-      replyToAddr: typeof body.from === 'string' ? body.from : null,
-      inReplyTo: typeof body.inReplyTo === 'string' ? body.inReplyTo : null,
-    });
-    if (!result.ok) {
-      return json(res, 400, { error: result.reason });
-    }
-    return json(res, 202, { ok: true, queueId: result.queueId, status: 'queued' });
   }
   if (addr.class === 'approval') {
     // approval:<channel> is a categorisation, not a sendable address. The
@@ -610,15 +501,6 @@ route('POST', '/api/agents/send', async (req, res, _match, ctx) => {
       channel: addr.channel,
     });
   }
-  if (addr.class === 'agent-instance') {
-    // Sync deliver via paste. Never persists into pending_messages.
-    const text = typeof body.message === 'string' ? body.message : JSON.stringify(body.message ?? {});
-    const deliveryResult = await ctx.messageDispatcher.deliverToInstance(addr.instanceId, text);
-    if (!deliveryResult.ok) {
-      return json(res, 503, { error: 'instance not deliverable', reason: deliveryResult.reason, ...(deliveryResult.error ? { details: deliveryResult.error } : {}) });
-    }
-    return json(res, 200, { ok: true });
-  }
   if (addr.class === 'telegram') {
     // RFC-008 PR-D: route the reply out through THIS agent's bot (closing the
     // round-trip the inbound envelope set up). Agent-first disambiguation: when
@@ -629,21 +511,6 @@ route('POST', '/api/agents/send', async (req, res, _match, ctx) => {
   }
   // addr.class === 'agent' — use bare name for storage / lookup.
   body.to = addr.name;
-
-  // An ephemeral template is authoritative over any (possibly stale shadow)
-  // `agents` row of the same name: a name backed by a non-persistent template
-  // must spawn an instance, never deliver to a leftover persistent row.
-  // reconcile-roots only clears shadows in void/suspended/failed states and
-  // not before the server accepts requests, so we cannot rely on getAgent()
-  // returning null — check the template first.
-  const routed = await tryRouteToEphemeralTemplate(ctx, {
-    name: body.to as string,
-    requestedTopic: typeof body.topic === 'string' ? body.topic : null,
-    payload: typeof body.message === 'string' ? body.message : JSON.stringify(body.message ?? {}),
-    replyToAddr: typeof body.from === 'string' ? body.from : null,
-    inReplyTo: typeof body.inReplyTo === 'string' ? body.inReplyTo : null,
-  });
-  if (routed.handled) return json(res, routed.status, routed.body);
 
   const target = ctx.db.getAgent(body.to);
   if (!target) return json(res, 404, { error: `Target agent "${body.to}" not found` });
@@ -718,28 +585,10 @@ route('POST', '/api/dashboard/send', async (req, res, _match, ctx) => {
     return json(res, 400, { error: 'agent, message, topic required' });
   }
 
-  // Q1: address-prefix routing on body.agent. Q3 wires `topic:` (through
-  // ctx.topicDelivery) and `agent-instance:` (through deliverToInstance).
+  // Q1: address-prefix routing on body.agent.
   const dashAddr = parseAddress(body.agent);
   if (dashAddr.class === 'malformed') {
     return json(res, 400, { error: 'malformed address', reason: dashAddr.reason });
-  }
-  if (dashAddr.class === 'topic') {
-    if (!ctx.topicDelivery) {
-      return json(res, 503, { error: 'topic delivery not configured' });
-    }
-    const payload = typeof body.message === 'string' ? body.message : JSON.stringify(body.message ?? {});
-    const result = await ctx.topicDelivery.publish({
-      agentTemplate: dashAddr.template,
-      topicName: dashAddr.topic,
-      payload,
-      replyToAddr: 'dashboard',
-      inReplyTo: typeof body.inReplyTo === 'string' ? body.inReplyTo : null,
-    });
-    if (!result.ok) {
-      return json(res, 400, { error: result.reason });
-    }
-    return json(res, 202, { ok: true, queueId: result.queueId, status: 'queued' });
   }
   if (dashAddr.class === 'approval') {
     // approval:<channel> is a categorisation, not a sendable address.
@@ -749,14 +598,6 @@ route('POST', '/api/dashboard/send', async (req, res, _match, ctx) => {
       class: 'approval',
       channel: dashAddr.channel,
     });
-  }
-  if (dashAddr.class === 'agent-instance') {
-    const text = typeof body.message === 'string' ? body.message : JSON.stringify(body.message ?? {});
-    const deliveryResult = await ctx.messageDispatcher.deliverToInstance(dashAddr.instanceId, text);
-    if (!deliveryResult.ok) {
-      return json(res, 503, { error: 'instance not deliverable', reason: deliveryResult.reason, ...(deliveryResult.error ? { details: deliveryResult.error } : {}) });
-    }
-    return json(res, 200, { ok: true });
   }
   if (dashAddr.class === 'telegram') {
     // telegram:<agent> is the agent-bot outbound channel (RFC-008 PR-D); it is
@@ -770,19 +611,6 @@ route('POST', '/api/dashboard/send', async (req, res, _match, ctx) => {
     });
   }
   body.agent = dashAddr.name;
-
-  // An ephemeral template is authoritative over any (possibly stale shadow)
-  // `agents` row of the same name — see the matching note in /api/agents/send.
-  // Checked before getAgent() so a live-state shadow or the boot-window race
-  // can't silently enqueue the mention to a dead persistent agent.
-  const routed = await tryRouteToEphemeralTemplate(ctx, {
-    name: body.agent as string,
-    requestedTopic: typeof body.topic === 'string' ? body.topic : null,
-    payload: typeof body.message === 'string' ? body.message : JSON.stringify(body.message ?? {}),
-    replyToAddr: 'dashboard',
-    inReplyTo: typeof body.inReplyTo === 'string' ? body.inReplyTo : null,
-  });
-  if (routed.handled) return json(res, routed.status, routed.body);
 
   const agent = ctx.db.getAgent(body.agent);
   if (!agent) return json(res, 404, { error: `Agent "${body.agent}" not found` });
@@ -813,119 +641,7 @@ route('POST', '/api/dashboard/send', async (req, res, _match, ctx) => {
   json(res, 202, { ok: true, msg, queueId: pending.id, status: 'pending' });
 });
 
-// ── v3 Q3: topic publish + instance complete + persona reload ──
-
-route('POST', '/api/topics/publish', async (req, res, _match, ctx) => {
-  if (!ctx.topicDelivery) {
-    return json(res, 503, { error: 'topic delivery not configured' });
-  }
-  const body = await readJson(req);
-  if (typeof body.agentTemplate !== 'string' || typeof body.topicName !== 'string') {
-    return json(res, 400, { error: 'agentTemplate and topicName required' });
-  }
-  const payload = typeof body.payload === 'string' ? body.payload : JSON.stringify(body.payload ?? {});
-  const result = await ctx.topicDelivery.publish({
-    agentTemplate: body.agentTemplate,
-    topicName: body.topicName,
-    payload,
-    replyToAddr: typeof body.replyToAddr === 'string' ? body.replyToAddr : null,
-    inReplyTo: typeof body.inReplyTo === 'string' ? body.inReplyTo : null,
-  });
-  if (!result.ok) {
-    return json(res, 400, { error: result.reason });
-  }
-  json(res, 202, { ok: true, queueId: result.queueId, templateId: result.templateId, topicName: result.topicName });
-});
-
-route('POST', '/api/instances/:id/complete', async (_req, res, match, ctx) => {
-  if (!ctx.instanceReaper) {
-    return json(res, 503, { error: 'instance reaper not configured' });
-  }
-  const id = match.pathname.groups['id'];
-  if (!id) return json(res, 400, { error: 'instance id required' });
-  const instance = ctx.db.getAgentInstance(id);
-  if (!instance) {
-    return json(res, 404, { error: 'unknown instance' });
-  }
-  if (instance.state === 'completed' || instance.state === 'failed') {
-    return json(res, 409, { error: 'already terminal', state: instance.state });
-  }
-  // Wake — does not block on result.
-  ctx.instanceReaper.wake(id).catch((err) => {
-    console.error(`[routes] reaper.wake(${id}) failed:`, (err as Error).message);
-  });
-  json(res, 202, { ok: true });
-});
-
-// ── RFC-006 Q2: ephemeral instance read surface (GET — Bearer-exempt) ──
-
-// List a template's instances, live + past, newest first. Backed by
-// `idx_agent_instances_template`. Returns the camelCased AgentInstanceRow
-// fields the dashboard renders (id, suffix, state, started/completed, etc.).
-route('GET', '/api/agent-templates/:id/instances', async (_req, res, match, ctx) => {
-  const id = match.pathname.groups['id'];
-  if (!id) return json(res, 400, { error: 'template id required' });
-  const instances = ctx.db.listInstancesForTemplate(id).map((i) => ({
-    id: i.id,
-    suffix: i.suffix,
-    state: i.state,
-    startedAt: i.startedAt,
-    completedAt: i.completedAt,
-    failureReason: i.failureReason,
-    instanceAddr: i.instanceAddr,
-    tmuxSession: i.tmuxSession,
-    proxyId: i.proxyId,
-  }));
-  json(res, 200, { instances });
-});
-
-// Peek a live instance's tmux pane. Mirrors the agent peek handler. A past /
-// session-less instance returns 200 `{live:false}` (NOT a 500), so the watch
-// surface degrades gracefully. Uses the STORED `tmuxSession` (sliced to 200
-// chars at spawn, `topic-delivery.ts:187`) — never reconstructed.
-route('GET', '/api/instances/:id/peek', async (req, res, match, ctx) => {
-  const id = match.pathname.groups['id'];
-  if (!id) return json(res, 400, { error: 'instance id required' });
-  const inst = ctx.db.getInstance(id);
-  if (!inst) { json(res, 404, { error: `Instance "${id}" not found` }); return; }
-
-  const isLive = (inst.state === 'spawning' || inst.state === 'running') && !!inst.tmuxSession;
-  if (!isLive) { json(res, 200, { live: false }); return; }
-
-  const url = new URL(req.url!, `http://${req.headers.host}`);
-  const linesParam = url.searchParams.get('lines');
-  const lines = linesParam ? Math.max(1, Math.min(parseInt(linesParam, 10) || 50, 1000)) : 50;
-
-  const result = await ctx.proxyDispatch(inst.proxyId, {
-    action: 'capture',
-    sessionName: inst.tmuxSession,
-    lines,
-  });
-  if (!result.ok) { json(res, 500, { error: result.error }); return; }
-  json(res, 200, { live: true, output: result.data });
-});
-
-// Read a single instance + its message/reply/status file contents (the MVP
-// past-instance view — RFC-006 Proposal.5). File reads tolerate missing/empty
-// paths; a completed instance whose IPC dir was reaped simply yields nulls.
-route('GET', '/api/instances/:id', async (_req, res, match, ctx) => {
-  const id = match.pathname.groups['id'];
-  if (!id) return json(res, 400, { error: 'instance id required' });
-  const instance = ctx.db.getInstance(id);
-  if (!instance) { json(res, 404, { error: `Instance "${id}" not found` }); return; }
-
-  const readFileOrNull = (path: string | null | undefined): string | null => {
-    if (!path) return null;
-    try { return readFileSync(path, 'utf-8'); } catch { return null; }
-  };
-
-  json(res, 200, {
-    instance,
-    message: readFileOrNull(instance.messagePath),
-    reply: readFileOrNull(instance.replyPath),
-    status: readFileOrNull(instance.statusPath),
-  });
-});
+// ── Persona reload ──
 
 route('POST', '/api/personas/reload', async (_req, res, _match, ctx) => {
   if (!ctx.reloadPersonas) {
@@ -1292,18 +1008,6 @@ route('POST', '/api/proxy/register', async (req, res, _match, ctx) => {
   recoverFailedAgents(ctx, body.proxyId).catch((err) => {
     console.error(`[proxy-register] Recovery failed for ${body.proxyId}:`, err);
   });
-
-  // v3 Q8: every live `agent_instances` row on this proxy died when the
-  // proxy died. Mark them failed (best-effort cleanup) — running this AFTER
-  // `recoverFailedAgents` so persistent agents that survived in tmux can
-  // still self-heal first. Fire-and-forget; don't block the registration
-  // response (the response was already sent above).
-  if (ctx.recovery) {
-    const pid = body.proxyId as string;
-    ctx.recovery.reconnectHandler.onProxyRegister(pid).catch((err) => {
-      console.error(`[proxy-register] Instance reconcile failed for ${pid}:`, err);
-    });
-  }
 });
 
 route('POST', '/api/proxy/heartbeat', async (req, res, _match, ctx) => {
@@ -2270,7 +1974,6 @@ function buildLaunchPreviewResponse(
     version: 0,
     spawnCount: 0,
     createdAt: '',
-    isTemplate: false,
   };
 
   // 3. S4 GATE: resolve engine-config defaults EXACTLY as spawn (lifecycle.ts:496-497).

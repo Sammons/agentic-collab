@@ -402,13 +402,6 @@
   font-weight: 600;
   margin-left: 4px;
 }
-/* Ephemeral spawn warning — shown when composer targets a template */
-.chat-pane .composer .ctrls .hint .spawn-warn {
-  color: var(--steel);
-  font-weight: 500;
-  margin-left: 8px;
-  font-size: 11px;
-}
 /* Staged files row — removable chips for pending files */
 .chat-pane .composer .staged-files-row {
   display: none;

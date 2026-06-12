@@ -1702,7 +1702,7 @@ describe('Lifecycle', () => {
         reloadQueued: 0, reloadTask: null, failedAt: null, failureReason: null,
         capturedVars: null, customButtons: null, indicators: null, icon: null,
         agentTelegram: null,
-        version: 0, spawnCount: 0, createdAt: '', isTemplate: false,
+        version: 0, spawnCount: 0, createdAt: '',
         ...over,
       };
     }

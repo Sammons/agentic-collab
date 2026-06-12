@@ -418,17 +418,19 @@ describe('API Routes', () => {
     assert.ok(!newest.targetAgent.includes(':'), 'target_agent must not contain prefix colon');
   });
 
-  it('POST /api/agents/send returns 503 for topic: addresses when topicDelivery not configured', async () => {
-    // Q3: when ctx.topicDelivery is absent (this fixture omits it), topic: routes 503.
+  it('POST /api/agents/send returns 400 malformed for topic: addresses (removed by RFC-009)', async () => {
+    // RFC-009: `topic:` is no longer a known prefix — parseAddress yields
+    // malformed and the route 400s before any delivery attempt.
     const { status, data } = await api('POST', '/api/agents/send', {
       from: 'dashboard',
       to: 'topic:foo/bar',
       message: 'hello',
       topic: 'test-topic',
     });
-    assert.equal(status, 503);
+    assert.equal(status, 400);
     const body = data as Record<string, unknown>;
-    assert.equal(body['error'], 'topic delivery not configured');
+    assert.equal(body['error'], 'malformed address');
+    assert.match(String(body['reason']), /unknown address prefix/);
   });
 
   it('POST /api/agents/send returns 400 for approval: addresses (not sendable; use POST /api/approvals)', async () => {
@@ -448,18 +450,18 @@ describe('API Routes', () => {
     assert.equal(body['channel'], 'chan');
   });
 
-  it('POST /api/agents/send returns 503 for agent:<tmpl>/<inst> addresses with unknown instance', async () => {
-    // Q3: instance addresses are delivered synchronously; an unknown instance returns 503.
+  it('POST /api/agents/send returns 400 malformed for agent:<tmpl>/<inst> addresses (removed by RFC-009)', async () => {
+    // RFC-009: the slash form fails NAME_RE — parseAddress yields malformed.
     const { status, data } = await api('POST', '/api/agents/send', {
       from: 'dashboard',
       to: 'agent:tmpl/inst-1',
       message: 'hello',
       topic: 'test-topic',
     });
-    assert.equal(status, 503);
+    assert.equal(status, 400);
     const body = data as Record<string, unknown>;
-    assert.equal(body['error'], 'instance not deliverable');
-    assert.equal(body['reason'], 'instance-not-found');
+    assert.equal(body['error'], 'malformed address');
+    assert.match(String(body['reason']), /does not match/);
   });
 
   it('POST /api/agents/send returns 400 for malformed addresses', async () => {
@@ -475,16 +477,28 @@ describe('API Routes', () => {
     assert.equal(typeof body['reason'], 'string');
   });
 
-  it('POST /api/dashboard/send returns 503 for topic: addresses when topicDelivery not configured', async () => {
-    // Q3: when ctx.topicDelivery is absent (this fixture omits it), topic: routes 503.
+  it('POST /api/dashboard/send returns 400 malformed for topic: addresses (removed by RFC-009)', async () => {
     const { status, data } = await api('POST', '/api/dashboard/send', {
       agent: 'topic:foo/bar',
       message: 'hello',
       topic: 'test-topic',
     });
-    assert.equal(status, 503);
+    assert.equal(status, 400);
     const body = data as Record<string, unknown>;
-    assert.equal(body['error'], 'topic delivery not configured');
+    assert.equal(body['error'], 'malformed address');
+    assert.match(String(body['reason']), /unknown address prefix/);
+  });
+
+  it('POST /api/dashboard/send returns 400 malformed for agent:<tmpl>/<inst> addresses (removed by RFC-009)', async () => {
+    const { status, data } = await api('POST', '/api/dashboard/send', {
+      agent: 'agent:tmpl/inst-1',
+      message: 'hello',
+      topic: 'test-topic',
+    });
+    assert.equal(status, 400);
+    const body = data as Record<string, unknown>;
+    assert.equal(body['error'], 'malformed address');
+    assert.match(String(body['reason']), /does not match/);
   });
 
   it('POST /api/dashboard/send returns 400 for malformed addresses', async () => {
@@ -1634,135 +1648,35 @@ describe('API Routes — Personas', () => {
   });
 });
 
-// ── v3 Q3: /api/topics/publish + /api/instances/:id/complete + /api/personas/reload ──
+// ── Persona reload (surviving route — RFC-009 kept /api/personas/reload) ──
 
-describe('API Routes — v3 Q3 endpoints', () => {
+describe('API Routes — persona reload', () => {
   let server: Server;
   let db: Database;
   let wss: WebSocketServer;
   let port: number;
   let tmpDir: string;
-  let ipcRoot: string;
-  const commandsLog: Array<{ action: string }> = [];
 
   before(async () => {
-    tmpDir = mkdtempSync(join(tmpdir(), 'agentic-q3-test-'));
-    ipcRoot = join(tmpDir, 'instances');
+    tmpDir = mkdtempSync(join(tmpdir(), 'agentic-reload-test-'));
     db = new Database(join(tmpDir, 'test.db'));
     wss = new WebSocketServer();
-
-    // Seed one ephemeral template + topic so publish has a target.
-    db.upsertAgentTemplate({
-      id: 'q3-tmpl',
-      personaPath: null,
-      engine: 'claude',
-      model: null,
-      persistent: false,
-      cwdBase: '/tmp',
-      cwdTemplate: null,
-      repoRoot: '/tmp',
-      hookStart: 'echo start',
-      hookExit: null,
-      hookPrepare: null,
-      hookCleanup: null,
-      createdAt: '',
-      updatedAt: '',
-    });
-    db.replaceTopicsForTemplate('q3-tmpl', [{
-      agentTemplate: 'q3-tmpl',
-      name: 'echo',
-      hookPrepareOverride: null,
-      hookStartOverride: null,
-      hookCleanupOverride: null,
-      monitorTemplate: null,
-      concurrency: 1,
-      schemaPath: null,
-      replySchemaPath: null,
-    }]);
-
-    // Seed a second ephemeral template with TWO declared topics so bare-name
-    // sends with an ambiguous/non-matching topic must 400 (no single default).
-    db.upsertAgentTemplate({
-      id: 'q3-multi',
-      personaPath: null,
-      engine: 'claude',
-      model: null,
-      persistent: false,
-      cwdBase: '/tmp',
-      cwdTemplate: null,
-      repoRoot: '/tmp',
-      hookStart: 'echo start',
-      hookExit: null,
-      hookPrepare: null,
-      hookCleanup: null,
-      createdAt: '',
-      updatedAt: '',
-    });
-    db.replaceTopicsForTemplate('q3-multi', [
-      {
-        agentTemplate: 'q3-multi', name: 'alpha',
-        hookPrepareOverride: null, hookStartOverride: null, hookCleanupOverride: null,
-        monitorTemplate: null, concurrency: 1, schemaPath: null, replySchemaPath: null,
-      },
-      {
-        agentTemplate: 'q3-multi', name: 'beta',
-        hookPrepareOverride: null, hookStartOverride: null, hookCleanupOverride: null,
-        monitorTemplate: null, concurrency: 1, schemaPath: null, replySchemaPath: null,
-      },
-    ]);
-
-    // Seed a PERSISTENT template — bare-name sends to it must NOT be
-    // topic-routed (helper returns handled:false → caller 404s).
-    db.upsertAgentTemplate({
-      id: 'q3-persistent',
-      personaPath: null,
-      engine: 'claude',
-      model: null,
-      persistent: true,
-      cwdBase: null,
-      cwdTemplate: null,
-      repoRoot: null,
-      hookStart: null,
-      hookExit: null,
-      hookPrepare: null,
-      hookCleanup: null,
-      createdAt: '',
-      updatedAt: '',
-    });
-    db.registerProxy('p1', 'tok', 'localhost:3100');
-
-    const q3Locks = new LockManager(db.rawDb);
-    const q3Dispatch = async (_pid: string, command: ProxyCommand): Promise<ProxyResponse> => {
-      commandsLog.push(command);
-      return { ok: true, data: '' };
-    };
-    const q3MsgDispatcher = makeTestDispatcher(db, q3Locks, q3Dispatch);
-    // Build the real driver + reaper.
-    const { TopicDelivery } = await import('./topic-delivery.ts');
-    const { InstanceReaper } = await import('./instance-reaper.ts');
-    const driver = new TopicDelivery({ db, proxyDispatch: q3Dispatch, orchestratorHost: 'x', ipcRoot, locks: q3Locks });
-    const reaper = new InstanceReaper({ db, proxyDispatch: q3Dispatch, messageDispatcher: q3MsgDispatcher, topicDelivery: driver, sweepIntervalMs: 50 });
-    const reloadCalls = { n: 0 };
+    const locks = new LockManager(db.rawDb);
+    const dispatch = async (_pid: string, _command: ProxyCommand): Promise<ProxyResponse> => ({ ok: true, data: '' });
     const ctx: RouteContext = {
       db,
       wss,
-      locks: q3Locks,
-      proxyDispatch: q3Dispatch,
+      locks,
+      proxyDispatch: dispatch,
       getDashboardHtml: () => '<html>Dashboard</html>',
       orchestratorHost: 'http://localhost:3000',
       orchestratorSecret: null,
-      messageDispatcher: q3MsgDispatcher,
+      messageDispatcher: makeTestDispatcher(db, locks, dispatch),
       usagePoller: { getUsageData: () => ({}), pollNow: async () => {} } as any,
       voiceEnabled: false,
       accountStore: new AccountStore({ accountsDir: join(tmpDir, 'accounts'), agentHomesDir: join(tmpDir, 'agent-homes'), skipAutoRegister: true }),
-      topicDelivery: driver,
-      instanceReaper: reaper,
-      reloadPersonas: () => {
-        reloadCalls.n++;
-        return { synced: 0, created: [], updated: [], skipped: [] };
-      },
+      reloadPersonas: () => ({ synced: 0, created: [], updated: [], skipped: [] }),
     };
-
     const router = createRouter(ctx);
     server = createServer(async (req, res) => {
       await router(req, res);
@@ -1793,79 +1707,6 @@ describe('API Routes — v3 Q3 endpoints', () => {
     return { status: resp.status, data };
   }
 
-  it('POST /api/topics/publish enqueues a topic message and 202s', async () => {
-    const { status, data } = await api('POST', '/api/topics/publish', {
-      agentTemplate: 'q3-tmpl',
-      topicName: 'echo',
-      payload: '{"hello":"world"}',
-    });
-    assert.equal(status, 202);
-    const body = data as Record<string, unknown>;
-    assert.equal(body['ok'], true);
-    assert.equal(body['templateId'], 'q3-tmpl');
-    assert.equal(body['topicName'], 'echo');
-    assert.equal(typeof body['queueId'], 'number');
-  });
-
-  it('POST /api/topics/publish 400s for unknown template', async () => {
-    const { status, data } = await api('POST', '/api/topics/publish', {
-      agentTemplate: 'nope',
-      topicName: 'x',
-      payload: '{}',
-    });
-    assert.equal(status, 400);
-    assert.match(String((data as { error: string }).error), /template/);
-  });
-
-  it('POST /api/instances/:id/complete wakes the reaper (202) when instance is live', async () => {
-    // Seed a live (running) instance via the claim path so the reaper can wake it.
-    db.enqueueTopicMessage({ agentTemplate: 'q3-tmpl', topicName: 'echo', payload: '{}' });
-    const claim = db.claimAndCreateInstance({
-      agentTemplate: 'q3-tmpl', topicName: 'echo',
-      instanceId: 'live-1', instanceAddr: 'agent:q3-tmpl/live-1',
-      tmuxSession: 'inst-q3-tmpl-live-1', proxyId: 'p1',
-      messageId: 'live-1', messagePath: '/tmp/m', replyPath: '/tmp/r', statusPath: '/tmp/s',
-      worktreePath: null, suffix: 'live01',
-    });
-    assert.ok(claim);
-    db.updateInstanceState('live-1', 'running');
-    const { status, data } = await api('POST', '/api/instances/live-1/complete');
-    assert.equal(status, 202);
-    assert.equal((data as Record<string, unknown>)['ok'], true);
-  });
-
-  it('POST /api/instances/:id/complete returns 404 for unknown instance', async () => {
-    const { status, data } = await api('POST', '/api/instances/never-existed/complete');
-    assert.equal(status, 404);
-    assert.equal((data as Record<string, unknown>)['error'], 'unknown instance');
-  });
-
-  // BLOCKER 1: second `complete` POST on a terminal instance must 409.
-  it('POST /api/instances/:id/complete returns 409 on second call (already terminal)', async () => {
-    // Seed a directly-terminal instance via the claim path.
-    db.enqueueTopicMessage({ agentTemplate: 'q3-tmpl', topicName: 'echo', payload: '{}' });
-    const claim = db.claimAndCreateInstance({
-      agentTemplate: 'q3-tmpl', topicName: 'echo',
-      instanceId: 'terminal-1', instanceAddr: 'agent:q3-tmpl/terminal-1',
-      tmuxSession: 'inst-q3-tmpl-terminal-1', proxyId: 'p1',
-      messageId: 'terminal-1', messagePath: '/tmp/m', replyPath: '/tmp/r', statusPath: '/tmp/s',
-      worktreePath: null, suffix: 'term01',
-    });
-    assert.ok(claim);
-    // Force terminal state.
-    db.updateInstanceState('terminal-1', 'completed', { completedAt: new Date().toISOString() });
-
-    const first = await api('POST', '/api/instances/terminal-1/complete');
-    assert.equal(first.status, 409, 'already terminal → 409');
-    const body = first.data as Record<string, unknown>;
-    assert.equal(body['error'], 'already terminal');
-    assert.equal(body['state'], 'completed');
-
-    // Second call still 409 (idempotent terminal).
-    const second = await api('POST', '/api/instances/terminal-1/complete');
-    assert.equal(second.status, 409);
-  });
-
   it('POST /api/personas/reload returns 200 with diff', async () => {
     const { status, data } = await api('POST', '/api/personas/reload');
     assert.equal(status, 200);
@@ -1877,283 +1718,6 @@ describe('API Routes — v3 Q3 endpoints', () => {
     // `skipped` ≠ deletion; reaper2 review caught the mislabel.
     assert.ok(Array.isArray(body['skipped']), 'response carries `skipped`');
     assert.equal(body['removed'], undefined, 'response does NOT carry `removed` (renamed to `skipped`)');
-  });
-
-  it('POST /api/agents/send with topic: forwards through TopicDelivery (202)', async () => {
-    const { status, data } = await api('POST', '/api/agents/send', {
-      from: 'dashboard',
-      to: 'topic:q3-tmpl/echo',
-      message: '{"k":"v"}',
-      topic: 'system',
-    });
-    assert.equal(status, 202);
-    const body = data as Record<string, unknown>;
-    assert.equal(body['status'], 'queued');
-  });
-
-  // ── Bug fix: @mentioning / `collab send`-ing a bare ephemeral template name
-  //    must spawn an instance via the topic pipeline instead of 404ing. ──
-
-  // Note on assertions: `queueId` is the real topic_queue row id returned by
-  // publish() AFTER the synchronous enqueue, so a positive numeric id is
-  // race-free proof the message was published. We deliberately do NOT assert a
-  // status='queued' count: publish() fires tryDispatch() fire-and-forget, which
-  // can claim the row (queued→claimed) before the assertion runs.
-  it('POST /api/dashboard/send to an ephemeral template name (declared topic) → 202 + enqueues', async () => {
-    const { status, data } = await api('POST', '/api/dashboard/send', {
-      agent: 'q3-tmpl',
-      message: 'hello ephemeral',
-      topic: 'echo', // matches a declared topic
-    });
-    assert.equal(status, 202);
-    const body = data as Record<string, unknown>;
-    assert.equal(body['ok'], true);
-    assert.equal(body['status'], 'queued');
-    assert.equal(body['spawnedTemplate'], 'q3-tmpl');
-    assert.equal(body['topic'], 'echo');
-    assert.ok(typeof body['queueId'] === 'number' && (body['queueId'] as number) > 0);
-  });
-
-  it('POST /api/agents/send to an ephemeral template name → 202 + enqueues', async () => {
-    const { status, data } = await api('POST', '/api/agents/send', {
-      from: 'some-agent',
-      to: 'q3-tmpl',
-      message: 'hi from agent',
-      topic: 'echo',
-    });
-    assert.equal(status, 202);
-    const body = data as Record<string, unknown>;
-    assert.equal(body['ok'], true);
-    assert.equal(body['status'], 'queued');
-    assert.equal(body['spawnedTemplate'], 'q3-tmpl');
-    assert.ok(typeof body['queueId'] === 'number' && (body['queueId'] as number) > 0);
-  });
-
-  it('POST /api/dashboard/send: single declared topic + non-matching topic → 202 using sole topic', async () => {
-    const { status, data } = await api('POST', '/api/dashboard/send', {
-      agent: 'q3-tmpl',
-      message: 'topic mismatch but only one declared',
-      topic: 'not-a-declared-topic', // falls back to the sole declared topic
-    });
-    assert.equal(status, 202);
-    const body = data as Record<string, unknown>;
-    assert.equal(body['topic'], 'echo');
-    assert.ok(typeof body['queueId'] === 'number' && (body['queueId'] as number) > 0);
-  });
-
-  it('POST /api/dashboard/send: multiple declared topics + non-matching topic → 400 with topics[]', async () => {
-    const { status, data } = await api('POST', '/api/dashboard/send', {
-      agent: 'q3-multi',
-      message: 'which topic?',
-      topic: 'nope',
-    });
-    assert.equal(status, 400);
-    const body = data as Record<string, unknown>;
-    assert.equal(body['template'], 'q3-multi');
-    assert.match(String(body['error']), /declared topic/);
-    assert.deepEqual([...(body['topics'] as string[])].sort(), ['alpha', 'beta']);
-  });
-
-  it('POST /api/agents/send: multiple declared topics + non-matching topic → 400 with topics[]', async () => {
-    const { status, data } = await api('POST', '/api/agents/send', {
-      from: 'some-agent',
-      to: 'q3-multi',
-      message: 'which topic?',
-      topic: 'nope',
-    });
-    assert.equal(status, 400);
-    const body = data as Record<string, unknown>;
-    assert.equal(body['template'], 'q3-multi');
-    assert.deepEqual([...(body['topics'] as string[])].sort(), ['alpha', 'beta']);
-  });
-
-  it('ephemeral template shadowed by a LIVE agents row → still spawns instance (template is authoritative)', async () => {
-    // Simulate a stale persistent `agents` row left from when this persona was
-    // persistent, stuck in a live state that reconcile-roots will NOT clean
-    // (it only clears void/suspended/failed). If the send handler checked
-    // getAgent() first it would deliver the mention into this dead agent's
-    // queue and never spawn. The ephemeral template must win.
-    const shadow = db.createAgent({ name: 'q3-shadow', engine: 'claude', cwd: '/tmp' });
-    db.updateAgentState('q3-shadow', 'active', shadow.version, {});
-    db.upsertAgentTemplate({
-      id: 'q3-shadow', personaPath: null, engine: 'claude', model: null,
-      persistent: false, cwdBase: '/tmp', cwdTemplate: null, repoRoot: '/tmp',
-      hookStart: 'echo start', hookExit: null, hookPrepare: null, hookCleanup: null,
-      createdAt: '', updatedAt: '',
-    });
-    db.replaceTopicsForTemplate('q3-shadow', [{
-      agentTemplate: 'q3-shadow', name: 'echo',
-      hookPrepareOverride: null, hookStartOverride: null, hookCleanupOverride: null,
-      monitorTemplate: null, concurrency: 1, schemaPath: null, replySchemaPath: null,
-    }]);
-
-    // Both send paths must route to the ephemeral spawn, not the live shadow.
-    const dash = await api('POST', '/api/dashboard/send', { agent: 'q3-shadow', message: 'hi', topic: 'echo' });
-    assert.equal(dash.status, 202);
-    assert.equal((dash.data as Record<string, unknown>)['spawnedTemplate'], 'q3-shadow');
-
-    const agentSend = await api('POST', '/api/agents/send', { from: 'x', to: 'q3-shadow', message: 'hi', topic: 'echo' });
-    assert.equal(agentSend.status, 202);
-    assert.equal((agentSend.data as Record<string, unknown>)['spawnedTemplate'], 'q3-shadow');
-  });
-
-  it('POST /api/dashboard/send: persistent template name is NOT topic-routed → 404', async () => {
-    const { status, data } = await api('POST', '/api/dashboard/send', {
-      agent: 'q3-persistent',
-      message: 'should not route',
-      topic: 'system',
-    });
-    assert.equal(status, 404);
-    assert.match(String((data as Record<string, unknown>)['error']), /not found/);
-  });
-
-  it('POST /api/dashboard/send: name that is neither agent nor template → 404 (regression guard)', async () => {
-    const { status, data } = await api('POST', '/api/dashboard/send', {
-      agent: 'totally-unknown-name',
-      message: 'nope',
-      topic: 'system',
-    });
-    assert.equal(status, 404);
-    assert.equal((data as Record<string, unknown>)['error'], 'Agent "totally-unknown-name" not found');
-  });
-
-  it('POST /api/agents/send: name that is neither agent nor template → 404 (regression guard)', async () => {
-    const { status, data } = await api('POST', '/api/agents/send', {
-      from: 'some-agent',
-      to: 'totally-unknown-name',
-      message: 'nope',
-      topic: 'system',
-    });
-    assert.equal(status, 404);
-    assert.equal((data as Record<string, unknown>)['error'], 'Target agent "totally-unknown-name" not found');
-  });
-
-  // ── RFC-006 Q2: instance read endpoints ──
-
-  /** Insert an instance row directly with an explicit started_at for deterministic ordering. */
-  function seedInstance(opts: {
-    id: string; template: string; state: string; startedAt: string;
-    suffix: string; tmuxSession: string; proxyId: string;
-    messagePath?: string; replyPath?: string; statusPath?: string;
-    completedAt?: string | null; failureReason?: string | null;
-  }): void {
-    db.rawDb.prepare(`
-      INSERT INTO agent_instances (
-        id, agent_template, spawned_from_topic, instance_addr,
-        tmux_session, worktree_path, proxy_id, state, failure_reason,
-        reply_to_addr, message_id, message_path, reply_path, status_path,
-        queue_id, monitor_of_instance, suffix, started_at, completed_at
-      ) VALUES (?, ?, NULL, ?, ?, NULL, ?, ?, ?, NULL, ?, ?, ?, ?, NULL, NULL, ?, ?, ?)
-    `).run(
-      opts.id, opts.template, `agent:${opts.template}/${opts.id}`,
-      opts.tmuxSession, opts.proxyId, opts.state, opts.failureReason ?? null,
-      opts.id, opts.messagePath ?? '/tmp/m', opts.replyPath ?? '/tmp/r', opts.statusPath ?? '/tmp/s',
-      opts.suffix, opts.startedAt, opts.completedAt ?? null,
-    );
-  }
-
-  it('GET /api/agent-templates/:id/instances returns rows newest-first', async () => {
-    db.upsertAgentTemplate({
-      id: 'list-tmpl', personaPath: null, engine: 'claude', model: null, persistent: false,
-      cwdBase: '/tmp', cwdTemplate: null, repoRoot: '/tmp',
-      hookStart: null, hookExit: null, hookPrepare: null, hookCleanup: null,
-      createdAt: '', updatedAt: '',
-    });
-    seedInstance({ id: 'inst-old', template: 'list-tmpl', state: 'completed', startedAt: '2026-01-01T00:00:00Z', suffix: 'old001', tmuxSession: 'inst-list-tmpl-old', proxyId: 'p1', completedAt: '2026-01-01T00:05:00Z' });
-    seedInstance({ id: 'inst-new', template: 'list-tmpl', state: 'running', startedAt: '2026-03-01T00:00:00Z', suffix: 'new001', tmuxSession: 'inst-list-tmpl-new', proxyId: 'p1', failureReason: null });
-
-    const { status, data } = await api('GET', '/api/agent-templates/list-tmpl/instances');
-    assert.equal(status, 200);
-    const instances = (data as { instances: Array<Record<string, unknown>> }).instances;
-    assert.equal(instances.length, 2);
-    // Newest first (started_at DESC).
-    assert.equal(instances[0]!['id'], 'inst-new');
-    assert.equal(instances[1]!['id'], 'inst-old');
-    // Shape: required fields present and camelCased.
-    assert.equal(instances[0]!['suffix'], 'new001');
-    assert.equal(instances[0]!['state'], 'running');
-    assert.equal(instances[0]!['tmuxSession'], 'inst-list-tmpl-new');
-    assert.equal(instances[0]!['proxyId'], 'p1');
-    assert.equal(instances[0]!['startedAt'], '2026-03-01T00:00:00Z');
-    assert.equal(instances[1]!['completedAt'], '2026-01-01T00:05:00Z');
-    assert.equal(instances[0]!['instanceAddr'], 'agent:list-tmpl/inst-new');
-  });
-
-  it('GET /api/agent-templates/:id/instances returns empty array for a template with no instances', async () => {
-    db.upsertAgentTemplate({
-      id: 'empty-tmpl', personaPath: null, engine: 'claude', model: null, persistent: false,
-      cwdBase: '/tmp', cwdTemplate: null, repoRoot: '/tmp',
-      hookStart: null, hookExit: null, hookPrepare: null, hookCleanup: null,
-      createdAt: '', updatedAt: '',
-    });
-    const { status, data } = await api('GET', '/api/agent-templates/empty-tmpl/instances');
-    assert.equal(status, 200);
-    assert.deepEqual((data as { instances: unknown[] }).instances, []);
-  });
-
-  it('GET /api/instances/:id/peek returns {live:true, output} for a running instance', async () => {
-    seedInstance({ id: 'peek-live', template: 'q3-tmpl', state: 'running', startedAt: '2026-04-01T00:00:00Z', suffix: 'plive1', tmuxSession: 'inst-q3-tmpl-peek-live', proxyId: 'p1' });
-    const { status, data } = await api('GET', '/api/instances/peek-live/peek?lines=10');
-    assert.equal(status, 200);
-    const body = data as Record<string, unknown>;
-    assert.equal(body['live'], true);
-    // q3Dispatch returns { ok:true, data:'' } for capture.
-    assert.equal(body['output'], '');
-    // The capture targeted the stored tmuxSession.
-    const lastCapture = [...commandsLog].reverse().find((c) => c.action === 'capture') as { action: string; sessionName?: string } | undefined;
-    assert.equal(lastCapture?.sessionName, 'inst-q3-tmpl-peek-live');
-  });
-
-  it('GET /api/instances/:id/peek returns {live:false} for a completed instance (no 500)', async () => {
-    seedInstance({ id: 'peek-done', template: 'q3-tmpl', state: 'completed', startedAt: '2026-04-02T00:00:00Z', suffix: 'pdone1', tmuxSession: 'inst-q3-tmpl-peek-done', proxyId: 'p1', completedAt: '2026-04-02T00:01:00Z' });
-    const { status, data } = await api('GET', '/api/instances/peek-done/peek');
-    assert.equal(status, 200);
-    assert.deepEqual(data, { live: false });
-  });
-
-  it('GET /api/instances/:id/peek returns 404 for an unknown instance', async () => {
-    const { status } = await api('GET', '/api/instances/never-existed/peek');
-    assert.equal(status, 404);
-  });
-
-  it('GET /api/instances/:id returns instance + message/reply/status file contents', async () => {
-    const msgPath = join(tmpDir, 'msg.txt');
-    const replyPath = join(tmpDir, 'reply.txt');
-    const statusPath = join(tmpDir, 'status.txt');
-    writeFileSync(msgPath, 'the original message');
-    writeFileSync(replyPath, 'the agent reply');
-    writeFileSync(statusPath, 'ok');
-    seedInstance({
-      id: 'read-1', template: 'q3-tmpl', state: 'completed', startedAt: '2026-04-03T00:00:00Z',
-      suffix: 'read01', tmuxSession: 'inst-q3-tmpl-read-1', proxyId: 'p1',
-      messagePath: msgPath, replyPath, statusPath, completedAt: '2026-04-03T00:02:00Z',
-    });
-    const { status, data } = await api('GET', '/api/instances/read-1');
-    assert.equal(status, 200);
-    const body = data as Record<string, unknown>;
-    assert.equal((body['instance'] as Record<string, unknown>)['id'], 'read-1');
-    assert.equal(body['message'], 'the original message');
-    assert.equal(body['reply'], 'the agent reply');
-    assert.equal(body['status'], 'ok');
-  });
-
-  it('GET /api/instances/:id tolerates missing files (nulls) and 404s for unknown id', async () => {
-    seedInstance({
-      id: 'read-missing', template: 'q3-tmpl', state: 'failed', startedAt: '2026-04-04T00:00:00Z',
-      suffix: 'rmiss1', tmuxSession: 'inst-q3-tmpl-read-missing', proxyId: 'p1',
-      messagePath: join(tmpDir, 'does-not-exist-m'), replyPath: join(tmpDir, 'does-not-exist-r'),
-      statusPath: join(tmpDir, 'does-not-exist-s'), failureReason: 'boom',
-    });
-    const { status, data } = await api('GET', '/api/instances/read-missing');
-    assert.equal(status, 200);
-    const body = data as Record<string, unknown>;
-    assert.equal(body['message'], null);
-    assert.equal(body['reply'], null);
-    assert.equal(body['status'], null);
-    assert.equal((body['instance'] as Record<string, unknown>)['failureReason'], 'boom');
-
-    const unknown = await api('GET', '/api/instances/no-such-instance');
-    assert.equal(unknown.status, 404);
   });
 });
 

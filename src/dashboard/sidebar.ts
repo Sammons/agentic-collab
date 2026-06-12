@@ -243,23 +243,19 @@ function memberHtml(agentName: string): string {
   // Caller (teamHtml) has already filtered orphans, so `agent` is guaranteed.
   const checked = state.selectedAgents.has(agentName) ? 'checked' : '';
   const agent = agentsByName.get(agentName)!;
-  const isTemplate = agent.isTemplate ?? false;
-  const status = isTemplate ? 'template' : statusClass(agent.state);
-  const stateTip = isTemplate
-    ? `${agentName} — template (messaging spawns new agent)`
-    : `${agentName} — ${agent.state}`;
-  // Template styling is handled via .member.is-template .nm in CSS.
+  const status = statusClass(agent.state);
+  const stateTip = `${agentName} — ${agent.state}`;
   // Selection is an IDE-file-nav-style highlighted row (`.member.checked`),
   // not a checkbox — see sidebar.css. The .status dot still conveys liveness;
   // it trails the row (right-aligned) so it doesn't crowd the agent-icon emoji.
   const iconHtml = agent.icon ? `<span class="agent-icon">${escapeHtml(agent.icon)}</span>` : '';
   return `
-    <div class="member ${checked}${isTemplate ? ' is-template' : ''}" data-member="${escapeHtml(agentName)}">
+    <div class="member ${checked}" data-member="${escapeHtml(agentName)}">
       ${iconHtml}
       <span class="nm">${escapeHtml(agentName)}</span>
       <span class="focus" data-focus="${escapeHtml(agentName)}" title="Focus on ${escapeHtml(agentName)}">${icons['focus']}</span>
       <span class="eye" data-eye="${escapeHtml(agentName)}" title="Watch ${escapeHtml(agentName)}">${icons['eye']}</span>
-      <span class="status ${status}" title="${escapeHtml(stateTip)}">${isTemplate ? '+' : ''}</span>
+      <span class="status ${status}" title="${escapeHtml(stateTip)}"></span>
     </div>
   `;
 }
