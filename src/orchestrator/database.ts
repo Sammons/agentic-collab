@@ -2068,14 +2068,16 @@ export class Database {
     hookCompact?: string | null;
     hookExit?: string | null;
     hookInterrupt?: string | null;
+    hookReload?: string | null;
     hookSubmit?: string | null;
     indicators?: string | null;
     detection?: string | null;
+    customButtons?: string | null;
     launchEnv?: Record<string, string> | null;
   }): EngineConfigRecord {
     this.db.prepare(`
-      INSERT INTO engine_configs (name, engine, model, thinking, permissions, hook_start, hook_resume, hook_compact, hook_exit, hook_interrupt, hook_submit, indicators, detection, launch_env)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO engine_configs (name, engine, model, thinking, permissions, hook_start, hook_resume, hook_compact, hook_exit, hook_interrupt, hook_reload, hook_submit, indicators, detection, custom_buttons, launch_env)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       opts.name,
       opts.engine,
@@ -2087,9 +2089,11 @@ export class Database {
       opts.hookCompact ?? null,
       opts.hookExit ?? null,
       opts.hookInterrupt ?? null,
+      opts.hookReload ?? null,
       opts.hookSubmit ?? null,
       opts.indicators ?? null,
       opts.detection ?? null,
+      opts.customButtons ?? null,
       opts.launchEnv ? JSON.stringify(opts.launchEnv) : null,
     );
     return this.getEngineConfig(opts.name)!;

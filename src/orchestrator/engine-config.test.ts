@@ -32,6 +32,10 @@ describe('EngineConfig CRUD', () => {
       hookExit: 'exit-cmd',
       hookInterrupt: 'interrupt-cmd',
       hookSubmit: 'submit-cmd',
+      hookReload: 'reload-cmd',
+      indicators: '[{"name":"busy","pattern":"esc to interrupt"}]',
+      detection: '{"idle_regex":"❯"}',
+      customButtons: '[{"label":"Compact","command":"/compact"}]',
       launchEnv: { FOO: 'bar', BAZ: 'qux' },
     });
 
@@ -46,8 +50,20 @@ describe('EngineConfig CRUD', () => {
     assert.equal(ec.hookExit, 'exit-cmd');
     assert.equal(ec.hookInterrupt, 'interrupt-cmd');
     assert.equal(ec.hookSubmit, 'submit-cmd');
+    assert.equal(ec.hookReload, 'reload-cmd');
+    assert.equal(ec.indicators, '[{"name":"busy","pattern":"esc to interrupt"}]');
+    assert.equal(ec.detection, '{"idle_regex":"❯"}');
+    assert.equal(ec.customButtons, '[{"label":"Compact","command":"/compact"}]');
     assert.deepEqual(ec.launchEnv, { FOO: 'bar', BAZ: 'qux' });
     assert.ok(ec.createdAt);
+
+    // Round-trip through a fresh read — INSERT column drift (the original
+    // hook_reload/custom_buttons silent drop) only shows on the re-read path.
+    const reread = db.getEngineConfig('full-config');
+    assert.equal(reread?.hookReload, 'reload-cmd');
+    assert.equal(reread?.customButtons, '[{"label":"Compact","command":"/compact"}]');
+    assert.equal(reread?.indicators, '[{"name":"busy","pattern":"esc to interrupt"}]');
+    assert.equal(reread?.detection, '{"idle_regex":"❯"}');
   });
 
   it('createEngineConfig with minimal fields (just name + engine)', () => {

@@ -536,11 +536,111 @@ function wireSections(scope: HTMLElement): void {
     void loadConfigs().then(rerender);
   });
 
-  scope.querySelector<HTMLElement>('[data-new-engine]')?.addEventListener('click', () => {
-    showToast('New engine config flow ships in PR 9.');
-  });
+  scope.querySelector<HTMLElement>('[data-new-engine]')?.addEventListener('click', () => openNewEngineForm());
 
   scope.querySelector<HTMLElement>('[data-new-dest]')?.addEventListener('click', () => openTelegramForm());
+}
+
+/**
+ * Create-engine modal. Collects a name + underlying adapter engine, and can
+ * clone all hook/indicator/detection shape from an existing config (the common
+ * case: "claude, but with an extra --add-dir"). On success it opens the full
+ * edit page so the operator can fine-tune the cloned hooks.
+ */
+const ENGINE_NAME_RE = /^[a-zA-Z0-9_-]+$/;
+const CLONEABLE_KEYS = [
+  'model', 'thinking', 'permissions',
+  'hookStart', 'hookResume', 'hookCompact', 'hookExit', 'hookInterrupt',
+  'hookReload', 'hookSubmit', 'indicators', 'detection', 'customButtons',
+  'launchEnv',
+] as const;
+
+function openNewEngineForm(): void {
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(22,24,28,0.18);z-index:50;display:flex;align-items:center;justify-content:center;padding:24px;';
+  const cloneOptions = configs
+    .map((c) => `<option value="${escapeHtml(c.name)}">${escapeHtml(c.name)} (${escapeHtml(c.engine)})</option>`)
+    .join('');
+  overlay.innerHTML = `
+    <div class="st-addform" style="background:var(--paper-card);width:520px;max-width:95vw;border-radius:6px;border:1px solid var(--rule);padding:20px;">
+      <div class="ttl" style="font-size:16px;font-weight:700;margin-bottom:14px;">+ New engine config</div>
+      <div class="field"><label>Name</label><input class="ov-input" type="text" data-in-name placeholder="e.g. claude-with-home"></div>
+      <div class="field"><label>Underlying engine</label>
+        <select class="ov-input" data-in-engine>
+          <option value="claude">claude</option>
+          <option value="codex">codex</option>
+          <option value="opencode">opencode</option>
+        </select>
+      </div>
+      <div class="field"><label>Clone hooks from</label>
+        <select class="ov-input" data-in-clone>
+          <option value="">— none (blank config) —</option>
+          ${cloneOptions}
+        </select>
+      </div>
+      <div class="help">Pick an existing config to copy its hooks, indicators, and detection. After creating, you'll land on the editor to tweak (e.g. add <code>--add-dir</code>).</div>
+      <div class="actions" style="display:flex;gap:6px;justify-content:flex-end;margin-top:14px;">
+        <button class="btn" data-cancel>Cancel</button>
+        <button class="btn primary" data-submit>Create</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  overlay.querySelector<HTMLElement>('[data-cancel]')?.addEventListener('click', close);
+
+  // When a clone source is chosen, default the underlying engine to match it.
+  const engineSel = overlay.querySelector<HTMLSelectElement>('[data-in-engine]');
+  const cloneSel = overlay.querySelector<HTMLSelectElement>('[data-in-clone]');
+  cloneSel?.addEventListener('change', () => {
+    const src = configs.find((c) => c.name === cloneSel.value);
+    if (src && engineSel) engineSel.value = src.engine;
+  });
+
+  const submitBtn = overlay.querySelector<HTMLButtonElement>('[data-submit]');
+  submitBtn?.addEventListener('click', async () => {
+    if (submitBtn.disabled) {
+      return;
+    }
+    const name = overlay.querySelector<HTMLInputElement>('[data-in-name]')?.value.trim() ?? '';
+    const engine = engineSel?.value ?? 'claude';
+    const cloneFrom = cloneSel?.value ?? '';
+    if (!name) { showToast('Name required', 'error'); return; }
+    if (!ENGINE_NAME_RE.test(name)) { showToast('Name: only letters, numbers, _ and -', 'error'); return; }
+    if (configs.some((c) => c.name === name)) { showToast('A config with that name already exists', 'error'); return; }
+
+    const payload: Record<string, unknown> = { name, engine };
+    if (cloneFrom) {
+      const src = configs.find((c) => c.name === cloneFrom) as Record<string, unknown> | undefined;
+      if (src) {
+        for (const k of CLONEABLE_KEYS) {
+          if (src[k] != null) payload[k] = src[k];
+        }
+        // The underlying engine is operator-chosen above; don't let the clone override it.
+        payload['engine'] = engine;
+      }
+    }
+
+    submitBtn.disabled = true;
+    try {
+      const res = await fetch('/api/engine-configs', {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        const b = await res.json().catch(() => null);
+        showToast(b?.error ?? (res.status === 409 ? 'Config already exists' : 'Create failed'), 'error');
+        return;
+      }
+      close();
+      showToast('Engine config created');
+      // Land on the editor so the operator can fine-tune the new config.
+      go({ kind: 'edit-engine', name });
+    } catch { showToast('Network error', 'error'); }
+    finally { submitBtn.disabled = false; }
+  });
 }
 
 function openTelegramForm(): void {
