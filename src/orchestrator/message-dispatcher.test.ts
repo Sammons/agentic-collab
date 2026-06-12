@@ -116,6 +116,52 @@ describe('MessageDispatcher', () => {
     }
   });
 
+  it('a tryDeliver racing an in-flight delivery does not double-paste the same message', async () => {
+    // Live incident 2026-06-12 (queue id 315): an approval auto-notify was
+    // pasted twice. The second enqueue-triggered tryDeliver read the head
+    // row while the first paste was still in flight — the row stays
+    // status='pending' until markMessageDelivered — so both calls pasted
+    // the same envelope. The queue showed one cleanly delivered row
+    // (markMessageDelivered is idempotent), hiding the duplicate.
+    db.createAgent({ name: 'codex-race', engine: 'codex', cwd: '/tmp', proxyId: 'p1' });
+    setAgentState('codex-race', 'active');
+
+    const queued = db.enqueueMessage({
+      sourceAgent: null,
+      targetAgent: 'codex-race',
+      envelope: 'Approval abc APPROVED (terminal)',
+    });
+
+    const pastes: string[] = [];
+    const dispatcher = makeDispatcher(async (_proxyId, command) => {
+      if (command.action === 'paste') {
+        pastes.push(command.text);
+        // Hold the paste in flight so the racing call overlaps it.
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+      return { ok: true };
+    });
+
+    try {
+      const results = await Promise.all([
+        dispatcher.tryDeliver('codex-race'),
+        dispatcher.tryDeliver('codex-race'),
+      ]);
+
+      assert.equal(
+        pastes.filter(text => text.includes('Approval abc APPROVED')).length,
+        1,
+        `expected exactly one paste of the envelope; pastes=${JSON.stringify(pastes)}`,
+      );
+      // Exactly one call wins; the loser reports undelivered and defers to
+      // the drain loop.
+      assert.equal(results.filter(Boolean).length, 1);
+      assert.equal(db.getPendingMessageById(queued.id)?.status, 'delivered');
+    } finally {
+      dispatcher.stop();
+    }
+  });
+
   // ── v3 Q3 invariant #10: deliverToInstance routes paste to the right tmux session ──
 
   it('invariant #10: deliverToInstance pastes to the instance tmux session and never persists', async () => {

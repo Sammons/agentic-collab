@@ -226,6 +226,94 @@ describe('ApprovalService (Q5)', () => {
     assert.equal(db.getDeliverableMessages('agent:foo').length, 0);
   });
 
+  it('setState enqueues exactly ONE auto-notify queue row for the requester (dedup regression)', async () => {
+    // Live incident 2026-06-12 (queue ids 315-318): the requester received
+    // the decision 2-3 times. The server-side invariant is one queue row per
+    // state change — counted on the raw table so retry/backoff bookkeeping
+    // cannot hide a duplicate from us.
+    const { svc, dispatcher } = makeService();
+    // No 'foo' agent row exists, so the dispatcher cannot deliver — the row
+    // stays queued for counting.
+    const created = svc.create({
+      requesterAddr: 'agent:foo',
+      channel: 'dedup-single',
+      payload: '{}',
+    });
+    if (!created.ok) throw new Error('create failed');
+    const id = created.approval.id;
+
+    const updated = await svc.setState(id, 'approved', { decidedBy: 'human' });
+    assert.equal(updated.ok, true);
+    // Let the fire-and-forget tryDeliver settle before counting.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const countQueueRows = () => {
+      const row = db.rawDb
+        .prepare("SELECT COUNT(*) AS count FROM pending_messages WHERE target_agent = 'foo'")
+        .get() as { count: number };
+      return row.count;
+    };
+    const countThreadRows = () => {
+      const row = db.rawDb
+        .prepare("SELECT COUNT(*) AS count FROM dashboard_messages WHERE agent = 'foo'")
+        .get() as { count: number };
+      return row.count;
+    };
+    assert.equal(countQueueRows(), 1);
+    assert.equal(countThreadRows(), 1);
+
+    // A repeat decision on the same id is rejected and must not enqueue.
+    const repeat = await svc.setState(id, 'rejected');
+    assert.equal(repeat.ok, false);
+    if (repeat.ok) throw new Error('unreachable');
+    assert.equal(repeat.reason, 'already-terminal');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(countQueueRows(), 1);
+    assert.equal(countThreadRows(), 1);
+    dispatcher.stop();
+  });
+
+  it('amend then terminal: exactly one auto-notify per state change (amended IS terminal)', async () => {
+    const { svc, dispatcher } = makeService();
+    const queueRows = () => db.rawDb
+      .prepare("SELECT envelope FROM pending_messages WHERE target_agent = 'foo' ORDER BY id ASC")
+      .all() as Array<{ envelope: string }>;
+
+    // First approval amended → one row, worded as the terminal amend notice.
+    const amendable = svc.create({
+      requesterAddr: 'agent:foo',
+      channel: 'dedup-amend',
+      payload: '{"v":1}',
+    });
+    if (!amendable.ok) throw new Error('create failed');
+    const amended = await svc.setState(amendable.approval.id, 'amended', { payload: '{"v":2}' });
+    assert.equal(amended.ok, true);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(queueRows().length, 1);
+    assert.ok(queueRows()[0]!.envelope.includes('APPROVED WITH AMENDMENTS'));
+
+    // amended is terminal — a follow-up approve is rejected and enqueues nothing.
+    const followUp = await svc.setState(amendable.approval.id, 'approved');
+    assert.equal(followUp.ok, false);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(queueRows().length, 1);
+
+    // An independent approval approved → exactly one more row.
+    const second = svc.create({
+      requesterAddr: 'agent:foo',
+      channel: 'dedup-amend',
+      payload: '{}',
+    });
+    if (!second.ok) throw new Error('create failed');
+    const approvedSecond = await svc.setState(second.approval.id, 'approved');
+    assert.equal(approvedSecond.ok, true);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const rows = queueRows();
+    assert.equal(rows.length, 2);
+    assert.ok(rows[1]!.envelope.includes(`Approval ${second.approval.id} APPROVED (terminal`));
+    dispatcher.stop();
+  });
+
   it('Auto-notify routes via deliverToInstance for agent-instance addresses', async () => {
     // Spy on deliverToInstance to assert it received the PARSED instanceId
     // ('inst-1'), not the raw `agent:tmpl-a/inst-1` requester string.

@@ -222,7 +222,7 @@ function renderDetail(a: ApprovalRow): void {
             also notify
             <select data-notify-agent style="font-family:var(--mono);font-size:12px;background:transparent;border:1px solid var(--rule);padding:3px 8px;border-radius:3px;color:var(--ink-2);">
               <option value="">(none)</option>
-              ${state.agents.map((ag) => `<option value="${escapeHtml(ag.name)}" ${defaultNotifyAgent(a) === ag.name ? 'selected' : ''}>${escapeHtml(ag.name)}</option>`).join('')}
+              ${state.agents.map((ag) => `<option value="${escapeHtml(ag.name)}">${escapeHtml(ag.name)}</option>`).join('')}
             </select>
           </span>
         `}
@@ -324,6 +324,11 @@ async function withdraw(id: string, notifyAgent?: string | null): Promise<void> 
  * Used when the operator picks "also notify <agent>" on the decision row,
  * so the agent learns about state changes for approvals whose requester
  * isn't itself.
+ *
+ * The dropdown defaults to "(none)": the orchestrator already auto-notifies
+ * the requester on every state change (ApprovalService.notifyRequester), so
+ * preselecting the requester here sent a second, dashboard-attributed copy
+ * of the same decision. "Also notify" is an explicit extra, never a default.
  */
 async function notifyAgentOfDecision(agentName: string, approvalId: string, newState: string): Promise<void> {
   const stateLabel: Record<string, string> = {
@@ -346,15 +351,6 @@ async function notifyAgentOfDecision(agentName: string, approvalId: string, newS
   } catch {
     showToast(`Notify @${agentName} failed`, 'error');
   }
-}
-
-/** Best guess for the default notify-agent: requester if it's a real agent. */
-function defaultNotifyAgent(a: ApprovalRow): string | null {
-  const m = a.requesterAddr.match(/^(?:agent:)?([a-zA-Z0-9_-]+)$/);
-  if (!m) return null;
-  const name = m[1]!;
-  if (name === 'dashboard' || name === 'system') return null;
-  return name;
 }
 
 /* ── amend modal ───────────────────────────────────────────────────── */

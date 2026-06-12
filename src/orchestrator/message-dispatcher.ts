@@ -41,6 +41,17 @@ export class MessageDispatcher {
   /** Guards against concurrent drain loops for the same agent. */
   private readonly draining = new Set<string>();
   /**
+   * Per-agent in-flight delivery guard (duplicate-paste fix, 2026-06-12).
+   * A message stays status='pending' while its paste is in flight —
+   * markAttemptStarted only stamps last_attempt_at — so a concurrent
+   * tryDeliver (event-driven enqueue, startup drainPending sweep) racing
+   * an active delivery re-reads the same head row and pastes it twice.
+   * The queue then shows ONE delivered row (markMessageDelivered is
+   * idempotent) while the agent received two copies. Delivery per agent
+   * is exclusive; losers return undelivered and the drain loop retries.
+   */
+  private readonly deliveriesInFlight = new Set<string>();
+  /**
    * Cool-down timestamps per agent (Race 2 fix).
    * After compact/interrupt operations, delivery waits for the agent to
    * process the command before sending messages to avoid interleaving.
@@ -120,6 +131,7 @@ export class MessageDispatcher {
     }
     this.drainTimers.clear();
     this.draining.clear();
+    this.deliveriesInFlight.clear();
     this.coolDownUntil.clear();
   }
 
@@ -206,50 +218,62 @@ export class MessageDispatcher {
    * One message per call to avoid flooding.
    */
   private async deliverNextMessage(agentName: string): Promise<boolean> {
-    // Wait for any lifecycle cool-down before delivery (Race 2 fix)
-    await this.waitForCoolDown(agentName);
+    // Exclusive per-agent delivery — see deliveriesInFlight. The check-and-add
+    // is synchronous (before the first await), so two racing calls cannot
+    // both claim the agent. Callers already schedule a drain when pending
+    // messages remain, which redelivers what the loser skipped.
+    if (this.deliveriesInFlight.has(agentName)) {
+      return false;
+    }
+    this.deliveriesInFlight.add(agentName);
+    try {
+      // Wait for any lifecycle cool-down before delivery (Race 2 fix)
+      await this.waitForCoolDown(agentName);
 
-    const messages = this.db.getDeliverableMessages(agentName);
-    if (messages.length === 0) return false;
+      const messages = this.db.getDeliverableMessages(agentName);
+      if (messages.length === 0) return false;
 
-    const message = messages[0]!;
-    this.db.markAttemptStarted(message.id);
+      const message = messages[0]!;
+      this.db.markAttemptStarted(message.id);
 
-    const agent = this.db.getAgent(agentName);
-    if (!agent || !agent.proxyId) {
-      this.db.markAttemptFailed(message.id, 'Agent not available or has no proxy');
+      const agent = this.db.getAgent(agentName);
+      if (!agent || !agent.proxyId) {
+        this.db.markAttemptFailed(message.id, 'Agent not available or has no proxy');
+        const updated = this.db.getPendingMessageById(message.id);
+        if (updated) {
+          this.onQueueUpdate(updated);
+          if (updated.status === 'failed') {
+            this.autoReplyToSender(updated);
+          }
+        }
+        return false;
+      }
+
+      const lifecycleCtx = this.makeLifecycleCtx();
+      const error = await deliverToAgent(lifecycleCtx, agent, message.envelope);
+
+      if (error) {
+        this.db.markAttemptFailed(message.id, error);
+        const updated = this.db.getPendingMessageById(message.id);
+        if (updated) {
+          this.onQueueUpdate(updated);
+          if (updated.status === 'failed') {
+            this.autoReplyToSender(updated);
+          }
+        }
+        return false;
+      }
+
+      this.db.markMessageDelivered(message.id);
       const updated = this.db.getPendingMessageById(message.id);
       if (updated) {
         this.onQueueUpdate(updated);
-        if (updated.status === 'failed') {
-          this.autoReplyToSender(updated);
-        }
       }
-      return false;
+      this.onMessageDelivered(agentName);
+      return true;
+    } finally {
+      this.deliveriesInFlight.delete(agentName);
     }
-
-    const lifecycleCtx = this.makeLifecycleCtx();
-    const error = await deliverToAgent(lifecycleCtx, agent, message.envelope);
-
-    if (error) {
-      this.db.markAttemptFailed(message.id, error);
-      const updated = this.db.getPendingMessageById(message.id);
-      if (updated) {
-        this.onQueueUpdate(updated);
-        if (updated.status === 'failed') {
-          this.autoReplyToSender(updated);
-        }
-      }
-      return false;
-    }
-
-    this.db.markMessageDelivered(message.id);
-    const updated = this.db.getPendingMessageById(message.id);
-    if (updated) {
-      this.onQueueUpdate(updated);
-    }
-    this.onMessageDelivered(agentName);
-    return true;
   }
 
   /**
