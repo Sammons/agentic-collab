@@ -365,8 +365,6 @@ describe('default-engine-configs', () => {
       for (const config of DEFAULT_ENGINE_CONFIGS) {
         const stored = db.getEngineConfig(config.name);
         assert.ok(stored, `${config.name} stored`);
-        // NOTE: hookReload is intentionally not asserted here — createEngineConfig
-        // does not persist it (reported as a production bug, out of scope for this PR).
         assert.deepEqual(
           {
             engine: stored.engine,
@@ -375,6 +373,7 @@ describe('default-engine-configs', () => {
             hookCompact: stored.hookCompact,
             hookExit: stored.hookExit,
             hookInterrupt: stored.hookInterrupt,
+            hookReload: stored.hookReload,
             indicators: stored.indicators,
             detection: stored.detection,
           },
@@ -385,6 +384,7 @@ describe('default-engine-configs', () => {
             hookCompact: config.hookCompact ?? null,
             hookExit: config.hookExit ?? null,
             hookInterrupt: config.hookInterrupt ?? null,
+            hookReload: config.hookReload ?? null,
             indicators: config.indicators ?? null,
             detection: config.detection ?? null,
           },

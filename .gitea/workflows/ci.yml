@@ -9,6 +9,9 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # node --test runs with no per-test timeout; cap the job so a wedged
+    # test can't hold the runner until act_runner's default 3h kill.
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
