@@ -163,3 +163,23 @@ Single revert of the squash/merge commit restores all code. **DB caveat:** `user
 2. **Fix the UX instead of removing.** Rejected by the operator: one production spawn, which failed. The kernel's value hypothesis (fan-out one-shot workers) did not survive contact; persistent agents + the dashboard cover the actual workflows. If one-shot fan-out returns, it should be re-designed from the lessons in `docs/quanta/` (retained) rather than evolved from this implementation.
 3. **Keep tables, drop code.** Rejected: orphaned tables invite schema drift (future migrations must tiptoe around them), keep the misleading `agent_templates` shadow rows for all 28 persistent agents, and make the grep gate impossible. The data is terminal and worthless; `DROP TABLE IF EXISTS` at userVersion 3 is strictly cleaner. (The inverse — drop tables, keep code — fails compilation and was never on the table.)
 4. **Phase the removal over several PRs (routes first, kernel later).** Rejected: every intermediate state either breaks imports or ships an orchestrator that half-knows about instances. The dependency graph (main.ts → routes.ts → kernel → database.ts → types.ts) removes cleanly in one changeset, and one PR = one revert.
+
+---
+
+## Adversarial review amendments (round 1, 2026-06-12) — BINDING scope additions
+
+The round-1 adversarial review confirmed the inventory and keep-list, and added the following to the Exact Removal Scope. The builder MUST treat these as part of the spec:
+
+**A1 (MAJOR).** `src/orchestrator/database.test.ts:1217-1219` — the fresh-DB migration test asserts `user_version == 2`; update the assertion (and the line-1218 comment) to `3`. This is also the only other reader of `user_version` outside `database.ts`.
+
+**A2 (MAJOR).** Persona sync signatures: `syncSinglePersona` (persona.ts:1477), `syncPersonasToDb` (persona.ts:1524), and `syncPersonasWithDiff` (persona.ts:1601) all carry `onTemplateEvent?: TemplateSyncEventSink` (type from the deleted template-sync.ts) — remove the parameter from all three. Corresponding call-site edits in `main.ts`: `reloadPersonas` (~412) and the persona watcher (~711) pass the WS sink as the third argument — drop it.
+
+**A3 (MAJOR).** Three surviving `isTemplate: false` construction sites: routes.ts:2234 and 2273 (annotated `AgentRecord` literals — excess-property errors once the field leaves the type); lifecycle.test.ts:1705 (fixture literal — file was missing from the tables); database.ts:2572 (`mapAgentRow`, hidden by an `as AgentRecord` cast — compiles clean, remove explicitly). Add `isTemplate`, `agent-instance`, and `template_updated` to the grep-gate term list.
+
+**A4 (MINOR).** routes.ts type imports: lines 40 (`TopicDelivery`) and 41 (`InstanceReaper`) go, not just line 43.
+
+**A5 (MINOR).** Gate-blind stale text to fix: address.ts:66 malformed-reason string must drop `topic:` from "(expected agent:, topic:, approval:, or telegram:)"; routes.test.ts:1637 banner comment; approvals.test.ts:22 doc bullet; main.ts:678 boot comment; bin/collab:23-27 and 175-179 mode comments (the stated ranges 29-36/181-182 were too narrow).
+
+**A6 (MINOR).** Rollback paragraph correction: `PRAGMA user_version = 1` does NOT re-run v1 (guard is `< 1`); the remedy works because v2's body is internally guarded via `PRAGMA table_info` (database.ts:498-507) and correctly re-adds `suffix` against the reverted base schema. Do NOT set version 0 — that re-runs v1 and can resurrect operator-deleted teams from stale `agent_group` values.
+
+**A7 (MINOR).** Validation checklist additions: runtime check `agent:tmpl/inst-1` → 400 (alongside `topic:foo/bar`); the migration check asserts fresh-DB `user_version == 3` consistent with A1; add a `POST /api/sync-personas` (reloadPersonas) round-trip check since that path is edited in two files.
