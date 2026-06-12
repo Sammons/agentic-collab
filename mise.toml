@@ -5,7 +5,7 @@ age = "latest"
 node = "24"
 
 [tasks.test]
-description = "Run all tests (~3s)"
+description = "Run all tests (~5min, 1300+ tests)"
 run = "node --test 'src/**/*.test.ts'"
 
 [tasks."test:watch"]
@@ -71,9 +71,9 @@ echo ""
 echo -n "claude CLI: "
 which claude >/dev/null 2>&1 && echo "found" || echo "not found"
 echo -n "codex CLI: "
-which codex >/dev/null 2>&1 && echo "not found" || echo "found"
+which codex >/dev/null 2>&1 && echo "found" || echo "not found"
 echo -n "opencode CLI: "
-which opencode >/dev/null 2>&1 && echo "not found" || echo "found"
+which opencode >/dev/null 2>&1 && echo "found" || echo "not found"
 
 echo ""
 SECRET_PATH="${HOME}/.config/agentic-collab/secret"

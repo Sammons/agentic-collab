@@ -6,7 +6,7 @@ Zero-dependency orchestrator for AI coding agents via tmux. Node 24 native TypeS
 
 ```bash
 ./start.sh          # orchestrator (Docker :3000) + proxy (host :3100)
-node --test 'src/**/*.test.ts'  # ~875 tests
+node --test 'src/**/*.test.ts'  # 1300+ tests, ~5 min
 pnpm typecheck      # type check (tsc --noEmit)
 ```
 
