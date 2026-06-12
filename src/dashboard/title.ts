@@ -1,12 +1,13 @@
 /**
  * Browser tab title + favicon, reflecting the focused agent.
  *
- * Restores v2 behavior dropped in the v3 cutover: the tab shows the focused
- * agent's icon + name (v2's updatePageTitle). "Focused agent" = the watched
- * agent on #/watch/:name, or the single selected agent in the sidebar filter;
- * otherwise none (app default). v2 only put the emoji in the title TEXT — here
- * we also render a real emoji favicon from the agent's icon. Updates on
- * route/selection/agent changes.
+ * Restores v2 behavior dropped in the v3 cutover: the tab reflects the focused
+ * agent (v2's updatePageTitle). "Focused agent" = the watched agent on
+ * #/watch/:name, or the single selected agent in the sidebar filter; otherwise
+ * none (app default). The agent's icon renders ONLY as the favicon — the title
+ * text carries just the name, otherwise the tab shows the same emoji twice
+ * (favicon + leading title character). Updates on route/selection/agent
+ * changes.
  */
 import { state, on, agentsByName } from './state.ts';
 
@@ -44,7 +45,7 @@ function update(): void {
   const name = focusedAgentName();
   const icon = name ? (agentsByName.get(name)?.icon || '') : '';
   if (name) {
-    document.title = `${icon ? `${icon} ` : ''}${name} — ${BASE}`;
+    document.title = `${name} — ${BASE}`;
     setFavicon(emojiFavicon(icon || DEFAULT_FAVICON_EMOJI));
   } else {
     document.title = BASE;
