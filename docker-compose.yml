@@ -13,6 +13,14 @@ services:
       # Dev: bind-mount src for hot-reload without rebuild. Dockerfile COPY
       # still bakes src/ into the image for prod/CI (self-contained deploys).
       - ./src:/app/src
+      # Q8 crash recovery: worktrees are created on the HOST by the proxy, so
+      # ephemeral-template `cwd_base` directories are NOT visible from inside
+      # this container. Per-instance cleanup probes route through the proxy
+      # and work without a mount, but the orphaned-worktree SWEEP stats bases
+      # locally — without a mount it logs a one-time warning per base and
+      # skips. To enable the sweep for a base, bind-mount it read-only at the
+      # same path, e.g.:
+      #   - /home/you/worktree-base:/home/you/worktree-base:ro
     # host.docker.internal resolves to the host on Docker Desktop (macOS/Windows).
     # On Linux, this requires Docker Engine 20.10+ with the host-gateway feature.
     # If host-gateway is unavailable, use --network=host or set

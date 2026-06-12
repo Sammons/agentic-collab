@@ -70,3 +70,24 @@ LOW:
 - `src/shared/utils.ts` — exported `DEFAULT_WORKTREE_PREFIX`.
 
 No new npm deps. No `ALTER TABLE` against any pre-existing table. `field-registry.ts` is untouched.
+
+## Review round 3 — recovery hardening (PR `fix/recovery-q8-hardening`)
+
+Outside adversarial review of `recovery.ts` confirmed defects; fixes:
+
+CRITICAL:
+- **CRITICAL-1 — stale `'spawning'` rows were permanently unrecoverable.** A crash between the claim commit and the `'running'` transition left a row no surface ever touched (reaper skips `'spawning'`, recovery excluded it): queue row stranded `'claimed'`, concurrency=1 topics bricked, worktree leaked. Fix: `BootReconciler` ADOPTS `'spawning'` rows at boot (provably no in-process claim flow exists pre-listen). Status-ready → promote to `'running'` + reaper finalise; otherwise best-effort `kill_session` + CAS-guarded failure path. The reconnect handler still excludes `'spawning'` (Q3 owns the live claim window).
+- **CRITICAL-2 — recovery fs checks read the CONTAINER filesystem.** Worktrees are created on the host; `docker-compose.yml` mounts no `cwd_base`, so every `isDirectory(worktreePath)` gate was always false → cleanup hooks never dispatched; the sweep silently no-opped. Fix (hybrid): per-instance cleanup gates probe via the OWNING PROXY (`test -d` over the existing `exec` surface, 5s timeout, degrade-to-skip); the sweep (which needs readdir + mtime) keeps local fs but warns loudly once per invisible base and the bind-mount requirement is documented in `docker-compose.yml`.
+
+HIGH:
+- **HIGH-1 — `ProxyReconnectHandler` raced the 1.5s reaper.** It skipped the `$STATUS_PATH`-first rule the file header mandates: finished work could be overwritten `'completed'`→`'failed'` and (under requeue policy) delivered twice. Fix: status-first check mirroring `reconcileOne`; summary gains a `finalised` counter; handler takes `instanceReaper` in its options.
+- **HIGH-2 — queue-policy writes were non-atomic and unguarded.** `updateInstanceState('failed')` + queue mark/requeue were separate autocommit statements (crash window strands the queue row); `requeueTopicQueueRow` / `markTopicQueueCompleted` had no `claimed_by_instance` predicate (delayed recovery could flip a row claimed by a NEWER instance → double delivery). Fix: new `db.failInstanceAndSettleQueue` — one `BEGIN IMMEDIATE` transaction, CAS on the instance state (`expectedStates`), `status='claimed' AND claimed_by_instance=?` guard on the queue row. `requeueTopicQueueRow` is REMOVED (recovery was its only caller); the reaper/topic-delivery owner paths keep `markTopicQueueCompleted`.
+
+MEDIUM:
+- **MEDIUM-2 (partial)** — orphan removal wraps in `test -d` and echoes `__ORPHAN_ABSENT__` for missing paths (counted skipped, not removed); the "no proxy has serviced this base" and new "base not visible" warnings are deduped per base. The host-correct resolver redesign remains follow-up (see `defaultResolveProxy` TODO).
+
+LOW:
+- Custom sweep `prefix` is anchored (`'wt-'` no longer matches `old-wt-backup`).
+- Coincident `/api/proxy/register` calls coalesce into one trailing run instead of being dropped.
+
+Tests: `recovery.test.ts` 38 (was 28); `database.test.ts` +4 for the transactional method. Gates: full suite green; per-file tsc delta vs main is zero.
