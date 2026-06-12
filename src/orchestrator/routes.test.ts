@@ -1418,6 +1418,25 @@ describe('API Routes — Personas', () => {
       }
     });
 
+    it('opencode: includes profilePreview and OPENCODE_CONFIG_CONTENT prefix (system prompt → instructions file)', async () => {
+      try {
+        writeFileSync(join(personasDir, 'lp-opencode.md'),
+          `---\nengine: opencode\ncwd: /tmp/lp\n---\n${SECRET_BODY}`);
+        const { status, data } = await api('GET', '/api/personas/lp-opencode/launch-preview');
+        assert.equal(status, 200);
+        const d = data as Record<string, unknown>;
+        assert.equal(d.engine, 'opencode');
+        assert.ok(typeof d.profilePreview === 'string', 'opencode must include profilePreview');
+        assert.ok((d.profilePreview as string).includes(PLACEHOLDER), 'profilePreview carries «PERSONA»');
+        const cmd = d.command as string;
+        assert.ok(cmd.includes('OPENCODE_CONFIG_CONTENT='), 'command carries the instructions env prefix');
+        assert.ok(cmd.includes('.config/opencode/collab/lp-opencode.md'), 'env prefix points at the per-agent instructions file');
+        assert.ok(!cmd.includes(SECRET_BODY), 'command must NOT contain the real persona body');
+      } finally {
+        rmSync(join(personasDir, 'lp-opencode.md'), { force: true });
+      }
+    });
+
     it('S2: file: hook pointing at a nonexistent path returns error field, not 500', async () => {
       try {
         writeFileSync(join(personasDir, 'lp-badfile.md'),

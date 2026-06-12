@@ -404,12 +404,13 @@ async function createSessionAndWriteProfile(
     sessionName: tmuxSession,
     cwd,
   });
-  if (createResult.ok && adapter.usesConfigProfile && systemPrompt) {
-    await ctx.proxyDispatch(proxyId, {
-      action: 'write_codex_profile',
-      profileName: name,
-      developerInstructions: systemPrompt,
-    });
+  if (createResult.ok && systemPrompt) {
+    const writeCommand = adapter.usesConfigProfile
+      ? adapter.buildProfileWriteCommand?.(name, systemPrompt)
+      : undefined;
+    if (writeCommand) {
+      await ctx.proxyDispatch(proxyId, writeCommand);
+    }
   }
   return createResult;
 }
@@ -763,12 +764,11 @@ export async function resumeAgent(
     } else {
       // Session alive — write updated config profile if needed
       const personaAdapter = getAdapter(engine);
-      if (personaAdapter.usesConfigProfile && systemPrompt) {
-        await ctx.proxyDispatch(proxyId, {
-          action: 'write_codex_profile',
-          profileName: name,
-          developerInstructions: systemPrompt,
-        }).catch(() => {});
+      const writeCommand = personaAdapter.usesConfigProfile && systemPrompt
+        ? personaAdapter.buildProfileWriteCommand?.(name, systemPrompt)
+        : undefined;
+      if (writeCommand) {
+        await ctx.proxyDispatch(proxyId, writeCommand).catch(() => {});
       }
     }
 
@@ -950,14 +950,15 @@ export async function destroyAgent(
       });
     }
 
-    // Clean up config profile for engines that use it (e.g. Codex)
+    // Clean up config profile for engines that use it (e.g. Codex, OpenCode)
     if (agent.proxyId) {
       const adapter = getAdapter(agent.engine);
-      if (adapter.usesConfigProfile) {
-        await ctx.proxyDispatch(agent.proxyId, {
-          action: 'remove_codex_profile',
-          profileName: name,
-        }).catch((err) => { console.warn('[cleanup] Config profile removal failed:', (err as Error).message); });
+      const removeCommand = adapter.usesConfigProfile
+        ? adapter.buildProfileRemoveCommand?.(name)
+        : undefined;
+      if (removeCommand) {
+        await ctx.proxyDispatch(agent.proxyId, removeCommand)
+          .catch((err) => { console.warn('[cleanup] Config profile removal failed:', (err as Error).message); });
       }
     }
 

@@ -10,6 +10,7 @@
 
 import { SPINNER_REGEX, type EngineAdapter, type SpawnOptions, type ResumeOptions, type IdleState, type ContextResult } from './types.ts';
 import { shellQuote } from '../../shared/utils.ts';
+import type { ProxyCommand } from '../../shared/types.ts';
 
 export class CodexAdapter implements EngineAdapter {
   readonly engine = 'codex';
@@ -17,10 +18,25 @@ export class CodexAdapter implements EngineAdapter {
 
   /**
    * Whether this engine uses a config profile for system prompt injection.
-   * When true, the orchestrator must dispatch a write_codex_profile action
-   * to the proxy BEFORE pasting the spawn/resume command.
+   * When true, the orchestrator dispatches buildProfileWriteCommand() to the
+   * proxy BEFORE pasting the spawn/resume command.
    */
   readonly usesConfigProfile = true;
+
+  buildProfileWriteCommand(profileName: string, systemPrompt: string) {
+    return {
+      action: 'write_codex_profile',
+      profileName,
+      developerInstructions: systemPrompt,
+    } as const satisfies ProxyCommand;
+  }
+
+  buildProfileRemoveCommand(profileName: string) {
+    return {
+      action: 'remove_codex_profile',
+      profileName,
+    } as const satisfies ProxyCommand;
+  }
 
   buildSpawnCommand(opts: SpawnOptions): string {
     const parts = ['codex', '--dangerously-bypass-approvals-and-sandbox', '--no-alt-screen'];

@@ -8,8 +8,8 @@
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { createWriteStream, existsSync, realpathSync, unlinkSync, readFileSync, writeFileSync, mkdirSync, readdirSync, statSync } from 'node:fs';
-import { join, relative, isAbsolute, dirname, resolve, sep } from 'node:path';
+import { createWriteStream, existsSync, realpathSync, unlinkSync, readdirSync, statSync } from 'node:fs';
+import { join, relative, isAbsolute, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { pipeline } from 'node:stream/promises';
 import { Transform } from 'node:stream';
@@ -19,6 +19,7 @@ import { generateToken } from '../shared/sanitize.ts';
 import { resolveSecret, waitForSecret, discoverOrchestrator, getSecretPath, hasDocker } from '../shared/config.ts';
 import { getVersion } from '../shared/version.ts';
 import * as tmux from './tmux.ts';
+import { EngineProfileStore } from './engine-profiles.ts';
 import type { ProxyCommand, ProxyResponse } from '../shared/types.ts';
 
 // Ensure the collab CLI (bin/collab) is on PATH for spawned tmux sessions.
@@ -120,77 +121,9 @@ async function deregister(): Promise<void> {
   }
 }
 
-// ── Codex Profile Management ──
+// ── Engine Profile Management (Codex TOML profiles, OpenCode instructions) ──
 
-const CODEX_CONFIG_PATH = join(homedir(), '.codex', 'config.toml');
-
-/**
- * Write or update a Codex profile in ~/.codex/config.toml.
- *
- * Uses TOML triple-quoted strings ("""...""") for developer_instructions,
- * which handle ALL special characters (backticks, $, !, quotes) with no
- * shell escaping needed. The only character that needs handling is three
- * consecutive double quotes in the content itself.
- */
-function writeCodexProfile(profileName: string, developerInstructions: string): void {
-  // Validate profile name (alphanumeric, hyphens, underscores)
-  if (!/^[a-zA-Z0-9_-]+$/.test(profileName)) {
-    throw new Error(`Invalid profile name: ${profileName}`);
-  }
-
-  // Escape the only problematic sequence in TOML triple-quoted strings: """
-  const safeInstructions = developerInstructions.replace(/"""/g, '""\\u0022');
-
-  const profileHeader = `[profiles.${profileName}]`;
-  const profileBlock = `${profileHeader}\ndeveloper_instructions = """\n${safeInstructions}\n"""\n`;
-
-  // Read existing config (or start with empty)
-  const configDir = dirname(CODEX_CONFIG_PATH);
-  mkdirSync(configDir, { recursive: true });
-
-  let config = '';
-  try {
-    config = readFileSync(CODEX_CONFIG_PATH, 'utf-8');
-  } catch {
-    // File doesn't exist yet
-  }
-
-  // Remove any existing profile section for this agent.
-  // Match from [profiles.<name>] to the next [section] header or end of file.
-  const profileRegex = new RegExp(
-    `\\[profiles\\.${profileName}\\]\\n[\\s\\S]*?(?=\\n\\[|$)`,
-  );
-  config = config.replace(profileRegex, '').replace(/\n{3,}/g, '\n\n');
-
-  // Append new profile
-  config = config.trimEnd() + '\n\n' + profileBlock;
-
-  writeFileSync(CODEX_CONFIG_PATH, config, 'utf-8');
-}
-
-/**
- * Remove a Codex profile from ~/.codex/config.toml.
- * Called on agent destroy to prevent stale profiles accumulating.
- */
-function removeCodexProfile(profileName: string): void {
-  if (!/^[a-zA-Z0-9_-]+$/.test(profileName)) {
-    throw new Error(`Invalid profile name: ${profileName}`);
-  }
-
-  let config = '';
-  try {
-    config = readFileSync(CODEX_CONFIG_PATH, 'utf-8');
-  } catch {
-    return; // No config file — nothing to remove
-  }
-
-  const profileRegex = new RegExp(
-    `\\[profiles\\.${profileName}\\]\\n[\\s\\S]*?(?=\\n\\[|$)`,
-  );
-  const cleaned = config.replace(profileRegex, '').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
-
-  writeFileSync(CODEX_CONFIG_PATH, cleaned, 'utf-8');
-}
+const engineProfiles = new EngineProfileStore(homedir());
 
 // ── Command Execution ──
 
@@ -243,11 +176,19 @@ async function executeCommand(command: ProxyCommand): Promise<ProxyResponse> {
       }
 
       case 'write_codex_profile':
-        writeCodexProfile(command.profileName, command.developerInstructions);
+        engineProfiles.writeCodexProfile(command.profileName, command.developerInstructions);
         return { ok: true };
 
       case 'remove_codex_profile':
-        removeCodexProfile(command.profileName);
+        engineProfiles.removeCodexProfile(command.profileName);
+        return { ok: true };
+
+      case 'write_opencode_instructions':
+        engineProfiles.writeOpencodeInstructions(command.agentName, command.content);
+        return { ok: true };
+
+      case 'remove_opencode_instructions':
+        engineProfiles.removeOpencodeInstructions(command.agentName);
         return { ok: true };
 
       case 'exec': {

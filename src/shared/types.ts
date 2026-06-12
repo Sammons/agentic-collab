@@ -631,6 +631,15 @@ export type ProxyCommand =
   | { action: 'display_message'; sessionName: string; format: string }
   | { action: 'write_codex_profile'; profileName: string; developerInstructions: string }
   | { action: 'remove_codex_profile'; profileName: string }
+  /**
+   * Persist the composed system prompt for an OpenCode agent to
+   * ~/.config/opencode/collab/<agentName>.md on the proxy host. The spawn
+   * command then points OPENCODE_CONFIG_CONTENT at that file via the
+   * `instructions` config field, which OpenCode APPENDS to the system prompt.
+   * Mirrors write_codex_profile / remove_codex_profile.
+   */
+  | { action: 'write_opencode_instructions'; agentName: string; content: string }
+  | { action: 'remove_opencode_instructions'; agentName: string }
   | { action: 'exec'; command: string; cwd?: string; timeoutMs?: number }
   | { action: 'resize_pane'; sessionName: string; width: number; height: number }
   | { action: 'clear_history'; sessionName: string }
