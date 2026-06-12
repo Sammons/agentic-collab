@@ -75,38 +75,6 @@ export type PersonaFrontmatter = {
    * token is never in frontmatter (it lives encrypted in SQLite; see RFC-008 §2).
    */
   telegram?: AgentTelegramConfig;
-
-  // ── v3 template fields (ephemeral-agent only; persistent agents ignore these). ──
-
-  /** When false, persona declares an ephemeral agent template — not a live persistent agent. */
-  persistent?: boolean;
-  /** Base directory for ephemeral instances; must exist on the proxy host. */
-  cwd_base?: string;
-  /** Per-message worktree path template (supports {{message_id}} substitution). */
-  cwd_template?: string;
-  /** Source repository for `git worktree add` (defaults to cwd_base when null). */
-  repo_root?: string;
-  /** Host-shell hook executed via proxy `exec` before tmux session creation. */
-  prepare?: HookValue;
-  /** Host-shell hook executed via proxy `exec` after tmux session teardown. */
-  cleanup?: HookValue;
-  /** Topic declarations — addressable as `topic:<template>/<topic-name>`. */
-  topics?: TopicSpec[];
-};
-
-/**
- * One entry in an ephemeral template's `topics` array. Each topic is a routable
- * address (`topic:<template>/<name>`) that triggers an ephemeral spawn.
- */
-export type TopicSpec = {
-  name: string;
-  schema?: string;
-  reply_schema?: string;
-  concurrency?: number;
-  monitor_template?: string;
-  prepare?: HookValue;
-  start?: HookValue;
-  cleanup?: HookValue;
 };
 
 export type ParsedPersona = {
@@ -117,12 +85,8 @@ export type ParsedPersona = {
 
 import { nestedPersonaKeys, configFieldsChanged, buildUpsertOptsFromFrontmatter } from './field-registry.ts';
 
-/** Frontmatter field names that support structured (nested) values.
- *  Note: `prepare` and `cleanup` are v3 host-shell hooks. They are template-only
- *  fields — they never round-trip through the scalar field-registry or the
- *  `agents` table; they live exclusively on `agent_templates` rows.
- */
-const NESTED_FIELDS = new Set([...nestedPersonaKeys(), 'env', 'spawn', 'prepare', 'cleanup']);
+/** Frontmatter field names that support structured (nested) values. */
+const NESTED_FIELDS = new Set([...nestedPersonaKeys(), 'env', 'spawn']);
 
 /**
  * Parse YAML-like frontmatter from a markdown string.
@@ -219,20 +183,6 @@ export function parseFrontmatter(raw: string): { frontmatter: Record<string, unk
       const nextIndent = nextLine.length - nextLine.trimStart().length;
       if (nextIndent > 0) {
         const { value, nextLine: endLine } = parseIndicators(lines, i + 1, nextIndent);
-        frontmatter[key] = value;
-        i = endLine;
-        continue;
-      }
-    }
-
-    // topics: array of objects with name/schema/reply_schema/concurrency/...
-    // Follows the indicators precedent — parsed separately, written via the
-    // new template-sync routine (NEVER via the scalar field-registry).
-    if (key === 'topics' && trimmedVal === '' && i + 1 < lines.length) {
-      const nextLine = lines[i + 1]!;
-      const nextIndent = nextLine.length - nextLine.trimStart().length;
-      if (nextIndent > 0) {
-        const { value, nextLine: endLine } = parseTopics(lines, i + 1, nextIndent);
         frontmatter[key] = value;
         i = endLine;
         continue;
@@ -878,113 +828,6 @@ function parseIndicators(
 }
 
 /**
- * Parse the `topics:` array. Each item begins with `- name: <name>` and may
- * carry scalar fields (schema, reply_schema, concurrency, monitor_template)
- * plus optional per-topic hook overrides (prepare, start, cleanup) that may be
- * block scalars (`|`).
- *
- * Mirrors the indicators precedent: the result is structured data parsed in
- * persona.ts and written via the new template-sync routine — it does NOT pass
- * through the scalar field-registry that targets the `agents` table.
- *
- * Example YAML:
- *   topics:
- *     - name: provision
- *       schema: ./schemas/provision.json
- *       reply_schema: ./schemas/provision-reply.json
- *       concurrency: 1
- *       monitor_template: aws-account-monitor
- *     - name: teardown
- *       schema: ./schemas/teardown.json
- *       prepare: ./teardown-prepare.sh
- */
-function parseTopics(
-  lines: string[],
-  startLine: number,
-  baseIndent: number,
-): { value: TopicSpec[]; nextLine: number } {
-  const topics: TopicSpec[] = [];
-  let i = startLine;
-
-  while (i < lines.length) {
-    const line = lines[i]!;
-    if (line.trim() === '') { i++; continue; }
-
-    const lineIndent = line.length - line.trimStart().length;
-    if (lineIndent < baseIndent) break;
-
-    const content = line.trim();
-    if (!content.startsWith('- ')) break;
-
-    // First field on the same line as "- ", e.g. "- name: provision"
-    const headField = content.slice(2).trim();
-    const headColon = headField.indexOf(':');
-
-    const topic: Record<string, unknown> = {};
-    if (headColon !== -1) {
-      const k = headField.slice(0, headColon).trim();
-      const v = headField.slice(headColon + 1).trim();
-      if (k) topic[k] = v === '' ? '' : coerceScalar(v);
-    }
-    i++;
-
-    // Continuation lines for this topic item — indent must exceed the "-" column.
-    const itemIndent = baseIndent + 2; // two chars consumed by "- "
-    while (i < lines.length) {
-      const next = lines[i]!;
-      if (next.trim() === '') { i++; continue; }
-      const nextIndent = next.length - next.trimStart().length;
-      if (nextIndent < itemIndent) break;
-      if (next.trim().startsWith('- ')) break; // next topic
-
-      const propContent = next.trim();
-      const propColon = propContent.indexOf(':');
-      if (propColon === -1) { i++; continue; }
-
-      const propKey = propContent.slice(0, propColon).trim();
-      const propVal = propContent.slice(propColon + 1).trim();
-
-      // Block scalar (| or >) for hook fields
-      if (propVal === '|' || propVal === '>') {
-        const { value, nextLine: endLine } = parseBlockScalar(lines, i + 1);
-        topic[propKey] = value;
-        i = endLine;
-        continue;
-      }
-
-      topic[propKey] = propVal === '' ? '' : coerceScalar(propVal);
-      i++;
-    }
-
-    topics.push(coerceTopicSpec(topic));
-  }
-
-  return { value: topics, nextLine: i };
-}
-
-/** Coerce a raw parsed topic object into a TopicSpec, keeping only known keys. */
-function coerceTopicSpec(raw: Record<string, unknown>): TopicSpec {
-  const out: TopicSpec = {
-    name: typeof raw['name'] === 'string' ? raw['name'] : '',
-  };
-  if (typeof raw['schema'] === 'string' && raw['schema']) out.schema = raw['schema'];
-  if (typeof raw['reply_schema'] === 'string' && raw['reply_schema']) out.reply_schema = raw['reply_schema'];
-  if (typeof raw['concurrency'] === 'number') {
-    out.concurrency = raw['concurrency'];
-  } else if (typeof raw['concurrency'] === 'string' && raw['concurrency'] !== '') {
-    const n = Number(raw['concurrency']);
-    if (Number.isFinite(n)) out.concurrency = n;
-  }
-  if (typeof raw['monitor_template'] === 'string' && raw['monitor_template']) {
-    out.monitor_template = raw['monitor_template'];
-  }
-  if (typeof raw['prepare'] === 'string' && raw['prepare']) out.prepare = raw['prepare'];
-  if (typeof raw['start'] === 'string' && raw['start']) out.start = raw['start'];
-  if (typeof raw['cleanup'] === 'string' && raw['cleanup']) out.cleanup = raw['cleanup'];
-  return out;
-}
-
-/**
  * Parse an array of objects (used for send actions).
  * Each item starts with "- " and may have sub-keys on the same or next lines.
  */
@@ -1271,25 +1114,14 @@ export function writeAgentTeams(agentName: string, names: string[], personasDir:
 /**
  * Compose the full system prompt for an agent.
  * Combines persona + messaging instructions + orchestrator rules.
- *
- * `mode` controls a final lifecycle-context addendum:
- *   - 'persistent' (default): agents have an ongoing inbox, run continuously.
- *   - 'ephemeral': agents own exactly one message and must call
- *     `collab complete` (or `collab fail`) to finalise; the worktree and tmux
- *     session are torn down immediately afterwards.
- *
- * The default preserves 2.x behaviour — every existing caller that omits
- * `mode` gets the persistent flavour, which today is the only flavour.
  */
 export function composeSystemPrompt(opts: {
   agentName: string;
   personaContent?: string | null;
   orchestratorHost: string;
   peers?: string[];
-  mode?: 'persistent' | 'ephemeral';
 }): string {
   const parts: string[] = [];
-  const mode = opts.mode ?? 'persistent';
 
   // Persona content
   if (opts.personaContent) {
@@ -1350,27 +1182,11 @@ Silence looks like "agent is working" from the dashboard; the operator has no ot
 Use /compact proactively when your context grows large.
 Keep context light — delegate to sub-agents when appropriate.`);
 
-  // Lifecycle-context addendum. Branches on mode so the engine knows whether
-  // it is a long-lived persistent agent or a single-shot ephemeral worker.
-  if (mode === 'ephemeral') {
-    parts.push(`
-
-## Ephemeral execution
-You are handling exactly one message and must complete. When done, call:
-\`\`\`
-collab complete --reply '<json>'
-\`\`\`
-Or to signal failure:
-\`\`\`
-collab fail --reason '<text>'
-\`\`\`
-The tmux session and worktree will be torn down after you complete.`);
-  } else {
-    parts.push(`
+  // Lifecycle-context addendum.
+  parts.push(`
 
 ## Persistent inbox
 Your inbox is delivered via tmux paste. You may receive multiple messages over time; stay running and continue handling them as they arrive.`);
-  }
 
   return parts.join('\n');
 }
@@ -1419,7 +1235,6 @@ function serializeIndicators(value?: IndicatorDefinition[]): string | null {
 // ── Startup Sync ──
 
 import type { Database } from './database.ts';
-import { syncTemplate, type TemplateSyncEventSink } from './template-sync.ts';
 
 /** Any non-empty engine string is valid. Engine configs provide defaults but are not required. */
 function isValidEngine(engine: string | undefined | null): engine is string {
@@ -1434,37 +1249,6 @@ function buildUpsertOpts(name: string, fm: PersonaFrontmatter): Parameters<Datab
   return opts;
 }
 
-/** True if this persona declares an ephemeral template (`persistent: false`).
- *  Persistent is the default — absent means true. The frontmatter parser keeps
- *  flat top-level scalars as raw strings (it doesn't coerce booleans), so we
- *  accept either the boolean `false` or the literal string `'false'`.
- */
-function isEphemeralTemplate(fm: PersonaFrontmatter): boolean {
-  const raw = (fm as Record<string, unknown>)['persistent'];
-  return raw === false || raw === 'false';
-}
-
-/** Run syncTemplate against the persona, downgrading exceptions to warnings.
- *  Returns true if a template row was written, false if validation failed.
- *  `onTemplateEvent` is forwarded to syncTemplate so callers can wire the
- *  orchestrator's `wss.broadcastEvent` for Q4 `template_updated` events. */
-function trySyncTemplate(
-  db: Database,
-  name: string,
-  fm: PersonaFrontmatter,
-  personaPath: string | null,
-  onTemplateEvent?: TemplateSyncEventSink,
-): boolean {
-  try {
-    syncTemplate(db, name, fm, personaPath, onTemplateEvent);
-    return true;
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.warn(`[template-sync] Skipping template "${name}": ${msg}`);
-    return false;
-  }
-}
-
 /**
  * Re-sync a single agent's persona from disk.
  * Call before spawn/resume to pick up config changes (engine, model, etc.).
@@ -1474,7 +1258,6 @@ export function syncSinglePersona(
   db: Database,
   name: string,
   personasDir?: string,
-  onTemplateEvent?: TemplateSyncEventSink,
 ): boolean {
   const dir = personasDir ?? getPersonasDir();
   const filePath = join(dir, `${name}.md`);
@@ -1492,18 +1275,6 @@ export function syncSinglePersona(
   const resolvedEngine = fm.engine;
   if (!resolvedEngine || !isValidEngine(resolvedEngine)) return false;
 
-  // v3: every loaded persona produces an `agent_templates` row (persistent
-  // or ephemeral). Failures here are logged but don't block persistent-agent
-  // sync for backwards compatibility.
-  trySyncTemplate(db, name, fm, filePath, onTemplateEvent);
-
-  // Ephemeral templates do NOT populate the `agents` table — they have no
-  // cwd, and the `agents` schema is intentionally untouched in v3.
-  if (isEphemeralTemplate(fm)) {
-    return true;
-  }
-
-  // Persistent path — unchanged from 2.x.
   const cwd = fm.cwd;
   if (!cwd) return false;
 
@@ -1521,35 +1292,19 @@ export function syncSinglePersona(
 export function syncPersonasToDb(
   db: Database,
   personasDir?: string,
-  onTemplateEvent?: TemplateSyncEventSink,
 ): number {
   const personas = scanPersonas(personasDir);
-  const dir = personasDir ?? getPersonasDir();
   let synced = 0;
 
   for (const persona of personas) {
     const { name, frontmatter } = persona;
     const resolvedEngine = frontmatter.engine;
 
-    // engine is required for both persistent and ephemeral paths.
     if (!resolvedEngine || !isValidEngine(resolvedEngine)) {
       console.warn(`[persona-sync] Skipping "${name}.md": engine is required (got ${resolvedEngine ?? 'undefined'})`);
       continue;
     }
 
-    // v3: every persona produces an `agent_templates` row. Ephemeral templates
-    // are validated by template-sync (which throws on missing cwd_base, etc.).
-    const personaPath = join(dir, `${name}.md`);
-    const templated = trySyncTemplate(db, name, frontmatter, personaPath, onTemplateEvent);
-
-    if (isEphemeralTemplate(frontmatter)) {
-      // Ephemeral templates skip the `agents` table entirely. The `cwd`-required
-      // gate stays for persistent personas only.
-      if (templated) synced++;
-      continue;
-    }
-
-    // Persistent path — unchanged 2.x behavior, including the cwd-required gate.
     const cwd = frontmatter.cwd;
     if (!cwd) {
       console.warn(`[persona-sync] Skipping "${name}.md": engine and cwd are required (got engine=${resolvedEngine}, cwd=${cwd ?? 'undefined'})`);
@@ -1598,10 +1353,8 @@ function validateFrontmatter(name: string, fm: PersonaFrontmatter): string[] {
 export function syncPersonasWithDiff(
   db: Database,
   personasDir?: string,
-  onTemplateEvent?: TemplateSyncEventSink,
 ): SyncDiffResult {
   const personas = scanPersonas(personasDir);
-  const dir = personasDir ?? getPersonasDir();
   const result: SyncDiffResult = { created: [], updated: [], unchanged: [], skipped: [] };
 
   for (const persona of personas) {
@@ -1613,27 +1366,6 @@ export function syncPersonasWithDiff(
       continue;
     }
 
-    // v3: every persona produces an `agent_templates` row. Persistent rows
-    // get a minimal template; ephemeral ones additionally populate `topics`.
-    const personaPath = join(dir, `${name}.md`);
-    const templated = trySyncTemplate(db, name, frontmatter, personaPath, onTemplateEvent);
-
-    if (isEphemeralTemplate(frontmatter)) {
-      // Ephemeral templates do not appear in the `agents` table. They are
-      // tracked exclusively in `agent_templates` (and `topics`) — the
-      // template-sync routine is the source of truth.
-      if (templated) {
-        // Treat first-time template install as "created", subsequent calls
-        // as "unchanged" for diff reporting. We don't deep-diff templates
-        // here — Q3 will add proper template diffing if needed.
-        result.unchanged.push(name);
-      } else {
-        result.skipped.push(name);
-      }
-      continue;
-    }
-
-    // Persistent path — unchanged 2.x behavior.
     const cwd = frontmatter.cwd;
     if (!cwd) {
       result.skipped.push(name);

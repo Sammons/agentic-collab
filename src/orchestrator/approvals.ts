@@ -3,8 +3,8 @@
  *
  * Approvals are first-class CRUD resources categorised by `channel`
  * (`approval:<channel>`). They are *not* a message-routing surface — the
- * channel is a label, not a queue that spawns workers (that's the topic
- * primitive). On state change the orchestrator:
+ * channel is a label, not a queue that spawns workers. On state change the
+ * orchestrator:
  *
  *   1. Records the transition in `approval_events` (durable audit trail).
  *   2. Broadcasts a `approval_changed` WS event (Q4-typed; subscribers in Q9).
@@ -13,8 +13,7 @@
  *
  * Auto-notification rides the existing message dispatcher:
  *   - bare-agent / `agent:` addresses → persistent enqueueMessage + tryDeliver
- *   - `agent:<template>/<instance-id>` → deliverToInstance (sync-or-drop)
- *   - anything else (topic:/approval:/malformed) → log and skip
+ *   - anything else (approval:/telegram:/malformed) → log and skip
  *
  * Polling `await(id)` is plain polling per the spec ("not long-poll"); the
  * caller decides the interval.
@@ -202,8 +201,7 @@ export class ApprovalService {
   /**
    * Auto-notify the requester. Routes by address class:
    *   - agent (bare or `agent:<name>`) → persistent enqueue + tryDeliver
-   *   - agent-instance → deliverToInstance (sync-or-drop, never persisted)
-   *   - topic / approval / malformed → log + skip
+   *   - approval / telegram / malformed → log + skip
    */
   private async notifyRequester(row: ApprovalRow): Promise<void> {
     const addr = parseAddress(row.requesterAddr);
@@ -234,18 +232,7 @@ export class ApprovalService {
       }
       return;
     }
-    if (addr.class === 'agent-instance') {
-      try {
-        const result = await this.messageDispatcher.deliverToInstance(addr.instanceId, envelope);
-        if (!result.ok) {
-          console.warn(`[approvals] notify deliverToInstance dropped (${result.reason}) for ${row.id}`);
-        }
-      } catch (err) {
-        console.warn(`[approvals] notify deliverToInstance threw for ${row.id}: ${(err as Error).message}`);
-      }
-      return;
-    }
-    // topic / approval / malformed — not a deliverable target.
+    // approval / telegram / malformed — not a deliverable target.
     console.warn(`[approvals] notify skipped for ${row.id}: requester "${row.requesterAddr}" is not a deliverable address class (${addr.class})`);
   }
 }

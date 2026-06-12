@@ -307,8 +307,7 @@ export class HealthMonitor {
    * Unchanged across IDLE_THRESHOLD consecutive polls → idle.
    */
   async pollActiveAgents(): Promise<void> {
-    // db.listAgents() only queries the `agents` table — `agent_instances`
-    // rows (v3 ephemeral kernel, Q3) are excluded by construction.
+    // db.listAgents() queries the `agents` table — persistent agents only.
     const agents = this.db.listAgents().filter(
       (a) => a.state === 'active' && a.proxyId,
     );
@@ -349,8 +348,7 @@ export class HealthMonitor {
    * Poll all active/idle agents.
    */
   async pollAll(): Promise<void> {
-    // db.listAgents() only queries the `agents` table — `agent_instances`
-    // rows (v3 ephemeral kernel, Q3) are excluded by construction.
+    // db.listAgents() queries the `agents` table — persistent agents only.
     const allAgents = this.db.listAgents();
 
     // Poll active/idle agents for health, idle detection, indicators

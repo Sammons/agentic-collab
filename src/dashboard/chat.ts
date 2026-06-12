@@ -484,8 +484,7 @@ function msgHtml(m: DashboardMessage): string {
   const toAgent = m.targetAgent;
   const fromKind = fromAgent ? kindOf(fromAgent) : 'me';
   const cls = ['msg'];
-  if (fromKind === 'eph') cls.push('from-eph');
-  else if (fromKind === 'per') cls.push('from-per');
+  if (fromKind === 'per') cls.push('from-per');
   else cls.push('from-me');
   if (m.withdrawn) cls.push('withdrawn');
 
@@ -517,13 +516,13 @@ function msgHtml(m: DashboardMessage): string {
  * Spawn-status dot rendered before an agent name in a chat head. Green for
  * running (active/idle/spawning/resuming), grey amber for transient, red for
  * suspended/failed. Returns '' for non-agent participants ("you", "dashboard",
- * "system", ephemeral instance addresses) so the head stays clean.
+ * "system") so the head stays clean.
  */
 function statusDot(agentName: string | null | undefined): string {
   if (!agentName) return '';
   if (agentName === 'dashboard' || agentName === 'system') return '';
   const a = agentsByName.get(agentName);
-  if (!a) return ''; // ephemeral / unknown — no dot
+  if (!a) return ''; // unknown — no dot
   // Map to a CSS class that owns its own shape *and* color so colorblind
   // users can still distinguish states. suspended and failed collapse to
   // the same "down" indicator (solid brick disc with × glyph) — in
@@ -558,18 +557,11 @@ function systemMsgHtml(m: DashboardMessage): string {
   `;
 }
 
-function kindOf(agentName: string): 'eph' | 'per' | 'me' {
-  // Ephemeral addresses look like `agent-instance:<hash>` or contain @ paths;
-  // for in-thread display we treat by AgentRecord.engine null as eph.
+function kindOf(agentName: string): 'per' | 'me' {
+  // Known agents color as persistent (plum); unknown senders fall back to
+  // the operator style.
   const a = agentsByName.get(agentName);
-  if (!a) {
-    // Could be an instance address — treat as ephemeral for color.
-    return agentName.includes(':') || agentName.includes('@') ? 'eph' : 'me';
-  }
-  // No explicit "ephemeral" flag on AgentRecord — use a heuristic: ephemeral
-  // instances are always in the form `agent-instance:<hash>` or similar; the
-  // dashboard's agents list only has persistent agents. Anything else = eph.
-  // For now, color persistents as plum and treat everything else as steel.
+  if (!a) return 'me';
   return 'per';
 }
 
@@ -672,19 +664,10 @@ function wire(root: HTMLElement): void {
       const hasFiles = getStagedFileCount() > 0;
       const messageReady = parsed.message.length > 0 || hasFiles;
 
-      // Check if any target is a template (will spawn new ephemeral)
-      const templateTargets = parsed.agents.filter((a) => {
-        const agent = agentsByName.get(a);
-        return agent?.isTemplate === true;
-      });
-      const spawnNote = templateTargets.length > 0
-        ? ` <span class="spawn-warn">⚡ spawns new ${templateTargets.map(t => `@${escapeHtml(t)}`).join(', ')}</span>`
-        : '';
-
       // Check if any target is dead (needs spawn/resume before message delivery)
       const deadTargets = parsed.agents.filter((a) => {
         const agent = agentsByName.get(a);
-        if (!agent || agent.isTemplate) return false;
+        if (!agent) return false;
         return ['void', 'failed', 'suspended'].includes(agent.state);
       });
       const allTargetsDead = deadTargets.length > 0 && deadTargets.length === parsed.agents.length;
@@ -717,8 +700,8 @@ function wire(root: HTMLElement): void {
       const hasMessage = parsed.message.length > 0;
       const hintPrefix = hasMessage ? 'Sending to' : (hasFiles ? 'Attaching to' : '');
       hint.innerHTML = messageReady
-        ? `${hintPrefix} ${list}${topicsChip}${spawnNote}${stagedNote}${countNote}${focusBtn}${escapeBtn}`
-        : `${list}${topicsChip}${spawnNote}${stagedNote}${countNote}${focusBtn}${escapeBtn} — type a message or attach files`;
+        ? `${hintPrefix} ${list}${topicsChip}${stagedNote}${countNote}${focusBtn}${escapeBtn}`
+        : `${list}${topicsChip}${stagedNote}${countNote}${focusBtn}${escapeBtn} — type a message or attach files`;
       sendBtn.disabled = !messageReady;
       sendBtn.textContent = btnText;
 
@@ -1149,7 +1132,7 @@ async function handleSend(input: HTMLTextAreaElement): Promise<void> {
   // Spawn dead agents before sending — suspended agents resume, others spawn
   const deadAgents = parsed.agents.filter((name) => {
     const agent = agentsByName.get(name);
-    if (!agent || agent.isTemplate) return false;
+    if (!agent) return false;
     return ['void', 'failed', 'suspended'].includes(agent.state);
   });
 

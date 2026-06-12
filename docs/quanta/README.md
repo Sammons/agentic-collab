@@ -1,5 +1,9 @@
 # Quanta dossiers
 
+> **Historical — the ephemeral feature documented here was removed by RFC-009**
+> (`docs/rfc-009-remove-ephemeral-agents.md`). These dossiers are retained as
+> design history and lessons-learned, not as documentation of live behavior.
+
 Per-quantum reports for the agentic-collab v3 upgrade. The root orchestrator (see [`../v3-claude-code-prompt.md`](../v3-claude-code-prompt.md)) writes one file here after each quantum completes.
 
 Naming: `Q<n>-<name>.md` — e.g. `Q3-ephemeral-lifecycle-kernel.md`.

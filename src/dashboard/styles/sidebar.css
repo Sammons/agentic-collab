@@ -272,29 +272,6 @@
   border: 1.5px solid var(--ink-4);
   border-radius: 50%;
 }
-/* Template indicator — dashed border + plus sign */
-.member .status.template {
-  width: 12px;
-  height: 12px;
-  flex: 0 0 12px;
-  border-radius: 3px;
-  background: transparent;
-  border: 1.5px dashed var(--steel);
-  color: var(--steel);
-  font-size: 10px;
-  font-weight: 700;
-  line-height: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.member.is-template .nm {
-  font-style: italic;
-  color: var(--ink-3);
-}
-.member.is-template.checked .nm {
-  color: var(--ink-2);
-}
 @keyframes status-pulse {
   0%, 100% { opacity: 1; }
   50%      { opacity: 0.45; }

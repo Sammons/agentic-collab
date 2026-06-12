@@ -20,11 +20,7 @@ import { shutdownAgents, restoreAllAgents } from './network.ts';
 import type { LifecycleContext } from './lifecycle.ts';
 import { syncPersonasToDb, syncPersonasWithDiff, getPersonasDir } from './persona.ts';
 import { backfillFrontmatterFromDb } from './persona-backfill.ts';
-import { reconcileEphemeralRoots } from './reconcile-roots.ts';
-import { TopicDelivery } from './topic-delivery.ts';
-import { InstanceReaper } from './instance-reaper.ts';
 import { ApprovalService } from './approvals.ts';
-import { BootReconciler, ProxyReconnectHandler, OrphanedWorktreeSweep } from './recovery.ts';
 import { AccountStore } from './accounts.ts';
 import { isRunning } from '../shared/agent-entity.ts';
 import { resolveSecret, getSecretPath } from '../shared/config.ts';
@@ -131,25 +127,6 @@ async function proxyDispatch(proxyId: string, command: ProxyCommand): Promise<Pr
   }
 
   return { ok: false, error: `Proxy unreachable after ${PROXY_RETRY_COUNT + 1} attempts: ${lastError}` };
-}
-
-// ── RFC-006 Q1: stale-root reconciliation ──
-//
-// A `persistent: false` persona becomes an `agent_templates` row, but a leftover
-// `agents` row of the same name (from when it was persistent) shadows it, so the
-// root mis-renders as a suspended agent. Tear that stale row down session-safely
-// (kill any live tmux pane FIRST, then delete + broadcast `agent_destroyed`).
-// Idempotent + safe to call repeatedly — runs on boot, on persona reload, and on
-// each persona-watch poll. Defined at module scope so it has db/wss/proxyDispatch
-// in scope; delegates to the unit-tested `reconcileEphemeralRoots`.
-async function reconcileRoots(): Promise<void> {
-  await reconcileEphemeralRoots({
-    db,
-    proxyDispatch,
-    broadcast: (name) => wss.broadcast(JSON.stringify({ type: 'agent_destroyed', name })),
-  }).catch((err) => {
-    console.error('[reconcile-roots] failed:', (err as Error).message);
-  });
 }
 
 // ── Dashboard HTML ──
@@ -316,34 +293,11 @@ if (whisperOpts) {
 
 const telegramDispatcher = new TelegramDispatcher();
 
-// ── v3 Q3: Topic delivery + instance reaper ──
-
-const INSTANCES_DIR = join(dirname(DB_PATH), 'instances');
-mkdirSync(INSTANCES_DIR, { recursive: true });
-
-const topicDelivery = new TopicDelivery({
-  db,
-  proxyDispatch,
-  orchestratorHost: ORCHESTRATOR_HOST,
-  ipcRoot: INSTANCES_DIR,
-  locks,
-  // Q4: typed WS broadcast — `event` is already a `WsEvent` shape.
-  onEvent: (event) => wss.broadcastEvent(event),
-});
-
-const instanceReaper = new InstanceReaper({
-  db,
-  proxyDispatch,
-  messageDispatcher,
-  topicDelivery,
-  onEvent: (event) => wss.broadcastEvent(event),
-});
-
 // ── v3 Q5: Approvals service ──
 //
 // Auto-notifies requesters on state change via the existing message
-// dispatcher (paste for live ephemeral instances, persistent enqueue for
-// agent: addresses). Emits `approval_changed` WS events.
+// dispatcher (persistent enqueue for agent: addresses). Emits
+// `approval_changed` WS events.
 const approvals = new ApprovalService({
   db,
   messageDispatcher,
@@ -351,33 +305,6 @@ const approvals = new ApprovalService({
   // Surface auto-notify dashboard rows over the same `message` WS event
   // the chat surface already listens on — agent thread updates live.
   onMessage: (msg) => wss.broadcast(JSON.stringify({ type: 'message', msg })),
-});
-
-// ── v3 Q8: Crash recovery ──
-//
-// Three coordinated routines reconcile ephemeral state. The boot reconciler
-// runs once before listen (so traffic never sees orphaned rows); the
-// reconnect handler is invoked from the proxy-register route; the orphan
-// sweep ticks on a 60s cadence (first tick at T+60s, NOT T+0).
-const bootReconciler = new BootReconciler({
-  db,
-  proxyDispatch,
-  instanceReaper,
-  onEvent: (event) => wss.broadcastEvent(event),
-});
-
-const proxyReconnectHandler = new ProxyReconnectHandler({
-  db,
-  proxyDispatch,
-  // HIGH-1: status-ready rows are finalised via the reaper, never failed.
-  instanceReaper,
-  onEvent: (event) => wss.broadcastEvent(event),
-});
-
-const orphanedWorktreeSweep = new OrphanedWorktreeSweep({
-  db,
-  proxyDispatch,
-  onEvent: (event) => wss.broadcastEvent(event),
 });
 
 const routeCtx: RouteContext = {
@@ -398,21 +325,9 @@ const routeCtx: RouteContext = {
   storesDir: STORES_DIR,
   filesDir: FILES_DIR,
   telegramDispatcher,
-  topicDelivery,
-  instanceReaper,
   approvals,
-  recovery: {
-    reconciler: bootReconciler,
-    reconnectHandler: proxyReconnectHandler,
-    orphanSweep: orphanedWorktreeSweep,
-  },
   reloadPersonas: () => {
-    // Q4: forward `template_updated` events to WS subscribers so the Q9
-    // dashboard can refresh the templates tree without a full reload.
-    const diff = syncPersonasWithDiff(db, undefined, (event) => wss.broadcastEvent(event));
-    // RFC-006 Q1: a persona that just flipped to `persistent: false` may leave a
-    // stale `agents` row shadowing its new template — reconcile it away.
-    void reconcileRoots();
+    const diff = syncPersonasWithDiff(db);
     // RFC-008 PR-C: re-reconcile per-agent Telegram bots on persona reload —
     // start new bots, stop removed ones, restart on token/chatId/routing change.
     try {
@@ -493,16 +408,7 @@ server.on('upgrade', (req, socket, head) => {
 
 // On WS connect, send init event
 wss.onConnect((client) => {
-  // Combine persistent agents + ephemeral templates for dashboard display.
-  // Ephemeral templates (persistent: false) have isTemplate: true so the
-  // sidebar renders them with distinct styling (dashed border, italic name).
-  // Templates sharing a name with a persistent agent are filtered out as a
-  // defensive guard (persistent agent takes precedence if both exist).
-  const persistentAgents = db.listAgents();
-  const persistentNames = new Set(persistentAgents.map((a) => a.name));
-  const templateAgents = db.listTemplatesAsAgentRecords()
-    .filter((t) => !persistentNames.has(t.name));
-  const agents = [...persistentAgents, ...templateAgents];
+  const agents = db.listAgents();
   // Delta init: the client may pass its max-seen message id via
   // ?sinceMessageId=N. If present and non-zero, we ship just the rows
   // that have appeared since (typically tiny). Otherwise we cold-load
@@ -612,8 +518,6 @@ async function shutdown(): Promise<void> {
   messageDispatcher.stop();
   usagePoller.stop();
   reminderDispatcher.stop();
-  instanceReaper.stop();
-  orphanedWorktreeSweep.stop();
   await usagePoller.cleanup().catch(err =>
     console.error('[orchestrator] Usage session cleanup error:', err));
 
@@ -637,17 +541,6 @@ process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
 
 // ── Start ──
-
-// v3 Q8: reconcile live `agent_instances` rows BEFORE traffic. We may have
-// crashed mid-flight: an instance whose status file is non-empty just needs
-// to be finalised via the reaper; one whose tmux session is alive resumes
-// waiting for `collab complete`; one whose session is gone is marked failed
-// with best-effort cleanup. Bounded by the existing proxy retry budget —
-// if a proxy is unreachable, its rows are skipped and picked up when the
-// proxy reconnects (`ProxyReconnectHandler`).
-await bootReconciler.reconcile().catch((err) => {
-  console.error('[boot-reconcile] failed:', err);
-});
 
 server.listen(PORT, '0.0.0.0', async () => {
   console.log(`[orchestrator] Listening on port ${PORT}`);
@@ -674,9 +567,7 @@ server.listen(PORT, '0.0.0.0', async () => {
     console.error('[backfill] Frontmatter backfill failed:', err);
   }
 
-  // Sync persona files → SQLite (idempotent merge). No WS subscribers yet at
-  // boot — `template_updated` events at this point would have no audience, so
-  // skip the sink. The hot-reload watcher below wires it.
+  // Sync persona files → SQLite (idempotent merge).
   try {
     const synced = syncPersonasToDb(db);
     if (synced > 0) {
@@ -685,13 +576,6 @@ server.listen(PORT, '0.0.0.0', async () => {
   } catch (err) {
     console.error('[orchestrator] Persona sync failed:', err);
   }
-
-  // RFC-006 Q1: one-time boot backfill — remove any stale `agents` row that
-  // shadows an ephemeral template (e.g. the existing
-  // `agentic-collab-lead-ephemeral`). Session-safe (kills a live pane first)
-  // and idempotent. WS subscribers may already be connected, so the gated
-  // `agent_destroyed` broadcast drops the stale sidebar row live.
-  await reconcileRoots();
 
   // Poll persona directory for changes (fs.watch unreliable on Docker bind mounts)
   const personasDir = getPersonasDir();
@@ -708,12 +592,7 @@ server.listen(PORT, '0.0.0.0', async () => {
         if (lastPersonaHash === '') { lastPersonaHash = hash; return; } // skip first run
         lastPersonaHash = hash;
 
-        const diff = syncPersonasWithDiff(db, undefined, (event) => wss.broadcastEvent(event));
-        // RFC-006 Q1: reconcile any stale `agents` row shadowing an ephemeral
-        // template (e.g. a persona just flipped to `persistent: false`). mtime-
-        // gated by the watch above, so this only runs when a file actually
-        // changed — no thrash. Idempotent (no-op when nothing is stale).
-        void reconcileRoots();
+        const diff = syncPersonasWithDiff(db);
         const changed = [...diff.created, ...diff.updated];
         if (changed.length > 0) {
           console.log(`[persona-watch] Hot-reloaded: ${changed.join(', ')}`);
@@ -736,15 +615,6 @@ server.listen(PORT, '0.0.0.0', async () => {
   healthMonitor.start();
   usagePoller.start();
   reminderDispatcher.start();
-  instanceReaper.start();
-
-  // v3 Q8: orphaned-worktree sweep ticks on a 60s cadence. The first tick
-  // fires at T+60s (setInterval semantics), NOT immediately at boot — boot
-  // reconciliation has already run by this point, so a delayed first sweep
-  // is intentional. Best-effort, never throws. Removes `wt-*` directories
-  // under any template's `cwd_base` that have no corresponding live
-  // `agent_instances.worktree_path` entry.
-  orphanedWorktreeSweep.start();
 
   // LEGACY (RFC-008 coexistence): keep the destinations-based polling loop for
   // global/non-agent telegram destinations. reconcileTelegramBots (below) seeds

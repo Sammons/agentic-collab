@@ -169,44 +169,16 @@ describe('Persona', () => {
       assert.ok(prompt.includes('context'));
     });
 
-    // v3 Q7: mode-aware lifecycle addendum.
-    it('persistent mode (default) appends the persistent-inbox addendum', () => {
+    it('appends the persistent-inbox addendum', () => {
       const prompt = composeSystemPrompt({
         agentName: 'agent-1',
         orchestratorHost: 'http://localhost:3000',
       });
       assert.ok(prompt.includes('## Persistent inbox'));
       assert.ok(prompt.includes('delivered via tmux paste'));
-      // Persistent prompt must NOT instruct the agent to call complete/fail.
-      assert.ok(!prompt.includes('Ephemeral execution'));
+      // The prompt must NOT instruct the agent to call complete/fail
+      // (removed by RFC-009).
       assert.ok(!prompt.includes('collab complete --reply'));
-    });
-
-    it('persistent mode explicit matches the default mode output', () => {
-      const def = composeSystemPrompt({
-        agentName: 'agent-1',
-        orchestratorHost: 'http://localhost:3000',
-      });
-      const explicit = composeSystemPrompt({
-        agentName: 'agent-1',
-        orchestratorHost: 'http://localhost:3000',
-        mode: 'persistent',
-      });
-      assert.equal(def, explicit);
-    });
-
-    it('ephemeral mode includes the collab complete --reply instruction', () => {
-      const prompt = composeSystemPrompt({
-        agentName: 'agent-1',
-        orchestratorHost: 'http://localhost:3000',
-        mode: 'ephemeral',
-      });
-      assert.ok(prompt.includes('## Ephemeral execution'));
-      assert.ok(prompt.includes("collab complete --reply '<json>'"));
-      assert.ok(prompt.includes("collab fail --reason '<text>'"));
-      assert.ok(prompt.includes('handling exactly one message'));
-      // Ephemeral prompt must NOT carry the persistent-inbox addendum.
-      assert.ok(!prompt.includes('Persistent inbox'));
     });
   });
 
@@ -895,15 +867,15 @@ describe('Persona', () => {
     });
 
     it('carries unknown keys through the passthrough verbatim', () => {
-      const raw = '---\nengine: claude\npoke:\n - shell: ok\nephemeral: true\n---\n\nBody.';
+      const raw = '---\nengine: claude\npoke:\n - shell: ok\nflagged: true\n---\n\nBody.';
       const { core, passthroughRaw } = splitFrontmatter(raw);
       assert.equal(core['engine'], 'claude');
       assert.ok(passthroughRaw.includes('poke:'));
       assert.ok(passthroughRaw.includes(' - shell: ok'));
-      assert.ok(passthroughRaw.includes('ephemeral: true'));
+      assert.ok(passthroughRaw.includes('flagged: true'));
       const saved = save(core, passthroughRaw);
       assert.ok(saved.includes('poke:\n - shell: ok')); // indentation intact
-      assert.ok(saved.includes('ephemeral: true'));
+      assert.ok(saved.includes('flagged: true'));
     });
 
     it('preserves a frontmatter comment in place (ios-recipe-lead case, B1)', () => {
@@ -1336,78 +1308,6 @@ Body
       assert.equal(steps.length, 2);
       assert.deepEqual(steps[0], { type: 'keystroke', key: 'Escape' });
       assert.deepEqual(steps[1], { type: 'shell', command: '/exit' });
-    });
-  });
-
-  describe('v3 topics frontmatter', () => {
-    it('parses a topics array of two entries with name/concurrency/schema', () => {
-      const raw = `---
-engine: claude
-persistent: false
-cwd_base: /tmp/ephemeral
-topics:
-  - name: provision
-    schema: ./schemas/provision.json
-    concurrency: 1
-  - name: teardown
-    schema: ./schemas/teardown.json
-    concurrency: 2
----
-Body
-`;
-      const { frontmatter } = parseFrontmatter(raw);
-      const topics = frontmatter['topics'] as Array<Record<string, unknown>>;
-      assert.ok(Array.isArray(topics), 'topics should be an array');
-      assert.equal(topics.length, 2);
-      assert.equal(topics[0]!['name'], 'provision');
-      assert.equal(topics[0]!['schema'], './schemas/provision.json');
-      assert.equal(topics[0]!['concurrency'], 1);
-      assert.equal(topics[1]!['name'], 'teardown');
-      assert.equal(topics[1]!['concurrency'], 2);
-      // The flat-scalar parser keeps booleans as raw strings; template-sync
-      // accepts both forms when deciding whether the template is ephemeral.
-      assert.equal(frontmatter['persistent'], 'false');
-      assert.equal(frontmatter['cwd_base'], '/tmp/ephemeral');
-    });
-
-    it('parses prepare: | block scalar as a flat string (not a nested object)', () => {
-      const raw = `---
-engine: claude
-persistent: false
-cwd_base: /tmp/wt
-prepare: |
-  git -C "$REPO_ROOT" worktree add "$WORKTREE_PATH" main
-cleanup: |
-  git -C "$REPO_ROOT" worktree remove --force "$WORKTREE_PATH"
----
-Body
-`;
-      const { frontmatter } = parseFrontmatter(raw);
-      assert.equal(typeof frontmatter['prepare'], 'string');
-      assert.match(frontmatter['prepare'] as string, /git -C "\$REPO_ROOT" worktree add/);
-      assert.equal(typeof frontmatter['cleanup'], 'string');
-      assert.match(frontmatter['cleanup'] as string, /worktree remove --force/);
-    });
-
-    it('parses topics with per-topic prepare/start block-scalar overrides', () => {
-      const raw = `---
-engine: claude
-persistent: false
-cwd_base: /tmp/ov
-topics:
-  - name: a
-    concurrency: 1
-    monitor_template: a-monitor
-  - name: b
-    concurrency: 1
----
-Body
-`;
-      const { frontmatter } = parseFrontmatter(raw);
-      const topics = frontmatter['topics'] as Array<Record<string, unknown>>;
-      assert.equal(topics.length, 2);
-      assert.equal(topics[0]!['monitor_template'], 'a-monitor');
-      assert.equal(topics[1]!['name'], 'b');
     });
   });
 

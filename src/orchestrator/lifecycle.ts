@@ -1173,7 +1173,7 @@ const RECOVER_TIMEOUT_MS = parseInt(process.env['RECOVER_TIMEOUT_MS'] ?? '60000'
  * Recover a failed agent by killing its old session and starting fresh.
  * Sends a reconstruction prompt that tells the agent to read its own durable
  * state (collab queue, persona, git log) rather than trying to restore the
- * ephemeral session transcript.
+ * prior session transcript.
  *
  * Accepts agents in 'failed' state only. Three-phase locking.
  */
