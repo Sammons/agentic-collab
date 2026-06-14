@@ -16,21 +16,21 @@ export type ContextResult = {
 export type SpawnOptions = {
   name: string;
   cwd: string;
-  model?: string;
-  thinking?: string;
-  task?: string;
-  appendSystemPrompt?: string;
-  dangerouslySkipPermissions?: boolean;
+  model?: string | undefined;
+  thinking?: string | undefined;
+  task?: string | undefined;
+  appendSystemPrompt?: string | undefined;
+  dangerouslySkipPermissions?: boolean | undefined;
   /** Pre-generated session ID for engines that support it (e.g. Claude --session-id). */
-  sessionId?: string;
+  sessionId?: string | undefined;
 };
 
 export type ResumeOptions = {
   name: string;
-  sessionId?: string;
+  sessionId?: string | undefined;
   cwd: string;
-  task?: string;
-  appendSystemPrompt?: string;
+  task?: string | undefined;
+  appendSystemPrompt?: string | undefined;
 };
 
 export interface EngineAdapter {

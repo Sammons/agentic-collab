@@ -13,8 +13,8 @@ description = "Run tests in watch mode"
 run = "node --test --watch 'src/**/*.test.ts'"
 
 [tasks.typecheck]
-description = "TypeScript type check (no emit)"
-run = "npx tsc --noEmit"
+description = "TypeScript type check (no emit) — root + the DOM-scoped src/test project"
+run = "pnpm exec tsc --noEmit && pnpm exec tsc --noEmit -p src/test/tsconfig.json"
 
 [tasks.help]
 description = "Show available commands"

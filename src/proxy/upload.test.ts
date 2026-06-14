@@ -132,19 +132,19 @@ describe('Proxy /upload endpoint', () => {
   it('rejects empty filename', async () => {
     const res = await upload('', tmpDir, 'data');
     assert.equal(res.status, 400);
-    assert.equal(res.body.ok, false);
+    assert.equal(res.body['ok'], false);
   });
 
   it('rejects filename with forward slash', async () => {
     const res = await upload('foo/bar.txt', tmpDir, 'data');
     assert.equal(res.status, 400);
-    assert.equal(res.body.ok, false);
+    assert.equal(res.body['ok'], false);
   });
 
   it('rejects filename with backslash', async () => {
     const res = await upload('foo\\bar.txt', tmpDir, 'data');
     assert.equal(res.status, 400);
-    assert.equal(res.body.ok, false);
+    assert.equal(res.body['ok'], false);
   });
 
   it('rejects dot filename', async () => {
@@ -165,14 +165,14 @@ describe('Proxy /upload endpoint', () => {
   it('accepts dotfile filenames (.eslintrc)', async () => {
     const res = await upload('.eslintrc', tmpDir, '{}');
     assert.equal(res.status, 200);
-    assert.equal(res.body.ok, true);
+    assert.equal(res.body['ok'], true);
     assert.ok(existsSync(join(tmpDir, '.eslintrc')));
   });
 
   it('accepts filenames with spaces', async () => {
     const res = await upload('my file.txt', tmpDir, 'hello');
     assert.equal(res.status, 200);
-    assert.equal(res.body.ok, true);
+    assert.equal(res.body['ok'], true);
     assert.ok(existsSync(join(tmpDir, 'my file.txt')));
   });
 
@@ -182,7 +182,7 @@ describe('Proxy /upload endpoint', () => {
     const content = 'Hello, World! 🌍';
     const res = await upload('test.txt', tmpDir, content);
     assert.equal(res.status, 200);
-    assert.equal(res.body.ok, true);
+    assert.equal(res.body['ok'], true);
 
     const written = readFileSync(join(tmpDir, 'test.txt'), 'utf-8');
     assert.equal(written, content);
@@ -192,7 +192,7 @@ describe('Proxy /upload endpoint', () => {
     const data = Buffer.from([0x00, 0x01, 0x02, 0xFF, 0xFE, 0xFD]);
     const res = await upload('binary.bin', tmpDir, data);
     assert.equal(res.status, 200);
-    assert.equal(res.body.ok, true);
+    assert.equal(res.body['ok'], true);
 
     const written = readFileSync(join(tmpDir, 'binary.bin'));
     assert.deepEqual(written, data);
@@ -202,7 +202,7 @@ describe('Proxy /upload endpoint', () => {
     const content = 'sized-content';
     const res = await upload('sized.txt', tmpDir, content);
     assert.equal(res.status, 200);
-    const resData = res.body.data as { path: string; size: number };
+    const resData = res.body['data'] as { path: string; size: number };
     assert.equal(resData.path, join(tmpDir, 'sized.txt'));
     assert.equal(resData.size, Buffer.byteLength(content));
   });
@@ -210,7 +210,7 @@ describe('Proxy /upload endpoint', () => {
   it('writes zero-byte file correctly', async () => {
     const res = await upload('empty.txt', tmpDir, '');
     assert.equal(res.status, 200);
-    assert.equal(res.body.ok, true);
+    assert.equal(res.body['ok'], true);
     const written = readFileSync(join(tmpDir, 'empty.txt'));
     assert.equal(written.length, 0);
   });
@@ -219,7 +219,7 @@ describe('Proxy /upload endpoint', () => {
     await upload('overwrite.txt', tmpDir, 'original');
     const res = await upload('overwrite.txt', tmpDir, 'replaced');
     assert.equal(res.status, 200);
-    assert.equal(res.body.ok, true);
+    assert.equal(res.body['ok'], true);
     const content = readFileSync(join(tmpDir, 'overwrite.txt'), 'utf-8');
     assert.equal(content, 'replaced');
   });
@@ -229,13 +229,13 @@ describe('Proxy /upload endpoint', () => {
   it('rejects non-existent cwd', async () => {
     const res = await upload('test.txt', '/nonexistent/path/xyz', 'data');
     assert.equal(res.status, 400);
-    assert.equal(res.body.ok, false);
+    assert.equal(res.body['ok'], false);
   });
 
   it('rejects relative cwd', async () => {
     const res = await upload('test.txt', 'relative/path', 'data');
     assert.equal(res.status, 400);
-    assert.equal(res.body.ok, false);
+    assert.equal(res.body['ok'], false);
   });
 
   // ── Auth ──
@@ -250,53 +250,53 @@ describe('Proxy /upload endpoint', () => {
   it('rejects filename with null byte', async () => {
     const res = await upload('file\0.txt', tmpDir, 'data');
     assert.equal(res.status, 400);
-    assert.equal(res.body.ok, false);
+    assert.equal(res.body['ok'], false);
   });
 
   it('rejects filename exceeding 255 chars', async () => {
     const longName = 'a'.repeat(256) + '.txt';
     const res = await upload(longName, tmpDir, 'data');
     assert.equal(res.status, 400);
-    assert.equal(res.body.ok, false);
+    assert.equal(res.body['ok'], false);
   });
 
   it('accepts filename at exactly 255 chars', async () => {
     const name = 'a'.repeat(251) + '.txt'; // 255 total
     const res = await upload(name, tmpDir, 'data');
     assert.equal(res.status, 200);
-    assert.equal(res.body.ok, true);
+    assert.equal(res.body['ok'], true);
     assert.ok(existsSync(join(tmpDir, name)));
   });
 
   it('rejects Windows reserved name CON', async () => {
     const res = await upload('CON', tmpDir, 'data');
     assert.equal(res.status, 400);
-    assert.equal(res.body.ok, false);
+    assert.equal(res.body['ok'], false);
   });
 
   it('rejects Windows reserved name NUL.txt', async () => {
     const res = await upload('NUL.txt', tmpDir, 'data');
     assert.equal(res.status, 400);
-    assert.equal(res.body.ok, false);
+    assert.equal(res.body['ok'], false);
   });
 
   it('rejects Windows reserved name com1 (case insensitive)', async () => {
     const res = await upload('com1', tmpDir, 'data');
     assert.equal(res.status, 400);
-    assert.equal(res.body.ok, false);
+    assert.equal(res.body['ok'], false);
   });
 
   it('rejects Windows reserved name LPT1.log', async () => {
     const res = await upload('LPT1.log', tmpDir, 'data');
     assert.equal(res.status, 400);
-    assert.equal(res.body.ok, false);
+    assert.equal(res.body['ok'], false);
   });
 
   it('accepts non-reserved filename that starts with reserved prefix', async () => {
     // "CONSOLE" is NOT reserved — only "CON" exactly (possibly with extension) is
     const res = await upload('CONSOLE.txt', tmpDir, 'data');
     assert.equal(res.status, 200);
-    assert.equal(res.body.ok, true);
+    assert.equal(res.body['ok'], true);
   });
 
   // ── Path Traversal via Symlinks ──

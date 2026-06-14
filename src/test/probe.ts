@@ -1,3 +1,26 @@
+// __PROBE_PORT__ is a serve-time placeholder: the mock server string-replaces it
+// with the real probe port before this script is sent to the browser (see
+// src/test/mock-server.ts getProbeScript). It is never a runtime identifier in
+// this source, so declare it as ambient so tsc can resolve the reference; the
+// `declare` is type-only and erases to nothing.
+declare const __PROBE_PORT__: number;
+
+// The dashboard SPA exposes its live state on `window.__dashboardState` for the
+// probe to read back. This file is served to the browser as a bare global script
+// (it is read as text and the `__PROBE_PORT__` token is string-substituted, then
+// injected), so it must stay a non-module — adding `export {}` to enable a
+// `declare global` augmentation would emit a bare `export` that throws in the
+// browser. A non-`declare global` `interface Window` does not reliably merge with
+// lib.dom's global Window here, so the probe reads window state through this
+// local view type instead.
+interface DashboardProbeState {
+  selected?: unknown;
+  threadView?: unknown;
+}
+interface ProbeWindow {
+  __dashboardState?: DashboardProbeState;
+}
+
 (function() {
   /* global WebSocket, document, window, location */
   var PROBE_PORT = __PROBE_PORT__;
@@ -54,7 +77,8 @@
         }
 
         case 'read-state': {
-          var state = window.__dashboardState || null;
+          // window carries the dashboard's runtime state; cast to the probe's view (see ProbeWindow above).
+          var state = (window as unknown as ProbeWindow).__dashboardState || null;
           ws.send(JSON.stringify({ id: id, ok: true, data: state }));
           break;
         }
@@ -105,6 +129,11 @@
             canvas.width = w;
             canvas.height = h;
             var ctx = canvas.getContext('2d');
+            if (!ctx) {
+              URL.revokeObjectURL(svgUrl);
+              ws.send(JSON.stringify({ id: id, ok: false, error: '2d context unavailable' }));
+              return;
+            }
             ctx.drawImage(img, 0, 0);
             URL.revokeObjectURL(svgUrl);
             try {
@@ -125,35 +154,38 @@
         }
 
         case 'snapshot': {
-          var state = window.__dashboardState || {};
+          // window carries the dashboard's runtime state; cast to the probe's view (see ProbeWindow above).
+          // Named distinctly from the `read-state` case's `state` because `var` is function-scoped.
+          var snapState: DashboardProbeState = (window as unknown as ProbeWindow).__dashboardState || {};
 
           var descriptor = {
             url: location.href,
             title: document.title,
             timestamp: new Date().toISOString(),
             viewport: { width: window.innerWidth, height: window.innerHeight },
-            agentCards: Array.from(document.querySelectorAll('[data-agent]')).map(function(card) {
+            agentCards: Array.from(document.querySelectorAll<HTMLElement>('[data-agent]')).map(function(card) {
               return {
-                name: card.dataset.agent,
+                name: card.dataset['agent'],
                 stateText: (function() { var b = card.querySelector('.state-badge'); return b ? b.textContent : ''; })(),
                 hasUnread: !!card.querySelector('.unread-badge'),
                 indicators: Array.from(card.querySelectorAll('.indicator-badge')).map(function(b) { return b.textContent; }),
                 indicatorActions: Array.from(card.querySelectorAll('.indicator-action')).map(function(b) { return b.textContent; }),
                 customButtons: Array.from(card.querySelectorAll('[data-action^="custom/"]')).map(function(b) { return b.textContent; }),
                 hasTmuxCopy: !!card.querySelector('[data-copy-tmux]'),
-                tmuxCommand: (function() { var b = card.querySelector('[data-copy-tmux]'); return b ? b.dataset.copyTmux : null; })(),
+                tmuxCommand: (function() { var b = card.querySelector<HTMLElement>('[data-copy-tmux]'); return b ? b.dataset['copyTmux'] : null; })(),
                 visible: card.offsetParent !== null,
               };
             }),
-            selectedAgent: state.selected || null,
-            threadView: state.threadView || null,
+            selectedAgent: snapState.selected || null,
+            threadView: snapState.threadView || null,
             threadMessageCount: document.querySelectorAll('.msg').length,
             messageCopyButtons: document.querySelectorAll('.msg-copy').length,
             messageLinks: Array.from(document.querySelectorAll('.msg-body a[href]')).map(function(a) { return { href: a.getAttribute('href'), text: a.textContent }; }),
             filterChipsActive: Array.from(document.querySelectorAll('.filter-chip.active')).map(function(c) { return c.textContent; }),
             modalVisible: !!document.querySelector('.create-modal-overlay, .reminder-edit-overlay'),
             createFormVisible: !!document.querySelector('.create-agent-btn'),
-            searchValue: document.getElementById('agentSearch') ? document.getElementById('agentSearch').value : '',
+            // getElementById is typed HTMLElement|null; #agentSearch is the search <input>, so narrow to read .value.
+            searchValue: (function() { var s = document.getElementById('agentSearch') as HTMLInputElement | null; return s ? s.value : ''; })(),
           };
 
           var html = document.documentElement.outerHTML;

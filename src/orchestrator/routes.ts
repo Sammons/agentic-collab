@@ -11,6 +11,7 @@ import { readdirSync, readFileSync, writeFileSync, mkdirSync, unlinkSync, exists
 import { join } from 'node:path';
 import { stripTypeScriptTypes } from 'node:module';
 import { DatabaseSync } from 'node:sqlite';
+import type { SQLInputValue } from 'node:sqlite';
 import { renderMarkdown, wrapInHtml, DOC_PAGES } from '../docs/render.ts';
 import { hostname } from 'node:os';
 import type { Database } from './database.ts';
@@ -389,14 +390,14 @@ route('GET', '/api/agents/:name', async (_req, res, match, ctx) => {
 
 route('POST', '/api/agents', async (req, res, _match, ctx) => {
   const body = await readJson(req);
-  if (!body.name || !body.cwd) {
+  if (!body['name'] || !body['cwd']) {
     return json(res, 400, { error: 'name, cwd required' });
   }
 
-  const nameError = validateAgentName(body.name as string);
+  const nameError = validateAgentName(body['name'] as string);
   if (nameError) return json(res, 400, { error: nameError });
 
-  const resolvedEngine = body.engine as string | undefined;
+  const resolvedEngine = body['engine'] as string | undefined;
   if (!resolvedEngine) {
     return json(res, 400, { error: 'engine is required' });
   }
@@ -410,39 +411,43 @@ route('POST', '/api/agents', async (req, res, _match, ctx) => {
     }
   }
 
-  const existing = ctx.db.getAgent(body.name);
+  // body is Record<string, unknown> from readJson; name/cwd validated truthy above.
+  const agentName = body['name'] as string;
+  const agentCwd = body['cwd'] as string;
+  const existing = ctx.db.getAgent(agentName);
   if (existing) return json(res, 409, { error: 'Agent already exists' });
 
   const agent = ctx.db.createAgent({
-    name: body.name,
+    name: agentName,
     engine: resolvedEngine as EngineType,
-    model: body.model,
-    thinking: body.thinking,
-    cwd: body.cwd,
-    persona: body.name,
-    permissions: body.permissions,
-    proxyId: body.proxyId,
-    proxyPin: body.proxy,
-    agentGroup: body.group,
+    // optional fields preserve prior behavior: pass the raw JSON value through, undefined when absent
+    ...(body['model'] !== undefined ? { model: body['model'] as string } : {}),
+    ...(body['thinking'] !== undefined ? { thinking: body['thinking'] as string } : {}),
+    cwd: agentCwd,
+    persona: agentName,
+    ...(body['permissions'] !== undefined ? { permissions: body['permissions'] as string } : {}),
+    ...(body['proxyId'] !== undefined ? { proxyId: body['proxyId'] as string } : {}),
+    ...(body['proxy'] !== undefined ? { proxyPin: body['proxy'] as string | null } : {}),
+    ...(body['group'] !== undefined ? { agentGroup: body['group'] as string } : {}),
   });
 
   // Write persona file so agent config persists across restarts
   try {
     const fmLines: string[] = [];
-    if (body.engine) fmLines.push(`engine: ${body.engine}`);
-    if (body.model) fmLines.push(`model: ${body.model}`);
-    if (body.thinking) fmLines.push(`thinking: ${body.thinking}`);
-    fmLines.push(`cwd: ${body.cwd}`);
-    if (body.permissions) fmLines.push(`permissions: ${body.permissions}`);
-    if (body.group) fmLines.push(`group: ${body.group}`);
-    if (body.proxy) fmLines.push(`proxy: ${body.proxy}`);
+    if (body['engine']) fmLines.push(`engine: ${body['engine']}`);
+    if (body['model']) fmLines.push(`model: ${body['model']}`);
+    if (body['thinking']) fmLines.push(`thinking: ${body['thinking']}`);
+    fmLines.push(`cwd: ${body['cwd']}`);
+    if (body['permissions']) fmLines.push(`permissions: ${body['permissions']}`);
+    if (body['group']) fmLines.push(`group: ${body['group']}`);
+    if (body['proxy']) fmLines.push(`proxy: ${body['proxy']}`);
     const content = `---\n${fmLines.join('\n')}\n---\n`;
     const dir = getPersonasDir();
     mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, `${body.name}.md`), content, 'utf-8');
+    writeFileSync(join(dir, `${body['name']}.md`), content, 'utf-8');
   } catch (err) {
     // Non-fatal — agent is created in DB even if persona file write fails
-    console.warn(`[routes] Failed to write persona file for ${body.name}: ${(err as Error).message}`);
+    console.warn(`[routes] Failed to write persona file for ${body['name']}: ${(err as Error).message}`);
   }
 
   ctx.db.logEvent(agent.name, 'created');
@@ -482,12 +487,12 @@ route('DELETE', '/api/agents/:name', async (_req, res, match, ctx) => {
 
 route('POST', '/api/agents/send', async (req, res, _match, ctx) => {
   const body = await readJson(req);
-  if (!body.from || !body.to || !body.message || !body.topic) {
+  if (!body['from'] || !body['to'] || !body['message'] || !body['topic']) {
     return json(res, 400, { error: 'from, to, message, topic required' });
   }
 
   // Q1: address-prefix routing. `approval:` is wired by Q5.
-  const addr = parseAddress(body.to);
+  const addr = parseAddress(body['to']);
   if (addr.class === 'malformed') {
     return json(res, 400, { error: 'malformed address', reason: addr.reason });
   }
@@ -510,50 +515,55 @@ route('POST', '/api/agents/send', async (req, res, _match, ctx) => {
     return handleTelegramOutbound(res, ctx, addr.agentName, body);
   }
   // addr.class === 'agent' — use bare name for storage / lookup.
-  body.to = addr.name;
+  // body fields validated truthy above; addr.name is a string from parseAddress.
+  const toName = addr.name;
+  body['to'] = toName;
+  const fromName = body['from'] as string;
+  const messageText = body['message'] as string;
 
-  const target = ctx.db.getAgent(body.to);
-  if (!target) return json(res, 404, { error: `Target agent "${body.to}" not found` });
+  const target = ctx.db.getAgent(toName);
+  if (!target) return json(res, 404, { error: `Target agent "${toName}" not found` });
   if (target.state === 'void') {
-    return json(res, 400, { error: `Target agent "${body.to}" is in void state (not spawned). Spawn it first with: collab spawn ${body.to}` });
+    return json(res, 400, { error: `Target agent "${toName}" is in void state (not spawned). Spawn it first with: collab spawn ${toName}` });
   }
 
   const messageId = generateMessageId();
-  const sanitized = sanitizeMessage(body.message);
-  const topicStr = body.topic as string;
-  const fileIds = Array.isArray(body.fileIds) ? body.fileIds.filter((id: unknown) => typeof id === 'string') : undefined;
+  const sanitized = sanitizeMessage(messageText);
+  const topicStr = body['topic'] as string;
+  const fileIds = Array.isArray(body['fileIds']) ? body['fileIds'].filter((id: unknown) => typeof id === 'string') : undefined;
 
   // Format envelope with topic (include file references if present)
-  const envelope = buildReplyEnvelope(body.from as string, topicStr, sanitized, fileIds);
+  const envelope = buildReplyEnvelope(fromName, topicStr, sanitized, fileIds);
 
   // Enqueue for async delivery
   const pending = ctx.db.enqueueMessage({
-    sourceAgent: body.from as string,
-    targetAgent: body.to as string,
+    sourceAgent: fromName,
+    targetAgent: toName,
     envelope,
   });
 
   // Store in dashboard_messages for sender thread (from_agent direction — agent sent it)
-  const senderMsg = ctx.db.addDashboardMessage(body.from as string, 'from_agent', sanitized, {
+  const senderMsg = ctx.db.addDashboardMessage(fromName, 'from_agent', sanitized, {
     topic: topicStr,
-    sourceAgent: body.from as string,
-    targetAgent: body.to as string,
-    fileIds,
+    sourceAgent: fromName,
+    targetAgent: toName,
+    // omit fileIds when absent: exactOptionalPropertyTypes forbids passing undefined
+    ...(fileIds !== undefined ? { fileIds } : {}),
   });
   ctx.db.linkDashboardMessageToQueue(senderMsg.id, pending.id);
 
   // Store in dashboard_messages for receiver thread (to_agent direction — message going to agent)
-  const receiverMsg = ctx.db.addDashboardMessage(body.to as string, 'to_agent', sanitized, {
+  const receiverMsg = ctx.db.addDashboardMessage(toName, 'to_agent', sanitized, {
     topic: topicStr,
-    sourceAgent: body.from as string,
-    targetAgent: body.to as string,
-    fileIds,
+    sourceAgent: fromName,
+    targetAgent: toName,
+    ...(fileIds !== undefined ? { fileIds } : {}),
   });
   ctx.db.linkDashboardMessageToQueue(receiverMsg.id, pending.id);
 
   // Log routing events
-  ctx.db.logEvent(body.from as string, 'message_queued', messageId, { to: body.to, queueId: pending.id });
-  ctx.db.logEvent(body.to as string, 'message_queued', messageId, { from: body.from, queueId: pending.id });
+  ctx.db.logEvent(body['from'] as string, 'message_queued', messageId, { to: body['to'], queueId: pending.id });
+  ctx.db.logEvent(body['to'] as string, 'message_queued', messageId, { from: body['from'], queueId: pending.id });
 
   // Broadcast both messages + queue update to dashboard (filtered by subscription)
   const linkedSenderMsg = { ...senderMsg, queueId: pending.id, deliveryStatus: 'pending' } as DashboardMessage;
@@ -563,15 +573,15 @@ route('POST', '/api/agents/send', async (req, res, _match, ctx) => {
   ctx.wss.broadcast(JSON.stringify({ type: 'queue_update', message: pending }));
 
   // Auto-create reply reminder if requested
-  if (body.replyReminder) {
-    const cadence = typeof body.replyReminder === 'number' ? body.replyReminder : 30;
-    const prompt = `[reply-reminder] topic: ${topicStr} | from: ${body.from} | "${sanitized}" — Please respond if you haven't already.`;
-    ctx.db.createReminder({ agentName: body.to as string, createdBy: body.from as string, prompt, cadenceMinutes: Math.max(cadence, 5) });
+  if (body['replyReminder']) {
+    const cadence = typeof body['replyReminder'] === 'number' ? body['replyReminder'] : 30;
+    const prompt = `[reply-reminder] topic: ${topicStr} | from: ${body['from']} | "${sanitized}" — Please respond if you haven't already.`;
+    ctx.db.createReminder({ agentName: body['to'] as string, createdBy: body['from'] as string, prompt, cadenceMinutes: Math.max(cadence, 5) });
   }
 
   // Event-driven delivery — attempt immediately, don't block response
-  ctx.messageDispatcher.tryDeliver(body.to as string).catch((err) => {
-    console.error(`[routes] Immediate delivery failed for ${body.to}:`, (err as Error).message);
+  ctx.messageDispatcher.tryDeliver(body['to'] as string).catch((err) => {
+    console.error(`[routes] Immediate delivery failed for ${body['to']}:`, (err as Error).message);
   });
 
   json(res, 202, { ok: true, messageId, queueId: pending.id, status: 'pending' });
@@ -581,12 +591,12 @@ route('POST', '/api/agents/send', async (req, res, _match, ctx) => {
 
 route('POST', '/api/dashboard/send', async (req, res, _match, ctx) => {
   const body = await readJson(req);
-  if (!body.agent || !body.message || !body.topic) {
+  if (!body['agent'] || !body['message'] || !body['topic']) {
     return json(res, 400, { error: 'agent, message, topic required' });
   }
 
   // Q1: address-prefix routing on body.agent.
-  const dashAddr = parseAddress(body.agent);
+  const dashAddr = parseAddress(body['agent']);
   if (dashAddr.class === 'malformed') {
     return json(res, 400, { error: 'malformed address', reason: dashAddr.reason });
   }
@@ -610,32 +620,35 @@ route('POST', '/api/dashboard/send', async (req, res, _match, ctx) => {
       agentName: dashAddr.agentName,
     });
   }
-  body.agent = dashAddr.name;
+  // dashAddr.name is a string; body fields validated truthy above.
+  const dashAgentName = dashAddr.name;
+  body['agent'] = dashAgentName;
 
-  const agent = ctx.db.getAgent(body.agent);
-  if (!agent) return json(res, 404, { error: `Agent "${body.agent}" not found` });
+  const agent = ctx.db.getAgent(dashAgentName);
+  if (!agent) return json(res, 404, { error: `Agent "${dashAgentName}" not found` });
 
-  const sanitized = sanitizeMessage(body.message);
-  const topicStr = body.topic as string;
-  const fileIds = Array.isArray(body.fileIds) ? body.fileIds.filter((id: unknown) => typeof id === 'string') : undefined;
+  const sanitized = sanitizeMessage(body['message'] as string);
+  const topicStr = body['topic'] as string;
+  const fileIds = Array.isArray(body['fileIds']) ? body['fileIds'].filter((id: unknown) => typeof id === 'string') : undefined;
 
   const envelope = buildReplyEnvelope('dashboard', topicStr, sanitized, fileIds);
   const { msg, pending } = enqueueAndDeliver(ctx, {
-    agentName: body.agent as string,
+    agentName: dashAgentName,
     displayMessage: sanitized,
     envelope,
     topic: topicStr,
     sourceAgent: 'dashboard',
-    targetAgent: body.agent as string,
+    targetAgent: dashAgentName,
     queueSourceAgent: null,
-    fileIds,
+    // omit fileIds when absent: exactOptionalPropertyTypes forbids passing undefined
+    ...(fileIds !== undefined ? { fileIds } : {}),
   });
 
   // Auto-create reply reminder if requested
-  if (body.replyReminder) {
-    const cadence = typeof body.replyReminder === 'number' ? body.replyReminder : 30;
+  if (body['replyReminder']) {
+    const cadence = typeof body['replyReminder'] === 'number' ? body['replyReminder'] : 30;
     const prompt = `[reply-reminder] topic: ${topicStr} | from: dashboard | "${sanitized}" — Please respond if you haven't already.`;
-    ctx.db.createReminder({ agentName: body.agent as string, createdBy: 'dashboard', prompt, cadenceMinutes: Math.max(cadence, 5) });
+    ctx.db.createReminder({ agentName: body['agent'] as string, createdBy: 'dashboard', prompt, cadenceMinutes: Math.max(cadence, 5) });
   }
 
   json(res, 202, { ok: true, msg, queueId: pending.id, status: 'pending' });
@@ -665,15 +678,15 @@ route('POST', '/api/personas/reload', async (_req, res, _match, ctx) => {
 route('POST', '/api/approvals', async (req, res, _match, ctx) => {
   if (!ctx.approvals) return json(res, 503, { error: 'approvals not configured' });
   const body = await readJson(req);
-  if (typeof body.requesterAddr !== 'string' || typeof body.channel !== 'string') {
+  if (typeof body['requesterAddr'] !== 'string' || typeof body['channel'] !== 'string') {
     return json(res, 400, { error: 'requesterAddr and channel required' });
   }
-  const payload = typeof body.payload === 'string'
-    ? body.payload
-    : JSON.stringify(body.payload ?? {});
+  const payload = typeof body['payload'] === 'string'
+    ? body['payload']
+    : JSON.stringify(body['payload'] ?? {});
   const result = ctx.approvals.create({
-    requesterAddr: body.requesterAddr,
-    channel: body.channel,
+    requesterAddr: body['requesterAddr'],
+    channel: body['channel'],
     payload,
   });
   if (!result.ok) return json(res, 400, { error: result.reason });
@@ -713,21 +726,21 @@ route('POST', '/api/approvals/:id/set', async (req, res, match, ctx) => {
   const id = match.pathname.groups['id'];
   if (!id) return json(res, 400, { error: 'approval id required' });
   const body = await readJson(req);
-  if (typeof body.state !== 'string') return json(res, 400, { error: 'state required' });
-  if (body.state !== 'approved' && body.state !== 'rejected' && body.state !== 'amended') {
+  if (typeof body['state'] !== 'string') return json(res, 400, { error: 'state required' });
+  if (body['state'] !== 'approved' && body['state'] !== 'rejected' && body['state'] !== 'amended') {
     return json(res, 400, { error: 'state must be approved|rejected|amended' });
   }
-  const payload = typeof body.payload === 'string'
-    ? body.payload
-    : body.payload != null ? JSON.stringify(body.payload) : null;
+  const payload = typeof body['payload'] === 'string'
+    ? body['payload']
+    : body['payload'] != null ? JSON.stringify(body['payload']) : null;
   // `amended` rewrites the active payload; rejecting the call here keeps
   // the audit trail honest. Otherwise the route silently leaves the prior
   // payload in place while the row's state column claims "amended".
-  if (body.state === 'amended' && (payload === null || payload === '')) {
+  if (body['state'] === 'amended' && (payload === null || payload === '')) {
     return json(res, 400, { error: 'amended state requires --payload' });
   }
-  const result = await ctx.approvals.setState(id, body.state, {
-    decidedBy: typeof body.decidedBy === 'string' ? body.decidedBy : null,
+  const result = await ctx.approvals.setState(id, body['state'], {
+    decidedBy: typeof body['decidedBy'] === 'string' ? body['decidedBy'] : null,
     payload,
   });
   if (!result.ok) {
@@ -743,10 +756,10 @@ route('POST', '/api/approvals/:id/withdraw', async (req, res, match, ctx) => {
   const id = match.pathname.groups['id'];
   if (!id) return json(res, 400, { error: 'approval id required' });
   const body = await readJson(req);
-  if (typeof body.requesterAddr !== 'string') {
+  if (typeof body['requesterAddr'] !== 'string') {
     return json(res, 400, { error: 'requesterAddr required' });
   }
-  const result = await ctx.approvals.withdraw(id, body.requesterAddr);
+  const result = await ctx.approvals.withdraw(id, body['requesterAddr']);
   if (!result.ok) {
     if (result.reason === 'not-found') return json(res, 404, { error: 'approval not found' });
     if (result.reason === 'not-creator') return json(res, 403, { error: 'only the creator may withdraw' });
@@ -841,8 +854,8 @@ route('POST', '/api/dashboard/upload', async (req, res, _match, ctx) => {
     return json(res, 500, { error: proxyResult.error ?? 'File write failed' });
   }
 
-  const writtenPath = (proxyResult.data?.path as string) ?? `${agent.cwd}/${filename}`;
-  const fileSize = (proxyResult.data?.size as number) ?? 0;
+  const writtenPath = (proxyResult.data?.['path'] as string) ?? `${agent.cwd}/${filename}`;
+  const fileSize = (proxyResult.data?.['size'] as number) ?? 0;
 
   // Silent upload: file lands on disk but no message or agent notification.
   // User can later send a message mentioning the file if desired.
@@ -851,16 +864,19 @@ route('POST', '/api/dashboard/upload', async (req, res, _match, ctx) => {
 
 route('POST', '/api/dashboard/reply', async (req, res, _match, ctx) => {
   const body = await readJson(req);
-  if (!body.agent || !body.message || !body.topic) {
+  if (!body['agent'] || !body['message'] || !body['topic']) {
     return json(res, 400, { error: 'agent, message, topic required' });
   }
 
-  const sanitized = sanitizeMessage(body.message);
-  const fileIds = Array.isArray(body.fileIds) ? body.fileIds.filter((id: unknown) => typeof id === 'string') : undefined;
-  const msg = ctx.db.addDashboardMessage(body.agent, 'from_agent', sanitized, {
-    topic: body.topic as string,
-    sourceAgent: body.agent as string,
-    fileIds,
+  // body fields validated truthy above; readJson yields Record<string, unknown>.
+  const replyAgent = body['agent'] as string;
+  const sanitized = sanitizeMessage(body['message'] as string);
+  const fileIds = Array.isArray(body['fileIds']) ? body['fileIds'].filter((id: unknown) => typeof id === 'string') : undefined;
+  const msg = ctx.db.addDashboardMessage(replyAgent, 'from_agent', sanitized, {
+    topic: body['topic'] as string,
+    sourceAgent: replyAgent,
+    // omit fileIds when absent: exactOptionalPropertyTypes forbids passing undefined
+    ...(fileIds !== undefined ? { fileIds } : {}),
   });
 
   // Broadcast to dashboard WebSocket (filtered by subscription)
@@ -937,10 +953,10 @@ route('GET', '/api/dashboard/messages/feed', async (req, res, _match, ctx) => {
 
 route('PUT', '/api/dashboard/read-cursor', async (req, res, _match, ctx) => {
   const body = await readJson(req);
-  if (!body.agent || typeof body.agent !== 'string') {
+  if (!body['agent'] || typeof body['agent'] !== 'string') {
     return json(res, 400, { error: 'agent (string) required' });
   }
-  ctx.db.updateReadCursor(body.agent as string);
+  ctx.db.updateReadCursor(body['agent'] as string);
   json(res, 200, { ok: true });
 });
 
@@ -985,12 +1001,16 @@ route('POST', '/api/dashboard/messages/:id/withdraw', async (_req, res, match, c
 
 route('POST', '/api/proxy/register', async (req, res, _match, ctx) => {
   const body = await readJson(req);
-  if (!body.proxyId || !body.token || !body.host) {
+  if (!body['proxyId'] || !body['token'] || !body['host']) {
     return json(res, 400, { error: 'proxyId, token, host required' });
   }
 
-  const proxyVersion = typeof body.version === 'string' ? body.version : undefined;
-  const proxy = ctx.db.registerProxy(body.proxyId, body.token, body.host, proxyVersion);
+  // body fields validated truthy above; readJson yields Record<string, unknown>.
+  const proxyId = body['proxyId'] as string;
+  const proxyToken = body['token'] as string;
+  const proxyHost = body['host'] as string;
+  const proxyVersion = typeof body['version'] === 'string' ? body['version'] : undefined;
+  const proxy = ctx.db.registerProxy(proxyId, proxyToken, proxyHost, proxyVersion);
 
   // Compute version match and enrich the response
   const orchestratorVersion = getVersion();
@@ -998,23 +1018,24 @@ route('POST', '/api/proxy/register', async (req, res, _match, ctx) => {
   const enriched: ProxyRegistration = { ...proxy, versionMatch };
 
   if (proxyVersion && !versionMatch) {
-    console.warn(`[proxy-register] Version mismatch: proxy "${body.proxyId}" is ${proxyVersion}, orchestrator is ${orchestratorVersion}`);
+    console.warn(`[proxy-register] Version mismatch: proxy "${proxyId}" is ${proxyVersion}, orchestrator is ${orchestratorVersion}`);
   }
 
   broadcastProxyUpdate(ctx);
   json(res, 200, { ...enriched, orchestratorVersion });
 
   // Self-heal: recover failed agents on this proxy whose tmux sessions survived
-  recoverFailedAgents(ctx, body.proxyId).catch((err) => {
-    console.error(`[proxy-register] Recovery failed for ${body.proxyId}:`, err);
+  recoverFailedAgents(ctx, proxyId).catch((err) => {
+    console.error(`[proxy-register] Recovery failed for ${proxyId}:`, err);
   });
 });
 
 route('POST', '/api/proxy/heartbeat', async (req, res, _match, ctx) => {
   const body = await readJson(req);
-  if (!body.proxyId) return json(res, 400, { error: 'proxyId required' });
+  if (!body['proxyId']) return json(res, 400, { error: 'proxyId required' });
 
-  const updated = ctx.db.updateProxyHeartbeat(body.proxyId);
+  // proxyId validated truthy above; readJson yields Record<string, unknown>.
+  const updated = ctx.db.updateProxyHeartbeat(body['proxyId'] as string);
   if (!updated) return json(res, 404, { error: 'Proxy not registered' });
 
   json(res, 200, { ok: true });
@@ -1103,10 +1124,10 @@ route('GET', '/api/engine-configs/:name', async (_req, res, match, ctx) => {
 
 route('POST', '/api/engine-configs', async (req, res, _match, ctx) => {
   const body = await readJson(req);
-  if (!body.name || !body.engine) return json(res, 400, { error: 'name and engine required' });
+  if (!body['name'] || !body['engine']) return json(res, 400, { error: 'name and engine required' });
   try {
     ctx.db.createEngineConfig(body as Parameters<typeof ctx.db.createEngineConfig>[0]);
-    const config = ctx.db.getEngineConfig(body.name as string);
+    const config = ctx.db.getEngineConfig(body['name'] as string);
     ctx.wss.broadcast(JSON.stringify({ type: 'engine_config_update', config }));
     json(res, 201, config);
   } catch (err) {
@@ -1230,7 +1251,14 @@ route('POST', '/api/pages', async (req, res, _match, ctx) => {
   }
 
   const stats = dirStats(pageDir);
-  const page = ctx.db.createPage({ slug, title, agent: agent ?? undefined, fileCount: stats.fileCount, totalBytes: stats.totalBytes });
+  // omit title/agent when null: exactOptionalPropertyTypes forbids passing undefined
+  const page = ctx.db.createPage({
+    slug,
+    ...(title !== null ? { title } : {}),
+    ...(agent !== null ? { agent } : {}),
+    fileCount: stats.fileCount,
+    totalBytes: stats.totalBytes,
+  });
   ctx.wss.broadcast(JSON.stringify({ type: 'pages_update', pages: ctx.db.listPages() }));
   json(res, 201, page);
 });
@@ -1339,8 +1367,8 @@ function checkStoreSize(storesDir: string, name: string): boolean {
 
 route('POST', '/api/stores', async (req, res, _match, ctx) => {
   const body = await readJson(req);
-  const name = body.name as string | undefined;
-  const agent = (body.agent as string | undefined) ?? null;
+  const name = body['name'] as string | undefined;
+  const agent = (body['agent'] as string | undefined) ?? null;
 
   if (!name || !SLUG_RE.test(name)) return json(res, 400, { error: 'Invalid store name (kebab-case, 2-64 chars)' });
 
@@ -1348,7 +1376,8 @@ route('POST', '/api/stores', async (req, res, _match, ctx) => {
   const storeDb = openStoreDb(ctx.storesDir, name);
   storeDb.close();
 
-  const record = ctx.db.createStore({ name, agent: agent ?? undefined });
+  // omit agent when absent: exactOptionalPropertyTypes forbids passing undefined
+  const record = ctx.db.createStore(agent !== null ? { name, agent } : { name });
   ctx.wss.broadcast(JSON.stringify({ type: 'stores_update', stores: ctx.db.listStores() }));
   json(res, 201, record);
 });
@@ -1395,8 +1424,9 @@ route('POST', '/api/stores/:name/query', async (req, res, match, ctx) => {
   if (!record) return json(res, 404, { error: 'Store not found' });
 
   const body = await readJson(req);
-  const sql = body.sql as string | undefined;
-  const params = (body.params as unknown[]) ?? [];
+  const sql = body['sql'] as string | undefined;
+  // user-supplied params flow straight to node:sqlite, which validates value types at runtime
+  const params = (body['params'] as SQLInputValue[]) ?? [];
 
   if (!sql) return json(res, 400, { error: 'sql is required' });
   const sqlErr = validateStoreSql(sql);
@@ -1687,9 +1717,9 @@ route('DELETE', '/api/files/:id', async (_req, res, match, ctx) => {
 
 route('POST', '/api/destinations', async (req, res, _match, ctx) => {
   const body = await readJson(req);
-  const name = body.name as string | undefined;
-  const type = body.type as string | undefined;
-  const config = body.config as Record<string, unknown> | undefined;
+  const name = body['name'] as string | undefined;
+  const type = body['type'] as string | undefined;
+  const config = body['config'] as Record<string, unknown> | undefined;
 
   if (!name || typeof name !== 'string' || name.length < 1 || name.length > 64) {
     return json(res, 400, { error: 'name required (1-64 chars)' });
@@ -1701,7 +1731,7 @@ route('POST', '/api/destinations', async (req, res, _match, ctx) => {
     return json(res, 400, { error: 'config required (object)' });
   }
   if (type === 'telegram') {
-    if (!config.botToken || !config.chatId) {
+    if (!config['botToken'] || !config['chatId']) {
       return json(res, 400, { error: 'telegram config requires botToken and chatId' });
     }
   }
@@ -1772,8 +1802,8 @@ route('POST', '/api/destinations/:name/test', async (_req, res, match, ctx) => {
   if (!dest) return json(res, 404, { error: 'Destination not found' });
 
   if (dest.type === 'telegram') {
-    const botToken = dest.config.botToken as string;
-    const chatId = dest.config.chatId as string;
+    const botToken = dest.config['botToken'] as string;
+    const chatId = dest.config['chatId'] as string;
     const ok = await ctx.telegramDispatcher.send(botToken, chatId, `[agentic-collab] Test message from destination "${name}"`);
     if (!ok) return json(res, 502, { error: 'Telegram test send failed' });
     json(res, 200, { ok: true });
@@ -1796,7 +1826,7 @@ route('POST', '/api/agents/:name/telegram-token', async (req, res, match, ctx) =
   if (!agent) return json(res, 404, { error: 'Agent not found' });
 
   const body = await readJson(req);
-  const token = body.token;
+  const token = body['token'];
   if (typeof token !== 'string' || token.length === 0) {
     return json(res, 400, { error: 'token required (non-empty string)' });
   }
@@ -2166,18 +2196,18 @@ route('PUT', '/api/personas/:name', async (req, res, match) => {
 
 route('POST', '/api/personas', async (req, res, _match, ctx) => {
   const body = await readJson(req);
-  if (!body.name || typeof body.name !== 'string') {
+  if (!body['name'] || typeof body['name'] !== 'string') {
     return json(res, 400, { error: 'name (string) required' });
   }
-  if (!body.content || typeof body.content !== 'string') {
+  if (!body['content'] || typeof body['content'] !== 'string') {
     return json(res, 400, { error: 'content (string) required' });
   }
 
-  const name = body.name as string;
+  const name = body['name'] as string;
   if (!NAME_RE.test(name)) return json(res, 400, { error: 'Invalid persona name' });
 
   try {
-    const persona = createPersonaAndAgent(ctx.db, name, body.content as string);
+    const persona = createPersonaAndAgent(ctx.db, name, body['content'] as string);
     const agent = ctx.db.getAgent(name);
     ctx.db.logEvent(name, 'persona_created');
     broadcastAgentUpdate(ctx, name);
@@ -2215,28 +2245,31 @@ route('POST', '/api/agents/:name/spawn', async (req, res, match, ctx) => {
     // Universal "start" verb: if the agent is suspended, treat /spawn as
     // /resume. UI surfaces (kebab menus, profile popover, etc.) all call
     // Spawn without having to switch endpoints by state.
+    // body fields are optional JSON; omit when absent so exactOptionalPropertyTypes is satisfied.
+    const spawnTask = body['task'] as string | undefined;
     if (agent.state === 'suspended') {
-      const proxyId = resolveProxyId(ctx, agent, body.proxyId as string | undefined);
+      const proxyId = resolveProxyId(ctx, agent, body['proxyId'] as string | undefined);
       if (proxyId && !agent.proxyId) {
         ctx.db.updateAgentState(name, agent.state, agent.version, { proxyId });
       }
-      const result = await resumeAgent(lifecycleCtx, name, {
-        task: body.task as string | undefined,
-      });
+      const result = await resumeAgent(lifecycleCtx, name, spawnTask !== undefined ? { task: spawnTask } : {});
       broadcastAgentUpdate(ctx, name);
       broadcastLifecycleEvent(ctx, name, 'Resumed');
       return json(res, 200, result);
     }
 
+    const resolvedModel = (body['model'] as string | undefined) ?? agent.model ?? undefined;
+    const resolvedThinking = (body['thinking'] as string | undefined) ?? agent.thinking ?? undefined;
+    const resolvedPersona = (body['persona'] as string | undefined) ?? agent.persona ?? undefined;
     const result = await spawnAgent(lifecycleCtx, {
       name,
       engine: agent.engine,
-      model: (body.model as string | undefined) ?? agent.model ?? undefined,
-      thinking: (body.thinking as string | undefined) ?? agent.thinking ?? undefined,
-      cwd: (body.cwd as string | undefined) ?? agent.cwd,
-      persona: (body.persona as string | undefined) ?? agent.persona ?? undefined,
-      proxyId: resolveProxyId(ctx, agent, body.proxyId as string | undefined),
-      task: body.task as string | undefined,
+      ...(resolvedModel !== undefined ? { model: resolvedModel } : {}),
+      ...(resolvedThinking !== undefined ? { thinking: resolvedThinking } : {}),
+      cwd: (body['cwd'] as string | undefined) ?? agent.cwd,
+      ...(resolvedPersona !== undefined ? { persona: resolvedPersona } : {}),
+      proxyId: resolveProxyId(ctx, agent, body['proxyId'] as string | undefined),
+      ...(spawnTask !== undefined ? { task: spawnTask } : {}),
     });
 
     broadcastAgentUpdate(ctx, name);
@@ -2259,14 +2292,14 @@ route('POST', '/api/agents/:name/resume', async (req, res, match, ctx) => {
     if (!agent) return json(res, 404, { error: 'Agent not found' });
 
     // Pre-assign proxy if the agent doesn't have one (e.g. first resume after persona sync)
-    const proxyId = resolveProxyId(ctx, agent, body.proxyId as string | undefined);
+    const proxyId = resolveProxyId(ctx, agent, body['proxyId'] as string | undefined);
     if (proxyId && !agent.proxyId) {
       ctx.db.updateAgentState(name, agent.state, agent.version, { proxyId });
     }
 
-    const result = await resumeAgent(lifecycleCtx, name, {
-      task: body.task as string | undefined,
-    });
+    // task is optional JSON; omit when absent so exactOptionalPropertyTypes is satisfied.
+    const resumeTask = body['task'] as string | undefined;
+    const result = await resumeAgent(lifecycleCtx, name, resumeTask !== undefined ? { task: resumeTask } : {});
     broadcastAgentUpdate(ctx, name);
     broadcastLifecycleEvent(ctx, name, 'Resumed');
     json(res, 200, result);
@@ -2300,9 +2333,12 @@ route('POST', '/api/agents/:name/reload', async (req, res, match, ctx) => {
     const lifecycleCtx = makeLifecycleCtx(ctx);
     // Re-sync persona from disk to pick up config changes (engine, model, etc.)
     syncSinglePersona(ctx.db, name);
+    // immediate/task are optional JSON; omit when absent for exactOptionalPropertyTypes.
+    const reloadImmediate = body['immediate'] as boolean | undefined;
+    const reloadTask = body['task'] as string | undefined;
     const result = await reloadAgent(lifecycleCtx, name, {
-      immediate: body.immediate as boolean | undefined,
-      task: body.task as string | undefined,
+      ...(reloadImmediate !== undefined ? { immediate: reloadImmediate } : {}),
+      ...(reloadTask !== undefined ? { task: reloadTask } : {}),
     });
     broadcastAgentUpdate(ctx, name);
     broadcastLifecycleEvent(ctx, name, 'Reloaded');
@@ -2357,7 +2393,7 @@ route('GET', '/api/agents/:name/peek', async (req, res, match, ctx) => {
 route('POST', '/api/agents/:name/keys', async (req, res, match, ctx) => {
   const name = match.pathname.groups['name']!;
   const body = await readJson(req);
-  const keys = body?.keys;
+  const keys = body?.['keys'];
   if (typeof keys !== 'string' || !keys) { json(res, 400, { error: 'keys required' }); return; }
 
   const agent = ctx.db.getAgent(name);
@@ -2418,7 +2454,7 @@ function parseTmuxResize(args: string[]): { width: number; height: number } {
 route('POST', '/api/agents/:name/tmux', async (req, res, match, ctx) => {
   const name = match.pathname.groups['name']!;
   const body = await readJson(req);
-  const args = body?.args;
+  const args = body?.['args'];
   if (!Array.isArray(args) || args.length === 0 || !args.every((arg: unknown) => typeof arg === 'string')) {
     json(res, 400, { error: 'args (string[]) required' }); return;
   }
@@ -2502,14 +2538,14 @@ route('POST', '/api/agents/:name/tmux', async (req, res, match, ctx) => {
 route('POST', '/api/agents/:name/type', async (req, res, match, ctx) => {
   const name = match.pathname.groups['name']!;
   const body = await readJson(req);
-  const text = body?.text;
+  const text = body?.['text'];
   if (typeof text !== 'string' || !text) { json(res, 400, { error: 'text required' }); return; }
 
   const agent = ctx.db.getAgent(name);
   if (!agent) { json(res, 404, { error: `Agent "${name}" not found` }); return; }
   if (!agent.proxyId) { json(res, 400, { error: `Agent "${name}" has no proxy` }); return; }
 
-  const pressEnter = body?.pressEnter === true;
+  const pressEnter = body?.['pressEnter'] === true;
   const result = await ctx.proxyDispatch(agent.proxyId, {
     action: 'paste',
     sessionName: agent.tmuxSession ?? `agent-${name}`,
@@ -2524,8 +2560,8 @@ route('POST', '/api/agents/:name/type', async (req, res, match, ctx) => {
 route('POST', '/api/agents/:name/resize', async (req, res, match, ctx) => {
   const name = match.pathname.groups['name']!;
   const body = await readJson(req);
-  const width = body?.width;
-  const height = body?.height;
+  const width = body?.['width'];
+  const height = body?.['height'];
   if (typeof width !== 'number' || typeof height !== 'number' || width < 1 || height < 1) {
     json(res, 400, { error: 'width and height required (positive integers)' }); return;
   }
@@ -2582,9 +2618,9 @@ route('POST', '/api/agents/:name/indicator/:indicator/:action', async (_req, res
 
 route('POST', '/api/agents/reorder', async (req, res, _match, ctx) => {
   const body = await readJson(req);
-  const orders = body?.orders;
+  const orders = body?.['orders'];
   if (!Array.isArray(orders) || !orders.every((o: unknown) =>
-    typeof o === 'object' && o !== null && typeof (o as Record<string, unknown>).name === 'string' && typeof (o as Record<string, unknown>).sortOrder === 'number'
+    typeof o === 'object' && o !== null && typeof (o as Record<string, unknown>)['name'] === 'string' && typeof (o as Record<string, unknown>)['sortOrder'] === 'number'
   )) {
     json(res, 400, { error: 'orders must be an array of {name, sortOrder}' });
     return;
@@ -2596,7 +2632,7 @@ route('POST', '/api/agents/reorder', async (req, res, _match, ctx) => {
 route('PATCH', '/api/agents/:name/group', async (req, res, match, ctx) => {
   const name = match.pathname.groups['name']!;
   const body = await readJson(req);
-  const group = body?.group;
+  const group = body?.['group'];
   if (typeof group !== 'string') { json(res, 400, { error: 'group (string) required' }); return; }
 
   const agent = ctx.db.getAgent(name);
@@ -2750,25 +2786,28 @@ route('GET', '/api/orchestrator/status', async (_req, res, _match, ctx) => {
 
 route('POST', '/api/reminders', async (req, res, _match, ctx) => {
   const body = await readJson(req);
-  if (!body.agentName || typeof body.agentName !== 'string') {
+  if (!body['agentName'] || typeof body['agentName'] !== 'string') {
     return json(res, 400, { error: 'agentName required' });
   }
-  if (!body.prompt || typeof body.prompt !== 'string') {
+  if (!body['prompt'] || typeof body['prompt'] !== 'string') {
     return json(res, 400, { error: 'prompt required' });
   }
-  if (typeof body.cadenceMinutes !== 'number' || body.cadenceMinutes < 5) {
+  if (typeof body['cadenceMinutes'] !== 'number' || body['cadenceMinutes'] < 5) {
     return json(res, 400, { error: 'cadenceMinutes must be >= 5' });
   }
 
-  const agent = ctx.db.getAgent(body.agentName as string);
-  if (!agent) return json(res, 404, { error: `Agent "${body.agentName}" not found` });
+  const agent = ctx.db.getAgent(body['agentName'] as string);
+  if (!agent) return json(res, 404, { error: `Agent "${body['agentName']}" not found` });
 
+  // createdBy/skipIfActive are optional JSON; omit when absent for exactOptionalPropertyTypes.
+  const reminderCreatedBy = (body['createdBy'] as string | undefined) ?? undefined;
+  const reminderSkipIfActive = typeof body['skipIfActive'] === 'boolean' ? body['skipIfActive'] : undefined;
   const reminder = ctx.db.createReminder({
-    agentName: body.agentName as string,
-    createdBy: (body.createdBy as string | undefined) ?? undefined,
-    prompt: body.prompt as string,
-    cadenceMinutes: body.cadenceMinutes as number,
-    skipIfActive: typeof body.skipIfActive === 'boolean' ? body.skipIfActive : undefined,
+    agentName: body['agentName'] as string,
+    ...(reminderCreatedBy !== undefined ? { createdBy: reminderCreatedBy } : {}),
+    prompt: body['prompt'] as string,
+    cadenceMinutes: body['cadenceMinutes'] as number,
+    ...(reminderSkipIfActive !== undefined ? { skipIfActive: reminderSkipIfActive } : {}),
   });
 
   broadcastReminderUpdate(ctx);
@@ -2824,9 +2863,9 @@ route('PATCH', '/api/reminders/:id', async (req, res, match, ctx) => {
 
   const body = await readJson(req);
   const opts: { prompt?: string; cadenceMinutes?: number; skipIfActive?: boolean } = {};
-  if (typeof body.prompt === 'string') opts.prompt = body.prompt;
-  if (typeof body.cadenceMinutes === 'number') opts.cadenceMinutes = body.cadenceMinutes;
-  if (typeof body.skipIfActive === 'boolean') opts.skipIfActive = body.skipIfActive;
+  if (typeof body['prompt'] === 'string') opts.prompt = body['prompt'];
+  if (typeof body['cadenceMinutes'] === 'number') opts.cadenceMinutes = body['cadenceMinutes'];
+  if (typeof body['skipIfActive'] === 'boolean') opts.skipIfActive = body['skipIfActive'];
 
   try {
     const updated = ctx.db.updateReminder(id, opts);
@@ -2850,8 +2889,8 @@ route('DELETE', '/api/reminders/:id', async (_req, res, match, ctx) => {
 route('POST', '/api/reminders/swap', async (req, res, _match, ctx) => {
   const body = await readJson(req);
   // Accept both { a, b } (dashboard) and { id1, id2 } (API) field names
-  const id1 = typeof body.a === 'number' ? body.a : body.id1;
-  const id2 = typeof body.b === 'number' ? body.b : body.id2;
+  const id1 = typeof body['a'] === 'number' ? body['a'] : body['id1'];
+  const id2 = typeof body['b'] === 'number' ? body['b'] : body['id2'];
   if (typeof id1 !== 'number' || typeof id2 !== 'number') {
     return json(res, 400, { error: 'id1/id2 (or a/b) required' });
   }
@@ -2989,8 +3028,8 @@ route('GET', '/api/accounts', async (_req, res, _match, ctx) => {
 });
 
 route('POST', '/api/accounts', async (req, res, _match, ctx) => {
-  const body = await readBody(req);
-  const name = body?.name;
+  const body = await readJson(req);
+  const name = body['name'];
   if (typeof name !== 'string' || name.length === 0) {
     return json(res, 400, { error: 'name is required' });
   }
@@ -3016,9 +3055,9 @@ route('DELETE', '/api/accounts/:name', async (_req, res, match, ctx) => {
 
 route('POST', '/api/notify', async (req, res, _match, ctx) => {
   const body = await readJson(req);
-  const agent = body.agent as string | undefined;
-  const message = body.message as string | undefined;
-  const priority = (body.priority as string) ?? 'normal';
+  const agent = body['agent'] as string | undefined;
+  const message = body['message'] as string | undefined;
+  const priority = (body['priority'] as string) ?? 'normal';
   if (!message) return json(res, 400, { error: 'message required' });
 
   const destinations = ctx.db.listDestinations().filter(d => d.enabled);
@@ -3028,8 +3067,8 @@ route('POST', '/api/notify', async (req, res, _match, ctx) => {
     const text = agent ? `[${agent}] ${message}` : message;
     try {
       if (dest.type === 'telegram') {
-        const botToken = dest.config.botToken as string;
-        const chatId = dest.config.chatId as string;
+        const botToken = dest.config['botToken'] as string;
+        const chatId = dest.config['chatId'] as string;
         const ok = await ctx.telegramDispatcher.send(botToken, chatId, text);
         if (ok) sent++;
       }
@@ -3340,11 +3379,15 @@ function enqueueAndDeliver(
   const direction = opts.direction ?? 'to_agent';
   const deliverTo = opts.targetAgent ?? opts.agentName;
 
+  // omit absent fields: exactOptionalPropertyTypes forbids passing undefined
+  const topic = opts.topic ?? undefined;
+  const sourceAgent = opts.sourceAgent ?? undefined;
+  const targetAgent = opts.targetAgent ?? undefined;
   const msg = ctx.db.addDashboardMessage(opts.agentName, direction, opts.displayMessage, {
-    topic: opts.topic ?? undefined,
-    sourceAgent: opts.sourceAgent ?? undefined,
-    targetAgent: opts.targetAgent ?? undefined,
-    fileIds: opts.fileIds,
+    ...(topic !== undefined ? { topic } : {}),
+    ...(sourceAgent !== undefined ? { sourceAgent } : {}),
+    ...(targetAgent !== undefined ? { targetAgent } : {}),
+    ...(opts.fileIds !== undefined ? { fileIds: opts.fileIds } : {}),
   });
 
   const queueSource = opts.queueSourceAgent !== undefined ? opts.queueSourceAgent : (opts.sourceAgent ?? null);
@@ -3432,7 +3475,7 @@ function makeLifecycleCtx(ctx: RouteContext): LifecycleContext {
  * Exported for use in main.ts on startup.
  */
 export function startTelegramPolling(ctx: RouteContext, dest: DestinationRecord): void {
-  const botToken = dest.config.botToken as string;
+  const botToken = dest.config['botToken'] as string;
 
   ctx.telegramDispatcher.startPolling(dest.name, botToken, (incomingChatId: string, text: string) => {
     console.log(`[telegram] Inbound from chat ${incomingChatId}: ${text.slice(0, 100)}`);

@@ -300,7 +300,7 @@ describe('HealthMonitor', () => {
     await monitor.pollAll();
 
     // Health monitor should NOT have pasted anything — only capture + pane_activity commands
-    const nonCapture = proxyCommands.filter(c => c.action !== 'capture' && c.action !== 'pane_activity' && c.action !== 'pane_activity');
+    const nonCapture = proxyCommands.filter(c => c.action !== 'capture' && c.action !== 'pane_activity');
     assert.equal(nonCapture.length, 0, 'health monitor should not deliver messages');
   });
 

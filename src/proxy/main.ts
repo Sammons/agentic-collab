@@ -253,7 +253,7 @@ async function executeCommand(command: ProxyCommand): Promise<ProxyResponse> {
       }
 
       default:
-        return { ok: false, error: `Unknown action: ${(command as Record<string, unknown>).action}` };
+        return { ok: false, error: `Unknown action: ${(command as Record<string, unknown>)['action']}` };
     }
   } catch (err) {
     return { ok: false, error: (err as Error).message };

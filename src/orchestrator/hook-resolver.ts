@@ -44,18 +44,18 @@ export type HookField = 'start' | 'resume' | 'exit' | 'compact' | 'interrupt' | 
 
 export type TemplateVars = {
   /** Agent name (e.g. "sysadmin") */
-  AGENT_NAME?: string;
+  AGENT_NAME?: string | undefined;
   /** Agent working directory */
-  AGENT_CWD?: string;
+  AGENT_CWD?: string | undefined;
   /** Session ID for resume (may be undefined on first spawn) */
-  SESSION_ID?: string;
+  SESSION_ID?: string | undefined;
   /** Full persona prompt string (system prompt content) */
-  PERSONA_PROMPT?: string;
+  PERSONA_PROMPT?: string | undefined;
   /** Path to the persona prompt file on disk */
-  PERSONA_PROMPT_FILEPATH?: string;
+  PERSONA_PROMPT_FILEPATH?: string | undefined;
 
   /** Captured variables from pipeline capture steps (fallback for $VAR interpolation) */
-  capturedVars?: Record<string, string>;
+  capturedVars?: Record<string, string> | undefined;
 };
 
 // ── Context for resolution ──
@@ -348,6 +348,15 @@ function resolvePresetWithAdapter(
       }
       return { mode: 'paste', text: adapter.buildSubmitCommand(context.task) };
     }
+
+    case 'reload': {
+      // No adapter exposes a reload preset — reload reuses the resume/start hook
+      // path (see lifecycle.resolveResumeOrStartHook), so this preset is never
+      // requested for 'reload' in production. Throwing makes the exhaustive switch
+      // total and turns the prior silent `undefined` fall-through into a loud
+      // invariant violation if a future caller ever asks for a reload preset.
+      throw new Error('resolveHook: no preset reload hook; reload uses the resume/start path');
+    }
   }
 }
 
@@ -388,6 +397,7 @@ const HOOK_FIELD_MAP: Record<HookField, keyof AgentRecord> = {
   exit: 'hookExit',
   compact: 'hookCompact',
   interrupt: 'hookInterrupt',
+  reload: 'hookReload',
   submit: 'hookSubmit',
 };
 

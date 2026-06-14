@@ -8,7 +8,7 @@ import { createServer, type IncomingMessage, type ServerResponse, type Server } 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { WebSocketServer } from '../shared/websocket-server.ts';
-import type { AgentRecord, DashboardMessage, ActiveIndicator, EngineConfigRecord, ProxyRegistration, WsInitEvent, WsAgentUpdateEvent, WsMessageEvent, WsIndicatorUpdateEvent } from '../shared/types.ts';
+import type { AgentRecord, DashboardMessage, ActiveIndicator, EngineConfigRecord, ProxyRegistration, WsInitEvent, WsAgentUpdateEvent, WsMessageEvent, WsIndicatorUpdateEvent, DataStoreRecord } from '../shared/types.ts';
 
 // ── Fixture Defaults ──
 
@@ -26,12 +26,15 @@ function makeDefaultAgents(): AgentRecord[] {
       permissions: null,
       agentGroup: null,
       launchEnv: null,
+      account: null,
+      proxyPin: null,
       sortOrder: 0,
       hookStart: null,
       hookResume: null,
       hookCompact: null,
       hookExit: null,
       hookInterrupt: null,
+      hookReload: null,
       hookSubmit: null,
       state: 'idle',
       stateBeforeShutdown: null,
@@ -63,12 +66,15 @@ function makeDefaultAgents(): AgentRecord[] {
       permissions: null,
       agentGroup: null,
       launchEnv: null,
+      account: null,
+      proxyPin: null,
       sortOrder: 1,
       hookStart: null,
       hookResume: null,
       hookCompact: null,
       hookExit: null,
       hookInterrupt: null,
+      hookReload: null,
       hookSubmit: null,
       state: 'active',
       stateBeforeShutdown: null,
@@ -100,12 +106,15 @@ function makeDefaultAgents(): AgentRecord[] {
       permissions: null,
       agentGroup: null,
       launchEnv: null,
+      account: null,
+      proxyPin: null,
       sortOrder: 2,
       hookStart: null,
       hookResume: null,
       hookCompact: null,
       hookExit: null,
       hookInterrupt: null,
+      hookReload: null,
       hookSubmit: null,
       state: 'failed',
       stateBeforeShutdown: null,
@@ -445,6 +454,7 @@ export async function startMockServer(port: number): Promise<MockServer> {
         deliveryStatus: null,
         withdrawn: false,
         createdAt: new Date().toISOString(),
+        fileIds: null,
       };
       if (!fixtures.threads[body.agent]) {
         fixtures.threads[body.agent] = [];
@@ -535,7 +545,10 @@ export async function startMockServer(port: number): Promise<MockServer> {
       proxies: fixtures.proxies,
       unreadCounts: {},
       indicators: fixtures.indicators,
-      stores: fixtures.stores as WsInitEvent['stores'],
+      // fixtures.stores is an untyped fixture array; assert the element type. Cast to the
+      // bare array (not WsInitEvent['stores'], which includes undefined) so it satisfies the
+      // non-undefined optional under exactOptionalPropertyTypes.
+      stores: fixtures.stores as DataStoreRecord[],
     };
     wss.send(client, JSON.stringify(initEvent));
   });

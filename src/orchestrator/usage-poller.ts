@@ -21,7 +21,7 @@ export type UsageBucket = {
 
 export type EngineUsage = {
   engine: string;
-  account?: string;    // account name (undefined = default/host credentials)
+  account?: string | undefined;    // account name (undefined = default/host credentials)
   buckets: UsageBucket[];
   queriedAt: string;   // ISO timestamp
   queriedFrom: string; // session name used for the query
@@ -44,8 +44,8 @@ const RECYCLE_MS = 8 * 60 * 60 * 1000; // 8 hours — kill and recreate stale se
 
 type EngineConfig = {
   engine: 'claude' | 'codex';
-  account?: string;        // account name if per-account usage
-  accountHome?: string;    // scaffolded HOME path for account isolation
+  account?: string | undefined;        // account name if per-account usage
+  accountHome?: string | undefined;    // scaffolded HOME path for account isolation
   sessionName: string;
   spawnCommand: string;
   usageCommand: string;

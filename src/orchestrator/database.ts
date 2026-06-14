@@ -4,6 +4,7 @@
  */
 
 import { DatabaseSync } from 'node:sqlite';
+import type { SQLInputValue } from 'node:sqlite';
 import type {
   AgentRecord,
   AgentState,
@@ -536,13 +537,17 @@ export class Database {
     }
 
     const sets: string[] = ['state = ?', 'version = version + 1'];
-    const params: unknown[] = [state];
+    const params: SQLInputValue[] = [state];
 
     if (extra) {
       for (const [key, value] of Object.entries(extra)) {
         if (value !== undefined) {
           sets.push(`${toColumnName(key)} = ?`);
-          params.push(value);
+          // cast: every `extra` key live callers pass is a scalar (string|number|null);
+          // the only object-typed member (launchEnv) is never passed to updateAgentState,
+          // so the bound value is a valid SQLInputValue. Behavior is unchanged — the value
+          // is pushed exactly as before.
+          params.push(value as SQLInputValue);
         }
       }
     }
@@ -940,7 +945,7 @@ export class Database {
       ORDER BY dm.id DESC
       LIMIT ?
     `;
-    const params: unknown[] = [agentName];
+    const params: SQLInputValue[] = [agentName];
     if (beforeId !== null) params.push(beforeId);
     params.push(limit);
     const rows = this.db.prepare(sql).all(...params) as Array<Record<string, unknown>>;
@@ -956,7 +961,7 @@ export class Database {
       LEFT JOIN pending_messages pm ON dm.queue_id = pm.id
       WHERE dm.message LIKE ?
     `;
-    const params: unknown[] = [pattern];
+    const params: SQLInputValue[] = [pattern];
     if (agent) {
       sql += ' AND dm.agent = ?';
       params.push(agent);
@@ -992,7 +997,7 @@ export class Database {
 
     // Build cursor condition
     let cursorCondition = '';
-    const params: unknown[] = agents.length > 0 ? [...agents] : [];
+    const params: SQLInputValue[] = agents.length > 0 ? [...agents] : [];
 
     if (beforeId !== undefined) {
       cursorCondition = 'AND dm.id < ?';
@@ -1101,7 +1106,9 @@ export class Database {
     const result = this.db.prepare(
       'UPDATE agents SET proxy_id = ? WHERE proxy_id = ? AND proxy_pin IS NULL'
     ).run(toProxyId, fromProxyId);
-    return result.changes;
+    // changes is number | bigint per node:sqlite; a row count is always within
+    // safe-integer range, so Number() is lossless and matches the declared return.
+    return Number(result.changes);
   }
 
   updateProxyHeartbeat(proxyId: string): boolean {
@@ -1120,7 +1127,9 @@ export class Database {
     const result = this.db.prepare(`
       UPDATE proxies SET last_heartbeat = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
     `).run();
-    return result.changes;
+    // changes is number | bigint per node:sqlite; a row count is always within
+    // safe-integer range, so Number() is lossless and matches the declared return.
+    return Number(result.changes);
   }
 
   removeProxy(proxyId: string): boolean {
@@ -1212,7 +1221,9 @@ export class Database {
         AND delivered_at IS NULL
         AND julianday('now') - julianday(last_attempt_at) > ? / 86400.0
     `).run(timeoutSeconds);
-    return result.changes;
+    // changes is number | bigint per node:sqlite; a row count is always within
+    // safe-integer range, so Number() is lossless and matches the declared return.
+    return Number(result.changes);
   }
 
   linkDashboardMessageToQueue(dashboardMsgId: number, queueId: number): void {
@@ -1277,7 +1288,7 @@ export class Database {
 
   listPendingMessages(agent?: string, status?: string, limit?: number): PendingMessage[] {
     let sql = 'SELECT * FROM pending_messages WHERE 1=1';
-    const params: unknown[] = [];
+    const params: SQLInputValue[] = [];
     if (agent) {
       sql += ' AND target_agent = ?';
       params.push(agent);
@@ -1381,7 +1392,7 @@ export class Database {
 
   updateReminder(id: number, opts: { prompt?: string; cadenceMinutes?: number; skipIfActive?: boolean }): Reminder | undefined {
     const sets: string[] = [];
-    const params: unknown[] = [];
+    const params: SQLInputValue[] = [];
     if (opts.prompt !== undefined) { sets.push('prompt = ?'); params.push(opts.prompt); }
     if (opts.cadenceMinutes !== undefined) {
       if (opts.cadenceMinutes < 5) throw new Error('cadenceMinutes must be >= 5');
@@ -1490,7 +1501,7 @@ export class Database {
     launchEnv?: Record<string, string> | null;
   }): EngineConfigRecord | null {
     const sets: string[] = [];
-    const params: unknown[] = [];
+    const params: SQLInputValue[] = [];
     if (opts.engine !== undefined) { sets.push('engine = ?'); params.push(opts.engine); }
     if (opts.model !== undefined) { sets.push('model = ?'); params.push(opts.model); }
     if (opts.thinking !== undefined) { sets.push('thinking = ?'); params.push(opts.thinking); }

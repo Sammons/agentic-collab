@@ -12,7 +12,7 @@
     "proxy": "node src/proxy/main.ts",
     "test": "node --test 'src/**/*.test.ts'",
     "test:watch": "node --test --watch 'src/**/*.test.ts'",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p src/test/tsconfig.json",
     "screenshot": "node scripts/capture-screenshots.ts"
   }
 }

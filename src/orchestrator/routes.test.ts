@@ -62,6 +62,9 @@ describe('API Routes', () => {
       usagePoller: { getUsageData: () => ({}), pollNow: async () => {} } as any,
       voiceEnabled: false,
       accountStore: new AccountStore({ accountsDir: join(tmpDir, 'accounts'), agentHomesDir: join(tmpDir, 'agent-homes'), skipAutoRegister: true }),
+      pagesDir: join(tmpDir, 'pages'),
+      storesDir: join(tmpDir, 'stores'),
+      filesDir: join(tmpDir, 'files'),
       telegramDispatcher,
     };
 
@@ -94,7 +97,7 @@ describe('API Routes', () => {
     const resp = await fetch(`http://localhost:${port}${path}`, {
       method,
       headers: body ? { 'content-type': 'application/json' } : {},
-      body: body ? JSON.stringify(body) : undefined,
+      ...(body ? { body: JSON.stringify(body) } : {}),
     });
     const data = await resp.json();
     return { status: resp.status, data };
@@ -121,8 +124,8 @@ describe('API Routes', () => {
       proxyId: 'proxy-test',
     });
     assert.equal(status, 201);
-    assert.equal((data as Record<string, unknown>).name, 'api-agent-1');
-    assert.equal((data as Record<string, unknown>).state, 'void');
+    assert.equal((data as Record<string, unknown>)['name'], 'api-agent-1');
+    assert.equal((data as Record<string, unknown>)['state'], 'void');
   });
 
   it('POST /api/agents accepts optional group field', async () => {
@@ -133,7 +136,22 @@ describe('API Routes', () => {
       group: 'infra',
     });
     assert.equal(status, 201);
-    assert.equal((data as Record<string, unknown>).agentGroup, 'infra');
+    assert.equal((data as Record<string, unknown>)['agentGroup'], 'infra');
+  });
+
+  // POST /api/accounts was dead (a `readBody` typo threw ReferenceError on
+  // every call); these guard the revived handler's validation path, which
+  // runs before registerFromCurrent so they don't depend on account state.
+  it('POST /api/accounts rejects a missing name with 400', async () => {
+    const { status, data } = await api('POST', '/api/accounts', {});
+    assert.equal(status, 400);
+    assert.equal((data as Record<string, unknown>)['error'], 'name is required');
+  });
+
+  it('POST /api/accounts rejects a non-alphanumeric name with 400', async () => {
+    const { status, data } = await api('POST', '/api/accounts', { name: 'bad name!' });
+    assert.equal(status, 400);
+    assert.equal((data as Record<string, unknown>)['error'], 'name must be alphanumeric with dashes/underscores');
   });
 
   it('PATCH /api/agents/:name/group updates and returns the agent', async () => {
@@ -142,7 +160,7 @@ describe('API Routes', () => {
     assert.equal(status, 200);
     // Verify the group actually persisted
     const { data: agent } = await api('GET', '/api/agents/api-agent-grouped');
-    assert.equal((agent as Record<string, unknown>).agentGroup, 'platform');
+    assert.equal((agent as Record<string, unknown>)['agentGroup'], 'platform');
   });
 
   it('PATCH /api/agents/:name/group returns 404 for unknown agent', async () => {
@@ -168,13 +186,13 @@ describe('API Routes', () => {
     const { status, data } = await api('GET', '/api/agents');
     assert.equal(status, 200);
     assert.ok(Array.isArray(data));
-    assert.ok((data as Array<Record<string, unknown>>).some(a => a.name === 'api-agent-1'));
+    assert.ok((data as Array<Record<string, unknown>>).some(a => a['name'] === 'api-agent-1'));
   });
 
   it('GET /api/agents/:name retrieves single agent', async () => {
     const { status, data } = await api('GET', '/api/agents/api-agent-1');
     assert.equal(status, 200);
-    assert.equal((data as Record<string, unknown>).name, 'api-agent-1');
+    assert.equal((data as Record<string, unknown>)['name'], 'api-agent-1');
   });
 
   it('GET /api/agents/:name returns 404 for missing', async () => {
@@ -212,9 +230,9 @@ describe('API Routes', () => {
       topic: 'testing',
     });
     assert.equal(status, 202);
-    assert.ok((data as Record<string, unknown>).ok);
-    assert.ok((data as Record<string, unknown>).queueId);
-    assert.equal((data as Record<string, unknown>).status, 'pending');
+    assert.ok((data as Record<string, unknown>)['ok']);
+    assert.ok((data as Record<string, unknown>)['queueId']);
+    assert.equal((data as Record<string, unknown>)['status'], 'pending');
   });
 
   it('POST /api/dashboard/reply stores reply', async () => {
@@ -224,8 +242,8 @@ describe('API Routes', () => {
       topic: 'testing',
     });
     assert.equal(status, 200);
-    const msg = (data as Record<string, unknown>).msg as Record<string, unknown>;
-    assert.equal(msg.direction, 'from_agent');
+    const msg = (data as Record<string, unknown>)['msg'] as Record<string, unknown>;
+    assert.equal(msg['direction'], 'from_agent');
   });
 
   it('GET /api/dashboard/threads returns threads', async () => {
@@ -248,7 +266,7 @@ describe('API Routes', () => {
   it('PUT /api/dashboard/read-cursor updates cursor', async () => {
     const { status, data } = await api('PUT', '/api/dashboard/read-cursor', { agent: 'api-agent-1' });
     assert.equal(status, 200);
-    assert.equal((data as Record<string, unknown>).ok, true);
+    assert.equal((data as Record<string, unknown>)['ok'], true);
   });
 
   it('PUT /api/dashboard/read-cursor rejects missing agent', async () => {
@@ -292,7 +310,7 @@ describe('API Routes', () => {
       host: 'localhost:3200',
     });
     assert.equal(status, 200);
-    assert.equal((data as Record<string, unknown>).proxyId, 'new-proxy');
+    assert.equal((data as Record<string, unknown>)['proxyId'], 'new-proxy');
   });
 
   it('POST /api/proxy/register includes version match info', async () => {
@@ -379,9 +397,9 @@ describe('API Routes', () => {
     });
 
     assert.equal(status, 202);
-    assert.ok((data as Record<string, unknown>).messageId);
-    assert.ok((data as Record<string, unknown>).queueId);
-    assert.equal((data as Record<string, unknown>).status, 'pending');
+    assert.ok((data as Record<string, unknown>)['messageId']);
+    assert.ok((data as Record<string, unknown>)['queueId']);
+    assert.equal((data as Record<string, unknown>)['status'], 'pending');
     const queued = db.listPendingMessages('api-agent-1');
     assert.ok(queued.some(m => m.envelope.includes('collab send dashboard --topic test-topic')));
   });
@@ -523,7 +541,7 @@ describe('API Routes', () => {
       args: ['send-keys', '/exit', 'Enter'],
     });
     assert.equal(status, 200);
-    assert.equal((data as Record<string, unknown>).ok, true);
+    assert.equal((data as Record<string, unknown>)['ok'], true);
     assert.deepEqual(proxyCommands.at(-1), {
       action: 'send_keys_raw',
       sessionName: 'agent-api-agent-1',
@@ -537,7 +555,7 @@ describe('API Routes', () => {
       args: ['display-message', '-p', '#{session_name}:#{window_index}.#{pane_index}'],
     });
     assert.equal(status, 200);
-    assert.equal((data as Record<string, unknown>).data, '#{session_name}:0.0');
+    assert.equal((data as Record<string, unknown>)['data'], '#{session_name}:0.0');
     assert.deepEqual(proxyCommands.at(-1), {
       action: 'display_message',
       sessionName: 'agent-api-agent-1',
@@ -566,13 +584,13 @@ describe('API Routes', () => {
 
     const { status, data } = await api('POST', '/api/agents/api-agent-1/exit');
     assert.equal(status, 200);
-    assert.equal((data as Record<string, unknown>).state, 'suspended');
+    assert.equal((data as Record<string, unknown>)['state'], 'suspended');
   });
 
   it('POST /api/agents/:name/resume resumes suspended agent', async () => {
     const { status, data } = await api('POST', '/api/agents/api-agent-1/resume');
     assert.equal(status, 200);
-    assert.equal((data as Record<string, unknown>).state, 'active');
+    assert.equal((data as Record<string, unknown>)['state'], 'active');
   });
 
   it('POST /api/agents/:name/reload queues reload (non-immediate)', async () => {
@@ -580,7 +598,7 @@ describe('API Routes', () => {
       task: 'check this',
     });
     assert.equal(status, 200);
-    assert.equal((data as Record<string, unknown>).reloadQueued, 1);
+    assert.equal((data as Record<string, unknown>)['reloadQueued'], 1);
   });
 
   it('POST /api/agents/:name/destroy removes agent', async () => {
@@ -599,19 +617,19 @@ describe('API Routes', () => {
   it('GET /api/orchestrator/status returns stats', async () => {
     const { status, data } = await api('GET', '/api/orchestrator/status');
     assert.equal(status, 200);
-    assert.ok(typeof (data as Record<string, unknown>).totalAgents === 'number');
+    assert.ok(typeof (data as Record<string, unknown>)['totalAgents'] === 'number');
   });
 
   it('POST /api/orchestrator/shutdown suspends running agents', async () => {
     const { status, data } = await api('POST', '/api/orchestrator/shutdown');
     assert.equal(status, 200);
-    assert.ok(typeof (data as Record<string, unknown>).suspended === 'number');
+    assert.ok(typeof (data as Record<string, unknown>)['suspended'] === 'number');
   });
 
   it('POST /api/orchestrator/restore restores agents', async () => {
     const { status, data } = await api('POST', '/api/orchestrator/restore');
     assert.equal(status, 200);
-    assert.ok(typeof (data as Record<string, unknown>).restored === 'number');
+    assert.ok(typeof (data as Record<string, unknown>)['restored'] === 'number');
   });
 
   // ── RFC-008: per-agent Telegram token (write-only encrypted store) ──
@@ -818,6 +836,10 @@ describe('API Routes — Auth', () => {
       usagePoller: { getUsageData: () => ({}), pollNow: async () => {} } as any,
       voiceEnabled: false,
       accountStore: new AccountStore({ accountsDir: join(tmpDir, 'accounts'), agentHomesDir: join(tmpDir, 'agent-homes'), skipAutoRegister: true }),
+      pagesDir: join(tmpDir, 'pages'),
+      storesDir: join(tmpDir, 'stores'),
+      filesDir: join(tmpDir, 'files'),
+      telegramDispatcher: new TelegramDispatcher(),
     };
 
     const router = createRouter(ctx);
@@ -849,7 +871,7 @@ describe('API Routes — Auth', () => {
     const resp = await fetch(`http://localhost:${port}${path}`, {
       method,
       headers,
-      body: body ? JSON.stringify(body) : undefined,
+      ...(body ? { body: JSON.stringify(body) } : {}),
     });
     const data = await resp.json();
     return { status: resp.status, data };
@@ -924,6 +946,10 @@ describe('API Routes — Rate Limiting', () => {
       usagePoller: { getUsageData: () => ({}), pollNow: async () => {} } as any,
       voiceEnabled: false,
       accountStore: new AccountStore({ accountsDir: join(tmpDir, 'accounts'), agentHomesDir: join(tmpDir, 'agent-homes'), skipAutoRegister: true }),
+      pagesDir: join(tmpDir, 'pages'),
+      storesDir: join(tmpDir, 'stores'),
+      filesDir: join(tmpDir, 'files'),
+      telegramDispatcher: new TelegramDispatcher(),
     };
 
     const router = createRouter(ctx);
@@ -1013,6 +1039,10 @@ describe('API Routes — Personas', () => {
       usagePoller: { getUsageData: () => ({}), pollNow: async () => {} } as any,
       voiceEnabled: false,
       accountStore: new AccountStore({ accountsDir: join(tmpDir, 'accounts'), agentHomesDir: join(tmpDir, 'agent-homes'), skipAutoRegister: true }),
+      pagesDir: join(tmpDir, 'pages'),
+      storesDir: join(tmpDir, 'stores'),
+      filesDir: join(tmpDir, 'files'),
+      telegramDispatcher: new TelegramDispatcher(),
     };
 
     const router = createRouter(ctx);
@@ -1045,7 +1075,7 @@ describe('API Routes — Personas', () => {
     const resp = await fetch(`http://localhost:${port}${path}`, {
       method,
       headers,
-      body: body ? JSON.stringify(body) : undefined,
+      ...(body ? { body: JSON.stringify(body) } : {}),
     });
     const data = await resp.json();
     return { status: resp.status, data };
@@ -1060,7 +1090,7 @@ describe('API Routes — Personas', () => {
         proxy: 'proxy-east',
       });
       assert.equal(status, 201);
-      assert.equal((data as Record<string, unknown>).proxyPin, 'proxy-east');
+      assert.equal((data as Record<string, unknown>)['proxyPin'], 'proxy-east');
       const raw = readFileSync(join(personasDir, 'proxy-pinned-agent.md'), 'utf-8');
       assert.match(raw, /^proxy: proxy-east$/m);
     } finally {
@@ -1077,7 +1107,7 @@ describe('API Routes — Personas', () => {
         cwd: '/tmp/test',
       });
       assert.equal(status, 201);
-      assert.ok(!(data as Record<string, unknown>).proxyPin);
+      assert.ok(!(data as Record<string, unknown>)['proxyPin']);
       const raw = readFileSync(join(personasDir, 'unpinned-agent.md'), 'utf-8');
       assert.ok(!/^proxy:/m.test(raw));
     } finally {
@@ -1250,7 +1280,7 @@ describe('API Routes — Personas', () => {
 
     const result = data as { persona: { name: string; frontmatter: Record<string, string> }; agent: { name: string; engine: string; cwd: string; state: string } };
     assert.equal(result.persona.name, 'atomic-agent');
-    assert.equal(result.persona.frontmatter.engine, 'claude');
+    assert.equal(result.persona.frontmatter['engine'], 'claude');
     assert.equal(result.agent.name, 'atomic-agent');
     assert.equal(result.agent.engine, 'claude');
     assert.equal(result.agent.cwd, '/my-project');
@@ -1305,7 +1335,7 @@ describe('API Routes — Personas', () => {
 
     // Verify agent was created with engine=claude
     const { data: before } = await api('GET', '/api/agents/sync-test-agent');
-    assert.equal((before as Record<string, unknown>).engine, 'claude');
+    assert.equal((before as Record<string, unknown>)['engine'], 'claude');
 
     // Update persona file on disk to engine: codex
     writeFileSync(
@@ -1319,7 +1349,7 @@ describe('API Routes — Personas', () => {
 
     // Verify engine was updated in DB regardless of reload outcome
     const { data: after } = await api('GET', '/api/agents/sync-test-agent');
-    assert.equal((after as Record<string, unknown>).engine, 'codex');
+    assert.equal((after as Record<string, unknown>)['engine'], 'codex');
   });
 
   // ── RFC-007 PR-A: GET /api/personas/:name/launch-preview ──
@@ -1339,10 +1369,10 @@ describe('API Routes — Personas', () => {
         const { status, data } = await api('GET', '/api/personas/lp-claude/launch-preview');
         assert.equal(status, 200);
         const d = data as Record<string, unknown>;
-        assert.equal(d.engine, 'claude');
-        assert.equal(d.personaPlaceholder, PLACEHOLDER);
-        assert.equal(d.hookKind, 'preset');
-        const cmd = d.command as string;
+        assert.equal(d['engine'], 'claude');
+        assert.equal(d['personaPlaceholder'], PLACEHOLDER);
+        assert.equal(d['hookKind'], 'preset');
+        const cmd = d['command'] as string;
         assert.ok(cmd.includes(PLACEHOLDER), 'command must contain the «PERSONA» placeholder');
         assert.ok(!cmd.includes(SECRET_BODY), 'command must NOT contain the real persona body');
         // Faithful spawn-path output: env wrap + claude flags.
@@ -1373,8 +1403,8 @@ describe('API Routes — Personas', () => {
         const { status, data } = await api('GET', '/api/personas/lp-custom/launch-preview');
         assert.equal(status, 200);
         const d = data as Record<string, unknown>;
-        assert.equal(d.engine, 'claude-with-home');
-        const cmd = d.command as string;
+        assert.equal(d['engine'], 'claude-with-home');
+        const cmd = d['command'] as string;
         assert.ok(cmd.includes('--add-dir /home/op/claude-home'),
           `engine-config hook_start --add-dir must appear; got: ${cmd}`);
         assert.ok(cmd.includes(PLACEHOLDER), 'placeholder still present in the interpolated $PERSONA_PROMPT');
@@ -1392,8 +1422,8 @@ describe('API Routes — Personas', () => {
         const { status, data } = await api('GET', '/api/personas/lp-shell/launch-preview');
         assert.equal(status, 200);
         const d = data as Record<string, unknown>;
-        assert.equal(d.hookKind, 'shell');
-        const cmd = d.command as string;
+        assert.equal(d['hookKind'], 'shell');
+        const cmd = d['command'] as string;
         assert.ok(cmd.includes('run.sh --p'), 'shell hook command present');
         assert.ok(cmd.includes(PLACEHOLDER), 'placeholder substituted into $PERSONA_PROMPT');
         assert.ok(!cmd.includes('TOP-SECRET'), 'no body leak');
@@ -1409,8 +1439,8 @@ describe('API Routes — Personas', () => {
         const { status, data } = await api('GET', '/api/personas/lp-pipe/launch-preview');
         assert.equal(status, 200);
         const d = data as Record<string, unknown>;
-        assert.equal(d.hookKind, 'pipeline');
-        assert.ok((d.command as string).includes('echo'), 'pipeline shell step rendered');
+        assert.equal(d['hookKind'], 'pipeline');
+        assert.ok((d['command'] as string).includes('echo'), 'pipeline shell step rendered');
       } finally {
         rmSync(join(personasDir, 'lp-pipe.md'), { force: true });
       }
@@ -1423,10 +1453,10 @@ describe('API Routes — Personas', () => {
         const { status, data } = await api('GET', '/api/personas/lp-codex/launch-preview');
         assert.equal(status, 200);
         const d = data as Record<string, unknown>;
-        assert.equal(d.engine, 'codex');
-        assert.ok(typeof d.profilePreview === 'string', 'codex must include profilePreview');
-        assert.ok((d.profilePreview as string).includes(PLACEHOLDER), 'profilePreview carries «PERSONA»');
-        assert.ok((d.command as string).includes('codex'), 'command is the codex launch line');
+        assert.equal(d['engine'], 'codex');
+        assert.ok(typeof d['profilePreview'] === 'string', 'codex must include profilePreview');
+        assert.ok((d['profilePreview'] as string).includes(PLACEHOLDER), 'profilePreview carries «PERSONA»');
+        assert.ok((d['command'] as string).includes('codex'), 'command is the codex launch line');
       } finally {
         rmSync(join(personasDir, 'lp-codex.md'), { force: true });
       }
@@ -1439,10 +1469,10 @@ describe('API Routes — Personas', () => {
         const { status, data } = await api('GET', '/api/personas/lp-opencode/launch-preview');
         assert.equal(status, 200);
         const d = data as Record<string, unknown>;
-        assert.equal(d.engine, 'opencode');
-        assert.ok(typeof d.profilePreview === 'string', 'opencode must include profilePreview');
-        assert.ok((d.profilePreview as string).includes(PLACEHOLDER), 'profilePreview carries «PERSONA»');
-        const cmd = d.command as string;
+        assert.equal(d['engine'], 'opencode');
+        assert.ok(typeof d['profilePreview'] === 'string', 'opencode must include profilePreview');
+        assert.ok((d['profilePreview'] as string).includes(PLACEHOLDER), 'profilePreview carries «PERSONA»');
+        const cmd = d['command'] as string;
         assert.ok(cmd.includes('OPENCODE_CONFIG_CONTENT='), 'command carries the instructions env prefix');
         assert.ok(cmd.includes('.config/opencode/collab/lp-opencode.md'), 'env prefix points at the per-agent instructions file');
         assert.ok(!cmd.includes(SECRET_BODY), 'command must NOT contain the real persona body');
@@ -1458,7 +1488,7 @@ describe('API Routes — Personas', () => {
         const { status, data } = await api('GET', '/api/personas/lp-badfile/launch-preview');
         assert.equal(status, 200);
         const d = data as Record<string, unknown>;
-        assert.ok(typeof d.error === 'string' && d.error.length > 0, 'should return an error field');
+        assert.ok(typeof d['error'] === 'string' && d['error'].length > 0, 'should return an error field');
       } finally {
         rmSync(join(personasDir, 'lp-badfile.md'), { force: true });
       }
@@ -1473,7 +1503,7 @@ describe('API Routes — Personas', () => {
           '---\nengine: claude\ncwd: /tmp/lp\naccount: lp-work\n---\nbody');
         const { status, data } = await api('GET', '/api/personas/lp-acct/launch-preview');
         assert.equal(status, 200);
-        const cmd = (data as Record<string, unknown>).command as string;
+        const cmd = (data as Record<string, unknown>)['command'] as string;
         assert.ok(cmd.includes(`HOME=${"'"}${join(tmpDir, 'agent-homes', 'lp-acct')}${"'"}`),
           `HOME should be the deterministic agent-home path; got: ${cmd}`);
       } finally {
@@ -1529,9 +1559,9 @@ describe('API Routes — Personas', () => {
       });
       assert.equal(status, 200);
       const d = data as Record<string, unknown>;
-      assert.equal(d.engine, 'claude');
-      assert.equal(d.personaPlaceholder, PLACEHOLDER);
-      const cmd = d.command as string;
+      assert.equal(d['engine'], 'claude');
+      assert.equal(d['personaPlaceholder'], PLACEHOLDER);
+      const cmd = d['command'] as string;
       assert.ok(cmd.includes(PLACEHOLDER), 'command must contain «PERSONA»');
       assert.ok(!cmd.includes('IGNORED-BODY-SHOULD-NOT-APPEAR'), 'body must NOT leak (it becomes «PERSONA»)');
       assert.ok(cmd.includes('--model opus'), 'posted model reflected');
@@ -1551,8 +1581,8 @@ describe('API Routes — Personas', () => {
         });
         assert.equal(saved.status, 200);
         assert.equal(edited.status, 200);
-        const savedCmd = (saved.data as Record<string, unknown>).command as string;
-        const editedCmd = (edited.data as Record<string, unknown>).command as string;
+        const savedCmd = (saved.data as Record<string, unknown>)['command'] as string;
+        const editedCmd = (edited.data as Record<string, unknown>)['command'] as string;
         assert.ok(savedCmd.includes('--model opus'), 'GET reflects saved model');
         assert.ok(editedCmd.includes('--model sonnet'), 'POST reflects edited model');
         assert.notEqual(savedCmd, editedCmd, 'edited preview must differ from the saved preview');
@@ -1574,8 +1604,8 @@ describe('API Routes — Personas', () => {
         });
         assert.equal(got.status, 200);
         assert.equal(posted.status, 200);
-        const gotCmd = (got.data as Record<string, unknown>).command as string;
-        const postedCmd = (posted.data as Record<string, unknown>).command as string;
+        const gotCmd = (got.data as Record<string, unknown>)['command'] as string;
+        const postedCmd = (posted.data as Record<string, unknown>)['command'] as string;
         assert.equal(postedCmd, gotCmd, 'preview of matching fields must equal the saved preview');
       } finally {
         rmSync(join(personasDir, 'pp-parity.md'), { force: true });
@@ -1592,8 +1622,8 @@ describe('API Routes — Personas', () => {
       });
       assert.equal(status, 200);
       const d = data as Record<string, unknown>;
-      assert.equal(d.hookKind, 'shell');
-      const cmd = d.command as string;
+      assert.equal(d['hookKind'], 'shell');
+      const cmd = d['command'] as string;
       assert.ok(cmd.includes('run.sh --p'), 'passthrough shell hook reconstructed + resolved');
       assert.ok(cmd.includes(PLACEHOLDER), 'placeholder substituted into the passthrough hook');
     });
@@ -1606,7 +1636,7 @@ describe('API Routes — Personas', () => {
       });
       assert.equal(status, 200, 'must degrade to 200 with an error field, never 500');
       const d = data as Record<string, unknown>;
-      assert.ok(typeof d.error === 'string' && d.error.length > 0, 'should carry an error field');
+      assert.ok(typeof d['error'] === 'string' && d['error'].length > 0, 'should carry an error field');
     });
 
     it('side-effect-free: POST preview writes NO DB row and dispatches NOTHING', async () => {
@@ -1675,6 +1705,10 @@ describe('API Routes — persona reload', () => {
       usagePoller: { getUsageData: () => ({}), pollNow: async () => {} } as any,
       voiceEnabled: false,
       accountStore: new AccountStore({ accountsDir: join(tmpDir, 'accounts'), agentHomesDir: join(tmpDir, 'agent-homes'), skipAutoRegister: true }),
+      pagesDir: join(tmpDir, 'pages'),
+      storesDir: join(tmpDir, 'stores'),
+      filesDir: join(tmpDir, 'files'),
+      telegramDispatcher: new TelegramDispatcher(),
       reloadPersonas: () => ({ synced: 0, created: [], updated: [], skipped: [] }),
     };
     const router = createRouter(ctx);
@@ -1701,7 +1735,7 @@ describe('API Routes — persona reload', () => {
     const resp = await fetch(`http://localhost:${port}${path}`, {
       method,
       headers: body ? { 'content-type': 'application/json' } : {},
-      body: body ? JSON.stringify(body) : undefined,
+      ...(body ? { body: JSON.stringify(body) } : {}),
     });
     const data = await resp.json();
     return { status: resp.status, data };
@@ -1753,6 +1787,10 @@ describe('API Routes — v3 Q5 approval endpoints', () => {
       usagePoller: { getUsageData: () => ({}), pollNow: async () => {} } as any,
       voiceEnabled: false,
       accountStore: new AccountStore({ accountsDir: join(tmpDir, 'accounts'), agentHomesDir: join(tmpDir, 'agent-homes'), skipAutoRegister: true }),
+      pagesDir: join(tmpDir, 'pages'),
+      storesDir: join(tmpDir, 'stores'),
+      filesDir: join(tmpDir, 'files'),
+      telegramDispatcher: new TelegramDispatcher(),
       approvals,
     };
 
@@ -1780,7 +1818,7 @@ describe('API Routes — v3 Q5 approval endpoints', () => {
     const resp = await fetch(`http://localhost:${port}${path}`, {
       method,
       headers: body ? { 'content-type': 'application/json' } : {},
-      body: body ? JSON.stringify(body) : undefined,
+      ...(body ? { body: JSON.stringify(body) } : {}),
     });
     const data = await resp.json().catch(() => null);
     return { status: resp.status, data };

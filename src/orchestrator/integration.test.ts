@@ -14,6 +14,8 @@ import { createRouter, type RouteContext } from './routes.ts';
 import { WebSocketServer } from '../shared/websocket-server.ts';
 import { LockManager } from '../shared/lock.ts';
 import { MessageDispatcher } from './message-dispatcher.ts';
+import { AccountStore } from './accounts.ts';
+import { TelegramDispatcher } from './telegram.ts';
 import type { ProxyCommand, ProxyResponse } from '../shared/types.ts';
 
 describe('Integration: full lifecycle via HTTP', () => {
@@ -76,6 +78,11 @@ describe('Integration: full lifecycle via HTTP', () => {
       messageDispatcher: new MessageDispatcher({ db, locks: intLocks, proxyDispatch: realisticProxy, orchestratorHost: 'http://localhost:3000' }),
       usagePoller: { getUsageData: () => ({}), pollNow: async () => {} } as any,
       voiceEnabled: false,
+      accountStore: new AccountStore({ accountsDir: join(tmpDir, 'accounts'), agentHomesDir: join(tmpDir, 'agent-homes'), skipAutoRegister: true }),
+      pagesDir: join(tmpDir, 'pages'),
+      storesDir: join(tmpDir, 'stores'),
+      filesDir: join(tmpDir, 'files'),
+      telegramDispatcher: new TelegramDispatcher(),
     };
 
     const router = createRouter(ctx);
@@ -106,7 +113,7 @@ describe('Integration: full lifecycle via HTTP', () => {
         'content-type': 'application/json',
         'authorization': 'Bearer test-secret-123',
       },
-      body: body ? JSON.stringify(body) : undefined,
+      ...(body ? { body: JSON.stringify(body) } : {}),
     }).then(async (resp) => ({
       status: resp.status,
       data: await resp.json(),
@@ -125,25 +132,25 @@ describe('Integration: full lifecycle via HTTP', () => {
     // Verify agent is in void state
     const afterCreate = await api('GET', '/api/agents/int-agent');
     assert.equal(afterCreate.status, 200);
-    assert.equal((afterCreate.data as Record<string, unknown>).state, 'void');
+    assert.equal((afterCreate.data as Record<string, unknown>)['state'], 'void');
 
     // 2. Spawn agent
     const spawn = await api('POST', '/api/agents/int-agent/spawn', {
       proxyId: 'int-proxy',
     });
     assert.equal(spawn.status, 200);
-    assert.equal((spawn.data as Record<string, unknown>).state, 'active');
+    assert.equal((spawn.data as Record<string, unknown>)['state'], 'active');
     assert.ok(sessions.has('agent-int-agent'), 'tmux session should exist');
 
     // 3. Exit agent
     const suspend = await api('POST', '/api/agents/int-agent/exit');
     assert.equal(suspend.status, 200);
-    assert.equal((suspend.data as Record<string, unknown>).state, 'suspended');
+    assert.equal((suspend.data as Record<string, unknown>)['state'], 'suspended');
 
     // 4. Resume agent
     const resume = await api('POST', '/api/agents/int-agent/resume');
     assert.equal(resume.status, 200);
-    assert.equal((resume.data as Record<string, unknown>).state, 'active');
+    assert.equal((resume.data as Record<string, unknown>)['state'], 'active');
     assert.ok(sessions.has('agent-int-agent'), 'tmux session should be re-created');
 
     // 5. Kill agent (hard stop without graceful exit)
@@ -152,7 +159,7 @@ describe('Integration: full lifecycle via HTTP', () => {
 
     // Kill returns { ok: true }, verify state via GET
     const afterKill = await api('GET', '/api/agents/int-agent');
-    assert.equal((afterKill.data as Record<string, unknown>).state, 'suspended');
+    assert.equal((afterKill.data as Record<string, unknown>)['state'], 'suspended');
 
     // 6. Destroy agent
     const destroy = await api('POST', '/api/agents/int-agent/destroy');
@@ -221,9 +228,9 @@ describe('Integration: full lifecycle via HTTP', () => {
     const status = await api('GET', '/api/orchestrator/status');
     assert.equal(status.status, 200);
     const data = status.data as Record<string, unknown>;
-    const byState = data.byState as Record<string, number>;
-    assert.ok((byState.active ?? 0) >= 1 || (byState.idle ?? 0) >= 1);
-    assert.ok((data.totalProxies as number) >= 1);
+    const byState = data['byState'] as Record<string, number>;
+    assert.ok((byState['active'] ?? 0) >= 1 || (byState['idle'] ?? 0) >= 1);
+    assert.ok((data['totalProxies'] as number) >= 1);
 
     // Cleanup
     await api('POST', '/api/agents/status-agent/destroy');
@@ -238,14 +245,14 @@ describe('Integration: full lifecycle via HTTP', () => {
     assert.equal(shutdown.status, 200);
 
     const afterShutdown = await api('GET', '/api/agents/cycle-agent');
-    assert.equal((afterShutdown.data as Record<string, unknown>).state, 'suspended');
+    assert.equal((afterShutdown.data as Record<string, unknown>)['state'], 'suspended');
 
     // Restore: agents come back
     const restore = await api('POST', '/api/orchestrator/restore');
     assert.equal(restore.status, 200);
 
     const afterRestore = await api('GET', '/api/agents/cycle-agent');
-    assert.equal((afterRestore.data as Record<string, unknown>).state, 'active');
+    assert.equal((afterRestore.data as Record<string, unknown>)['state'], 'active');
 
     // Cleanup
     await api('POST', '/api/agents/cycle-agent/destroy');
@@ -282,7 +289,7 @@ describe('Integration: full lifecycle via HTTP', () => {
     const list = await api('GET', '/api/proxies');
     assert.equal(list.status, 200);
     const proxies = list.data as Record<string, unknown>[];
-    assert.ok(proxies.some(p => p.proxyId === 'int-proxy-2'));
+    assert.ok(proxies.some(p => p['proxyId'] === 'int-proxy-2'));
 
     // Deregister
     const dereg = await api('DELETE', '/api/proxy/int-proxy-2');
@@ -291,7 +298,7 @@ describe('Integration: full lifecycle via HTTP', () => {
     // Verify gone
     const listAfter = await api('GET', '/api/proxies');
     const proxiesAfter = listAfter.data as Record<string, unknown>[];
-    assert.ok(!proxiesAfter.some(p => p.proxyId === 'int-proxy-2'));
+    assert.ok(!proxiesAfter.some(p => p['proxyId'] === 'int-proxy-2'));
   });
 });
 
@@ -386,6 +393,11 @@ describe('Integration: file upload via streaming', () => {
       messageDispatcher: new MessageDispatcher({ db, locks: uploadLocks, proxyDispatch: uploadDispatch, orchestratorHost: 'http://localhost:3000' }),
       usagePoller: { getUsageData: () => ({}), pollNow: async () => {} } as any,
       voiceEnabled: false,
+      accountStore: new AccountStore({ accountsDir: join(tmpDir, 'accounts'), agentHomesDir: join(tmpDir, 'agent-homes'), skipAutoRegister: true }),
+      pagesDir: join(tmpDir, 'pages'),
+      storesDir: join(tmpDir, 'stores'),
+      filesDir: join(tmpDir, 'files'),
+      telegramDispatcher: new TelegramDispatcher(),
     };
 
     const router = createRouter(ctx);
@@ -438,11 +450,11 @@ describe('Integration: file upload via streaming', () => {
 
     // Silent upload: 200 OK, no queueId, no msg
     assert.equal(res.status, 200);
-    assert.equal(res.data.ok, true);
-    assert.ok((res.data.path as string).endsWith('/hello.txt'));
-    assert.equal(res.data.size, Buffer.byteLength(content));
-    assert.equal(res.data.queueId, undefined, 'should NOT have a queueId (silent)');
-    assert.equal(res.data.msg, undefined, 'should NOT have a msg (silent)');
+    assert.equal(res.data['ok'], true);
+    assert.ok((res.data['path'] as string).endsWith('/hello.txt'));
+    assert.equal(res.data['size'], Buffer.byteLength(content));
+    assert.equal(res.data['queueId'], undefined, 'should NOT have a queueId (silent)');
+    assert.equal(res.data['msg'], undefined, 'should NOT have a msg (silent)');
 
     // Verify file was written to disk
     const filePath = join(tmpDir, 'hello.txt');
@@ -497,7 +509,7 @@ describe('Integration: file upload via streaming', () => {
     db.createAgent({ name: 'no-proxy-agent', engine: 'codex', cwd: '/tmp' });
     const res = await uploadFile('no-proxy-agent', 'test.txt', 'data');
     assert.equal(res.status, 400);
-    assert.ok((res.data.error as string).includes('no proxy'));
+    assert.ok((res.data['error'] as string).includes('no proxy'));
   });
 
   it('rejects unauthenticated request', async () => {
@@ -517,7 +529,7 @@ describe('Integration: file upload via streaming', () => {
     // forward it, the mock would return 401 and the orchestrator would return 500.
     const res = await uploadFile('upload-agent', 'token-test.txt', 'token-verified');
     assert.equal(res.status, 200);
-    assert.equal(res.data.ok, true);
+    assert.equal(res.data['ok'], true);
     // File was written — proxy accepted the token
     assert.ok(existsSync(join(tmpDir, 'token-test.txt')));
   });
@@ -533,8 +545,8 @@ describe('Integration: file upload via streaming', () => {
 
     const res = await uploadFile('bad-cwd-agent', 'test.txt', 'will-fail');
     assert.equal(res.status, 500);
-    assert.equal(res.data.ok, undefined); // error response from orchestrator
-    assert.ok(res.data.error, 'Should have error message');
+    assert.equal(res.data['ok'], undefined); // error response from orchestrator
+    assert.ok(res.data['error'], 'Should have error message');
   });
 
   it('uploads concurrent files correctly', async () => {
@@ -548,9 +560,11 @@ describe('Integration: file upload via streaming', () => {
     );
 
     // All should succeed (200 for silent uploads)
-    for (let i = 0; i < files.length; i++) {
-      assert.equal(results[i].status, 200, `File ${files[i].name} should succeed`);
-      assert.equal(results[i].data.ok, true);
+    for (const [i, f] of files.entries()) {
+      const result = results[i];
+      assert.ok(result !== undefined, `Missing result for file ${f.name}`);
+      assert.equal(result.status, 200, `File ${f.name} should succeed`);
+      assert.equal(result.data['ok'], true);
     }
 
     // All files should exist with correct content

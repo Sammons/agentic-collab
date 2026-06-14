@@ -57,7 +57,7 @@ describe('backfillFrontmatterFromDb', () => {
     try {
       writeFileSync(join(dir, 'a.md'), '---\nengine: claude\ncwd: /tmp\n---\nb\n');
       const report = backfillFrontmatterFromDb(fakeDb([
-        { name: 'a', persona: 'a', engine: 'claude', cwd: '/tmp', launchEnv: { vars: { FOO: 'bar' } } as AgentRecord['launchEnv'] },
+        { name: 'a', persona: 'a', engine: 'claude', cwd: '/tmp', launchEnv: { FOO: 'bar' } },
       ]), dir);
       const raw = readFileSync(join(dir, 'a.md'), 'utf-8');
       assert.doesNotMatch(raw, /env:|FOO/, 'nested config not written by Stage 1');

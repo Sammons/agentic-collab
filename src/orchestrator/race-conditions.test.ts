@@ -310,7 +310,7 @@ describe('Race Conditions', () => {
       const deliveriesBy: Record<string, number> = { p1: 0, p2: 0 };
 
       const ctx = makeLifecycleCtx(async (proxyId, _command) => {
-        deliveriesBy[proxyId]++;
+        deliveriesBy[proxyId] = (deliveriesBy[proxyId] ?? 0) + 1;
         return { ok: true };
       });
 
@@ -327,7 +327,7 @@ describe('Race Conditions', () => {
         `delivery went to stale proxy p1 (expected 0, got ${deliveriesBy['p1']})`,
       );
       assert.ok(
-        deliveriesBy['p2'] >= 1,
+        (deliveriesBy['p2'] ?? 0) >= 1,
         `delivery should use current proxy p2 (expected >= 1, got ${deliveriesBy['p2']})`,
       );
     });

@@ -10,6 +10,7 @@ import { WebSocketServer } from '../shared/websocket-server.ts';
 import { LockManager } from '../shared/lock.ts';
 import { MessageDispatcher } from './message-dispatcher.ts';
 import { AccountStore } from './accounts.ts';
+import { TelegramDispatcher } from './telegram.ts';
 import type { ProxyCommand, ProxyResponse } from '../shared/types.ts';
 
 function makeServer(
@@ -36,6 +37,10 @@ function makeServer(
       agentHomesDir: join(tmpDir, `h-${Math.random()}`),
       skipAutoRegister: true,
     }),
+    pagesDir: join(tmpDir, 'pages'),
+    storesDir: join(tmpDir, 'stores'),
+    filesDir: join(tmpDir, 'files'),
+    telegramDispatcher: new TelegramDispatcher(),
     ...patch,
   };
   const router = createRouter(ctx);

@@ -18,12 +18,16 @@ function makeAgent(overrides: Partial<AgentRecord> = {}): AgentRecord {
     persona: null,
     permissions: null,
     agentGroup: null,
+    launchEnv: null,
+    account: null,
+    proxyPin: null,
     sortOrder: 0,
     hookStart: null,
     hookResume: null,
     hookCompact: null,
     hookExit: null,
     hookInterrupt: null,
+    hookReload: null,
     hookSubmit: null,
     state: 'idle',
     stateBeforeShutdown: null,
@@ -36,6 +40,11 @@ function makeAgent(overrides: Partial<AgentRecord> = {}): AgentRecord {
     reloadTask: null,
     failedAt: null,
     failureReason: null,
+    capturedVars: null,
+    customButtons: null,
+    indicators: null,
+    icon: null,
+    agentTelegram: null,
     version: 0,
     spawnCount: 0,
     createdAt: '2025-01-01T00:00:00Z',
@@ -296,7 +305,7 @@ describe('hook-resolver', () => {
       }, agent);
       assert.equal(result.mode, 'send');
       const actions = (result as { actions: Array<Record<string, unknown>> }).actions;
-      assert.equal(actions[0]!.post_wait_ms, 100);
+      assert.equal(actions[0]!['post_wait_ms'], 100);
     });
 
     it('returns skip for empty send array', () => {
@@ -328,7 +337,7 @@ describe('hook-resolver', () => {
       }, agent);
       assert.equal(result.mode, 'send');
       const actions = (result as { actions: Array<Record<string, unknown>> }).actions;
-      assert.equal(actions[0]!.post_wait_ms, 200);
+      assert.equal(actions[0]!['post_wait_ms'], 200);
     });
 
     it('returns skip for empty keystrokes array', () => {
