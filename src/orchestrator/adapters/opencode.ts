@@ -6,7 +6,11 @@
  *   - `opencode -s <id>` — resumes specific session in TUI mode
  *   - `opencode -c` — resumes last session in TUI mode
  *   - `opencode -m <model>` — selects model at launch
- *   - `opencode --variant <thinking>` — selects thinking variant
+ *   - thinking variant is NOT a launch flag for the TUI: `--variant` is defined
+ *     only on the `opencode run` subcommand (cli/cmd/run.ts), not on the TUI
+ *     command (cli/cmd/tui.ts, which exposes only model/session/continue/fork/
+ *     agent/prompt/project). The TUI selects variants interactively via
+ *     `ctrl+t variants`. See buildSpawnCommand for the drop and citation.
  *
  * System prompt injection (validated 2026-06-11 against the sst/opencode
  * v1.17.3 release binary via `opencode debug config`):
@@ -98,9 +102,14 @@ export class OpenCodeAdapter implements EngineAdapter {
       parts.push('-m', opts.model);
     }
 
-    if (opts.thinking) {
-      parts.push('--variant', opts.thinking);
-    }
+    // opts.thinking is intentionally NOT emitted. The `--variant` flag was
+    // removed from the TUI launch command in sst/opencode: as of v1.17.3 it
+    // lives only on the `opencode run` subcommand (cli/cmd/run.ts), while the
+    // TUI command (cli/cmd/tui.ts) accepts only model/session/continue/fork/
+    // agent/prompt/project. Passing `--variant` to the bare `opencode` TUI is
+    // an unknown yargs flag and errors the launch. Thinking-variant selection
+    // for the persistent TUI is interactive (ctrl+t cycles variants), so it is
+    // not selectable at launch for OpenCode — opts.thinking is a no-op here.
 
     if (opts.appendSystemPrompt) {
       parts.unshift(this.#instructionsEnvPrefix(opts.name));

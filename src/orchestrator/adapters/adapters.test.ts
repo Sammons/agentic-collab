@@ -496,13 +496,28 @@ describe('Engine Adapters', () => {
       assert.equal(cmd, 'opencode');
     });
 
-    it('builds spawn command with variant for thinking', () => {
+    it('ignores thinking (TUI launch has no --variant flag as of sst/opencode v1.17.3)', () => {
       const cmd = adapter.buildSpawnCommand({
         name: 'oc-agent',
         cwd: '/tmp',
         thinking: 'high',
       });
-      assert.equal(cmd, 'opencode --variant high');
+      // --variant is defined only on the `opencode run` subcommand, not the TUI
+      // command; emitting it would error the launch. See opencode.ts buildSpawnCommand.
+      assert.equal(cmd, 'opencode');
+      assert.ok(!cmd.includes('--variant'));
+      assert.ok(!cmd.includes('high'));
+    });
+
+    it('ignores thinking even when combined with a model', () => {
+      const cmd = adapter.buildSpawnCommand({
+        name: 'oc-agent',
+        cwd: '/tmp',
+        model: 'claude-3.5',
+        thinking: 'high',
+      });
+      assert.equal(cmd, 'opencode -m claude-3.5');
+      assert.ok(!cmd.includes('--variant'));
     });
 
     it('builds resume with -s for session ID', () => {

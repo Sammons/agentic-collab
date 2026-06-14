@@ -243,12 +243,14 @@ describe('Lifecycle', () => {
 
       const paste = proxyCommands.find(c => c.action === 'paste') as Extract<ProxyCommand, { action: 'paste' }>;
       assert.ok(paste, 'should have paste command');
-      // TUI mode: spawn command is `opencode -m <model> --variant <thinking>`
-      // Task is NOT in the spawn command — it's delivered separately via paste
+      // TUI mode: spawn command is `opencode -m <model>`. Thinking is NOT a
+      // launch flag — `--variant` exists only on the `opencode run` subcommand
+      // as of sst/opencode v1.17.3, so it must not appear in the TUI launch.
+      // Task is NOT in the spawn command — it's delivered separately via paste.
       assert.ok(paste.text.includes('opencode'), 'should include opencode');
       assert.ok(!paste.text.includes('opencode run'), 'should NOT use run subcommand (TUI mode)');
       assert.ok(paste.text.includes('-m claude-3.5'), 'should include -m flag');
-      assert.ok(paste.text.includes('--variant high'), 'should include --variant for thinking');
+      assert.ok(!paste.text.includes('--variant'), 'should NOT include --variant (TUI has no such flag)');
     });
 
     it('claude spawn omits optional flags when not provided', async () => {
