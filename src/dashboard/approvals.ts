@@ -393,7 +393,22 @@ function openAmendModal(a: ApprovalRow, notifyAgent?: string | null): void {
   `;
   document.body.appendChild(overlay);
 
-  const close = () => overlay.remove();
+  // close() tears down BOTH the overlay and the keydown listener so every close
+  // route (Escape, Cancel, submit, overlay-click) removes the listener exactly
+  // once. Without this the ⌘↵ handler would keep firing against a detached
+  // submit button after the modal closed.
+  const onKeydown = (e: KeyboardEvent) => {
+    if (e.key === 'Escape') {
+      close();
+    }
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+      overlay.querySelector<HTMLElement>('[data-amend-submit]')?.click();
+    }
+  };
+  const close = () => {
+    overlay.remove();
+    document.removeEventListener('keydown', onKeydown);
+  };
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
   overlay.querySelector<HTMLElement>('[data-amend-cancel]')?.addEventListener('click', close);
   const submitBtn = overlay.querySelector<HTMLButtonElement>('[data-amend-submit]');
@@ -420,12 +435,7 @@ function openAmendModal(a: ApprovalRow, notifyAgent?: string | null): void {
       submitBtn.disabled = false;
     }
   });
-  document.addEventListener('keydown', function esc(e) {
-    if (e.key === 'Escape') { close(); document.removeEventListener('keydown', esc); }
-    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
-      overlay.querySelector<HTMLElement>('[data-amend-submit]')?.click();
-    }
-  });
+  document.addEventListener('keydown', onKeydown);
 }
 
 /* ── helpers ───────────────────────────────────────────────────────── */
