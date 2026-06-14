@@ -70,13 +70,11 @@ describe('Engine Adapters', () => {
     });
 
     it('omits optional flags when undefined', () => {
+      // Optional flags (model/thinking/task/appendSystemPrompt) omitted entirely:
+      // an absent optional property reads as undefined, the case under test.
       const cmd = adapter.buildSpawnCommand({
         name: 'test-agent',
         cwd: '/tmp/test',
-        model: undefined,
-        thinking: undefined,
-        task: undefined,
-        appendSystemPrompt: undefined,
       });
       // --add-dir is opt-in via CLAUDE_HOME_DIR env; not asserted here.
       // (When the env var is set, --add-dir appears between any
@@ -291,12 +289,11 @@ describe('Engine Adapters', () => {
     });
 
     it('omits optional flags when undefined', () => {
+      // Optional flags (model/task/thinking) omitted entirely:
+      // an absent optional property reads as undefined, the case under test.
       const cmd = adapter.buildSpawnCommand({
         name: 'codex-agent',
         cwd: '/tmp',
-        model: undefined,
-        task: undefined,
-        thinking: undefined,
       });
       assert.equal(cmd, 'codex --dangerously-bypass-approvals-and-sandbox --no-alt-screen');
     });

@@ -20,13 +20,13 @@ export type WhisperOptions = {
    */
   url: string;
   /** Bearer token. Required for OpenAI; optional for most self-hosted servers. */
-  apiKey?: string;
+  apiKey?: string | undefined;
   /** Model name. Default `whisper-1` (OpenAI naming). */
-  model?: string;
+  model?: string | undefined;
   /** ISO-639-1 language hint (e.g. `en`). Optional. */
-  language?: string;
+  language?: string | undefined;
   /** Request timeout in ms. Default 60_000. */
-  timeoutMs?: number;
+  timeoutMs?: number | undefined;
 };
 
 export type TranscribeResult = {
@@ -40,8 +40,11 @@ export async function transcribe(
   opts: WhisperOptions,
 ): Promise<TranscribeResult> {
   const form = new FormData();
-  // Blob accepts ArrayBuffer/TypedArray/Buffer (Buffer extends Uint8Array).
-  const blob = new Blob([audio], { type: contentType });
+  // Blob accepts ArrayBuffer/TypedArray/Buffer at runtime (Buffer extends Uint8Array).
+  // cast: node:buffer's BlobPart excludes ArrayBufferLike-backed views (it forbids the
+  // SharedArrayBuffer case), but `audio` is always a regular Buffer/Uint8Array here,
+  // so the runtime is unaffected — the cast only bridges the lib-type gap.
+  const blob = new Blob([audio as NodeJS.BufferSource], { type: contentType });
   form.append('file', blob, filename);
   form.append('model', opts.model ?? 'whisper-1');
   if (opts.language) form.append('language', opts.language);

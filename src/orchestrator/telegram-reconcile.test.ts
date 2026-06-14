@@ -85,6 +85,9 @@ describe('reconcileTelegramBots + inbound (RFC-008 PR-C)', () => {
       usagePoller: { getUsageData: () => ({}), pollNow: async () => {} } as never,
       voiceEnabled: false,
       accountStore: new AccountStore({ accountsDir: join(tmpDir, 'accounts'), agentHomesDir: join(tmpDir, 'homes'), skipAutoRegister: true }),
+      pagesDir: join(tmpDir, 'pages'),
+      storesDir: join(tmpDir, 'stores'),
+      filesDir: join(tmpDir, 'files'),
       telegramDispatcher: dispatcher,
     };
   });

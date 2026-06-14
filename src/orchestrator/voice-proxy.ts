@@ -26,8 +26,8 @@ const OP_PONG = 0xA;
 
 export type VoiceProxyOptions = {
   elevenLabsApiKey: string;
-  sttModel?: string;
-  language?: string;
+  sttModel?: string | undefined;
+  language?: string | undefined;
 };
 
 type VoiceSession = {
@@ -144,7 +144,10 @@ function handleBrowserFrame(session: VoiceSession, opcode: number, payload: Buff
       if (session.upstream?.writable) {
         if (!session._audioCount) { session._audioCount = 0; session._audioBytes = 0; }
         session._audioCount++;
-        session._audioBytes += payload.length;
+        // _audioBytes is always set alongside _audioCount above; the `?? 0` only
+        // satisfies the optional-field type and is a no-op (the value is already 0
+        // or its prior count) — behavior is unchanged.
+        session._audioBytes = (session._audioBytes ?? 0) + payload.length;
         if (session._audioCount % 50 === 1) {
           console.log(`[voice] ${session.sid} audio: ${session._audioCount} chunks, ${session._audioBytes} bytes total`);
         }

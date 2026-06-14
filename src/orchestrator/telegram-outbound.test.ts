@@ -142,7 +142,7 @@ describe('per-agent Telegram outbound (RFC-008 PR-D)', () => {
     const resp = await realFetch(`http://localhost:${port}${path}`, {
       method,
       headers: body ? { 'content-type': 'application/json' } : {},
-      body: body ? JSON.stringify(body) : undefined,
+      ...(body ? { body: JSON.stringify(body) } : {}),
     });
     const raw = await resp.text();
     let data: unknown;

@@ -475,7 +475,7 @@ function resolveResumeOrStartHook(params: {
         sessionId: params.sessionId,
         cwd: params.cwd,
         task: params.resumeTask,
-        appendSystemPrompt: params.systemPrompt,
+        appendSystemPrompt: params.systemPrompt ?? undefined,
       },
       templateVars: params.templateVars,
     });
@@ -489,9 +489,9 @@ function resolveResumeOrStartHook(params: {
       name: params.name,
       cwd: params.cwd,
       task: params.startTask,
-      appendSystemPrompt: params.systemPrompt,
+      appendSystemPrompt: params.systemPrompt ?? undefined,
       dangerouslySkipPermissions: params.permissions === 'skip',
-      sessionId: newSessionId,
+      sessionId: newSessionId ?? undefined,
     },
     templateVars: params.templateVars,
   });

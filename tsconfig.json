@@ -18,5 +18,5 @@
     "types": ["node"]
   },
   "include": ["src/**/*.ts"],
-  "exclude": ["src/dashboard/**/*.ts", "src/dashboard-v2-archive/**/*.ts"]
+  "exclude": ["src/dashboard/**/*.ts", "src/dashboard-v2-archive/**/*.ts", "src/test/**/*.ts"]
 }

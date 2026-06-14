@@ -238,8 +238,8 @@ describe('Persona', () => {
       ].join('\n');
       const { frontmatter } = parseFrontmatter(raw);
       const env = frontmatter['env'] as Record<string, string>;
-      assert.equal(env.GIT_CONFIG_GLOBAL, '$PWD/agent-x.config');
-      assert.equal(env.GIT_AUTHOR_NAME, 'agent-x');
+      assert.equal(env['GIT_CONFIG_GLOBAL'], '$PWD/agent-x.config');
+      assert.equal(env['GIT_AUTHOR_NAME'], 'agent-x');
     });
 
     it('parses lifecycle hook fields (spawn, resume, compact)', () => {
@@ -638,7 +638,7 @@ describe('Persona', () => {
     it('parses nested preset hook with no options', () => {
       const raw = '---\nengine: claude\ncwd: /tmp\nstart:\n  preset: claude\n---\nBody';
       const { frontmatter } = parseFrontmatter(raw);
-      const start = frontmatter.start as { preset: string };
+      const start = frontmatter['start'] as { preset: string };
       assert.equal(start.preset, 'claude');
     });
 
@@ -649,10 +649,10 @@ describe('Persona', () => {
         '---', 'Body',
       ].join('\n');
       const { frontmatter } = parseFrontmatter(raw);
-      const start = frontmatter.start as { preset: string; options: Record<string, string> };
+      const start = frontmatter['start'] as { preset: string; options: Record<string, string> };
       assert.equal(start.preset, 'claude');
-      assert.equal(start.options.model, 'opus');
-      assert.equal(start.options.thinking, 'high');
+      assert.equal(start.options['model'], 'opus');
+      assert.equal(start.options['thinking'], 'high');
     });
 
     it('parses nested shell hook with env', () => {
@@ -662,10 +662,10 @@ describe('Persona', () => {
         '---', 'Body',
       ].join('\n');
       const { frontmatter } = parseFrontmatter(raw);
-      const start = frontmatter.start as { shell: string; env: Record<string, string> };
+      const start = frontmatter['start'] as { shell: string; env: Record<string, string> };
       assert.equal(start.shell, './run.sh');
-      assert.equal(start.env.MY_VAR, 'hello');
-      assert.equal(start.env.OTHER, 'world');
+      assert.equal(start.env['MY_VAR'], 'hello');
+      assert.equal(start.env['OTHER'], 'world');
     });
 
     it('parses top-level env alongside hook env without collisions', () => {
@@ -683,11 +683,11 @@ describe('Persona', () => {
         'Body',
       ].join('\n');
       const { frontmatter } = parseFrontmatter(raw);
-      const env = frontmatter.env as Record<string, string>;
-      const start = frontmatter.start as { shell: string; env: Record<string, string> };
-      assert.equal(env.GIT_CONFIG_GLOBAL, '$PWD/agent-x.config');
+      const env = frontmatter['env'] as Record<string, string>;
+      const start = frontmatter['start'] as { shell: string; env: Record<string, string> };
+      assert.equal(env['GIT_CONFIG_GLOBAL'], '$PWD/agent-x.config');
       assert.equal(start.shell, './run.sh');
-      assert.equal(start.env.MY_VAR, 'hello');
+      assert.equal(start.env['MY_VAR'], 'hello');
     });
 
     it('parses nested send hook with keystroke actions', () => {
@@ -697,7 +697,7 @@ describe('Persona', () => {
         '---', 'Body',
       ].join('\n');
       const { frontmatter } = parseFrontmatter(raw);
-      const exit = frontmatter.exit as { send: Array<{ keystroke: string }> };
+      const exit = frontmatter['exit'] as { send: Array<{ keystroke: string }> };
       assert.equal(exit.send.length, 2);
       assert.equal(exit.send[0]!.keystroke, 'Escape');
       assert.equal(exit.send[1]!.keystroke, 'C-c');
@@ -713,12 +713,12 @@ describe('Persona', () => {
         '---', 'Body',
       ].join('\n');
       const { frontmatter } = parseFrontmatter(raw);
-      const submit = frontmatter.submit as { send: Array<Record<string, unknown>> };
+      const submit = frontmatter['submit'] as { send: Array<Record<string, unknown>> };
       assert.equal(submit.send.length, 3);
-      assert.equal(submit.send[0]!.keystroke, 'Escape');
-      assert.equal(submit.send[0]!.post_wait_ms, 100);
-      assert.equal(submit.send[1]!.paste, 'hello world');
-      assert.equal(submit.send[2]!.keystroke, 'Enter');
+      assert.equal(submit.send[0]!['keystroke'], 'Escape');
+      assert.equal(submit.send[0]!['post_wait_ms'], 100);
+      assert.equal(submit.send[1]!['paste'], 'hello world');
+      assert.equal(submit.send[2]!['keystroke'], 'Enter');
     });
 
     it('parses nested keystrokes hook (preferred name for send)', () => {
@@ -728,7 +728,7 @@ describe('Persona', () => {
         '---', 'Body',
       ].join('\n');
       const { frontmatter } = parseFrontmatter(raw);
-      const exit = frontmatter.exit as { keystrokes: Array<{ keystroke: string }> };
+      const exit = frontmatter['exit'] as { keystrokes: Array<{ keystroke: string }> };
       assert.equal(exit.keystrokes.length, 2);
       assert.equal(exit.keystrokes[0]!.keystroke, 'Escape');
       assert.equal(exit.keystrokes[1]!.keystroke, 'Enter');
@@ -746,7 +746,7 @@ describe('Persona', () => {
         '---', 'Body',
       ].join('\n');
       const { frontmatter } = parseFrontmatter(raw);
-      const exit = frontmatter.exit as Array<{ type: string }>;
+      const exit = frontmatter['exit'] as Array<{ type: string }>;
       assert.ok(Array.isArray(exit), 'exit should be a pipeline array');
       assert.equal(exit.length, 3);
       assert.equal(exit[0]!.type, 'keystrokes');
@@ -767,7 +767,7 @@ describe('Persona', () => {
         '---', 'Body',
       ].join('\n');
       const { frontmatter } = parseFrontmatter(raw);
-      const exit = frontmatter.exit as Array<{ type: string }>;
+      const exit = frontmatter['exit'] as Array<{ type: string }>;
       assert.ok(Array.isArray(exit), 'exit should be a pipeline array');
       assert.equal(exit.length, 2);
       assert.equal(exit[0]!.type, 'shell');
@@ -785,7 +785,7 @@ describe('Persona', () => {
         '---', 'Body',
       ].join('\n');
       const { frontmatter } = parseFrontmatter(raw);
-      const exit = frontmatter.exit as { send: Array<{ keystroke: string }> };
+      const exit = frontmatter['exit'] as { send: Array<{ keystroke: string }> };
       assert.ok(!Array.isArray(exit), 'legacy send should not be an array');
       assert.equal(exit.send.length, 2);
     });
@@ -799,27 +799,27 @@ describe('Persona', () => {
         '---', '# Body',
       ].join('\n');
       const { frontmatter, body } = parseFrontmatter(raw);
-      assert.equal(frontmatter.engine, 'claude');
-      assert.equal(frontmatter.model, 'opus');
-      const start = frontmatter.start as { preset: string; options: Record<string, string> };
+      assert.equal(frontmatter['engine'], 'claude');
+      assert.equal(frontmatter['model'], 'opus');
+      const start = frontmatter['start'] as { preset: string; options: Record<string, string> };
       assert.equal(start.preset, 'claude');
-      assert.equal(start.options.model, 'sonnet');
-      const resume = frontmatter.resume as { preset: string };
+      assert.equal(start.options['model'], 'sonnet');
+      const resume = frontmatter['resume'] as { preset: string };
       assert.equal(resume.preset, 'claude');
-      assert.equal(frontmatter.exit, '/exit');
+      assert.equal(frontmatter['exit'], '/exit');
       assert.equal(body, '# Body');
     });
 
     it('parses block scalar with pipe', () => {
       const raw = '---\nengine: claude\ncwd: /tmp\nstart: |\n  line one\n  line two\n---\nBody';
       const { frontmatter } = parseFrontmatter(raw);
-      assert.equal(frontmatter.start, 'line one\nline two');
+      assert.equal(frontmatter['start'], 'line one\nline two');
     });
 
     it('non-hook fields with empty value stay as empty string', () => {
       const raw = '---\nengine: claude\nmodel:\ncwd: /tmp\n---\nBody';
       const { frontmatter } = parseFrontmatter(raw);
-      assert.equal(frontmatter.model, '');
+      assert.equal(frontmatter['model'], '');
     });
   });
 

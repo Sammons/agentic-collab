@@ -1,0 +1,17 @@
+{
+  // Scoped config for the UI probe test-harness. The probe (probe.ts) runs in a
+  // BROWSER context and needs DOM globals (document, window, XMLSerializer, etc.).
+  // Those types are added here, NOT in the root tsconfig, so DOM never leaks into
+  // the Node program's global lib — adding "DOM" to the root would silently mask
+  // genuinely-missing-DOM errors across the rest of the Node codebase (it changes
+  // the global `fetch`/`RequestInit` types, for one). The root tsconfig excludes
+  // src/test/**; this config owns type-checking for those files.
+  //
+  // Run with:  tsc --noEmit -p src/test/tsconfig.json
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "lib": ["esnext", "DOM", "DOM.Iterable"]
+  },
+  "include": ["./**/*.ts"],
+  "exclude": []
+}

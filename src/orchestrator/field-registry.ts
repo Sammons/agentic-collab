@@ -6,6 +6,7 @@
  * Runtime fields (state, version, capturedVars, etc.) are NOT in the registry.
  */
 
+import type { SQLInputValue } from 'node:sqlite';
 import type { LaunchEnv, EngineType, HookValue, PipelineStep, IndicatorDefinition, AgentTelegramConfig } from '../shared/types.ts';
 import type { PersonaFrontmatter } from './persona.ts';
 
@@ -151,6 +152,21 @@ function serializeHookValue(value: unknown): string | null {
   return JSON.stringify(value);
 }
 
+/**
+ * Pass a scalar config value through to the SQLite bind layer. Scalar config
+ * fields (CONFIG_FIELDS scalar kind: engine/model/cwd/persona/... ) are
+ * string | null by construction, so the value is a valid SQLInputValue; the cast
+ * only asserts that invariant the registry shape guarantees but `Record<string,
+ * unknown>` opts erase. Behavior is unchanged: the value is passed through
+ * exactly as `value ?? null` did, so any non-scalar that ever slipped in would
+ * still reach .run() and throw at bind time (a latent bug, not masked here).
+ */
+function toScalarSqlValue(value: unknown): SQLInputValue {
+  // cast: scalar config fields are string|null by registry construction; opts
+  // typed as unknown can't prove it. Pass-through preserves prior runtime.
+  return (value ?? null) as SQLInputValue;
+}
+
 function serializeCustomButtons(value: unknown): string | null {
   if (value == null) return null;
   const obj = value as Record<string, PipelineStep[]>;
@@ -246,7 +262,7 @@ export function configInsertColumns(): string[] {
  * Values that are already strings pass through unchanged — this supports
  * both pre-serialized opts (from buildUpsertOpts) and raw objects.
  */
-export function serializeConfigParams(opts: Record<string, unknown>): unknown[] {
+export function serializeConfigParams(opts: Record<string, unknown>): SQLInputValue[] {
   return CONFIG_FIELDS.map(f => {
     const value = opts[f.name];
     if (f.kind === 'json' && f.serialize) {
@@ -257,7 +273,7 @@ export function serializeConfigParams(opts: Record<string, unknown>): unknown[] 
     if (f.kind === 'hook') {
       return serializeHookValue(value);
     }
-    return value ?? null;
+    return toScalarSqlValue(value);
   });
 }
 
@@ -276,7 +292,7 @@ export function configUpdateSetClause(): string {
 /**
  * Serialize opts for upsert UPDATE (excludes createOnly fields).
  */
-export function serializeUpsertParams(opts: Record<string, unknown>): unknown[] {
+export function serializeUpsertParams(opts: Record<string, unknown>): SQLInputValue[] {
   return CONFIG_FIELDS.filter(f => f.upsertable).map(f => {
     const value = opts[f.name];
     if (f.kind === 'json' && f.serialize) {
@@ -286,7 +302,7 @@ export function serializeUpsertParams(opts: Record<string, unknown>): unknown[] 
     if (f.kind === 'hook') {
       return serializeHookValue(value);
     }
-    return value ?? null;
+    return toScalarSqlValue(value);
   });
 }
 
@@ -325,7 +341,7 @@ export function buildUpsertOptsFromFrontmatter(
   for (const f of CONFIG_FIELDS) {
     if (f.createOnly) continue; // proxyId not set from persona
     if (f.name === 'persona') {
-      opts.persona = name;
+      opts['persona'] = name;
       continue;
     }
     if (!f.personaKey) continue;

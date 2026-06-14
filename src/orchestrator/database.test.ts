@@ -650,21 +650,23 @@ describe('Database', () => {
       });
 
       const listed = rDb.listReminders(agentName);
+      // completed[1..5] in reverse (most-recently-completed first); index 0 is
+      // dropped from the listing window. slice/reverse avoids indexed access
+      // while preserving the exact expected ordering.
+      const completedNewestFirst = completed.slice(1).reverse().map(r => r.id);
       assert.deepEqual(
         listed.map(r => r.id),
         [
           pendingA.id,
           pendingB.id,
-          completed[5].id,
-          completed[4].id,
-          completed[3].id,
-          completed[2].id,
-          completed[1].id,
+          ...completedNewestFirst,
         ],
       );
       assert.ok(listed.every(r => r.agentName === agentName));
       assert.equal(listed.filter(r => r.status === 'completed').length, 5);
-      assert.ok(!listed.some(r => r.id === completed[0].id));
+      const oldestCompleted = completed[0];
+      assert.ok(oldestCompleted !== undefined);
+      assert.ok(!listed.some(r => r.id === oldestCompleted.id));
     });
 
     it('deleteReminder removes it', () => {

@@ -26,8 +26,8 @@ import { resolveEffectiveConfig } from './engine-config-resolver.ts';
 type CompiledDetection = {
   json: string;
   config: DetectionConfig;
-  idlePatterns: Array<{ re: RegExp; lines?: number }>;
-  activePatterns: Array<{ re: RegExp; lines?: number }>;
+  idlePatterns: Array<{ re: RegExp; lines?: number | undefined }>;
+  activePatterns: Array<{ re: RegExp; lines?: number | undefined }>;
   contextPattern: RegExp | null;
 };
 
@@ -168,8 +168,8 @@ export class HealthMonitor {
 
     try {
       const config: DetectionConfig = JSON.parse(detectionJson);
-      const idlePatterns: Array<{ re: RegExp; lines?: number }> = [];
-      const activePatterns: Array<{ re: RegExp; lines?: number }> = [];
+      const idlePatterns: Array<{ re: RegExp; lines?: number | undefined }> = [];
+      const activePatterns: Array<{ re: RegExp; lines?: number | undefined }> = [];
       for (const p of config.idlePatterns ?? []) {
         const raw = typeof p === 'string' ? p : p.pattern;
         const lines = typeof p === 'object' ? p.lines : undefined;
@@ -841,10 +841,12 @@ export class HealthMonitor {
   private async handleReload(agent: AgentRecord): Promise<void> {
     try {
       const lifecycleCtx = this.makeLifecycleCtx();
-      await reloadAgent(lifecycleCtx, agent.name, {
-        immediate: true,
-        task: agent.reloadTask ?? undefined,
-      });
+      // Only include `task` when present — exactOptionalPropertyTypes forbids
+      // passing an explicit `undefined` to the optional `task?: string` param.
+      const reloadOpts = agent.reloadTask != null
+        ? { immediate: true, task: agent.reloadTask }
+        : { immediate: true };
+      await reloadAgent(lifecycleCtx, agent.name, reloadOpts);
       this.onAgentUpdate(agent.name);
     } catch (err) {
       if (!this.failOnProxyUnavailable(agent.name, err)) {
