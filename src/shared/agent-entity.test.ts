@@ -73,6 +73,29 @@ describe('requireProxy', () => {
     assert.throws(() => requireProxy(agent), ProxyUnavailableError);
   });
 
+  // stale-placement validation: an un-pinned proxyId must also be live when a set is given
+  test('no pin + proxyId IN registeredProxies returns proxyId', () => {
+    const agent = makeAgent({ proxyId: 'proxy-7' });
+    assert.equal(requireProxy(agent, new Set(['proxy-7'])), 'proxy-7');
+  });
+
+  test('no pin + proxyId NOT in registeredProxies throws ProxyUnavailableError naming proxyId', () => {
+    const agent = makeAgent({ name: 'stale-agent', proxyId: 'gone-proxy' });
+    try {
+      requireProxy(agent, new Set(['proxy-1']));
+      assert.fail('expected throw');
+    } catch (err) {
+      assert.ok(err instanceof ProxyUnavailableError);
+      assert.equal(err.agentName, 'stale-agent');
+      assert.equal(err.pin, 'gone-proxy'); // carries the stale proxy id for the operator signal
+    }
+  });
+
+  test('no pin + proxyId set but no registeredProxies arg returns proxyId (back-compat)', () => {
+    const agent = makeAgent({ proxyId: 'proxy-3' });
+    assert.equal(requireProxy(agent), 'proxy-3');
+  });
+
   // pinned behavior
   test('pin set + in registeredProxies returns pin', () => {
     const agent = makeAgent({ proxyPin: 'proxy-2', proxyId: 'proxy-1' });

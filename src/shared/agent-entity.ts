@@ -11,9 +11,11 @@ export function sessionName(agent: AgentRecord): string {
 }
 
 /**
- * Thrown when an agent cannot be placed on a proxy: either no proxy is known
- * at all, or the persona-pinned proxy is not currently registered. Carries the
- * pin (when relevant) so background callers can record a precise failure reason.
+ * Thrown when an agent cannot be placed on a proxy: either no proxy is known at
+ * all, the persona-pinned proxy is not currently registered, or the agent's
+ * assigned `proxyId` references a proxy that is no longer registered (stale
+ * placement). Carries the offending proxy id in `pin` (when relevant) so
+ * background callers can record a precise failure reason.
  */
 export class ProxyUnavailableError extends Error {
   readonly agentName: string;
@@ -21,7 +23,7 @@ export class ProxyUnavailableError extends Error {
   constructor(agentName: string, pin: string | null) {
     super(
       pin
-        ? `Agent "${agentName}": pinned proxy "${pin}" is not registered`
+        ? `Agent "${agentName}": proxy "${pin}" is not registered`
         : `Agent "${agentName}" has no proxy assigned`,
     );
     this.name = 'ProxyUnavailableError';
@@ -38,8 +40,20 @@ export class ProxyUnavailableError extends Error {
  * on the wrong proxy. When a pin is set and `registeredProxies` is provided,
  * the pin must be live or this throws (fail-loud, RFC-003 §2/§2a).
  *
+ * An un-pinned agent's `proxyId` is likewise validated against
+ * `registeredProxies` when provided: a stale `proxyId` pointing at a proxy that
+ * is no longer registered throws the same typed `ProxyUnavailableError` rather
+ * than being returned blindly. Returning it would only defer the failure to a
+ * cryptic downstream dispatch error ("Proxy X not registered") and leave the
+ * agent wedged in `failed`; the typed error names the stale proxy so callers
+ * and operators get a clear "placed on unregistered proxy" signal. We do NOT
+ * auto-pick a different proxy — host affinity is not knowable here, so the
+ * explicit error is the correct outcome.
+ *
  * `registeredProxies` is optional so the pure helper stays unit-testable; live
- * lifecycle callers pass `new Set(db.listProxies().map(p => p.proxyId))`.
+ * lifecycle callers pass `new Set(db.listProxies().map(p => p.proxyId))`. When
+ * it is omitted, the un-pinned path preserves the prior behavior and returns
+ * `proxyId` without validation.
  */
 export function requireProxy(agent: AgentRecord, registeredProxies?: ReadonlySet<string>): string {
   if (agent.proxyPin) {
@@ -50,6 +64,9 @@ export function requireProxy(agent: AgentRecord, registeredProxies?: ReadonlySet
   }
   if (!agent.proxyId) {
     throw new ProxyUnavailableError(agent.name, null);
+  }
+  if (registeredProxies && !registeredProxies.has(agent.proxyId)) {
+    throw new ProxyUnavailableError(agent.name, agent.proxyId);
   }
   return agent.proxyId;
 }
