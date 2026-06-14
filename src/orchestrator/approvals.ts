@@ -7,7 +7,9 @@
  * orchestrator:
  *
  *   1. Records the transition in `approval_events` (durable audit trail).
- *   2. Broadcasts a `approval_changed` WS event (Q4-typed; subscribers in Q9).
+ *   2. Broadcasts a `approval_changed` WS event (typed via the `WsEvent`
+ *      union) to subscribed dashboard clients. Approvals is the only
+ *      producer of these typed WS events.
  *   3. Auto-notifies the requesting agent's address with a one-line message
  *      that points the agent at `collab approval get <id>` for details.
  *

@@ -427,9 +427,8 @@ export type WsNotificationEvent = {
 // is non-breaking.
 
 /**
- * Emitted by approvals (Q5) when an approval row's `state` column
- * changes. Q4 only ships the type so subscribers can subscribe ahead of
- * the producer landing.
+ * Emitted by the approvals service when an approval row's `state` column
+ * changes. Subscribed dashboard clients narrow on `type` to react.
  */
 export type WsApprovalChangedEvent = {
   type: 'approval_changed';

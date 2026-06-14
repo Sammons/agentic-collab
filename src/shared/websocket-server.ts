@@ -195,9 +195,9 @@ export class WebSocketServer {
   }
 
   /**
-   * Typed convenience wrapper around `broadcast`. v3-era emitters
-   * (approvals) call this so the event payload structure is constrained
-   * by the `WsEvent` union rather than constructed ad-hoc.
+   * Typed convenience wrapper around `broadcast`. The approvals service —
+   * currently the only emitter — calls this so the event payload structure
+   * is constrained by the `WsEvent` union rather than constructed ad-hoc.
    */
   broadcastEvent(event: WsEvent): void {
     this.broadcast(JSON.stringify(event));
