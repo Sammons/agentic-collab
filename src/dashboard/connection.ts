@@ -10,7 +10,7 @@
  * (per-event broadcasts).
  */
 import type { AgentRecord, DashboardMessage, Team } from '../shared/types.ts';
-import { state, emit, restoreSelectionOnInit, saveToken, loadCachedThreads, persistCachedThreads, agentsByName, rebuildAgentIndex, rebuildTeamIndex, on } from './state.ts';
+import { state, emit, restoreSelectionOnInit, saveToken, loadCachedThreads, persistCachedThreads, agentsByName, rebuildAgentIndex, rebuildTeamIndex, pruneSelection, on } from './state.ts';
 
 type WsEvent =
   | { type: 'init'; agents: AgentRecord[]; threads: Record<string, DashboardMessage[]>; teams?: Team[] }
@@ -257,6 +257,16 @@ function handle(msg: WsEvent): void {
       const u = msg as Extract<WsEvent, { type: 'agents_update' }>;
       state.agents = u.agents ?? [];
       rebuildAgentIndex();
+      // Prune any selected names no longer in the roster. When the persona-watch
+      // poller broadcasts a shrunken db.listAgents() (e.g. after a destroy removed
+      // a persona file), the gone agent's name would otherwise linger in the
+      // selection — skewing the sidebar count ("selected > total"), search scope,
+      // and chat feed. Mirrors the prune in `agent_destroyed`. Re-emit
+      // selection-changed only when something actually changed so the server-side
+      // subscription filter is refreshed too.
+      if (pruneSelection(state.selectedAgents, state.agents) > 0) {
+        emit('selection-changed');
+      }
       emit('agents-changed');
       break;
     }
