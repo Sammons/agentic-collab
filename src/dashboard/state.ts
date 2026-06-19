@@ -182,6 +182,34 @@ function persistSelection(): void {
   } catch {}
 }
 
+/**
+ * Drop any selected agent names that no longer exist in the given roster.
+ * Mutates `selected` in place. Returns the count removed so callers can decide
+ * whether anything changed (e.g. to skip a redundant emit/persist).
+ *
+ * Used by the WS handlers when the agent roster shrinks: `agents_update`
+ * swaps in a smaller list and `agent_destroyed` removes one. Without this, a
+ * destroyed agent's name lingers in the selection and downstream surfaces
+ * (sidebar count, search scope, chat feed) compute against a stale Set —
+ * producing "selected (28) / total (27)".
+ */
+export function pruneSelection(selected: Set<string>, agents: { name: string }[]): number {
+  const known = new Set(agents.map((a) => a.name));
+  let removed = 0;
+  // Deleting from a Set while iterating it is safe in JS (the spec only
+  // re-visits entries added after the current cursor), but collect-then-delete
+  // keeps the intent obvious and avoids any reader second-guessing it.
+  const stale: string[] = [];
+  for (const name of selected) {
+    if (!known.has(name)) stale.push(name);
+  }
+  for (const name of stale) {
+    selected.delete(name);
+    removed++;
+  }
+  return removed;
+}
+
 /** Toggle a single agent in the sidebar selection. */
 export function toggleAgentSelected(name: string): void {
   if (state.selectedAgents.has(name)) state.selectedAgents.delete(name);
