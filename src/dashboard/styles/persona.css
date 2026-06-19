@@ -140,6 +140,15 @@
 /* The teams field needs the full width (chips wrap + add-row). */
 .pe-core-grid .ov-field[data-field="teams"] { grid-column: 1 / -1; }
 
+/* The Icon field holds a single emoji — render it large enough to read as a
+   glyph in the desktop two-column layout (the shared .ov-input is 13px, which
+   left the emoji tiny/faint here). Matches the larger feel of the mobile
+   single-column rendering. */
+.pe-core-grid .ov-field[data-field="icon"] .ov-input {
+  font-size: 22px;
+  line-height: 1.2;
+}
+
 .pe-core-actions {
   margin-top: 12px;
   display: flex;

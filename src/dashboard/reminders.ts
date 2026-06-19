@@ -103,11 +103,11 @@ function rerender(): void {
   const summary = root.querySelector<HTMLElement>('[data-summary]');
   if (summary) {
     if (sel === 0) {
-      summary.innerHTML = `<span class="where">No agents</span><span class="sub">— check agents in the sidebar</span>`;
+      summary.innerHTML = `<span class="where">No agents</span> <span class="sub">— check agents in the sidebar</span>`;
     } else if (sel === total) {
-      summary.innerHTML = `<span class="where">All agents</span><span class="sub">· all ${total} selected</span>`;
+      summary.innerHTML = `<span class="where">All agents</span> <span class="sub">· all ${total} selected</span>`;
     } else {
-      summary.innerHTML = `<span class="where">${sel} agents</span><span class="sub">· filtered from ${total}</span>`;
+      summary.innerHTML = `<span class="where">${sel} agents</span> <span class="sub">· filtered from ${total}</span>`;
     }
   }
 

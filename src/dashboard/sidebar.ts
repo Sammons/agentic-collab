@@ -252,7 +252,7 @@ function memberHtml(agentName: string): string {
   return `
     <div class="member ${checked}" data-member="${escapeHtml(agentName)}">
       ${iconHtml}
-      <span class="nm">${escapeHtml(agentName)}</span>
+      <span class="nm" title="${escapeHtml(agentName)}">${escapeHtml(agentName)}</span>
       <span class="focus" data-focus="${escapeHtml(agentName)}" title="Focus on ${escapeHtml(agentName)}">${icons['focus']}</span>
       <span class="eye" data-eye="${escapeHtml(agentName)}" title="Watch ${escapeHtml(agentName)}">${icons['eye']}</span>
       <span class="status ${status}" title="${escapeHtml(stateTip)}"></span>

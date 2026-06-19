@@ -146,12 +146,21 @@
   .watch-hdr .back { width: fit-content; }
   .watch-hdr .title { font-size: 22px !important; }
 
-  /* chip rows scroll horizontally if they overflow */
+  /* Filter-chip rows wrap onto multiple lines so no chip is clipped off the
+     right edge on narrow phones. (Previously these scrolled horizontally with
+     no visible affordance, so trailing chips looked cut off.) */
   .pg-chips,
   .ap-chips,
-  .st-subnav,
   .sr-scope-chips,
   .rm-page-chips {
+    flex-wrap: wrap !important;
+    row-gap: 6px;
+    overflow-x: visible;
+    padding-bottom: 8px !important;
+  }
+  /* The settings section sub-nav is a horizontal section-jump bar, not a
+     filter row — keep it scrollable rather than wrapping into a tall stack. */
+  .st-subnav {
     overflow-x: auto;
     flex-wrap: nowrap !important;
     -webkit-overflow-scrolling: touch;
@@ -344,6 +353,19 @@
   /* ── settings ── */
 
   .st-section { padding: 22px 18px 4px; }
+  /* Section header (e.g. Engine configs) — let the title and its action row
+     stack so the "Reset defaults" / "+ New engine config" buttons wrap onto
+     their own full-width line instead of clipping off the right edge. */
+  .st-section-hdr {
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 8px;
+  }
+  .st-section-hdr .right {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+  .st-section-hdr .right .btn { flex: 1 1 auto; justify-content: center; }
   .st-item-hdr {
     flex-wrap: wrap;
     gap: 6px 10px;

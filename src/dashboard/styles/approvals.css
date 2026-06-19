@@ -262,21 +262,37 @@
   font-family: var(--mono);
   font-size: 12.5px;
   line-height: 1.7;
-  white-space: pre;
   padding: 16px 18px;
   background: var(--paper-2);
   border-radius: var(--radius);
   color: var(--ink);
   margin-bottom: 28px;
+  /* Fallback for any line a browser still refuses to fold. The per-line
+     wrapping below means this rarely engages, but it guarantees no text is
+     ever clipped without a scrollbar. */
   overflow-x: auto;
 }
+/* Each line is a grid row: fixed-width gutter (line-number rail) + a content
+   column that WRAPS long lines instead of clipping them. `pre-wrap` keeps the
+   JSON indentation; `overflow-wrap: anywhere` + `word-break: break-word` fold
+   unspaced runs (URLs, base64, long identifiers). The gutter stays a clean
+   left rail because it is its own column; wrapped continuation text hangs
+   under the content column, not under the number. */
+.ap-payload .ln {
+  display: grid;
+  grid-template-columns: 22px 1fr;
+  column-gap: 14px;
+}
+.ap-payload .ln .code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  min-width: 0;
+}
 .ap-payload .gutter {
-  display: inline-block;
-  width: 22px;
   color: var(--ink-4);
   text-align: right;
   user-select: none;
-  margin-right: 14px;
 }
 .ap-payload .punc { color: var(--ink-3); }
 .ap-payload .key  { color: var(--steel); }
