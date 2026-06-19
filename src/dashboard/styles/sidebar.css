@@ -286,7 +286,19 @@
   align-items: center;
   justify-content: center;
 }
-.member .nm { flex: 1; color: var(--ink-3); }
+.member .nm {
+  flex: 1;
+  color: var(--ink-3);
+  /* Long agent names stay on one line and ellipsize rather than wrapping to
+     a second line (which pushed the trailing focus/eye/status controls down).
+     The full name is available via the row's `title` attribute. `min-width: 0`
+     lets the flex item shrink below its content width so the ellipsis kicks
+     in instead of overflowing. */
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .member.checked .nm { color: var(--ink); }
 .member .focus,
 .member .eye {

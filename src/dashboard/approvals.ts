@@ -441,14 +441,18 @@ function openAmendModal(a: ApprovalRow, notifyAgent?: string | null): void {
 /* ── helpers ───────────────────────────────────────────────────────── */
 
 function formatPayload(p: string): string {
+  // Each line is its own `.ln` row: a fixed-width `.gutter` column (the line
+  // number rail) plus a `.code` column that wraps long content. This keeps
+  // the gutter aligned while letting overlong lines fold instead of clipping
+  // — the markup half of the `.ap-payload` wrap fix in approvals.css.
   try {
     const obj = JSON.parse(p);
     const lines = JSON.stringify(obj, null, 2).split('\n');
     return lines.map((line, i) =>
-      `<span class="gutter">${String(i + 1).padStart(2, ' ')}</span>${colorizeJsonLine(line)}`
-    ).join('\n');
+      `<div class="ln"><span class="gutter">${String(i + 1).padStart(2, ' ')}</span><span class="code">${colorizeJsonLine(line)}</span></div>`
+    ).join('');
   } catch {
-    return `<span class="gutter"> 1</span>${escapeHtml(p)}`;
+    return `<div class="ln"><span class="gutter"> 1</span><span class="code">${escapeHtml(p)}</span></div>`;
   }
 }
 

@@ -17,7 +17,25 @@
   color: var(--ink-4);
   margin-bottom: 6px;
 }
-.rm-hdr .filter-summary { margin: 0 0 8px; }
+.rm-hdr .filter-summary {
+  margin: 0 0 8px;
+  /* Let the "· all N selected" segment wrap onto its own line on narrow
+     widths instead of orphan-wrapping mid-phrase. */
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  line-height: 1.15;
+  color: var(--ink);
+}
+.rm-hdr .filter-summary .where { color: var(--ink); font-weight: 700; }
+.rm-hdr .filter-summary .sub {
+  color: var(--ink-3);
+  font-weight: 400;
+  font-size: 14px;
+  letter-spacing: -0.005em;
+  /* Keeps the "· all N selected" tail together so it wraps as a unit. */
+  white-space: nowrap;
+}
 .rm-hdr .pg-title {
   font-size: 28px;
   font-weight: 700;
