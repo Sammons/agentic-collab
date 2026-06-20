@@ -51,7 +51,7 @@
   background: transparent;
   color: var(--ink-3);
   border: 1px solid var(--rule);
-  border-radius: 999px;
+  border-radius: 3px;
   cursor: pointer;
   letter-spacing: -0.003em;
   transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
@@ -122,13 +122,13 @@
 .pg-row .t-chip {
   font-size: 11.5px;
   padding: 2px 8px;
-  background: var(--paper-2);
+  background: transparent;
   color: var(--ink-3);
+  border: 1px solid var(--rule-soft);
   border-radius: 3px;
   font-weight: 500;
   white-space: nowrap;
 }
-.pg-row:hover .t-chip { background: var(--paper-card); }
 .pg-row .teams .none {
   font-size: 11.5px;
   color: var(--ink-4);
