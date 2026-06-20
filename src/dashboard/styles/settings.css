@@ -62,6 +62,11 @@
   transition: color 140ms ease, background 140ms ease;
 }
 .st-subnav .jump:hover { color: var(--ink); background: var(--paper-2); }
+/* Keyboard focus ring (F4 a11y) — :focus-visible so mouse clicks don't show it. */
+.st-subnav .jump:focus-visible {
+  outline: 2px solid var(--plum);
+  outline-offset: 2px;
+}
 .st-subnav .jump.on {
   color: var(--ink);
   background: var(--paper-2);
@@ -512,7 +517,7 @@
 .ee-page {
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  height: var(--route-h, 100vh); /* mobile re-points --route-h below tab bar (responsive.css) */
   background: var(--paper-card);
   overflow: hidden;
 }

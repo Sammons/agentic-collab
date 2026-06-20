@@ -29,6 +29,14 @@
   opacity: 0.5;
   pointer-events: none;
 }
+/* Keyboard focus ring. :focus-visible (not :focus) so a mouse click never
+   shows the ring — only keyboard navigation does. Plum is the Greenroom
+   identity accent reserved for focus emphasis here; clay stays the primary-
+   action moment, and steel stays the input-focus convention. */
+.btn:focus-visible {
+  outline: 2px solid var(--plum);
+  outline-offset: 2px;
+}
 
 .btn.primary {
   background: var(--clay);

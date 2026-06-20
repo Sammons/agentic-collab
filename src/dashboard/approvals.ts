@@ -18,7 +18,7 @@
 import type { ApprovalRow, ApprovalState } from '../shared/types.ts';
 import { state, on, authHeaders } from './state.ts';
 import { registerRoute } from './routing.ts';
-import { escapeHtml, toast } from './util.ts';
+import { escapeHtml, toast, onActivate } from './util.ts';
 
 let approvals: ApprovalRow[] = [];
 let selectedId: string | null = null;
@@ -30,18 +30,18 @@ export function setupApprovals(): void {
 
 function render(root: HTMLElement): void {
   root.innerHTML = `
-    <div class="ap-page" style="height: 100vh;">
+    <div class="ap-page" style="height: var(--route-h, 100vh);">
       <div class="ap-master">
         <div class="ap-master-hdr">
           <h1 class="title">Approvals <span class="ct" data-summary>—</span></h1>
         </div>
-        <div class="ap-chips">
+        <div class="ap-chips" role="tablist">
           <span class="row-label">State</span>
-          <span class="chip on urgent" data-fstate="pending">Pending <span class="ct" data-c-pending>0</span></span>
-          <span class="chip" data-fstate="approved">Approved <span class="ct" data-c-approved>0</span></span>
-          <span class="chip" data-fstate="rejected">Rejected <span class="ct" data-c-rejected>0</span></span>
-          <span class="chip" data-fstate="amended">Amended <span class="ct" data-c-amended>0</span></span>
-          <span class="chip" data-fstate="all">All <span class="ct" data-c-all>0</span></span>
+          <span class="chip on urgent" data-fstate="pending" role="tab" tabindex="0" aria-selected="true">Pending <span class="ct" data-c-pending>0</span></span>
+          <span class="chip" data-fstate="approved" role="tab" tabindex="0" aria-selected="false">Approved <span class="ct" data-c-approved>0</span></span>
+          <span class="chip" data-fstate="rejected" role="tab" tabindex="0" aria-selected="false">Rejected <span class="ct" data-c-rejected>0</span></span>
+          <span class="chip" data-fstate="amended" role="tab" tabindex="0" aria-selected="false">Amended <span class="ct" data-c-amended>0</span></span>
+          <span class="chip" data-fstate="all" role="tab" tabindex="0" aria-selected="false">All <span class="ct" data-c-all>0</span></span>
         </div>
         <div class="ap-list" data-list>Loading…</div>
         <div class="ap-master-foot" data-foot>—</div>
@@ -53,6 +53,17 @@ function render(root: HTMLElement): void {
       </div>
     </div>
   `;
+
+  // Wire the filter chips ONCE here (the markup is static, created above), not
+  // in renderMaster (which runs on every refresh). onActivate routes click AND
+  // Enter/Space to the same handler — wiring it per-render would stack keydown
+  // listeners. renderMaster only updates the visual `on` state + aria-selected.
+  root.querySelectorAll<HTMLElement>('[data-fstate]').forEach((el) => {
+    onActivate(el, () => {
+      activeFilter = (el.dataset['fstate'] as ApprovalState | 'all') ?? 'pending';
+      renderMaster();
+    });
+  });
 
   void loadAll();
 
@@ -107,13 +118,11 @@ function renderMaster(): void {
   setText('[data-summary]', `${approvals.length} · ${counts['pending'] ?? 0} pending`);
   setText('[data-foot]', `${approvals.length} total · ${counts['pending'] ?? 0} pending`);
 
-  // chips
+  // chips — visual state only; activation is wired once in render() above.
   document.querySelectorAll<HTMLElement>('[data-fstate]').forEach((el) => {
-    el.classList.toggle('on', el.dataset['fstate'] === activeFilter);
-    el.onclick = () => {
-      activeFilter = (el.dataset['fstate'] as ApprovalState | 'all') ?? 'pending';
-      renderMaster();
-    };
+    const active = el.dataset['fstate'] === activeFilter;
+    el.classList.toggle('on', active);
+    el.setAttribute('aria-selected', String(active));
   });
 
   // list

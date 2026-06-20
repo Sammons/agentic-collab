@@ -6,7 +6,7 @@
 .watch-page {
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  height: var(--route-h, 100vh); /* mobile re-points --route-h below tab bar (responsive.css) */
   background: var(--paper-card);
   overflow: hidden;
 }

@@ -184,12 +184,52 @@ export function proxyOnline(lastHeartbeat: string, nowMs: number, staleSeconds =
 }
 
 /**
+ * Wire an element so it activates on BOTH click and keyboard (Enter / Space),
+ * routing both to the SAME handler — no duplicated logic. Used to make
+ * non-`<button>` interactive elements (filter chips, section-jump spans built
+ * as `<span role="button" tabindex="0">`) reachable and operable by keyboard
+ * and assistive tech. Space/Enter call preventDefault so Space doesn't scroll
+ * the page and Enter doesn't submit an enclosing form.
+ */
+export function onActivate(el: HTMLElement, handler: () => void): void {
+  el.addEventListener('click', handler);
+  el.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      handler();
+    }
+  });
+}
+
+/**
+ * Lazily get (creating on first use) the shared toast stack container.
+ *
+ * All toasts render into one fixed bottom-right column-reverse flex container
+ * so simultaneous toasts stack vertically (newest at the bottom) instead of
+ * overlapping pixel-for-pixel. The container itself is non-interactive
+ * (pointer-events disabled in CSS) so it never traps clicks once empty.
+ */
+function toastStack(): HTMLElement {
+  let stack = document.querySelector<HTMLElement>('.toast-stack');
+  if (!stack) {
+    stack = document.createElement('div');
+    stack.className = 'toast-stack';
+    document.body.appendChild(stack);
+  }
+  return stack;
+}
+
+/**
  * Show a toast notification that auto-dismisses after 3 seconds.
+ *
+ * Toasts append into the shared `.toast-stack` so multiple are readable at
+ * once; the stack sits above modal overlays (z-index, see chat.css) so a
+ * validation toast fired from inside a modal renders on top, not behind it.
  */
 export function toast(msg: string, kind: 'info' | 'error' = 'info'): void {
   const el = document.createElement('div');
   el.className = `chat-toast ${kind === 'error' ? 'error' : ''}`;
   el.textContent = msg;
-  document.body.appendChild(el);
+  toastStack().appendChild(el);
   setTimeout(() => el.remove(), 3000);
 }
