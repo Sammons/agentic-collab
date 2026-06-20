@@ -35,6 +35,11 @@
   transition: background 140ms ease, color 140ms ease;
 }
 .nav-action:hover { background: var(--paper-2); color: var(--ink); }
+/* Keyboard focus ring (F4 a11y) — :focus-visible so mouse clicks don't show it. */
+.nav-action:focus-visible {
+  outline: 2px solid var(--plum);
+  outline-offset: 2px;
+}
 .nav-action.active {
   background: var(--pill-on-bg);
   color: var(--pill-on-fg);

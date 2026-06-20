@@ -24,7 +24,7 @@ export function setupReminders(): void {
 
 function render(root: HTMLElement): void {
   root.innerHTML = `
-    <div class="rm-page" style="display:flex;flex-direction:column;height:100vh;background:var(--paper);overflow:hidden;">
+    <div class="rm-page" style="display:flex;flex-direction:column;height:var(--route-h,100vh);background:var(--paper);overflow:hidden;">
       <div class="rm-hdr">
         <div>
           <div class="eyebrow">Reminders</div>

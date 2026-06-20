@@ -14,7 +14,7 @@ import type { AgentRecord, DashboardMessage, Reminder, ApprovalRow, PageRecord }
 import { state, on, authHeaders, enterFocusMode, emit } from './state.ts';
 import { registerRoute, go } from './routing.ts';
 import { focusMessage } from './chat.ts';
-import { escapeHtml, formatTime } from './util.ts';
+import { escapeHtml, formatTime, onActivate } from './util.ts';
 
 type Hit =
   | { kind: 'agent';     score: number; matched: string[]; record: AgentRecord }
@@ -44,7 +44,7 @@ export function setupSearch(): void {
 
 function render(root: HTMLElement): void {
   root.innerHTML = `
-    <div class="sr-page" style="height:100vh;overflow-y:auto;background:var(--paper);">
+    <div class="sr-page" style="height:var(--route-h,100vh);overflow-y:auto;background:var(--paper);">
       <div class="sr-hdr">
         <div class="eyebrow">
           <span>Search</span>
@@ -140,16 +140,22 @@ function rerender(): void {
 
   const chips = root.querySelector<HTMLElement>('[data-chips]');
   if (chips) {
+    // role="tab"/tablist + tabindex makes the scope filters keyboard-reachable
+    // and announces the active one to assistive tech via aria-selected.
+    const chip = (s: typeof scope, label: string, ct: number): string =>
+      `<span class="chip ${scope === s ? 'on' : ''}" data-scope="${s}" role="tab" tabindex="0" aria-selected="${scope === s}">${label} <span class="ct">${ct}</span></span>`;
+    chips.setAttribute('role', 'tablist');
     chips.innerHTML = `
-      <span class="chip ${scope === 'all' ? 'on' : ''}" data-scope="all">All <span class="ct">${hits.length}</span></span>
-      <span class="chip ${scope === 'agent' ? 'on' : ''}" data-scope="agent">Agents <span class="ct">${counts.agent}</span></span>
-      <span class="chip ${scope === 'message' ? 'on' : ''}" data-scope="message">Messages <span class="ct">${counts.message}</span></span>
-      <span class="chip ${scope === 'approval' ? 'on' : ''}" data-scope="approval">Approvals <span class="ct">${counts.approval}</span></span>
-      <span class="chip ${scope === 'reminder' ? 'on' : ''}" data-scope="reminder">Reminders <span class="ct">${counts.reminder}</span></span>
-      <span class="chip ${scope === 'page' ? 'on' : ''}" data-scope="page">Pages <span class="ct">${counts.page}</span></span>
+      ${chip('all', 'All', hits.length)}
+      ${chip('agent', 'Agents', counts.agent)}
+      ${chip('message', 'Messages', counts.message)}
+      ${chip('approval', 'Approvals', counts.approval)}
+      ${chip('reminder', 'Reminders', counts.reminder)}
+      ${chip('page', 'Pages', counts.page)}
     `;
     chips.querySelectorAll<HTMLElement>('[data-scope]').forEach((el) => {
-      el.addEventListener('click', () => {
+      // onActivate routes click AND Enter/Space to the same handler.
+      onActivate(el, () => {
         scope = (el.dataset['scope'] as typeof scope) ?? 'all';
         rerender();
       });

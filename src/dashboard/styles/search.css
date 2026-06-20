@@ -101,6 +101,11 @@
   transition: color 140ms ease, border-color 140ms ease, background 140ms ease;
 }
 .sr-scope-chips .chip:hover { color: var(--ink); border-color: var(--rule-strong); }
+/* Keyboard focus ring (F4 a11y) — :focus-visible so mouse clicks don't show it. */
+.sr-scope-chips .chip:focus-visible {
+  outline: 2px solid var(--plum);
+  outline-offset: 2px;
+}
 .sr-scope-chips .chip.on {
   background: var(--pill-on-bg);
   color: var(--pill-on-fg);

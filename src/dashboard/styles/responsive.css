@@ -48,6 +48,12 @@
 }
 .mobile-tabs .tab:hover,
 .mobile-tabs .tab:focus { color: var(--ink-2); }
+/* Keyboard focus ring (F4 a11y) — :focus-visible so taps don't show it,
+   inset so the ring isn't clipped by the tab bar's top border. */
+.mobile-tabs .tab:focus-visible {
+  outline: 2px solid var(--plum);
+  outline-offset: -2px;
+}
 .mobile-tabs .tab.active {
   color: var(--steel);
 }
@@ -106,6 +112,28 @@
     width: 100%;
     min-height: 100vh;
     padding-bottom: calc(56px + env(safe-area-inset-bottom, 0)); /* leave room for tab bar */
+  }
+
+  /* Full-page route containers pin themselves to the viewport via
+     height: var(--route-h, 100vh). On desktop --route-h is unset so the
+     fallback 100vh wins. On mobile the fixed bottom tab bar (56px) would
+     otherwise occlude the bottom of every route — the .main padding-bottom
+     reserves the space, but each route child re-asserts its own height and
+     paints over it. Re-point --route-h to the viewport minus the tab bar
+     (plus the iOS safe-area inset) so the route's own bottom content —
+     Settings Test/Delete buttons, Reminders footer stats, the Search hint
+     bar — scrolls into view instead of hiding behind the tab bar.
+     100dvh tracks the dynamic viewport as mobile browser chrome shows/hides. */
+  .ag-pane,
+  .ee-page,
+  .watch-page,
+  .chat-pane,
+  .pe-page,
+  .st-page,
+  .rm-page,
+  .ap-page,
+  .sr-page {
+    --route-h: calc(100dvh - 56px - env(safe-area-inset-bottom, 0px));
   }
 
   /* lock body scroll while drawer is open */

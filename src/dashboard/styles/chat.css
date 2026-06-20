@@ -7,7 +7,7 @@
 .chat-pane {
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  height: var(--route-h, 100vh); /* mobile re-points --route-h below tab bar (responsive.css) */
   background: var(--paper-card);
   position: relative;
 }
@@ -585,21 +585,42 @@
   .profile-pop .pa .btn { flex-basis: calc(50% - 4px); }
 }
 
-/* mini toast (delivery error) */
-.chat-toast {
+/* mini toast (delivery error) — stacked bottom-right via .toast-stack.
+   The stack is the single fixed container so simultaneous toasts stack
+   vertically (newest at the bottom) instead of overlapping pixel-for-pixel.
+   z-index 60 sits ABOVE modal overlays (z-index 50) so a validation toast
+   fired from inside a modal renders on top, and BELOW the auth gate (100). */
+.toast-stack {
   position: fixed;
   bottom: 24px;
   right: 24px;
+  z-index: 60;
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 8px;
+  pointer-events: none; /* never trap clicks; toasts re-enable below */
+}
+.chat-toast {
   background: var(--ink);
   color: var(--paper-card);
   padding: 10px 16px;
   border-radius: var(--radius);
   font-size: 13px;
   font-family: var(--sans);
-  z-index: 30;
   box-shadow: 0 8px 20px -6px rgba(22,24,28,0.4);
+  pointer-events: auto;
 }
 .chat-toast.error { background: var(--brick); }
+/* On mobile lift the stack above the 56px bottom tab bar so toasts aren't
+   hidden behind it (the tab bar is z-index 50, below the stack's 60, but
+   visually would still occlude a toast sitting at bottom:24px). */
+@media (max-width: 768px) {
+  .toast-stack {
+    bottom: calc(56px + env(safe-area-inset-bottom, 0px) + 12px);
+    right: 12px;
+    left: 12px;
+  }
+}
 
 /* system / lifecycle events — compact one-line row, not a bubble */
 .chat-pane .sys-event {

@@ -24,7 +24,7 @@ import type {
 import { on, authHeaders } from './state.ts';
 import { registerRoute, go } from './routing.ts';
 import type { Route } from './state.ts';
-import { escapeHtml, toast, proxyOnline } from './util.ts';
+import { escapeHtml, toast, proxyOnline, onActivate } from './util.ts';
 
 /** One agent's Telegram bot status (RFC-008 PR-E) — mirrors GET /api/telegram/status.
  *  Token-free by construction: the server never returns the token, only `hasToken`. */
@@ -54,7 +54,7 @@ export function setupSettings(): void {
 
 function render(root: HTMLElement): void {
   root.innerHTML = `
-    <div class="st-page" style="height:100vh;overflow:hidden;display:flex;flex-direction:column;background:var(--paper);">
+    <div class="st-page" style="height:var(--route-h,100vh);overflow:hidden;display:flex;flex-direction:column;background:var(--paper);">
       <div class="st-hdr">
         <div>
           <h1 class="pg-title">Settings</h1>
@@ -67,13 +67,13 @@ function render(root: HTMLElement): void {
         </div>
       </div>
       <div class="st-subnav" data-subnav>
-        <span class="jump on" data-jump="engines">Engine configs <span class="ct" data-c-engines>0</span></span>
-        <span class="jump" data-jump="proxies">Proxies <span class="ct" data-c-proxies>0</span></span>
-        <span class="jump" data-jump="telegram">Telegram bots <span class="ct" data-c-telegram>0</span></span>
-        <span class="jump" data-jump="prefs">Preferences</span>
-        <span class="jump" data-jump="pages">Published pages <span class="ct" data-c-pages>0</span></span>
-        <span class="jump" data-jump="stores">Data stores <span class="ct" data-c-stores>0</span></span>
-        <span class="jump" data-jump="destinations">Destinations <span class="ct" data-c-destinations>0</span></span>
+        <span class="jump on" data-jump="engines" role="button" tabindex="0">Engine configs <span class="ct" data-c-engines>0</span></span>
+        <span class="jump" data-jump="proxies" role="button" tabindex="0">Proxies <span class="ct" data-c-proxies>0</span></span>
+        <span class="jump" data-jump="telegram" role="button" tabindex="0">Telegram bots <span class="ct" data-c-telegram>0</span></span>
+        <span class="jump" data-jump="prefs" role="button" tabindex="0">Preferences</span>
+        <span class="jump" data-jump="pages" role="button" tabindex="0">Published pages <span class="ct" data-c-pages>0</span></span>
+        <span class="jump" data-jump="stores" role="button" tabindex="0">Data stores <span class="ct" data-c-stores>0</span></span>
+        <span class="jump" data-jump="destinations" role="button" tabindex="0">Destinations <span class="ct" data-c-destinations>0</span></span>
       </div>
       <div class="st-scroll" style="flex:1;overflow-y:auto;" data-scroll></div>
     </div>
@@ -453,7 +453,8 @@ function destinationsSectionHtml(): string {
 
 function wireSubnav(root: HTMLElement): void {
   root.querySelectorAll<HTMLElement>('[data-jump]').forEach((el) => {
-    el.addEventListener('click', () => {
+    // onActivate routes click AND Enter/Space to the same handler (F5 a11y).
+    onActivate(el, () => {
       root.querySelectorAll<HTMLElement>('.st-subnav .jump').forEach((j) => j.classList.remove('on'));
       el.classList.add('on');
       const target = `sec-${el.dataset['jump']}`;
