@@ -140,7 +140,7 @@ function renderMaster(): void {
 }
 
 function itemHtml(a: ApprovalRow): string {
-  const short = a.id.length > 10 ? `${a.id.slice(0, 6)}…${a.id.slice(-2)}` : a.id;
+  const short = shortHash(a.id);
   const fromAgent = a.requesterAddr.replace(/^agent:/, '');
   return `
     <div class="ap-item ${a.state} ${a.id === selectedId ? 'active' : ''}" data-id="${escapeHtml(a.id)}">
@@ -195,7 +195,10 @@ function renderDetail(a: ApprovalRow): void {
         <span>request from ${escapeHtml(fromAgent)}</span>
       </div>
       <div class="id-row">
-        <span class="id">${escapeHtml(a.id)}</span>
+        <span class="id" title="${escapeHtml(a.id)}">${escapeHtml(shortHash(a.id))}</span>
+        <button class="id-copy" data-copy-id title="Copy full id">
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="8" height="11" rx="1"/><rect x="6" y="1.5" width="4" height="2" rx="0.5"/></svg>
+        </button>
         <span class="state ${a.state}">● ${a.state}</span>
       </div>
       <div class="meta-row">
@@ -208,7 +211,7 @@ function renderDetail(a: ApprovalRow): void {
     <div class="ap-detail-body">
       <div class="ap-section-hd">Payload <span class="meta">application/json</span></div>
       <div class="ap-payload" data-payload>${payloadFmt}</div>
-      ${a.amendmentsJson ? `<div class="ap-section-hd" style="margin-top:18px;">Amendments</div><div class="ap-payload">${formatPayload(a.amendmentsJson)}</div>` : ''}
+      ${renderAmendments(a)}
       <div class="ap-section-hd" style="margin-top:18px;">Decision</div>
       <div class="ap-actions">
         ${isTerminal ? `
@@ -245,6 +248,15 @@ function renderDetail(a: ApprovalRow): void {
       void withdraw(a.id, notifyAgent);
     });
   }
+
+  // Copy the full approval id to the clipboard — the header shows the
+  // abbreviated hash, so this is the affordance that recovers the full value.
+  pane.querySelector<HTMLElement>('[data-copy-id]')?.addEventListener('click', async () => {
+    await navigator.clipboard?.writeText(a.id).then(
+      () => showToast('Copied id', 'info'),
+      () => showToast('Copy failed', 'error'),
+    );
+  });
 
   // Mobile-only back button — visible when in stacked-detail mode.
   const backBtn = pane.querySelector<HTMLElement>('[data-back]');
@@ -438,6 +450,179 @@ function openAmendModal(a: ApprovalRow, notifyAgent?: string | null): void {
   document.addEventListener('keydown', onKeydown);
 }
 
+/* ── amendments diff ───────────────────────────────────────────────── */
+
+/**
+ * One stored amendment: the PRIOR payload that was replaced, plus when. The
+ * approval's own current `payload` is the most-recent (amended) version. Older
+ * orchestrator rows may omit either field, so both are optional and validated
+ * before use.
+ */
+type Amendment = { payload?: unknown; replacedAt?: unknown };
+
+/**
+ * Render the AMENDMENTS section as a chronological set of two-column
+ * Original→Amended diffs.
+ *
+ * `a.amendmentsJson` is a JSON-stringified array of `{ payload, replacedAt }`,
+ * where each `payload` is itself a stringified prior version of the request.
+ * The version chain is therefore `[amendment[0].payload, …, a.payload]`:
+ * each amendment's stored prior is the "Original" and the next version in the
+ * chain (the next amendment's prior, or the approval's current payload for the
+ * most recent amendment) is the "Amended".
+ *
+ * Every value flows through `colorizeJsonLine`/`escapeHtml`, so no raw payload
+ * ever reaches innerHTML. Malformed top-level JSON falls back to the readable
+ * payload viewer over the raw string; a malformed per-amendment payload is
+ * shown verbatim (escaped) on its side of the diff.
+ */
+function renderAmendments(a: ApprovalRow): string {
+  if (!a.amendmentsJson) return '';
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(a.amendmentsJson);
+  } catch {
+    // Top-level amendments blob isn't valid JSON — show it through the same
+    // readable viewer the Payload block uses rather than escaped soup.
+    return `<div class="ap-section-hd" style="margin-top:18px;">Amendments</div>`
+      + `<div class="ap-payload">${formatPayload(a.amendmentsJson)}</div>`;
+  }
+
+  if (!Array.isArray(parsed) || parsed.length === 0) return '';
+
+  const amendments = (parsed as Amendment[])
+    .filter((m): m is Amendment => m != null && typeof m === 'object')
+    .slice()
+    .sort((x, y) => replacedAtKey(x).localeCompare(replacedAtKey(y)));
+  if (amendments.length === 0) return '';
+
+  // Version chain: each amendment's prior payload, then the current payload.
+  // Coerce every entry to a string — a missing/null prior payload becomes ''
+  // so downstream `.split('\n')` never sees undefined.
+  const priors = amendments.map((m) => {
+    if (typeof m.payload === 'string') return m.payload;
+    if (m.payload == null) return '';
+    return JSON.stringify(m.payload) ?? '';
+  });
+  const versions = [...priors, a.payload ?? ''];
+
+  const blocks = amendments.map((m, i) => {
+    const original = versions[i]!;
+    const amended = versions[i + 1]!;
+    const when = typeof m.replacedAt === 'string' && m.replacedAt ? ago(m.replacedAt) : '—';
+    const meta = amendments.length > 1 ? `<span class="meta">#${i + 1} · ${escapeHtml(when)}</span>` : `<span class="meta">${escapeHtml(when)}</span>`;
+    return `${i === 0 ? '' : '<div style="height:18px;"></div>'}${diffBlock(original, amended, meta)}`;
+  }).join('');
+
+  return `<div class="ap-section-hd" style="margin-top:18px;">Amendments</div>${blocks}`;
+}
+
+function replacedAtKey(m: Amendment): string {
+  return typeof m.replacedAt === 'string' ? m.replacedAt : '';
+}
+
+/**
+ * Build one Original|Amended two-column diff. Both payloads are pretty-printed,
+ * aligned line-by-line via LCS so unchanged lines sit across from each other,
+ * and removed/added lines get the brick/moss background tints (matching the
+ * `.amend-mini` viewer from the v3 mock). Every line is colorized + escaped.
+ */
+function diffBlock(originalRaw: string, amendedRaw: string, meta: string): string {
+  const left = pretty(originalRaw).split('\n');
+  const right = pretty(amendedRaw).split('\n');
+  // LCS alignment is O(n·m); cap it so a pathologically large payload can't
+  // allocate a huge DP table. Past the cap, fall back to an unaligned
+  // side-by-side (still readable, just no add/rem tinting).
+  const rows = left.length * right.length > 40_000
+    ? unalignedRows(left, right)
+    : alignLines(left, right);
+  const leftHtml = rows.map((r) => diffLine(r.left, r.leftKind)).join('');
+  const rightHtml = rows.map((r) => diffLine(r.right, r.rightKind)).join('');
+  return `
+    <div class="amend-mini">
+      <div class="hdr">
+        <div class="left">Original ${meta}</div>
+        <div class="right">Amended</div>
+      </div>
+      <div class="body">
+        <div>${leftHtml}</div>
+        <div>${rightHtml}</div>
+      </div>
+    </div>
+  `;
+}
+
+type LineKind = 'same' | 'add' | 'rem' | 'pad';
+type DiffRow = { left: string | null; leftKind: LineKind; right: string | null; rightKind: LineKind };
+
+/**
+ * Align two arrays of lines using a standard LCS. Common lines become `same`
+ * rows; a line only on the left becomes a `rem` (with a `pad` on the right) and
+ * a line only on the right becomes an `add` (with a `pad` on the left). The
+ * result is a sequence of rows that read top-to-bottom as a side-by-side diff.
+ */
+function alignLines(left: string[], right: string[]): DiffRow[] {
+  const n = left.length;
+  const m = right.length;
+  // lcs[i][j] = length of LCS of left[i..] and right[j..]
+  const lcs: number[][] = Array.from({ length: n + 1 }, () => new Array<number>(m + 1).fill(0));
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      lcs[i]![j] = left[i] === right[j]
+        ? lcs[i + 1]![j + 1]! + 1
+        : Math.max(lcs[i + 1]![j]!, lcs[i]![j + 1]!);
+    }
+  }
+  const rows: DiffRow[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < n && j < m) {
+    if (left[i] === right[j]) {
+      rows.push({ left: left[i]!, leftKind: 'same', right: right[j]!, rightKind: 'same' });
+      i++; j++;
+    } else if (lcs[i + 1]![j]! >= lcs[i]![j + 1]!) {
+      rows.push({ left: left[i]!, leftKind: 'rem', right: null, rightKind: 'pad' });
+      i++;
+    } else {
+      rows.push({ left: null, leftKind: 'pad', right: right[j]!, rightKind: 'add' });
+      j++;
+    }
+  }
+  while (i < n) {
+    rows.push({ left: left[i]!, leftKind: 'rem', right: null, rightKind: 'pad' });
+    i++;
+  }
+  while (j < m) {
+    rows.push({ left: null, leftKind: 'pad', right: right[j]!, rightKind: 'add' });
+    j++;
+  }
+  return rows;
+}
+
+/** Side-by-side without diffing — used when payloads are too large for LCS. */
+function unalignedRows(left: string[], right: string[]): DiffRow[] {
+  const rows: DiffRow[] = [];
+  const max = Math.max(left.length, right.length);
+  for (let i = 0; i < max; i++) {
+    rows.push({
+      left: left[i] ?? null,
+      leftKind: left[i] === undefined ? 'pad' : 'same',
+      right: right[i] ?? null,
+      rightKind: right[i] === undefined ? 'pad' : 'same',
+    });
+  }
+  return rows;
+}
+
+function diffLine(text: string | null, kind: LineKind): string {
+  if (kind === 'pad' || text === null) {
+    return `<div class="line pad"><span class="sig"> </span><span class="src"> </span></div>`;
+  }
+  const sig = kind === 'add' ? '+' : kind === 'rem' ? '−' : ' ';
+  return `<div class="line ${kind}"><span class="sig">${sig}</span><span class="src">${colorizeJsonLine(text)}</span></div>`;
+}
+
 /* ── helpers ───────────────────────────────────────────────────────── */
 
 function formatPayload(p: string): string {
@@ -470,6 +655,16 @@ function colorizeJsonLine(line: string): string {
   s = s.replace(/: (true|false)/g, ': <span class="bool">$1</span>');
   s = s.replace(/([{}[\],:])/g, '<span class="punc">$1</span>');
   return s;
+}
+
+/**
+ * Abbreviate an approval id to the Greenroom hash convention: `a3f1…8b`
+ * (4 leading chars + ellipsis + 2 trailing). Short ids (8 chars or fewer)
+ * are shown verbatim — abbreviating them would gain nothing and could drop
+ * meaningful characters. See ui-theme REFERENCE §5.
+ */
+function shortHash(id: string): string {
+  return id.length > 8 ? `${id.slice(0, 4)}…${id.slice(-2)}` : id;
 }
 
 function ago(iso: string): string {

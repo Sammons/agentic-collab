@@ -46,7 +46,7 @@
   background: transparent;
   color: var(--ink-3);
   border: 1px solid var(--rule);
-  border-radius: 999px;
+  border-radius: 3px;
   cursor: pointer;
   letter-spacing: -0.003em;
   transition: all 120ms ease;
@@ -197,7 +197,7 @@
 .ap-detail-hdr .crumb .chan { color: var(--ink); }
 .ap-detail-hdr .crumb .sep { color: var(--ink-4); margin: 0 6px; }
 .ap-detail-hdr .id-row {
-  display: flex; align-items: baseline; gap: 14px;
+  display: flex; align-items: center; gap: 10px;
 }
 .ap-detail-hdr .id {
   font-family: var(--mono);
@@ -206,10 +206,22 @@
   color: var(--ink);
   letter-spacing: -0.018em;
 }
+.ap-detail-hdr .id-copy {
+  display: inline-flex; align-items: center; justify-content: center;
+  background: transparent;
+  border: 0;
+  padding: 4px;
+  margin-right: 4px;
+  border-radius: 3px;
+  color: var(--ink-4);
+  cursor: pointer;
+  transition: color 120ms ease, background 120ms ease;
+}
+.ap-detail-hdr .id-copy:hover { color: var(--ink); background: var(--paper-2); }
 .ap-detail-hdr .state {
   font-size: 11px;
   padding: 3px 10px;
-  border-radius: 999px;
+  border-radius: var(--radius);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -299,6 +311,69 @@
 .ap-payload .str  { color: var(--moss); }
 .ap-payload .num  { color: var(--clay); }
 .ap-payload .bool { color: var(--plum); }
+
+/* ───── amendments diff (Original | Amended) ─────
+   Two-column side-by-side diff for the AMENDMENTS section. Mirrors the
+   `.amend-mini` viewer from docs/v3-dashboard-design.html (§02·c) and reuses
+   the same syntax tints as `.ap-payload`. Add/rem lines use the --moss-bg /
+   --brick-bg tokens (§8). Long payload strings wrap instead of clipping. */
+.amend-mini {
+  background: var(--paper-2);
+  border-radius: var(--radius);
+  overflow: hidden;
+  margin-bottom: 28px;
+}
+.amend-mini .hdr {
+  display: flex;
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  font-weight: 600;
+}
+.amend-mini .hdr > div {
+  flex: 1; padding: 8px 12px;
+  border-bottom: 1px solid var(--rule);
+  display: flex; align-items: baseline; gap: 8px;
+}
+.amend-mini .hdr > div + div { border-left: 1px solid var(--rule); }
+.amend-mini .hdr .meta {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--ink-4);
+  font-weight: 400;
+}
+.amend-mini .body { display: flex; }
+.amend-mini .body > div {
+  flex: 1; min-width: 0; padding: 8px 0;
+  font-family: var(--mono); font-size: 11.5px; line-height: 1.7;
+}
+.amend-mini .body > div + div { border-left: 1px solid var(--rule); }
+.amend-mini .line {
+  padding: 1px 12px;
+  display: grid; grid-template-columns: 14px 1fr; gap: 8px;
+}
+.amend-mini .line .sig { color: var(--ink-4); text-align: center; user-select: none; }
+.amend-mini .line .src {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  min-width: 0;
+}
+.amend-mini .line .src .key  { color: var(--steel); }
+.amend-mini .line .src .str  { color: var(--moss); }
+.amend-mini .line .src .num  { color: var(--clay); }
+.amend-mini .line .src .bool { color: var(--plum); }
+.amend-mini .line .src .punc { color: var(--ink-3); }
+.amend-mini .line.add { background: var(--moss-bg); }
+.amend-mini .line.add .sig { color: var(--moss); font-weight: 600; }
+.amend-mini .line.add .src .num { color: var(--moss); }
+.amend-mini .line.rem { background: var(--brick-bg); }
+.amend-mini .line.rem .sig { color: var(--brick); font-weight: 600; }
+.amend-mini .line.rem .src { color: var(--ink-3); }
+.amend-mini .line.rem .src .num { color: var(--brick); }
 
 .ap-timeline {
   list-style: none; padding: 0; margin: 0 0 28px;
