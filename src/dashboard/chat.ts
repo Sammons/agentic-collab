@@ -19,7 +19,7 @@ import { state, on, authHeaders, agentsByName, isFocusMode, toggleFocusMode, upd
 import { registerRoute, go } from './routing.ts';
 import { renderMarkdown } from '../shared/markdown.ts';
 import { initVoice, voiceState, clearUsedFlag } from './voice.ts';
-import { escapeHtml, formatTime, toast } from './util.ts';
+import { escapeHtml, formatTime, toast, onActivate } from './util.ts';
 
 // Threads whose name isn't a registered agent but still belongs in the
 // merged feed — operator-visible system context (approval auto-notify,
@@ -93,6 +93,9 @@ function render(root: HTMLElement): void {
         <div class="staged-files-row" data-staged-files></div>
         <div class="voice-status" data-voice-status style="display:none"></div>
         <div class="ctrls">
+          <button class="mention-btn" data-mention-btn type="button" title="Mention an agent" aria-label="Mention an agent">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94"></path></svg>
+          </button>
           <span class="hint" data-target-hint>No target — start with <span class="target">@agent</span> to send.</span>
           <span class="spacer"></span>
           <div class="voice-ctrls" data-voice-toggle>
@@ -773,6 +776,21 @@ function wire(root: HTMLElement): void {
 
   const mention = setupMentionAutocomplete(input, inputWrap, updateHint);
 
+  // Mention button: opens the same picker the typed `@` opens. `onActivate`
+  // routes click AND keyboard (Enter / Space) through one handler, so the
+  // button is fully operable from the keyboard with the same path as a mouse
+  // click. The button lives in `root.innerHTML`, re-created on every render(),
+  // so this binds a fresh node each time — no listener-stacking. After opening
+  // we dispatch an `input` event so the hint + send-button state reflect any
+  // freshly-inserted `@` through the existing single code path.
+  const mentionBtn = root.querySelector<HTMLButtonElement>('[data-mention-btn]');
+  if (mentionBtn) {
+    onActivate(mentionBtn, () => {
+      mention.openPicker();
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+  }
+
   input.addEventListener('input', () => {
     // Preserve the draft across navigation. After send, the input is reset to
     // the channel prefix and an 'input' event is dispatched, so the draft
@@ -897,6 +915,14 @@ type MentionApi = {
   move: (dir: 1 | -1) => void;
   pick: () => void;
   close: () => void;
+  /**
+   * Open the picker showing all agents — the click/keyboard target for the
+   * composer mention button. Focuses the textarea, ensures an `@` token sits
+   * at the caret (inserting one only when the caret isn't already inside an
+   * `@`-token), then runs the existing `refresh()` so the one shared
+   * `.mention-popover` renders. Reuses the same path the typed `@` follows.
+   */
+  openPicker: () => void;
 };
 
 function setupMentionAutocomplete(
@@ -925,9 +951,19 @@ function setupMentionAutocomplete(
   const detectToken = (): { partial: string; start: number; end: number } | null => {
     const pos = input.selectionStart ?? 0;
     const before = input.value.slice(0, pos);
-    // Match an @-token: `@` not preceded by alphanumeric, followed by zero+
-    // [a-zA-Z0-9_\-/] chars, anchored to the caret.
-    const m = before.match(/(?:^|\s)(@[a-zA-Z0-9_\-/]*)$/);
+    // Match the @-token anchored to the caret: the nearest `@` to the left of
+    // the caret followed by zero+ [a-zA-Z0-9_\-/] chars, ending AT the caret.
+    // This is a chat composer, not prose, so we err hard toward opening —
+    // `@` triggers no matter what precedes it: bare `@`, `word@`, `(hi@`, `,@`,
+    // `word @` all open the picker immediately, with no backspace. The match
+    // is `$`-anchored so it only fires while the caret sits at the tail of the
+    // run, and starts at the `@` so `pick()` rewrites only `@partial` → `@name`
+    // (e.g. `foo@bar` → caret after `bar` → picking yields `foo@name `, the
+    // `foo` is left untouched). Previously this used `(?:^|\s)`, which required
+    // the `@` to be preceded by start-of-string or whitespace, so `word@`
+    // opened nothing and the operator had to backspace into a whitespace
+    // context to re-fire — the bug this fix removes.
+    const m = before.match(/(@[a-zA-Z0-9_\-/]*)$/);
     if (!m) return null;
     const start = pos - m[1]!.length;
     return { partial: m[1]!.slice(1), start, end: pos };
@@ -1035,6 +1071,42 @@ function setupMentionAutocomplete(
     render();
   };
 
+  const openPicker = () => {
+    // Clicking the button blurs a focused textarea, which queues the blur
+    // handler's deferred close(). Raise the same guard the popover taps use so
+    // that deferred close is skipped — otherwise it races ~200ms later and
+    // tears down the picker we just opened. Held past the blur timeout, then
+    // released. (No-op when the textarea wasn't focused, e.g. keyboard Tab →
+    // Enter, since no blur fires then.)
+    interactingWithPopover = true;
+    setTimeout(() => { interactingWithPopover = false; }, 300);
+    input.focus();
+    // If the caret is already sitting inside an `@`-token, don't insert a
+    // second `@` — just (re)open on the existing one. `detectToken` is the
+    // single source of truth for "is there a token at the caret", so the
+    // button and the typed `@` agree on what counts.
+    if (!detectToken()) {
+      const pos = input.selectionStart ?? input.value.length;
+      const before = input.value.slice(0, pos);
+      const after = input.value.slice(pos);
+      // Insert a separating space when the preceding char is part of a word
+      // (`word` → `word @`) so the inserted mention reads as its own token
+      // rather than glued on (`word@`). Purely cosmetic — the relaxed
+      // `detectToken` would open on `word@` too — but it produces cleaner text
+      // for the common "click the button after a sentence" path. After a
+      // separator char (or at the start) the `@` is dropped in directly.
+      const needsSpace = before.length > 0 && /[a-zA-Z0-9_\-/]$/.test(before);
+      const insert = needsSpace ? ' @' : '@';
+      input.value = before + insert + after;
+      const caret = before.length + insert.length;
+      input.setSelectionRange(caret, caret);
+      // Keep the draft + send-button/hint state in sync with the new value,
+      // mirroring what a typed character would do via the 'input' listener.
+      state.composerDraft = input.value;
+    }
+    refresh();
+  };
+
   return {
     isOpen: () => pop !== null,
     isInteracting: () => interactingWithPopover,
@@ -1042,6 +1114,7 @@ function setupMentionAutocomplete(
     move,
     pick,
     close,
+    openPicker,
   };
 }
 
