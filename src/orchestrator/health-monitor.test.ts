@@ -9,6 +9,25 @@ import type { ProxyCommand, ProxyResponse } from '../shared/types.ts';
 import { HealthMonitor } from './health-monitor.ts';
 import { MessageDispatcher } from './message-dispatcher.ts';
 
+/**
+ * Poll a predicate until it returns true, or throw after `timeout` ms.
+ * Replaces fixed `setTimeout` waits before assertions on timer-driven
+ * outcomes (drain delivery, state transitions) so the test waits only as
+ * long as the work actually takes — deterministic regardless of runner speed.
+ */
+async function waitFor(
+  predicate: () => boolean,
+  { timeout = 20000, interval = 100 }: { timeout?: number; interval?: number } = {},
+): Promise<void> {
+  const start = Date.now();
+  while (!predicate()) {
+    if (Date.now() - start > timeout) {
+      throw new Error(`waitFor timed out after ${timeout}ms`);
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, interval));
+  }
+}
+
 describe('HealthMonitor', () => {
   let db: Database;
   let tmpDir: string;
@@ -362,8 +381,10 @@ describe('HealthMonitor', () => {
     // Duplicate should be deduplicated
     monitor.scheduleQuickPoll('health-a1');
 
-    // Wait for the 1s timer to fire
-    await new Promise<void>((resolve) => setTimeout(resolve, 1200));
+    // Wait for the ~1s quick-poll timer to fire and transition the agent.
+    // Poll for the transition rather than sleeping a fixed 1200ms — a slow
+    // runner can fire the timer (and run the poll) later than that.
+    await waitFor(() => db.getAgent('health-a1')?.state === 'idle');
 
     // Quick poll sees same output → unchangedCount reaches IDLE_THRESHOLD → idle
     const agent = db.getAgent('health-a1');
@@ -464,8 +485,16 @@ describe('HealthMonitor', () => {
     assert.ok(delivered, 'first message should be delivered');
     assert.equal(deliveryCount, 1);
 
-    // Drain timer is scheduled — wait for it to fire (6s + buffer)
-    await new Promise(resolve => setTimeout(resolve, 6500));
+    // Drain timer is scheduled (DRAIN_INTERVAL_MS = 6000). Poll until the
+    // drain has delivered the 2nd message and both rows read 'delivered'
+    // instead of sleeping a fixed window — a slow CI runner can need longer
+    // than 6500ms to finish the drain delivery, which read 'pending' and
+    // flaked the assertion below.
+    await waitFor(() =>
+      deliveryCount === 2
+      && db.getPendingMessageById(msg1.id)?.status === 'delivered'
+      && db.getPendingMessageById(msg2.id)?.status === 'delivered',
+    );
 
     // Second message should have been delivered by drain
     assert.equal(deliveryCount, 2);

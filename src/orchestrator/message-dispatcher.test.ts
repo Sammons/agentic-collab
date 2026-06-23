@@ -8,6 +8,25 @@ import { LockManager } from '../shared/lock.ts';
 import { MessageDispatcher } from './message-dispatcher.ts';
 import type { AgentState, ProxyCommand, ProxyResponse } from '../shared/types.ts';
 
+/**
+ * Poll a predicate until it returns true, or throw after `timeout` ms.
+ * Used in place of fixed `setTimeout` waits before assertions on
+ * timer-driven drain outcomes so the test waits only as long as the drain
+ * actually takes — deterministic regardless of runner speed.
+ */
+async function waitFor(
+  predicate: () => boolean,
+  { timeout = 20000, interval = 50 }: { timeout?: number; interval?: number } = {},
+): Promise<void> {
+  const start = Date.now();
+  while (!predicate()) {
+    if (Date.now() - start > timeout) {
+      throw new Error(`waitFor timed out after ${timeout}ms`);
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, interval));
+  }
+}
+
 describe('MessageDispatcher', () => {
   let db: Database;
   let tmpDir: string;
@@ -105,8 +124,15 @@ describe('MessageDispatcher', () => {
       assert.ok(!commands.some(c => c.action === 'capture'));
       assert.equal(commands.filter(c => c.action === 'paste').length, 1);
 
-      // Codex submit actions include a delayed second Enter after the paste.
-      await new Promise(resolve => setTimeout(resolve, 1400));
+      // Codex submit actions include a delayed second Enter after the paste,
+      // and the drain loop fires on a timer (DRAIN_INTERVAL_MS, set to 20ms
+      // above). Poll for the drain to finish delivering the 2nd message
+      // rather than sleeping a fixed window — a slow runner can need longer
+      // than 1400ms, which read 'pending' and flaked.
+      await waitFor(() =>
+        db.getPendingMessageById(second.id)?.status === 'delivered'
+        && commands.filter(c => c.action === 'paste').length === 2,
+      );
 
       assert.equal(db.getPendingMessageById(second.id)?.status, 'delivered');
       assert.equal(commands.filter(c => c.action === 'paste').length, 2);
