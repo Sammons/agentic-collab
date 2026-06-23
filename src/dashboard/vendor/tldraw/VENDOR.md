@@ -47,15 +47,26 @@ fetch** (see "No runtime CDN" below). CSS is emitted to a sibling
 
 | File | sha256 | minified bytes | gzipped bytes |
 |---|---|---|---|
-| `tldraw.bundle.js` | `87aebb5aaa4e80e000d69be666cf6724a1a745a8d0cad124c775ecc46cfab3e5` | 5794526 (5.53 MB) | 2308085 (2.20 MB) |
+| `tldraw.bundle.js` | `2fd3da8bd2b9cd4c6c7abae0a5de96f78a53418446e8bad05d210228cf7b22da` | 5795234 (5.53 MB) | 2308334 (2.20 MB) |
 | `tldraw.bundle.css` | `073c17a72f279691acbe3ae79609f26a99fbe5cebf36e4e19fa05a99ea5f216c` | 77119 (75.3 KB) | 14396 (14.1 KB) |
+
+> **Q3 rebuild (2026-06-23):** the bundle was rebuilt so the iframe-side export
+> handler (a) applies the Q3 per-edge raster cap (`MAX_EDGE_PX = 2048`) via the pure
+> `decideExport` gate (which down-scales a large canvas instead of rejecting, and
+> still refuses an empty canvas WITHOUT reaching `toImage`), and (b) emits the EDITED
+> canvas as a re-editable tldraw snapshot (`editor.getSnapshot()`, JSON-serialized)
+> in the `sketch:export-response` so the Send sidecar carries re-editable source
+> reflecting the operator's edits (operator decision, supersedes RFC §1.1b's
+> original-DSL default; the original DSL remains the fallback when serialization
+> fails). The JS sha256 + size above are the Q3 build (+708 bytes vs Q2); the CSS is
+> unchanged. Build is byte-reproducible (verified: two consecutive rebuilds produced
+> identical sha256).
 
 > **Q2 rebuild (2026-06-23):** the bundle was rebuilt to carry the iframe-side
 > DSL→tldraw translator (`tools/tldraw-bundle/translate.tsx`) and the icon-sprite
 > fix (entry.tsx now points tldraw's icon URLs at the REAL vendored
-> `0_merged.svg`). The JS sha256 + size above are the Q2 build; the CSS is
-> unchanged. The `0_merged.svg` is committed alongside the bundle and served by the
-> vendor route (`.svg` added to `VENDOR_TYPES`).
+> `0_merged.svg`). The `0_merged.svg` is committed alongside the bundle and served
+> by the vendor route (`.svg` added to `VENDOR_TYPES`).
 
 The JS is larger than the RFC's ~1.5–2.5 MB estimate because all fonts + the
 merged icon SVG + all locale JSON inline as base64 data URIs (base64 inflates

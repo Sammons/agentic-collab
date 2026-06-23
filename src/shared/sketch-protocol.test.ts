@@ -23,7 +23,7 @@ import {
   nonceMatches,
   type SketchMessage,
 } from './sketch-protocol.ts';
-import { clampScale, withinRasterCeiling, MIN_SCALE, MAX_SCALE, MAX_RASTER_PX } from './sketch-raster.ts';
+import { clampScale, withinRasterCeiling, MIN_SCALE, MAX_SCALE, MAX_RASTER_PX, MAX_EDGE_PX } from './sketch-raster.ts';
 
 const V = SKETCH_PROTOCOL_VERSION;
 const NONCE = '11111111-2222-3333-4444-555555555555';
@@ -91,13 +91,24 @@ test('clampScale clamps into [MIN_SCALE, MAX_SCALE], defaults to 1', () => {
   assert.equal(clampScale(1.5), 1.5);
 });
 
-test('withinRasterCeiling rejects over-ceiling, NaN, and non-positive dims', () => {
+test('withinRasterCeiling rejects over-ceiling (edge + total), NaN, and non-positive dims', () => {
   assert.ok(withinRasterCeiling(1000, 1000));
-  assert.ok(!withinRasterCeiling(MAX_RASTER_PX, 2), 'over ceiling');
+  assert.ok(!withinRasterCeiling(MAX_RASTER_PX, 2), 'over total + over edge');
   assert.ok(!withinRasterCeiling(NaN, 10));
   assert.ok(!withinRasterCeiling(10, Infinity));
   assert.ok(!withinRasterCeiling(0, 10));
   assert.ok(!withinRasterCeiling(-5, 10));
-  // Exactly at the ceiling is allowed.
-  assert.ok(withinRasterCeiling(MAX_RASTER_PX, 1));
+  // Q3 per-edge cap: an edge over MAX_EDGE_PX is rejected even when total MP is fine.
+  assert.ok(!withinRasterCeiling(MAX_EDGE_PX + 1, 1), 'over the per-edge cap');
+  // Exactly at the per-edge cap and under the total ceiling is allowed.
+  assert.ok(withinRasterCeiling(MAX_EDGE_PX, MAX_EDGE_PX), 'at the edge cap, under total');
+});
+
+test('export-response: editedDsl is OPTIONAL but must be a string when present (Q3 sidecar)', () => {
+  // Present + string → valid.
+  assert.ok(isSketchExportResponse({ kind: 'sketch:export-response', v: V, nonce: NONCE, requestId: 'r1', ok: true, dataUrl: 'data:image/png;base64,AAA', width: 10, height: 10, editedDsl: '{"document":{}}' }));
+  // Absent → still valid (older frame / serialization failure; parent falls back).
+  assert.ok(isSketchExportResponse({ kind: 'sketch:export-response', v: V, nonce: NONCE, requestId: 'r1', ok: true, dataUrl: 'data:image/png;base64,AAA', width: 10, height: 10 }));
+  // Present but non-string → rejected.
+  assert.ok(!isSketchExportResponse({ kind: 'sketch:export-response', v: V, nonce: NONCE, requestId: 'r1', ok: true, dataUrl: 'data:image/png;base64,AAA', width: 10, height: 10, editedDsl: 42 }), 'non-string editedDsl rejected');
 });

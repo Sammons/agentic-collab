@@ -96,7 +96,18 @@ export type SketchDirty = {
   readonly dirty: boolean;
 };
 
-/** A rasterized PNG (as a data URL), correlated by `requestId`. */
+/**
+ * A rasterized PNG (as a data URL), correlated by `requestId`.
+ *
+ * RFC-010 Q3: the success response also carries `editedDsl` — the EDITED canvas
+ * serialized as a re-editable tldraw snapshot (`editor.getSnapshot()` → JSON
+ * string). The operator decided the Send sidecar must carry the EDITED source (so
+ * the agent receives re-editable material reflecting the operator's edits), NOT the
+ * original DSL. The snapshot is lossless + reloadable (`loadSnapshot`); the parent
+ * uploads it as the `.tldr.json` sidecar alongside the PNG. It is OPTIONAL on the
+ * wire so an older frame (or a snapshot-serialization failure) still returns a valid
+ * PNG response — the parent falls back to the original DSL sidecar when it is absent.
+ */
 export type SketchExportResponse =
   | {
       readonly kind: 'sketch:export-response';
@@ -107,6 +118,8 @@ export type SketchExportResponse =
       readonly dataUrl: string;
       readonly width: number;
       readonly height: number;
+      /** Edited canvas as a re-editable tldraw snapshot (JSON string). Optional. */
+      readonly editedDsl?: string;
     }
   | {
       readonly kind: 'sketch:export-response';
@@ -210,7 +223,10 @@ export function isSketchExportResponse(value: unknown): value is SketchExportRes
   if (!isString(message['nonce'])) return false;
   if (!isString(message['requestId'])) return false;
   if (message['ok'] === true) {
-    return isString(message['dataUrl']) && typeof message['width'] === 'number' && typeof message['height'] === 'number';
+    if (!isString(message['dataUrl']) || typeof message['width'] !== 'number' || typeof message['height'] !== 'number') return false;
+    // editedDsl is optional; when present it must be a string (the serialized snapshot).
+    if (message['editedDsl'] !== undefined && !isString(message['editedDsl'])) return false;
+    return true;
   }
   if (message['ok'] === false) {
     return isString(message['error']);

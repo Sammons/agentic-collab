@@ -21,7 +21,8 @@ import { renderMarkdown } from '../shared/markdown.ts';
 import { initVoice, voiceState, clearUsedFlag } from './voice.ts';
 import { escapeHtml, formatTime, toast, onActivate } from './util.ts';
 import { renderBodyWithSketches } from './sketch-chat.ts';
-import { mountSketchCanvas } from './sketch-mount.ts';
+import { mountSketchCanvas, type SketchCanvasDriver } from './sketch-mount.ts';
+import { runSketchSend, type UploadedFile } from './sketch-send.ts';
 import type { SketchDoc } from '../shared/sketch-dsl.ts';
 
 // Threads whose name isn't a registered agent but still belongs in the
@@ -477,8 +478,65 @@ function wireSketches(root: HTMLElement): void {
       if (!doc) return;
       // Mount once: if a canvas already exists in this block, do nothing.
       if (blockEl.querySelector('.sketch-canvas')) return;
-      mountSketchCanvas(blockEl, doc, state.token ? { token: state.token } : {});
+      // Resolve the reply target: the agent that drew the sketch (its source
+      // agent), falling back to the thread owner. Topic mirrors the message's
+      // topic so the reply lands in the same conversation.
+      const target = resolveSketchSendTarget(msgId);
+      mountSketchCanvas(blockEl, doc, {
+        ...(state.token ? { token: state.token } : {}),
+        onSend: (driver: SketchCanvasDriver) => {
+          if (!target) {
+            toast('Cannot determine who to send this sketch to', 'error');
+            return;
+          }
+          void runSketchSend(driver, target, {
+            uploadFile: uploadSketchFile,
+            sendMessage: sendSketchMessage,
+            notify: toast,
+          });
+        },
+      });
     });
+  }
+}
+
+/**
+ * Resolve where a sketch reply goes: prefer the message's source agent (the agent
+ * that drew it), fall back to the thread owner. Returns null when neither is a known
+ * agent (a dashboard/system message — nothing to reply to).
+ */
+function resolveSketchSendTarget(msgId: number): { agent: string; topic: string } | null {
+  const msg = feedState.messages.find((m) => m.id === msgId);
+  if (!msg) return null;
+  const candidate = msg.sourceAgent && msg.sourceAgent !== 'dashboard' && msg.sourceAgent !== 'system'
+    ? msg.sourceAgent
+    : msg.agent;
+  if (!candidate || candidate === 'dashboard' || candidate === 'system') return null;
+  return { agent: candidate, topic: msg.topic || 'general' };
+}
+
+/** Upload one sketch artifact via the existing `POST /api/files` octet-stream path. */
+async function uploadSketchFile(file: File): Promise<UploadedFile> {
+  const result = await uploadFileToStorage(file);
+  return result.id !== undefined
+    ? { ok: result.ok, id: result.id }
+    : { ok: result.ok, ...(result.error !== undefined ? { error: result.error } : {}) };
+}
+
+/** Post a sketch reply via the existing `/api/dashboard/send` endpoint. */
+async function sendSketchMessage(input: { agent: string; topic: string; message: string; fileIds: string[] }): Promise<{ ok: boolean; error?: string }> {
+  const targetAddr = input.agent.includes(':') || input.agent.includes('/') ? input.agent : `agent:${input.agent}`;
+  try {
+    const res = await fetch('/api/dashboard/send', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ agent: targetAddr, message: input.message, topic: input.topic, fileIds: input.fileIds }),
+    });
+    if (res.ok) return { ok: true };
+    const body = await res.json().catch(() => null);
+    return { ok: false, error: (body as { error?: string } | null)?.error ?? `send failed (${res.status})` };
+  } catch {
+    return { ok: false, error: 'network error' };
   }
 }
 
