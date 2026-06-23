@@ -191,6 +191,7 @@ export const DOC_PAGES = [
   { slug: 'persona-reference', title: 'Persona Reference' },
   { slug: 'cli-reference', title: 'CLI Reference' },
   { slug: 'hooks-and-indicators', title: 'Hooks & Indicators' },
+  { slug: 'sketch-dsl', title: 'Sketch DSL' },
 ];
 
 // ── HTML shell ──

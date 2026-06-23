@@ -31,35 +31,12 @@ export type SketchTheme = 'greenroom-light';
 export type SketchNonce = string;
 
 // ── The shape descriptor doc (the validated DSL §7) ───────────────────────────
-// The full validator + rich descriptor schema land in Q2 (`src/shared/sketch-dsl.ts`).
-// Q1 carries a minimal structural shape so the protocol's `sketch:load` payload is
-// typed end-to-end. Q2 replaces `SketchDoc` here with the richer validated type.
+// The full validator + rich descriptor schema live in `src/shared/sketch-dsl.ts`
+// (Q2). The protocol re-exports them so the `sketch:load` payload is typed
+// end-to-end against the same source of truth both sides validate against.
 
-/** A single shape descriptor. Refined in Q2. */
-export type SketchShape = {
-  readonly id?: string;
-  readonly type: string;
-  readonly text?: string;
-  readonly color?: string;
-  readonly x?: number;
-  readonly y?: number;
-  readonly w?: number;
-  readonly h?: number;
-  readonly z?: number;
-  readonly from?: string;
-  readonly to?: string;
-  readonly children?: readonly string[];
-};
-
-/** The validated sketch document carried by `sketch:load`. Refined in Q2. */
-export type SketchDoc = {
-  readonly shapes: readonly SketchShape[];
-  readonly layout?: {
-    readonly mode?: string;
-    readonly direction?: string;
-    readonly gap?: number;
-  };
-};
+export type { SketchDoc, SketchShape } from './sketch-dsl.ts';
+import type { SketchDoc } from './sketch-dsl.ts';
 
 // ── Parent → iframe ───────────────────────────────────────────────────────────
 

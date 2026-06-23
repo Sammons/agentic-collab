@@ -37,13 +37,34 @@ import {
   type SketchExportRequest,
   type SketchNonce,
 } from '../../src/shared/sketch-protocol.ts';
+import type { SketchDoc } from '../../src/shared/sketch-dsl.ts';
 
 import { clampScale, withinRasterCeiling } from '../../src/shared/sketch-raster.ts';
+import { translateAndRender } from './translate.tsx';
 
 // Assets (fonts/icons) are imported and inlined as data URIs by esbuild's dataurl
 // loader (see build.mjs). getAssetUrlsByImport() returns the data-URI map, so the
 // browser fetches NOTHING from tldraw.com / unpkg / jsdelivr (RFC §4.2).
 const assetUrls = getAssetUrlsByImport();
+
+// ── Icon-sprite fix (RFC-010 Q2, §VENDOR.md "Known cosmetic limitation") ────────
+//
+// getAssetUrlsByImport() inlines the merged icon spritesheet as a SINGLE data: URI
+// referenced by `#fragment` (e.g. `…0_merged.svg#zoom-in`). Browsers do NOT resolve
+// fragment identifiers on data: URIs, so every toolbar icon renders as a filled
+// square. The fix: point the icons at the REAL vendored 0_merged.svg file served by
+// the vendor route, so the `#fragment` resolves. The file is committed alongside the
+// bundle and served by `GET /dashboard/vendor/...`. The frame's <base href> is the
+// dashboard origin (the host HTML sets it), so a relative vendor path resolves to
+// the real same-site file.
+const ICON_SPRITE_URL = new URL('dashboard/vendor/tldraw/0_merged.svg', document.baseURI).href;
+if (assetUrls.icons && typeof assetUrls.icons === 'object') {
+  for (const iconName of Object.keys(assetUrls.icons)) {
+    // Preserve the `#fragment` (the icon name) so the browser selects the right
+    // <symbol>/<view> out of the merged sheet, now that the sheet is a real file.
+    (assetUrls.icons as Record<string, string>)[iconName] = `${ICON_SPRITE_URL}#${iconName}`;
+  }
+}
 
 // ── Channel state ─────────────────────────────────────────────────────────────
 
@@ -52,6 +73,10 @@ let editor: Editor | null = null;
 let nonce: SketchNonce | null = null;
 /** License key from `sketch:init` (omitted in dev). Drives a one-time re-mount. */
 let licenseKey: string | undefined;
+/** The most recently loaded DSL (so `sketch:reset` can re-render the original). */
+let loadedDoc: SketchDoc | null = null;
+/** True once the operator has edited since the last load (drives `· edited`). */
+let dirty = false;
 
 /** Post a message back to the parent window. */
 function postToParent(message: FrameToParent): void {
@@ -116,6 +141,35 @@ async function handleExportRequest(request: SketchExportRequest): Promise<void> 
   }
 }
 
+// ── Render a validated DSL doc into the editor (RFC §7.2) ─────────────────────
+
+/**
+ * Clear the canvas and render `doc`. Used by `sketch:load` and `sketch:reset` (the
+ * latter discards staged edits by re-rendering the original doc). Posts a
+ * `sketch:error` for each dangling connector ref the translator dropped. Resets the
+ * dirty flag (a fresh render is, by definition, un-edited).
+ */
+function renderDoc(doc: SketchDoc): void {
+  if (!editor || nonce === null) return;
+  loadedDoc = doc;
+  // Replace everything currently on the page (a reset/reload starts clean).
+  const existing = editor.getCurrentPageShapeIds();
+  if (existing.size > 0) editor.deleteShapes([...existing]);
+  let result: { dangling: { index: number; danglingRef: string }[] };
+  try {
+    result = translateAndRender(editor, doc);
+  } catch (error: unknown) {
+    postError('translate', error instanceof Error ? error.message : 'translate failed');
+    return;
+  }
+  for (const drop of result.dangling) {
+    postError('connector', `shape ${drop.index}: dangling ref "${drop.danglingRef}" — connector dropped`);
+  }
+  // A fresh render is un-edited; tell the parent so the `· edited` marker clears.
+  dirty = false;
+  postToParent({ kind: 'sketch:dirty', v: SKETCH_PROTOCOL_VERSION, nonce, dirty: false });
+}
+
 // ── Message pump ──────────────────────────────────────────────────────────────
 
 window.addEventListener('message', (event: MessageEvent) => {
@@ -142,7 +196,8 @@ window.addEventListener('message', (event: MessageEvent) => {
 
   if (isSketchLoad(data)) {
     if (data.nonce !== nonce) return;
-    // Q2 translates data.doc → editor.createShapes(...). Q1 is a no-op mount.
+    // Q2: translate data.doc → editor.createShapes(...) + createBindings(...).
+    renderDoc(data.doc as SketchDoc);
     return;
   }
 
@@ -154,7 +209,8 @@ window.addEventListener('message', (event: MessageEvent) => {
 
   if (isSketchReset(data)) {
     if (data.nonce !== nonce) return;
-    // Q3 discards staged edits and re-renders the original doc. Q1 no-op.
+    // Discard staged edits by re-rendering the original loaded doc (§5.3, §8).
+    if (loadedDoc) renderDoc(loadedDoc);
     return;
   }
 
@@ -162,6 +218,11 @@ window.addEventListener('message', (event: MessageEvent) => {
 });
 
 // ── Mount ─────────────────────────────────────────────────────────────────────
+
+/** Debounce handle for the dirty-change notifier. */
+let dirtyTimer: ReturnType<typeof setTimeout> | null = null;
+/** Guards the one-time `sketch:ready` (a license-key re-mount re-fires onMount). */
+let readyPosted = false;
 
 function App() {
   return (
@@ -171,6 +232,34 @@ function App() {
         assetUrls={assetUrls}
         onMount={(mountedEditor: Editor) => {
           editor = mountedEditor;
+          // Tell the parent the editor is mounted ONLY once it actually exists.
+          // (Posting `sketch:ready` at module top-level — before React's onMount —
+          // races: `sketch:load` could arrive while `editor` is still null, and
+          // `renderDoc` would bail. The editor is the precondition for "ready".)
+          if (!readyPosted) {
+            readyPosted = true;
+            postToParent({ kind: 'sketch:ready', v: SKETCH_PROTOCOL_VERSION });
+          } else if (loadedDoc) {
+            // A license-key re-mount: re-render whatever was loaded before.
+            renderDoc(loadedDoc);
+          }
+          // Dirty tracking (RFC §5.3 / §8): a USER store change since the last load
+          // marks the sketch edited. `renderDoc` (load/reset) sets dirty=false and
+          // notifies; we only flip to true on a user-sourced change. Debounced so a
+          // drag doesn't spam the parent.
+          mountedEditor.store.listen(
+            () => {
+              if (nonce === null || dirty) return;
+              dirty = true;
+              if (dirtyTimer) clearTimeout(dirtyTimer);
+              dirtyTimer = setTimeout(() => {
+                if (nonce !== null) {
+                  postToParent({ kind: 'sketch:dirty', v: SKETCH_PROTOCOL_VERSION, nonce, dirty: true });
+                }
+              }, 250);
+            },
+            { source: 'user', scope: 'document' },
+          );
         }}
       />
     </div>
@@ -195,8 +284,7 @@ function mount(): void {
   );
 }
 
+// `sketch:ready` is posted from <Tldraw onMount> (once the editor exists), NOT
+// here — see the onMount handler. The parent replies with `sketch:init` then
+// `sketch:load`; by then `editor` is guaranteed non-null.
 mount();
-
-// Tell the parent the editor is mounted. This is the ONLY pre-handshake message;
-// the parent replies with `sketch:init` (carrying the nonce + optional key).
-postToParent({ kind: 'sketch:ready', v: SKETCH_PROTOCOL_VERSION });
