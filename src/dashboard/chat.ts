@@ -484,6 +484,10 @@ function wireSketches(root: HTMLElement): void {
       const target = resolveSketchSendTarget(msgId);
       mountSketchCanvas(blockEl, doc, {
         ...(state.token ? { token: state.token } : {}),
+        // RFC-010 §1.0 — forward the production license key (set only when the
+        // server has TLDRAW_LICENSE_KEY) so the iframe drops the free-tier
+        // watermark on the prod domain. Null in dev → omitted → free-tier mount.
+        ...(state.sketchLicenseKey ? { licenseKey: state.sketchLicenseKey } : {}),
         onSend: (driver: SketchCanvasDriver) => {
           if (!target) {
             toast('Cannot determine who to send this sketch to', 'error');

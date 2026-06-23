@@ -91,6 +91,19 @@ export type RouteContext = {
    * from STT_PROVIDER env + which provider configs are present.
    */
   defaultSttProvider?: 'elevenlabs' | 'whisper' | null;
+  /**
+   * RFC-010 §1.0 / §9.5 — the tldraw production license key, sourced from the
+   * `TLDRAW_LICENSE_KEY` env var. Surfaced to the dashboard via
+   * `GET /api/sketch/config` so the dashboard can pass it into
+   * `mountSketchCanvas(..., { licenseKey })`, which forwards it into the
+   * `sketch:init` postMessage so the iframe's `<Tldraw licenseKey=…>` drops the
+   * free-tier watermark on the production HTTPS domain. ABSENT in dev
+   * (HTTP/localhost) — when unset, the config endpoint omits the key entirely so
+   * no key crosses the wire and behavior is unchanged (free-tier watermark). The
+   * key is the ONLY secret allowed to reach the iframe: it is domain-restricted,
+   * client-validated, and ship-safe per tldraw's model (RFC §1).
+   */
+  tldrawLicenseKey?: string | null;
   accountStore: import('./accounts.ts').AccountStore;
   pagesDir: string;
   storesDir: string;
@@ -2918,6 +2931,28 @@ route('GET', '/api/voice/status', async (_req, res, _match, ctx) => {
     providers: { elevenlabs, whisper },
     defaultProvider: ctx.defaultSttProvider ?? null,
   });
+});
+
+/**
+ * RFC-010 §1.0 / §9.5 — sketch runtime config for the dashboard.
+ *
+ * Surfaces the tldraw production license key (`TLDRAW_LICENSE_KEY` env) so the
+ * dashboard can pass it into `mountSketchCanvas(..., { licenseKey })` → `sketch:init`
+ * → `<Tldraw licenseKey=…>`, dropping the free-tier "made with tldraw" watermark on
+ * the production HTTPS domain.
+ *
+ * When the env var is ABSENT (dev / current state), `licenseKey` is OMITTED from the
+ * response body entirely — no key crosses the wire, and the dashboard mounts the
+ * canvas with no key (free-tier watermark, unchanged behavior). The key is the only
+ * secret allowed to reach the iframe; it is ship-safe (domain-restricted,
+ * client-validated) per tldraw's model.
+ */
+route('GET', '/api/sketch/config', async (_req, res, _match, ctx) => {
+  const key = ctx.tldrawLicenseKey;
+  // Emit the key ONLY when set + non-empty. Omitting it (vs. emitting null/empty)
+  // keeps the dev path byte-for-byte the no-key path the Q3 mount already takes.
+  const body = key ? { licenseKey: key } : {};
+  json(res, 200, body);
 });
 
 const WHISPER_MAX_BYTES = 25 * 1024 * 1024; // 25 MB — matches OpenAI Whisper's per-file cap

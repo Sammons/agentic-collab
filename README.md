@@ -462,6 +462,7 @@ Persona files are editable in the dashboard UI. Agents can also edit their own p
 | `WHISPER_MODEL` | `whisper-1` | Whisper model name (matches the endpoint's vocabulary) |
 | `WHISPER_LANGUAGE` | _(unset)_ | ISO-639-1 language hint passed to Whisper |
 | `STT_PROVIDER` | `auto` | Dashboard's default STT provider when both are configured. `auto` prefers ElevenLabs if its key is set, else Whisper. Override with `elevenlabs` or `whisper`. |
+| `TLDRAW_LICENSE_KEY` | _(unset)_ | tldraw production license key for the sketch canvas (RFC-010). When set, the orchestrator surfaces it to the dashboard via `GET /api/sketch/config`; the dashboard passes it into the sketch iframe so the free-tier "made with tldraw" watermark drops on the production HTTPS domain. Unset (dev / localhost) → no key on the wire, free-tier watermark, unchanged behavior. This is the only secret the dashboard hands to the sketch iframe; it is domain-restricted, client-validated, and ship-safe per tldraw's model. Register a free hobby key at tldraw.dev for the prod domain before production deploy. |
 
 ### Proxy
 

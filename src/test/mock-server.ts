@@ -181,6 +181,15 @@ type FixtureState = {
   messageIdCounter: number;
   requestLog: RequestLogEntry[];
   wsLog: WsLogEntry[];
+  /**
+   * RFC-010 §1.0 — the tldraw license key the mock `GET /api/sketch/config`
+   * surfaces, mirroring the real route's omit-when-unset semantics. `null` (the
+   * default) reproduces dev: the endpoint returns `{}` and no key crosses the wire.
+   * A test sets it via `POST /test/set-sketch-license` to exercise production mode.
+   */
+  sketchLicenseKey: string | null;
+  /** Monotonic counter so each `POST /api/files` returns a distinct fileId. */
+  fileUploadSeq: number;
 };
 
 function createFixtureState(): FixtureState {
@@ -195,6 +204,8 @@ function createFixtureState(): FixtureState {
     messageIdCounter: 1,
     requestLog: [],
     wsLog: [],
+    sketchLicenseKey: null,
+    fileUploadSeq: 0,
   };
 }
 
@@ -215,6 +226,16 @@ function readBody(req: IncomingMessage): Promise<string> {
     const chunks: Buffer[] = [];
     req.on('data', (c: Buffer) => chunks.push(c));
     req.on('end', () => resolve(Buffer.concat(chunks).toString()));
+    req.on('error', reject);
+  });
+}
+
+/** Drain a request body as raw bytes (for binary uploads like /api/files). */
+function readBodyBytes(req: IncomingMessage): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (c: Buffer) => chunks.push(c));
+    req.on('end', () => resolve(Buffer.concat(chunks)));
     req.on('error', reject);
   });
 }
@@ -393,6 +414,15 @@ export async function startMockServer(port: number): Promise<MockServer> {
       return;
     }
 
+    // ── API: sketch config (RFC-010 §1.0) ──
+    // Mirrors the real route: emit the license key ONLY when set + non-empty,
+    // otherwise return `{}` so the dev (no-key) path is byte-for-byte unchanged.
+    if (method === 'GET' && path === '/api/sketch/config') {
+      const key = fixtures.sketchLicenseKey;
+      logJson(res, key ? { licenseKey: key } : {});
+      return;
+    }
+
     // ── Test Control: request-log ──
     if (method === 'GET' && path === '/test/request-log') {
       json(res, fixtures.requestLog);
@@ -507,6 +537,34 @@ export async function startMockServer(port: number): Promise<MockServer> {
       fixtures.messageIdCounter = fresh.messageIdCounter;
       fixtures.requestLog = fresh.requestLog;
       fixtures.wsLog = fresh.wsLog;
+      fixtures.sketchLicenseKey = fresh.sketchLicenseKey;
+      fixtures.fileUploadSeq = fresh.fileUploadSeq;
+      logJson(res, { ok: true });
+      return;
+    }
+
+    // ── API: file upload (RFC-010 Q3/Q4 dual upload) ──
+    // The dashboard POSTs an octet-stream body to /api/files?filename=…; the real
+    // orchestrator stores it and returns { ok, id, name, size }. The mock returns a
+    // distinct fileId per upload (so the dual-upload yields two ids that flow into
+    // the send) and logs the byte length + filename for assertions.
+    if (method === 'POST' && path === '/api/files') {
+      const bytes = await readBodyBytes(req);
+      const filename = url.searchParams.get('filename') ?? 'upload.bin';
+      const id = `file-${fixtures.fileUploadSeq++}`;
+      parsedRequestBody = { filename, size: bytes.length };
+      logJson(res, { ok: true, id, name: filename, size: bytes.length });
+      return;
+    }
+
+    // ── Test Control: set-sketch-license (RFC-010 §1.0) ──
+    if (method === 'POST' && path === '/test/set-sketch-license') {
+      const rawBody = await readBody(req);
+      const body = JSON.parse(rawBody) as { licenseKey?: string | null };
+      parsedRequestBody = body;
+      fixtures.sketchLicenseKey = typeof body.licenseKey === 'string' && body.licenseKey.length > 0
+        ? body.licenseKey
+        : null;
       logJson(res, { ok: true });
       return;
     }

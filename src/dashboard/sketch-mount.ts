@@ -140,12 +140,30 @@ export function mountSketchCanvas(blockEl: HTMLElement, doc: SketchDoc, options:
     doc,
     requestExport(scale?: number) {
       return new Promise((resolve, reject) => {
-        const requestId = controller.registerExport(resolve, reject);
-        post({ kind: 'sketch:export-request', v: SKETCH_PROTOCOL_VERSION, nonce, requestId, format: 'png', background: true, ...(scale !== undefined ? { scale } : {}) });
-        // Safety timeout so a never-answering frame doesn't leak a pending promise.
-        setTimeout(() => {
+        // Arm a safety timeout so a never-answering frame doesn't leak a pending
+        // promise, and CLEAR it the moment the export settles. Without the clear the
+        // 20s timer outlives a successful export — a dangling timer per export in a
+        // real browser tab, and (under node --test) a 20s teardown hang because the
+        // timer keeps the event loop alive long after the test asserted. A `settled`
+        // flag makes this correct even when the frame answers SYNCHRONOUSLY (a test
+        // stub): the response may resolve before the timer var is assigned, so the
+        // resolve path records `settled` and the post-arm check below cancels it.
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const finish = (run: () => void): void => {
+          if (timer) clearTimeout(timer);
+          run();
+        };
+        const requestId = controller.registerExport(
+          (value) => finish(() => resolve(value)),
+          (error) => finish(() => reject(error)),
+        );
+        // Arm the timer BEFORE posting so a frame that answers synchronously (a test
+        // stub) settles after the timer exists and `finish` can cancel it. In a real
+        // browser postMessage is async, so the response always arrives after this.
+        timer = setTimeout(() => {
           controller.timeoutExport(requestId, new Error('export timed out'));
         }, 20_000);
+        post({ kind: 'sketch:export-request', v: SKETCH_PROTOCOL_VERSION, nonce, requestId, format: 'png', background: true, ...(scale !== undefined ? { scale } : {}) });
       });
     },
   };

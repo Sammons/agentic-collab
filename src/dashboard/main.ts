@@ -10,7 +10,7 @@
  * The sidebar re-renders automatically on init/agents-changed/teams-changed
  * /selection-changed/route-changed events via state.ts's pub/sub bus.
  */
-import { loadToken, loadCachedThreads, restoreSelectionAtBoot, state } from './state.ts';
+import { loadToken, loadCachedThreads, restoreSelectionAtBoot, loadSketchConfig, state } from './state.ts';
 import { setupRouter } from './routing.ts';
 import { setupSidebar } from './sidebar.ts';
 import { setupChat } from './chat.ts';
@@ -27,6 +27,11 @@ import { connect } from './connection.ts';
 
 function boot(): void {
   loadToken();
+  // RFC-010 §1.0 — fetch the tldraw license key (if the server has one) in the
+  // background. The sketch canvas mounts only on a deliberate "open canvas" click
+  // (§9.6), long after this resolves, so it does not block boot. In dev (env
+  // unset) this no-ops and the canvas mounts free-tier.
+  void loadSketchConfig();
   // Restore cached threads BEFORE wiring routes so the merged feed has
   // something to render against immediately on cold reload, even before
   // the WS delta init lands. The selection restore below intersects with
