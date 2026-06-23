@@ -31,6 +31,7 @@ import {
   type FrameToParent,
   type ParentToFrame,
 } from '../shared/sketch-protocol.ts';
+import { SketchSendController } from './sketch-send-controller.ts';
 
 export type SketchMountOptions = {
   /** Dashboard auth token (passed to Q3's upload, not to the iframe). */
@@ -45,11 +46,24 @@ export type SketchMountOptions = {
   readonly onSend?: (driver: SketchCanvasDriver) => void;
 };
 
+/** The result of a canvas export: the PNG data URL + the EDITED-source sidecar. */
+export type SketchExportResult = {
+  readonly dataUrl: string;
+  readonly width: number;
+  readonly height: number;
+  /**
+   * The EDITED canvas as a re-editable tldraw snapshot (JSON string), when the
+   * iframe could serialize it. Absent on an older frame / serialization failure;
+   * the Send flow falls back to the original DSL sidecar in that case (RFC-010 Q3).
+   */
+  readonly editedDsl?: string;
+};
+
 /** What Q3 needs to drive Send: request a PNG export + read the original DSL. */
 export type SketchCanvasDriver = {
   readonly doc: SketchDoc;
-  /** Post a `sketch:export-request`; resolves with the PNG data URL or rejects. */
-  requestExport(scale?: number): Promise<{ dataUrl: string; width: number; height: number }>;
+  /** Post a `sketch:export-request`; resolves with the PNG + edited sidecar or rejects. */
+  requestExport(scale?: number): Promise<SketchExportResult>;
 };
 
 /** Fetch the opaque-origin host HTML (absolute bundle URLs + <base>) for srcdoc. */
@@ -66,8 +80,8 @@ async function fetchFrameHtml(): Promise<string> {
  */
 export function mountSketchCanvas(blockEl: HTMLElement, doc: SketchDoc, options: SketchMountOptions = {}): void {
   const nonce = crypto.randomUUID();
-  let exportSeq = 0;
-  const pendingExports = new Map<string, { resolve: (v: { dataUrl: string; width: number; height: number }) => void; reject: (e: Error) => void }>();
+  // Pure controller owns dirty-state + requestId correlation (DOM-free, unit-tested).
+  const controller = new SketchSendController<SketchExportResult>();
 
   // ── Build the chrome ──────────────────────────────────────────────────────
   const head = blockEl.querySelector<HTMLElement>('.sketch-head');
@@ -126,12 +140,11 @@ export function mountSketchCanvas(blockEl: HTMLElement, doc: SketchDoc, options:
     doc,
     requestExport(scale?: number) {
       return new Promise((resolve, reject) => {
-        const requestId = `exp-${exportSeq++}`;
-        pendingExports.set(requestId, { resolve, reject });
+        const requestId = controller.registerExport(resolve, reject);
         post({ kind: 'sketch:export-request', v: SKETCH_PROTOCOL_VERSION, nonce, requestId, format: 'png', background: true, ...(scale !== undefined ? { scale } : {}) });
         // Safety timeout so a never-answering frame doesn't leak a pending promise.
         setTimeout(() => {
-          if (pendingExports.delete(requestId)) reject(new Error('export timed out'));
+          controller.timeoutExport(requestId, new Error('export timed out'));
         }, 20_000);
       });
     },
@@ -165,15 +178,26 @@ export function mountSketchCanvas(blockEl: HTMLElement, doc: SketchDoc, options:
     const message = data as FrameToParent;
 
     if (message.kind === 'sketch:dirty') {
-      editedMarker.hidden = !message.dirty;
+      // dirty drives ONLY the `· edited` marker (NOT Send's enabled state, §1.1a).
+      const intent = controller.applyDirty(message.dirty);
+      editedMarker.hidden = !intent.markerVisible;
       return;
     }
     if (message.kind === 'sketch:export-response') {
-      const pending = pendingExports.get(message.requestId);
-      if (!pending) return; // stale / unknown requestId — ignore (Q3 covers correlation)
-      pendingExports.delete(message.requestId);
-      if (message.ok) pending.resolve({ dataUrl: message.dataUrl, width: message.width, height: message.height });
-      else pending.reject(new Error(message.error));
+      // requestId correlation lives in the controller: a stale / unknown id is
+      // ignored and never resolves the wrong promise (§13 Q3).
+      const outcome = message.ok
+        ? {
+            ok: true as const,
+            value: {
+              dataUrl: message.dataUrl,
+              width: message.width,
+              height: message.height,
+              ...(message.editedDsl !== undefined ? { editedDsl: message.editedDsl } : {}),
+            },
+          }
+        : { ok: false as const, error: new Error(message.error) };
+      controller.settleExport(message.requestId, outcome);
       return;
     }
     // sketch:error → surface to console (a toast is Q3's polish).
@@ -186,7 +210,8 @@ export function mountSketchCanvas(blockEl: HTMLElement, doc: SketchDoc, options:
   // Reset re-renders the original doc (discards staged edits).
   resetBtn.addEventListener('click', () => {
     post({ kind: 'sketch:reset', v: SKETCH_PROTOCOL_VERSION, nonce });
-    editedMarker.hidden = true;
+    const intent = controller.reset();
+    editedMarker.hidden = !intent.markerVisible;
   });
 
   // Send: Q3 installs the export→upload→post-back flow via options.onSend.

@@ -39,7 +39,7 @@ import {
 } from '../../src/shared/sketch-protocol.ts';
 import type { SketchDoc } from '../../src/shared/sketch-dsl.ts';
 
-import { clampScale, withinRasterCeiling } from '../../src/shared/sketch-raster.ts';
+import { decideExport } from '../../src/shared/sketch-raster.ts';
 import { translateAndRender } from './translate.tsx';
 
 // Assets (fonts/icons) are imported and inlined as data URIs by esbuild's dataurl
@@ -102,6 +102,22 @@ async function blobToDataUrl(blob: Blob): Promise<string> {
   });
 }
 
+/**
+ * Serialize the EDITED canvas as a re-editable tldraw snapshot (RFC-010 Q3). The
+ * operator decided the Send sidecar carries the EDITED source (reflecting the
+ * operator's edits, re-loadable via `loadSnapshot`), not the original DSL. Returns
+ * a JSON string, or `undefined` if serialization fails (the PNG still ships; the
+ * parent falls back to the original DSL sidecar).
+ */
+function serializeEditedSnapshot(activeEditor: Editor): string | undefined {
+  try {
+    const snapshot = activeEditor.getSnapshot();
+    return JSON.stringify(snapshot);
+  } catch {
+    return undefined;
+  }
+}
+
 async function handleExportRequest(request: SketchExportRequest): Promise<void> {
   if (nonce === null) return;
   const requestId = request.requestId;
@@ -110,15 +126,15 @@ async function handleExportRequest(request: SketchExportRequest): Promise<void> 
     return;
   }
 
-  // Clamp the scale, then enforce the concrete raster ceiling on the would-be
-  // pixel dimensions BEFORE asking tldraw to render — a malicious/huge canvas
-  // must never reach toImage. We do NOT rely on the upload-size backstop (§9.4).
-  const scale = clampScale(request.scale);
+  // Apply the export GATE BEFORE asking tldraw to render — a malicious/huge canvas
+  // must never reach toImage at a dangerous size, and a large-but-legitimate canvas
+  // degrades to a smaller image rather than failing (RFC §9.4 + Q3 edge cap). The
+  // gate is a pure function (`decideExport`) shared with `node --test`. We do NOT
+  // rely on the upload-size backstop.
   const bounds = editor.getCurrentPageBounds();
-  const width = bounds ? bounds.width * scale : 0;
-  const height = bounds ? bounds.height * scale : 0;
-  if (bounds && !withinRasterCeiling(width, height)) {
-    postToParent({ kind: 'sketch:export-response', v: SKETCH_PROTOCOL_VERSION, nonce, requestId, ok: false, error: 'too large' });
+  const decision = decideExport(bounds ? { width: bounds.width, height: bounds.height } : null, request.scale);
+  if (!decision.proceed) {
+    postToParent({ kind: 'sketch:export-response', v: SKETCH_PROTOCOL_VERSION, nonce, requestId, ok: false, error: decision.error });
     return;
   }
 
@@ -126,7 +142,7 @@ async function handleExportRequest(request: SketchExportRequest): Promise<void> 
     const options: TLImageExportOptions = {
       format: 'png',
       background: request.background ?? true,
-      scale,
+      scale: decision.scale,
     };
     const result = await editor.toImage([], options);
     if (!result) {
@@ -134,7 +150,18 @@ async function handleExportRequest(request: SketchExportRequest): Promise<void> 
       return;
     }
     const dataUrl = await blobToDataUrl(result.blob);
-    postToParent({ kind: 'sketch:export-response', v: SKETCH_PROTOCOL_VERSION, nonce, requestId, ok: true, dataUrl, width: result.width, height: result.height });
+    const editedDsl = serializeEditedSnapshot(editor);
+    postToParent({
+      kind: 'sketch:export-response',
+      v: SKETCH_PROTOCOL_VERSION,
+      nonce,
+      requestId,
+      ok: true,
+      dataUrl,
+      width: result.width,
+      height: result.height,
+      ...(editedDsl !== undefined ? { editedDsl } : {}),
+    });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'export threw';
     postToParent({ kind: 'sketch:export-response', v: SKETCH_PROTOCOL_VERSION, nonce, requestId, ok: false, error: message });
