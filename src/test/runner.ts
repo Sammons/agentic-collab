@@ -258,6 +258,20 @@ export class TestContext {
     if (!res.ok) throw new Error(`reset failed: ${res.status}`);
   }
 
+  /**
+   * RFC-010 §1.0 — set (or clear) the tldraw license key the mock
+   * `GET /api/sketch/config` surfaces. Pass `null` to reproduce dev (no key on the
+   * wire); pass a string to exercise the production-license path.
+   */
+  async setSketchLicense(licenseKey: string | null): Promise<void> {
+    const res = await fetch(`${this.mock.url}/test/set-sketch-license`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ licenseKey }),
+    });
+    if (!res.ok) throw new Error(`setSketchLicense failed: ${res.status}`);
+  }
+
   // ── Probe Commands ──
 
   async waitForProbe(timeout = 10_000): Promise<void> {

@@ -289,6 +289,19 @@ if (whisperOpts) {
   console.log(`[orchestrator] Voice dictation: Whisper batch enabled (${WHISPER_URL})`);
 }
 
+// ── RFC-010 §1.0 / §9.5: tldraw production license key ──
+//
+// Sourced from TLDRAW_LICENSE_KEY. When set, it is surfaced to the dashboard via
+// GET /api/sketch/config and forwarded into the sketch iframe's `<Tldraw licenseKey=…>`
+// so the free-tier "made with tldraw" watermark drops on the production HTTPS domain.
+// When unset (dev / current state), no key crosses the wire and the canvas renders
+// free-tier (HTTP/localhost is unlicensed-by-design, no watermark; production without
+// a key shows the watermark). This is the ONLY secret allowed to reach the iframe.
+const TLDRAW_LICENSE_KEY = process.env['TLDRAW_LICENSE_KEY']?.trim() || null;
+if (TLDRAW_LICENSE_KEY) {
+  console.log('[orchestrator] Sketch canvas: tldraw production license key configured');
+}
+
 // ── Telegram Dispatcher ──
 
 const telegramDispatcher = new TelegramDispatcher();
@@ -320,6 +333,7 @@ const routeCtx: RouteContext = {
   voiceEnabled: !!voiceOpts,
   whisperOpts,
   defaultSttProvider: resolveDefaultSttProvider(),
+  tldrawLicenseKey: TLDRAW_LICENSE_KEY,
   accountStore,
   pagesDir: PAGES_DIR,
   storesDir: STORES_DIR,

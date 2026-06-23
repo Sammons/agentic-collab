@@ -47,6 +47,16 @@ export type DashboardState = {
   route: Route;
   /** Auth token for /api/* requests. */
   token: string | null;
+  /**
+   * RFC-010 §1.0 — the tldraw production license key, fetched once from
+   * `GET /api/sketch/config` at startup. Forwarded into
+   * `mountSketchCanvas(..., { licenseKey })` → `sketch:init` so the iframe drops the
+   * free-tier watermark on the production domain. `null` in dev (env unset) — the
+   * mount then omits the key entirely (free-tier, unchanged behavior). This is the
+   * only secret the dashboard hands to the sketch iframe; it is ship-safe per
+   * tldraw's domain-restricted, client-validated model.
+   */
+  sketchLicenseKey: string | null;
   /** Pending composer text to inject on next chat mount (cross-route injection). */
   pendingComposerText: string | null;
   /** Unsent composer text, preserved across navigation so chat drafts survive
@@ -64,6 +74,7 @@ export const state: DashboardState = {
   connected: 'connecting',
   route: { kind: 'dashboard' },
   token: null,
+  sketchLicenseKey: null,
   pendingComposerText: null,
   composerDraft: null,
 };
@@ -372,4 +383,27 @@ export function authHeaders(): Record<string, string> {
   const h: Record<string, string> = { 'content-type': 'application/json' };
   if (state.token) h['authorization'] = `Bearer ${state.token}`;
   return h;
+}
+
+/* ── sketch config (RFC-010 §1.0) ──────────────────────────────────── */
+
+/**
+ * Fetch the tldraw production license key once at boot from
+ * `GET /api/sketch/config` and stash it on `state.sketchLicenseKey` so the sketch
+ * canvas mount can forward it into `sketch:init`. Best-effort: a missing endpoint,
+ * an unreachable server, or an omitted key (dev) leaves `state.sketchLicenseKey`
+ * null, and the canvas mounts free-tier (unchanged behavior). Only a non-empty
+ * string is accepted; any other shape is ignored.
+ */
+export async function loadSketchConfig(): Promise<void> {
+  try {
+    const res = await fetch('/api/sketch/config', { headers: authHeaders() });
+    if (!res.ok) return;
+    const data = await res.json() as { licenseKey?: unknown };
+    if (typeof data.licenseKey === 'string' && data.licenseKey.length > 0) {
+      state.sketchLicenseKey = data.licenseKey;
+    }
+  } catch {
+    // Server unreachable / non-JSON — leave the key null (free-tier mount).
+  }
 }
