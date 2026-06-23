@@ -11,3 +11,4 @@ src/test/ui/snapshots/
 *.log
 .build-version
 .claude/worktrees/
+worktree-description.md
