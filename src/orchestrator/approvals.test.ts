@@ -10,6 +10,25 @@ import { ApprovalService } from './approvals.ts';
 import type { ProxyCommand, ProxyResponse, WsApprovalChangedEvent, AgentState } from '../shared/types.ts';
 
 /**
+ * Poll a predicate until it returns true, or throw after `timeout` ms.
+ * Used in place of fixed `setTimeout` waits before assertions on the async
+ * auto-notify dispatch so the test waits only as long as the dispatch
+ * actually takes — deterministic regardless of runner speed.
+ */
+async function waitFor(
+  predicate: () => boolean,
+  { timeout = 20000, interval = 25 }: { timeout?: number; interval?: number } = {},
+): Promise<void> {
+  const start = Date.now();
+  while (!predicate()) {
+    if (Date.now() - start > timeout) {
+      throw new Error(`waitFor timed out after ${timeout}ms`);
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, interval));
+  }
+}
+
+/**
  * Q5 — approvals CRUD + auto-notify.
  *
  * Covers the matrix from the spec:
@@ -173,9 +192,10 @@ describe('ApprovalService (Q5)', () => {
     assert.equal(events.length, 2);
     assert.equal(events[1]!.state, 'rejected');
 
-    // The dispatcher may have started draining; wait for it to finish so we
-    // observe both invariants stably.
-    await new Promise((r) => setTimeout(r, 100));
+    // The dispatcher may have started draining; the auto-notify dispatch
+    // fires async. Poll until tryDeliver has been recorded rather than
+    // sleeping a fixed 100ms — a slow runner can dispatch later than that.
+    await waitFor(() => tryDeliverCalls.includes('foo'));
 
     // Invariant 1 — tryDeliver was called with the BARE name. This is the
     // contract pending_messages.target_agent is stored against.
