@@ -1,380 +1,498 @@
-# RFC-010: AI Sketch Canvas (tldraw, vendored — Option A)
+# RFC-010: AI Sketch Canvas (tldraw, vendored — Option A, FROZEN)
 
-**Status:** Draft — needs operator decision on the license tier (§1: free hobby-watermark vs paid commercial)
+**Status:** FROZEN / build-ready. Operator approved FULL Option A (vendored tldraw + React, iframe-isolated) on the FREE hobby tier + "made with tldraw" watermark ($0). This revision folds in the operator's decisions and all dependency / security / LLM-feasibility adversarial-review findings. The Diamond DAG (§13) is final; every leaf binds to a named `node --test` or Playwright check.
 **Author:** agentic-collab-lead
-**Created:** 2026-06-23
-**Depends on:** existing file-upload pipeline (`POST /api/files`, `GET /api/files/:id`), the merged-chat renderer (`src/dashboard/chat.ts`), the dashboard asset server (`src/orchestrator/routes.ts` `/dashboard/assets/:path+`).
+**Created:** 2026-06-23 · **Frozen:** 2026-06-23
+**Depends on:** existing file-upload pipeline (`POST /api/files`, `GET /api/files/:id`), the merged-chat renderer (`src/dashboard/chat.ts`), the dashboard asset server (`src/orchestrator/routes.ts`, `/dashboard/assets/:path+`), the docs route (`src/orchestrator/routes.ts` `/docs/:page` + `DOC_PAGES` in `src/docs/render.ts`).
 
 ---
 
-## 1. LICENSE FINDING — THE GATE (read this first)
+## 0. What changed in this freeze (review fold-in summary)
 
-**Verdict: Option A is VIABLE. tldraw can be self-hosted and vendored for this internal tool. The one operator decision is whether to accept a "made with tldraw" watermark (free) or pay to remove it ($6,000/yr).**
+This RFC was reviewed by three adversarial lenses. Every binding finding is folded in here so executing quanta do not rediscover them.
 
-The tldraw SDK (4.x, the current line) is **source-available, NOT permissively licensed** (not MIT/Apache). The relevant terms, verbatim from the canonical license, are:
+- **Operator decisions** → §1 (license: free hobby + watermark, production must be tested), §1.1 (four baked UX defaults, each veto-able).
+- **Dependency review** → §4.1 (honest offline-build-step admission), §4.2 + §4.5 (`VENDOR.md` carries versions/build-cmd/sha256/size **and** a CI reproducible-build check), §4.6 (named CVE-rot owner + quarterly/on-disclosure rebuild ritual), §11 Option C (zero-dep vanilla SVG/canvas renderer, properly **costed**).
+- **Security review (BLOCKERS)** → §5.1 (sandbox via **srcdoc/blob, NOT `allow-same-origin allow-scripts`**), §9.2 (**CSP** for `/dashboard` + `/dashboard/sketch-frame`), §9.3 (path-traversal fix: `resolve()` + `startsWith`, not substring `..`), §9.4 (`parseSketchDsl`: reject `__proto__`/`constructor`/`prototype`, explicit field-copy, finite+bounded numerics, raster ceiling **inside** the iframe before `toImage`).
+- **LLM-feasibility review** → §7.2 (DSL extended: `id`, connector-by-id, `frame`/container, z-order, relative/flow layout), §7.4 (**detection-before-escape** trap documented), §13 Q4 (**golden-corpus** human-reviewed gate), §7.3 + §13 Q2 (`/docs/sketch-dsl` needs a `DOC_PAGES` entry + `src/docs/sketch-dsl.md`).
 
-- **Bundling and modifying are explicitly PERMITTED.** The license grants the right to *"Use the Software in Development Environments,"* *"Modify the Software to suit your needs,"* and *"Bundle the Software with your own projects."* The only redistribution limit is you *"cannot distribute the Software … as a standalone product, but only as part of another application."* Vendoring a built bundle into our dashboard is exactly "as part of another application." ([LICENSE.md](https://github.com/tldraw/tldraw/blob/main/LICENSE.md))
-- **Development use is free and needs no key.** The SDK self-detects "development" and runs unrestricted when **any** of these hold: protocol is **HTTP** (not HTTPS), hostname is **`localhost`**, or **`NODE_ENV !== 'production'`**. ([License key docs](https://tldraw.dev/sdk-features/license-key))
-- **Production use requires a license key.** "Production" = HTTPS on a non-localhost domain. Without a key in production you get *"console errors about the missing or invalid license"* and the watermark; the SDK does not hard-fail to a blank screen, but running unlicensed in production is a license violation, so we do not rely on that. ([License key docs](https://tldraw.dev/sdk-features/license-key))
-- **A FREE "hobby" license exists** for non-commercial projects. It is granted on request (discretionary review). It keeps the **"made with tldraw" watermark** visible on the canvas. ([License page](https://tldraw.dev/community/license))
-- **Removing the watermark requires a paid commercial license: $6,000 USD / year per team.** ([Community debate on the $6k fee](https://biggo.com/news/202509190115_tldraw_SDK_4.0_Licensing_Debate), [License updates](https://tldraw.substack.com/p/license-updates-for-the-tldraw-sdk))
-- **License keys are safe to ship in the bundle.** Keys are validated client-side and are domain-restricted, so embedding the key in the vendored bundle (or passing it via the iframe host page) is sanctioned by tldraw. ([License key docs](https://tldraw.dev/sdk-features/license-key))
+---
 
-### What this means for agentic-collab specifically
+## 1. License — DECIDED: free hobby tier + watermark ($0)
 
-The dashboard is served by the orchestrator (Docker `:3000`) and reached over the tailnet. **Detection turns on the URL the browser uses, not on where the server runs.**
+**The tldraw SDK (4.x) is source-available, not permissively licensed (not MIT/Apache).** The operator chose the **free hobby license** with the **"made with tldraw" watermark**. $0/yr. The terms, verbatim from the canonical license:
 
-- If operators reach the dashboard at `http://<host>:3000/...` (HTTP) or via `localhost`, the SDK is in **development mode → free, no key, no watermark, no violation.** This is the common case today.
-- If the dashboard is fronted by HTTPS on a non-localhost tailnet hostname, the SDK is in **production mode** and needs a key. For an **internal, non-commercial** tool the **free hobby license** covers this — it costs nothing and only adds the watermark.
+- **Bundling and modifying are explicitly PERMITTED.** The license grants *"Use the Software in Development Environments,"* *"Modify the Software to suit your needs,"* *"Bundle the Software with your own projects."* The only redistribution limit: you *"cannot distribute the Software … as a standalone product, but only as part of another application."* Vendoring a built bundle into our dashboard is exactly "as part of another application." ([LICENSE.md](https://github.com/tldraw/tldraw/blob/main/LICENSE.md))
+- **Development use is free and needs no key.** The SDK self-detects "development" and runs unrestricted when **any** of: protocol is **HTTP** (not HTTPS), hostname is **`localhost`**, or **`NODE_ENV !== 'production'`**. ([License key docs](https://tldraw.dev/sdk-features/license-key))
+- **Production use requires a license key.** "Production" = HTTPS on a non-localhost domain. Without a key in production you get console errors + the watermark; the SDK does not blank-screen, but running unlicensed in production is a license violation, so we do not rely on it. ([License key docs](https://tldraw.dev/sdk-features/license-key))
+- **The free hobby license** is granted on request (discretionary review) for non-commercial projects and keeps the **"made with tldraw" watermark** visible. ([License page](https://tldraw.dev/community/license))
+- **License keys are safe to ship.** Keys are validated client-side and domain-restricted, so passing the key via the iframe-host config is sanctioned. ([License key docs](https://tldraw.dev/sdk-features/license-key))
 
-### The operator decision (the only gate)
+### 1.0 How the decision lands in the build (key injection, dev vs prod)
 
-1. **Free hobby license, accept the watermark.** $0. A small "made with tldraw" mark sits on the sketch canvas. Recommended default for an internal tool. The agent requests a hobby key, we set it via env/iframe-host config, done.
-2. **Paid commercial license, no watermark.** $6,000/yr. Only worth it if the watermark is unacceptable on shared/recorded sketches.
+- **The license key is NEVER committed.** It is a free hobby key registered for the dashboard's production HTTPS tailnet domain. It is injected at runtime via the `sketch:init` postMessage config (§5.3) — the dashboard reads it from an orchestrator-provided runtime config value (env → `getDashboardHtml`/a config endpoint), passes it into `sketch:init`, and the iframe sets `<Tldraw licenseKey={key}>`. Rotating the key changes one config value, not the bundle.
+- **Dev mode needs NO key.** When the browser reaches the dashboard over HTTP or via `localhost`, the SDK is in development mode → free, no key, no watermark, no violation. `sketch:init` simply omits `licenseKey` in that case.
+- **Production mode (HTTPS non-localhost) MUST be tested, not assumed-localhost.** Q4's Playwright gate exercises the production path: the test serves the dashboard over HTTPS on a non-localhost host (or stubs the SDK's detection inputs to the production branch) and asserts (a) the canvas renders with a key injected, and (b) the key is present in `sketch:init` and absent from any committed source. We do not ship trusting that everyone reaches it via `localhost`.
 
-Either way **the architecture is identical** — the license key is one config value passed to the `<Tldraw licenseKey=...>` component inside the iframe (or omitted in HTTP/localhost dev). **There is no architectural blocker. Build proceeds.** This RFC assumes option (1) unless the operator picks (2).
+> **Deploy prerequisite (operator action before production):** register a **free hobby key at tldraw.dev** for the production HTTPS tailnet domain, then set it as an orchestrator config value (see §9.5 for storage). Until that key exists, production renders with console errors + the watermark; dev (HTTP/localhost) is unaffected. This prerequisite is recorded in `VENDOR.md` and the deploy runbook.
 
-> Why this is not the same as the zero-runtime-dep stance being violated: see §4. The bundler is a dev-only build tool (like `typescript` already is in this repo); the committed bundle is a static asset, not an npm runtime dependency.
+> Why this is not a zero-runtime-dep violation: §4.1. The bundler is a dev-only build tool (like `typescript` already is here); the committed bundle is a static asset, not an npm runtime dependency.
+
+### 1.1 Baked UX defaults (decisions, each veto-able by the operator)
+
+These are stated as **decisions** so the quanta have a concrete target; each carries a one-line rationale and the operator can veto any of them (tracked in §14).
+
+- **(a) Send always works, even when the canvas is unedited** — Send rasterizes the *current* canvas state (agent's original if untouched, the edit if touched). Rationale: forcing an edit before Send is a footgun; "forward the agent's diagram as a PNG" is a real use. (Supersedes the old "disabled until dirty" default; `dirty` now only drives the `· edited` marker, not Send's enabled state.)
+- **(b) Send shares the PNG AND attaches the editable sketch DSL as a sidecar** — the PNG is the **primary deliverable** (matches how agents already consume images); the DSL sidecar is a near-free enhancement (the DSL already exists in the message text, so attaching it costs one extra small upload) that keeps the artifact iterable. Rationale: the operator asked for PNG; the sidecar makes the sketch re-editable later without rebuilding it from a raster.
+- **(c) Inline rendering = a cheap static SVG preview from the DSL (zero-dep, no tldraw) + "click to open canvas"** — the chat feed shows a small server-of-nothing, dashboard-rendered SVG built directly from the validated DSL (pure vanilla TS, no React, no tldraw, no iframe). The heavy tldraw iframe is **lazy-loaded only on demand** when the operator clicks "open canvas." Rationale: most sketches are read, not edited; rendering a React tree per sketch on first paint is waste. The SVG preview also doubles as the graceful path when the iframe/bundle is unavailable.
+- **(d) Agent adoption = docs-only + opt-in per persona initially** — the DSL convention lives in `/docs/sketch-dsl` and is referenced by personas that opt in (a line in their persona file). It is **NOT** injected into every agent's system context yet. Rationale: prove the premise (golden corpus, §13 Q4) on a few agents before paying the token cost + behavior change across the whole fleet; broad injection is a later, separate decision.
 
 ---
 
 ## 2. Problem
 
-Agents communicate in text + attached files. They cannot communicate **spatial / diagrammatic** intent: an architecture sketch, a box-and-arrow flow, a wireframe, a "here's the layout I mean." The operator equally has no way to **draw back** at an agent. Today the closest path is an agent describing a diagram in prose or ASCII, which is lossy and slow to iterate on.
+Agents communicate in text + attached files. They cannot communicate **spatial / diagrammatic** intent: an architecture sketch, a box-and-arrow flow, a wireframe, "here's the layout I mean." The operator equally has no way to **draw back** at an agent. Today the closest path is an agent describing a diagram in prose or ASCII, which is lossy and slow to iterate on.
 
-We want a first-class **sketch** message type: an agent emits a drawing, it renders as an **interactive canvas inline in the chat**, the operator **edits it in place** with changes **staged** (nothing leaves the browser until they choose), and **Send** shares the edited result back as a **rasterized PNG** through the existing file pipeline — so the agent (and the rest of the system) sees it exactly the way it already sees any uploaded image.
+We want a first-class **sketch** message type: an agent emits a drawing; it renders as a **cheap inline SVG preview** in chat; the operator can **click to open** an **interactive tldraw canvas**, edit it in place with changes **staged** (nothing leaves the browser until they choose), and **Send** shares the result back as a **rasterized PNG** (primary) plus the **editable DSL sidecar** (enhancement) through the existing file pipeline — so the agent sees it exactly the way it already sees any uploaded image, and can re-edit later.
 
 ## 3. Goals / Non-Goals
 
 **Goals**
-- An agent can produce a sketch that renders as an **interactive tldraw canvas** inline in a chat message.
-- The operator edits that canvas with tldraw's own editing UI; edits are **staged in the browser**, never auto-sent.
-- A **Send** control rasterizes the edited canvas to a **PNG** and posts it back via the existing `POST /api/files` → message-with-`fileIds` flow.
-- **Zero runtime npm dependency** in the orchestrator/dashboard: tldraw ships as a **pre-built, committed, vendored bundle**, served by the existing static-asset path, **lazy-loaded only for sketch messages**.
-- **iframe isolation**: tldraw + React run inside a same-origin sandboxed iframe; the dashboard talks to it only over a typed `postMessage` protocol. The dashboard's vanilla-TS world never imports React.
+- An agent produces a sketch that renders inline as a **cheap static SVG preview** (zero-dep) and, on demand, as an **interactive tldraw canvas**.
+- The operator edits that canvas with tldraw's own UI; edits are **staged in the browser**, never auto-sent.
+- A **Send** control rasterizes the current canvas to a **PNG** and posts it back via `POST /api/files` → message-with-`fileIds`, **plus** attaches the source **DSL** as a sidecar file.
+- **Zero runtime npm dependency** in orchestrator/dashboard: tldraw ships as a **pre-built, committed, vendored bundle**, served by the static-asset path, **lazy-loaded only when the operator opens a canvas**.
+- **iframe isolation** that is a *real* boundary: tldraw + React run inside a sandboxed iframe whose script-execution context is **NOT same-origin with the dashboard** (§5.1); the dashboard talks to it only over a typed `postMessage` protocol and never imports React.
 
 **Non-Goals**
-- No multiplayer / real-time collaborative editing (no `tldraw sync`, no server-side store).
-- No round-trip of the **editable** document back to the agent in v1 — the agent receives the **rasterized PNG** (matching how it consumes any image). (Optional future: also attach the source DSL/snapshot JSON as a sidecar file.)
+- No multiplayer / real-time collaborative editing (no `tldraw sync`, no server store).
+- No round-trip of a tldraw *snapshot* document to the agent — the agent receives the **PNG + the source DSL** (not the brittle snapshot JSON, §7.1).
 - No tldraw plugins, custom shapes, or asset uploads inside the canvas in v1.
-- No change to the agent engines/adapters — agents emit sketches via a text convention in their normal message stream (§7).
+- No engine/adapter change; no global system-context injection of the DSL convention (§1.1d).
 
 ---
 
-## 4. Decision: Option A — vendored tldraw + React, iframe-isolated, lazy-loaded, PNG on Send
+## 4. Decision: Option A — vendored tldraw + React, iframe-isolated, lazy-loaded, PNG + DSL sidecar on Send
 
-### 4.1 The zero-runtime-dep justification (the part the adversarial reviewer will attack)
+### 4.1 Zero-runtime-dep justification — and the honest admission of an offline build step
 
-The repo's north-star constraint is **zero runtime npm dependencies** — `node --test`, no `npm install`, `.ts` served type-stripped to the browser. tldraw is a React SDK. Reconciling these:
+The repo's north-star constraint is **zero runtime npm dependencies** (`node --test`, no `npm install`, `.ts` served type-stripped). tldraw is a React SDK. Reconciling these, honestly:
 
-- **The orchestrator and dashboard runtime gain ZERO new dependencies.** No entry is added to any `package.json` `dependencies`. `npm install` is still not part of running the app. The orchestrator still serves static files and type-strips `.ts`; it never imports React or tldraw.
-- **tldraw is built ONCE, OFFLINE, into a single self-contained ESM bundle (JS + CSS), and the OUTPUT is committed** under `src/dashboard/vendor/tldraw/`. This is identical in spirit to how `typescript` is already a dev-only tool in this repo: a developer runs a tool offline to produce an artifact the runtime consumes. The runtime consumes the **artifact** (a `.js` file), not the tool.
-- **The build is NOT in CI and NOT at runtime.** No CI step builds the bundle; no container build step runs a bundler. The committed bundle is the source of truth. Rebuilding only happens when a human deliberately upgrades tldraw (§4.3), as a one-off, off the critical path.
-- **Supply-chain posture is BETTER than a live dep, not worse.** Per the user-level rule `assume_risk_from_all_supply_chain`: a vendored, pinned, committed bundle is reviewed once and frozen — it cannot silently update under us. A live `dependencies` entry can pull a compromised patch on any reinstall. The bundle's provenance (tldraw version, build command, checksums) is recorded next to it (§4.2).
-- **It is iframe-isolated.** Even though the bundle is large and React-based, it never enters the dashboard's module graph. The dashboard stays vanilla TS; the React world is sealed behind an iframe boundary and a `postMessage` wire.
+- **The orchestrator and dashboard runtime gain ZERO new runtime dependencies.** No entry is added to any app `package.json` `dependencies`. `npm install` is still not part of running the app. The orchestrator serves static files and type-strips `.ts`; it never imports React or tldraw.
+- **Honest admission:** this **introduces an offline build step** — `tools/tldraw-bundle/` with its own `package.json` (tldraw + react + react-dom + esbuild) — and the base project's ethos forbids a build step **for the live app**. The justification, stated plainly so the reviewer does not have to extract it: the bundler is **dev-only, exactly like `typescript` is already a dev-only tool in this repo**. The **runtime never builds it**, **CI never builds it**, the container never builds it. A human runs the bundler offline on a deliberate upgrade; the **committed bundle is the artifact** the runtime consumes (a `.js` file), and the artifact — not the tool — is what ships. This is the one sanctioned exception and it is bounded by §4.5 (the committed bundle must match a reproducible build) and §4.6 (CVE-rot ownership).
+- **Supply-chain posture is BETTER than a live dep, not worse** (per `assume_risk_from_all_supply_chain`): a vendored, pinned, committed bundle is reviewed once and frozen — it cannot silently update under us. A live `dependencies` entry can pull a compromised patch on any reinstall. Provenance (version, build command, checksums, size) is recorded next to it (§4.2) **and** verified in CI (§4.5).
+- **iframe-isolated.** The bundle never enters the dashboard's module graph; the React world is sealed behind the iframe boundary (§5.1) and a `postMessage` wire.
 
-This is the same call RFC-008 makes for Telegram ("no new runtime dependency; custom HTTP polling stays") applied to a UI dependency: we take the capability without taking the dependency into the runtime.
+This is the same call RFC-008 made for Telegram ("take the capability, not the runtime dependency") applied to a UI dependency.
 
 ### 4.2 The vendored bundle — build, location, serving
 
-**Build (offline, one-off, by a human upgrading tldraw):**
-
-A tiny build dir lives at `tools/tldraw-bundle/` (a top-level dev tool, per `top_level_tools_for_cross_skill_dev_tools`), NOT under `src/`. It has its **own** `package.json` (the ONLY place tldraw + react + react-dom + esbuild appear — and it is never installed by the app, never referenced by the runtime). The build:
+**Build dir (offline, one-off, human-run on upgrade):** `tools/tldraw-bundle/` — a top-level dev tool (per `top_level_tools_for_cross_skill_dev_tools`), NOT under `src/`. It has its **own** `package.json` (the ONLY place tldraw + react + react-dom + esbuild appear; never installed by the app, never referenced by the runtime).
 
 ```
 tools/tldraw-bundle/
   package.json          # tldraw, react, react-dom, esbuild — dev-only, NOT the app's
-  entry.tsx             # imports { Tldraw, toRichText } from 'tldraw' + 'tldraw/tldraw.css';
-                        # implements the iframe-side runtime (postMessage handler, DSL→shape
-                        # translation, export-to-PNG) — see §6/§7
+  entry.tsx             # iframe-side runtime: postMessage handler, DSL→shape translation,
+                        # connector-binding computation, export-to-PNG, raster-ceiling guard
   build.mjs             # esbuild: bundle entry.tsx → ESM, minify, bundle CSS, inline assets
-  README.md            # exact build command + how to upgrade + checksum-record steps
+  README.md             # exact build command, upgrade steps, checksum-record steps, CVE-rot ritual
+  tools/README.md entry # one line in the top-level tools/README per top_level_tools rule
 ```
 
-`build.mjs` runs esbuild with: `bundle: true`, `format: 'esm'`, `minify: true`, `define: { 'process.env.NODE_ENV': '"production"' }` (so React's dev code is dropped), `loader` entries to **inline** tldraw's fonts/icons as data URIs (tldraw's self-hosted assets — `getAssetUrls` from `@tldraw/assets/selfHosted` — so there is **no runtime CDN fetch**), and CSS bundled into the JS (or emitted as a sibling `tldraw.bundle.css`). Output:
+`build.mjs` runs esbuild with `bundle: true`, `format: 'esm'`, `minify: true`, `define: { 'process.env.NODE_ENV': '"production"' }` (drops React dev code), `loader` entries to **inline** tldraw's self-hosted fonts/icons as data URIs (`getAssetUrls` from `@tldraw/assets/selfHosted` — **no runtime CDN fetch**), and CSS emitted as a sibling `tldraw.bundle.css`. Output:
 
 ```
 src/dashboard/vendor/tldraw/
   tldraw.bundle.js       # self-contained ESM: tldraw + react + react-dom + iframe runtime
-  tldraw.bundle.css      # tldraw.css (+ any extracted CSS)
-  VENDOR.md              # tldraw version, build command, esbuild version, sha256 of each output,
-                         # build date, the licenseKey-injection note
+  tldraw.bundle.css      # tldraw.css (+ extracted CSS)
+  VENDOR.md              # REQUIRED contents — see below
 ```
 
-- tldraw ships **ESM** and is designed to be bundled (`import { Tldraw } from 'tldraw'`), so a single-file ESM output is the supported path. ([Installation docs](https://tldraw.dev/installation))
-- **No runtime CDN dependency**: fonts/icons are inlined or emitted as local sibling assets and served from `/dashboard/vendor/tldraw/...`. The browser fetches nothing from `tldraw.com`/`unpkg`/`jsdelivr`. (The one exception, if option-2 paid is NOT chosen and a hobby/trial key is in play: a trial key sends a hashed key + deploy URL to tldraw for analytics — no canvas data. A hobby/commercial key validates client-side and works fully offline.)
+**`VENDOR.md` REQUIRED contents (a leaf-bound deliverable, not prose):**
+- exact `tldraw` version (e.g. `4.x.y`) and exact `react` + `react-dom` versions,
+- exact `esbuild` version,
+- the **exact build command** (`pnpm --dir tools/tldraw-bundle build` with any flags),
+- the **sha256 of each output file** (`tldraw.bundle.js`, `tldraw.bundle.css`),
+- the **measured size** (minified bytes + gzipped bytes) of each output,
+- the `style-src` measurement result (§9.2 — whether tldraw needs `'unsafe-inline'`),
+- the licenseKey-injection note + the **deploy prerequisite** (register a free hobby key for the prod domain, §1.0),
+- the CVE-rot owner + review cadence (§4.6).
 
-**Approximate size:** the full tldraw editor + React + react-dom minified is large — on the order of **~1.5–2.5 MB minified (~400–700 KB gzipped)** (tldraw's full UI is heavy; tldraw's own tracker notes the editor pulls ~30% it does not strictly need, and v5 trimmed deps — [issue #5256](https://github.com/tldraw/tldraw/issues/5256)). **The exact number is measured at build time and recorded in `VENDOR.md`; Q1's check asserts the committed bundle is a single self-contained file and records its measured size.** Because it is **lazy-loaded only when a sketch message is present** (§8), it costs nothing on the normal text-chat path.
+- tldraw ships **ESM** and is designed to be bundled, so single-file ESM output is the supported path. ([Installation docs](https://tldraw.dev/installation))
+- **No runtime CDN dependency**: fonts/icons inlined; the browser fetches nothing from `tldraw.com`/`unpkg`/`jsdelivr`. (A *trial* key would send a hashed key + deploy URL to tldraw for analytics; a **hobby/commercial** key validates client-side and works fully offline — we use the hobby key, so offline.)
 
-**Serving — the concrete gap to close.** The existing asset server (`routes.ts`) whitelists only `.js`, `.ts`, `.css` in `ASSET_TYPES` and serves from `/dashboard/assets/:path+` and `/dashboard/shared/:path+`. Two facts make vendoring clean and one needs a small change:
+**Approximate size:** the full tldraw editor + React + react-dom minified is large — order of **~1.5–2.5 MB minified (~400–700 KB gzipped)** ([issue #5256](https://github.com/tldraw/tldraw/issues/5256)). The exact number is **measured at build time, recorded in `VENDOR.md`, and asserted by Q1's check**. Because the iframe loads only when the operator **clicks "open canvas"** (§1.1c), it costs nothing on the normal text-chat path **and** nothing on the inline-SVG-preview path.
 
-1. `.js` is already whitelisted and is served **as-is** (only `.ts` is type-stripped — `loadAssetEntry` strips only when `ext === '.ts'`). So `tldraw.bundle.js` and `tldraw.bundle.css` serve correctly with **no server change** if we expose `src/dashboard/vendor/` through a route.
-2. `warmDashboardAssets()` walks `src/dashboard` recursively at boot and pre-caches supported extensions. It would try to **read+cache** `tldraw.bundle.js` (fine — `.js` is not stripped) but the multi-MB read at boot is wasteful. **Q1 adds an exclusion**: `warmDashboardAssets` skips `vendor/` (the bundle is loaded lazily on first sketch, cached on demand by `loadAssetEntry`, mtime-keyed like everything else).
-3. **The iframe host page is `.html`, which is NOT in `ASSET_TYPES`.** Q1 adds a **dedicated route** `GET /dashboard/sketch-frame` that returns the host HTML directly (mirroring the existing `/dashboard` and `/filter-test` routes), rather than widening the asset whitelist to `.html` (narrower blast radius). The host page `<script type="module" src="/dashboard/vendor/tldraw/tldraw.bundle.js">` + `<link rel="stylesheet" href="/dashboard/vendor/tldraw/tldraw.bundle.css">`.
-4. A vendor route `GET /dashboard/vendor/:path+` (same shape as `/dashboard/assets/:path+`, same `..` guard, same content-type whitelist, same etag/mtime caching) serves the bundle files.
+### 4.3 Serving — the concrete gaps to close
 
-### 4.3 Rebuild on upgrade
+The existing asset server (`routes.ts`) whitelists only `.js`, `.ts`, `.css` in `ASSET_TYPES`, serves from `/dashboard/assets/:path+` and `/dashboard/shared/:path+`, and serves `.js` **as-is** (only `.ts` is type-stripped). `warmDashboardAssets()` walks `src/dashboard` at boot and pre-caches supported extensions. Gaps:
+
+1. **`warmDashboardAssets` would read+cache the multi-MB bundle at boot.** Q1 adds an exclusion: the boot walk **skips `vendor/`**; the bundle loads lazily on first canvas-open, cached on demand by `loadAssetEntry`, mtime-keyed like everything else.
+2. **The iframe host page is `.html`, not in `ASSET_TYPES`.** Q1 adds a **dedicated route** `GET /dashboard/sketch-frame` returning the host HTML directly (mirroring `/dashboard` and `/filter-test`), rather than widening the asset whitelist to `.html` (narrower blast radius). **NOTE:** the host page is served as the iframe `src` only in the *fallback* same-origin path; the **default** sandbox path uses `srcdoc`/blob (§5.1) and serves the bundle bytes via the vendor route. The route exists either way (the blob/srcdoc HTML still `<script src>`-loads the bundle from the vendor route).
+3. **A vendor route `GET /dashboard/vendor/:path+`** (same shape as `/dashboard/assets/:path+`, same content-type whitelist, same etag/mtime caching) serves the bundle files — **with the hardened path guard from §9.3, not the substring `..` check.**
+
+### 4.4 Rebuild on upgrade
 
 Upgrading tldraw is a deliberate human action, never automatic:
 
-1. Bump the tldraw version in `tools/tldraw-bundle/package.json`, `pnpm install` **inside that dir only**.
+1. Bump the tldraw (and react/react-dom if needed) version in `tools/tldraw-bundle/package.json`; `pnpm install` **inside that dir only**.
 2. Run `pnpm --dir tools/tldraw-bundle build` → regenerates `src/dashboard/vendor/tldraw/*`.
-3. Update `VENDOR.md` with the new version, build command, esbuild version, and fresh sha256s.
-4. Manually open a sketch in the dashboard, verify render + edit + export still work; run the Q4 tests.
-5. Commit the regenerated bundle in a dedicated `chore(deps): bump vendored tldraw to X.Y.Z` PR so the diff is reviewable as "binary-ish blob changed, here's why."
+3. Update `VENDOR.md` with new versions, build command, esbuild version, fresh sha256s, fresh sizes, and the `style-src` re-measurement.
+4. Manually open a sketch in the dashboard; verify render + edit + export still work; run the Q4 tests including the production-mode path.
+5. Commit the regenerated bundle in a dedicated `chore(deps): bump vendored tldraw to X.Y.Z` PR so the diff is reviewable as "binary-ish blob changed, here's why," and the **CI reproducible-build check (§4.5) re-verifies the sha256**.
 
-### 4.4 Architecture at a glance
+### 4.5 "Frozen" must be VERIFIABLE — CI reproducible-build check
+
+"Frozen" is not "trust me." A CI check (a `node --test`, runs in the normal suite, **does not** itself run esbuild) asserts the committed bundle matches its recorded provenance:
+
+- Recompute `sha256(src/dashboard/vendor/tldraw/tldraw.bundle.js)` and `.css` and assert each equals the value recorded in `VENDOR.md`. A drifted bundle (someone hand-edited it, or a rebuild was committed without updating `VENDOR.md`) fails CI.
+- Assert each output is a single non-empty file and that the measured size in `VENDOR.md` is within a tolerance of the actual file size.
+- The **fully reproducible build** (re-running esbuild and getting byte-identical output) is a stronger guarantee that requires installing the dev toolchain; it is run **manually on upgrade** (step 4.4.4) and documented in `tools/tldraw-bundle/README.md`. CI's cheap proxy is the sha256 match — it catches the realistic failure mode (post-hoc tampering / un-recorded rebuild) without making CI build React.
+
+### 4.6 CVE-rot ownership — the vendored bundle has no `npm audit` signal
+
+A committed bundle gets **no** `npm audit` / Dependabot alerting. That gap is owned, not ignored:
+
+- **Owner:** `agentic-collab-lead` (the persona that authored this RFC) is the named CVE-rot owner of the vendored tldraw bundle, recorded in `VENDOR.md` and `tools/tldraw-bundle/README.md`.
+- **Cadence:** a **quarterly** manual review (check tldraw + react release notes / GitHub Security Advisories for the pinned versions) **plus** an **on-disclosure** trigger (any CVE published against tldraw / react / react-dom at or below the pinned version → review immediately). The review either confirms "no action" (recorded with date in `VENDOR.md`) or runs the §4.4 rebuild ritual to pull the patched version.
+- This ritual is documented in `tools/tldraw-bundle/README.md` as a checklist so any agent/operator can run it.
+
+### 4.7 Architecture at a glance
 
 ```
- Dashboard (vanilla TS, no React)            Sandboxed iframe (same-origin)
- ┌─────────────────────────────┐             ┌──────────────────────────────────┐
- │ chat.ts renderMessageBody    │  init ───▶  │ /dashboard/sketch-frame (host .html)│
- │  detects ```sketch``` block  │  load-doc ─▶│  loads tldraw.bundle.js/.css       │
- │  mounts <iframe sandbox>     │             │  <Tldraw licenseKey=…> (or none in │
- │                              │  ◀── ready  │     HTTP/localhost dev)            │
- │  Greenroom chrome around it: │             │  DSL → editor.createShapes(...)    │
- │   header + Send + Reset      │  ◀─ dirty   │  staged edits live in tldraw store │
- │                              │ export-req ▶│                                    │
- │  on Send: postMessage        │◀ export-res │  editor.toImage([],{format:'png'}) │
- │   export-request             │   (PNG)     │   → Blob → dataURL                 │
- │  → upload PNG to /api/files  │             │                                    │
- │  → POST /api/dashboard/send  │             │                                    │
- └─────────────────────────────┘             └──────────────────────────────────┘
+ Dashboard (vanilla TS, no React)                  Sandboxed iframe (NOT same-origin — srcdoc/blob)
+ ┌───────────────────────────────────────┐         ┌──────────────────────────────────────────┐
+ │ chat.ts: detect ```sketch``` on RAW    │         │ host HTML (srcdoc/blob) loads             │
+ │   text BEFORE escape+markdown (§7.4)   │         │   /dashboard/vendor/tldraw/*.js/.css       │
+ │ render cheap inline SVG preview (DSL)  │         │  <Tldraw licenseKey=…> (or none in dev)    │
+ │   + "click to open canvas" button      │         │  DSL → editor.createShapes(...)            │
+ │                                        │  init ─▶ │  + connector bindings by id (§7.2)         │
+ │ on click → mount <iframe sandbox=…>    │  load ─▶ │  staged edits live in tldraw store         │
+ │   (allow-scripts only; cross-origin    │ ◀ ready  │                                            │
+ │    via srcdoc/blob)                     │ ◀ dirty  │  raster-ceiling guard (§9.4) before        │
+ │ Greenroom chrome: header + Send + Reset│ export ▶ │   editor.toImage([],{format:'png'})        │
+ │ on Send: postMessage export-request    │◀ export  │   → Blob → dataURL                          │
+ │   → upload PNG (primary) to /api/files  │  (PNG)   │                                            │
+ │   → upload DSL sidecar to /api/files     │         │                                            │
+ │   → POST /api/dashboard/send (fileIds)  │         │                                            │
+ └───────────────────────────────────────┘         └──────────────────────────────────────────┘
 ```
 
 ---
 
-## 5. The iframe host page + postMessage protocol
+## 5. The iframe host + postMessage protocol
 
-### 5.1 The iframe element (dashboard side)
+### 5.1 Sandbox — the BLOCKER fix: do NOT ship `allow-same-origin allow-scripts`
 
-The dashboard mounts:
+**Adversarial security finding (binding):** shipping `sandbox="allow-scripts allow-same-origin"` makes the sandbox a **no-op** — with both flags, the framed document runs scripts *in the dashboard's own origin*, so an agent-DSL-triggered tldraw/React 0-day could read the dashboard's auth token / `localStorage` / cookies and exfiltrate them. The sandbox would isolate nothing.
 
-```html
-<iframe
-  src="/dashboard/sketch-frame"
-  sandbox="allow-scripts allow-same-origin"
-  referrerpolicy="no-referrer"
-  title="sketch canvas"></iframe>
-```
+**Resolution (concrete):** the iframe runs **cross-origin to the dashboard** so `postMessage` works **without** `allow-same-origin`, by serving the iframe document via **`srcdoc` (or a `blob:` URL)**:
 
-- **Same-origin** (served by the orchestrator), so the dashboard can address it and the iframe can fetch the vendored bundle. `allow-same-origin` is required for tldraw (it uses storage / blob URLs) **and** for the dev-mode detection (`localhost`/HTTP read from the same origin).
-- **`allow-scripts`** is required (React runs). We do **not** grant `allow-top-navigation`, `allow-popups`, `allow-forms`, or `allow-modals`. The combination `allow-scripts allow-same-origin` is the documented minimum for an interactive same-origin embed; we add nothing more.
-- Note: `allow-scripts allow-same-origin` together does technically let the frame reach back into same-origin context — acceptable here because **we author and vendor the bundle ourselves** (it is trusted code we built, pinned by checksum), and the **data it processes is validated** (§9). The sandbox's job here is defense-in-depth + a clean message boundary, not isolating hostile code.
+- The dashboard mounts:
+  ```html
+  <iframe
+    sandbox="allow-scripts"
+    referrerpolicy="no-referrer"
+    title="sketch canvas"
+    srcdoc="<!doctype html>…host page that <script type=module src=/dashboard/vendor/tldraw/tldraw.bundle.js>…">
+  </iframe>
+  ```
+  A `srcdoc` document with `sandbox="allow-scripts"` (and **without** `allow-same-origin`) runs in an **opaque origin** (`origin === "null"`). Scripts run (React works), but the frame has **no access to the dashboard's origin** — no shared `localStorage`, no cookies, no token. `postMessage` still works across the opaque-origin boundary; the message-channel design (§5.3) is the only contact surface.
+- **Origin validation under opaque origin:** because the frame's origin is `"null"`, the parent validates `event.source === iframe.contentWindow` (identity check) and the parent posts to the frame with `targetOrigin: "*"` is **not** used — the parent uses the frame's window reference directly and validates the source on replies; the frame validates that messages come from `window.parent` and that its received `init` carries a one-time **handshake nonce** (§5.3) the parent generated, so a third party that somehow got a window handle cannot drive it. The frame replies with `event.source.postMessage(msg, "*")` only after the nonce handshake; payloads carry no secrets (the license key is the one config value, see below).
+- **Why the bundle still loads under opaque origin:** the `<script src="/dashboard/vendor/tldraw/tldraw.bundle.js">` is a *subresource fetch* from the parent's origin, which an opaque-origin sandboxed frame is permitted to make (it is a normal same-site GET; the response just must not require credentials/CORS that the opaque origin can't satisfy — it doesn't, it's a static asset). The CSP (§9.2) `script-src 'self'` on the **frame document** must allow this; measured at vendor time.
+- **License key under opaque origin:** the key is delivered in the `sketch:init` payload after the nonce handshake. tldraw validates it client-side against the **document's URL/domain**; for a `srcdoc` opaque-origin frame the effective host is the parent's host (the browser reports the embedding context for license purposes via the embedding URL). **This must be verified at vendor time** — if tldraw's license check rejects the opaque-origin/`srcdoc` host, the documented fallback is below.
+- **Sandbox grants:** `allow-scripts` **only**. We do NOT grant `allow-same-origin`, `allow-top-navigation`, `allow-popups`, `allow-forms`, `allow-modals`, `allow-pointer-lock`, or `allow-downloads`.
 
-### 5.2 Protocol
+**Documented fallback if `srcdoc`/opaque-origin breaks tldraw's storage or license check (justified in writing, bounded by CSP):** if vendor-time testing shows tldraw genuinely requires same-origin (it uses `IndexedDB`/`localStorage` for some features, and the license check may key off the document origin), the fallback is to serve the frame from a **dedicated, credential-free sub-path origin is not available on a single host** — so instead we keep it same-origin **but** strip the attack value: (a) the dashboard's auth token must **not** live in a storage surface a same-origin frame can read (move it to an `HttpOnly` cookie or keep it only in the top frame's closure, never `localStorage`/`sessionStorage`), and (b) the frame document is locked down with the strict CSP (§9.2) so even executing 0-day code can only `connect-src 'self'` (exfil to a third party is blocked) and cannot navigate top. This fallback is **only** taken if `srcdoc` provably fails, and the failure + the chosen mitigation are recorded in `VENDOR.md`. **Default is `srcdoc`/opaque-origin (no `allow-same-origin`).** Q1 tests the default; Q4 confirms it end-to-end before any fallback is considered.
 
-All messages are JSON objects with a `kind` discriminator (matching the repo's `kind_is_the_discriminator` convention) and a `v: 1` version field. **Both sides validate `event.origin === window.location.origin`** before processing, and the parent validates `event.source === iframe.contentWindow`.
+### 5.2 Inline preview vs interactive canvas (UX default 1.1c)
+
+- **Default render:** `chat.ts` renders a **static SVG** from the validated DSL (vanilla TS, no iframe) inside the Greenroom block, plus a **"open canvas"** button.
+- **On click:** mount the sandboxed iframe (above), load the bundle, post `init` + `load`, swap the SVG preview for the live canvas. The heavy React tree exists only after a deliberate click.
+
+### 5.3 Protocol
+
+All messages are JSON objects with a `kind` discriminator (per `kind_is_the_discriminator`) and `v: 1`. Types live in **`src/shared/sketch-protocol.ts`**, referenced by both the dashboard (`.ts`) and the iframe runtime (built from `tools/tldraw-bundle/entry.tsx`).
+
+A **handshake nonce** secures the opaque-origin channel: when the dashboard mounts the iframe it generates a `crypto.randomUUID()` nonce, includes it in `sketch:init`, and the iframe echoes it in every subsequent message; the parent drops any message whose nonce doesn't match.
 
 **Parent → iframe:**
 
-| `kind`          | payload                                  | meaning |
-|-----------------|------------------------------------------|---------|
-| `sketch:init`   | `{ v, licenseKey?: string, readOnly?: boolean, theme: 'greenroom-light' }` | sent once after the iframe posts `ready`; carries the (optional) license key and display prefs. |
-| `sketch:load`   | `{ v, shapes: SketchShape[] }`           | the agent's sketch DSL (§7) to render. The iframe translates → `editor.createShapes(...)`. |
-| `sketch:export-request` | `{ v, requestId: string, format: 'png', scale?: number, background?: boolean }` | ask the iframe to rasterize the current (edited) canvas. |
-| `sketch:reset`  | `{ v }`                                  | discard staged edits, re-render the original `sketch:load` shapes. |
+| `kind` | payload | meaning |
+|---|---|---|
+| `sketch:init` | `{ v, nonce, licenseKey?: string, readOnly?: boolean, theme: 'greenroom-light' }` | sent once after the iframe posts `ready`; carries the handshake nonce, the optional license key (omitted in HTTP/localhost dev), and display prefs. |
+| `sketch:load` | `{ v, nonce, doc: SketchDoc }` | the validated DSL (§7) to render. The iframe translates → `editor.createShapes(...)` + computes connector bindings. |
+| `sketch:export-request` | `{ v, nonce, requestId, format: 'png', scale?: number, background?: boolean }` | rasterize the current canvas. |
+| `sketch:reset` | `{ v, nonce }` | discard staged edits; re-render the original `sketch:load` doc. |
 
 **iframe → parent:**
 
-| `kind`          | payload                                  | meaning |
-|-----------------|------------------------------------------|---------|
-| `sketch:ready`  | `{ v }`                                  | bundle loaded, editor mounted; parent may now `init` + `load`. |
-| `sketch:dirty`  | `{ v, dirty: boolean }`                  | the operator has (or hasn't) edited since load; drives the Send button's enabled state + a "edited" marker. Debounced on the editor's store-change event. |
-| `sketch:export-response` | `{ v, requestId, ok: true, dataUrl: string, width: number, height: number }` or `{ v, requestId, ok: false, error: string }` | the rasterized PNG as a data URL (matching the `requestId` from the request). `toImage` returns `undefined` on failure → `ok:false`. |
-| `sketch:error`  | `{ v, where: string, message: string }`  | a parse/render/export failure the iframe wants surfaced (e.g. invalid DSL). |
+| `kind` | payload | meaning |
+|---|---|---|
+| `sketch:ready` | `{ v }` | bundle loaded, editor mounted; parent may now `init` + `load`. (No nonce yet — this is the only pre-handshake message.) |
+| `sketch:dirty` | `{ v, nonce, dirty }` | the operator has/hasn't edited since load; drives the `· edited` marker (NOT Send's enabled state, per §1.1a). Debounced on store-change. |
+| `sketch:export-response` | `{ v, nonce, requestId, ok: true, dataUrl, width, height }` or `{ …, ok: false, error }` | rasterized PNG as a data URL, correlated by `requestId`. `toImage` returns `undefined` on failure → `ok:false`. |
+| `sketch:error` | `{ v, nonce, where, message }` | a parse/render/export failure to surface. |
 
-- The PNG comes back as a **data URL** (simplest cross-frame transfer; no `MessageChannel`/transferable needed for a one-shot blob). The parent converts it to a `File`/`Blob` for upload. For very large canvases a transferable `ArrayBuffer` is a future optimization; v1 uses the data URL.
-- **`requestId`** correlates request↔response so a second export can't be mistaken for the first.
-- The protocol type definitions live in **`src/shared/sketch-protocol.ts`** so both the dashboard (`.ts`) and the iframe runtime (built from `tools/tldraw-bundle/entry.tsx`) reference one source of truth.
+- The PNG returns as a **data URL** (simplest cross-frame transfer for a one-shot blob). The parent converts to a `File`/`Blob` for upload. A transferable `ArrayBuffer` is a future optimization.
+- The DSL sidecar (§1.1b) is built **parent-side** from the original validated DSL the parent already holds — it does NOT round-trip through the iframe. (The PNG is what reflects edits; v1 ships the **original** DSL as the sidecar, with a §14 open question on whether to round-trip the *edited* DSL later.)
 
 ---
 
 ## 6. Export to PNG (the Send result)
 
-Inside the iframe, on `sketch:export-request`:
+Inside the iframe, on `sketch:export-request` (AFTER the raster-ceiling guard, §9.4):
 
 ```ts
-// editor is the tldraw Editor instance captured from <Tldraw onMount={(e) => editor = e}>
-const result = await editor.toImage([], { format: 'png', background: true, scale: 1 });
-// [] = all shapes on the current page; result is undefined on failure
-if (!result) { postBack({ kind: 'sketch:export-response', v: 1, requestId, ok: false, error: 'export failed' }); return; }
+// editor captured from <Tldraw onMount={(e) => editor = e}>
+const result = await editor.toImage([], { format: 'png', background: true, scale: CLAMPED_SCALE });
+if (!result) { postBack({ kind: 'sketch:export-response', v: 1, nonce, requestId, ok: false, error: 'export failed' }); return; }
 const dataUrl = await blobToDataUrl(result.blob);   // FileReader.readAsDataURL
-postBack({ kind: 'sketch:export-response', v: 1, requestId, ok: true, dataUrl, width: result.width, height: result.height });
+postBack({ kind: 'sketch:export-response', v: 1, nonce, requestId, ok: true, dataUrl, width: result.width, height: result.height });
 ```
 
-- `Editor.toImage(shapes, options)` is the current, supported raster export; it returns `{ blob, width, height }` (or `undefined` on failure). `exportToBlob` is deprecated in favor of it. ([Image export docs](https://tldraw.dev/sdk-features/image-export), [exportToBlob reference](https://tldraw.dev/reference/tldraw/exportToBlob))
-- Options used: `format: 'png'`, `background: true` (so the PNG has the Greenroom paper background, not transparency that looks broken in chat), `scale`/`pixelRatio` default to a crisp 2× — recorded as a constant.
+- `Editor.toImage(shapes, options)` is the current supported raster export; returns `{ blob, width, height }` (or `undefined` on failure). `exportToBlob` is deprecated in favor of it. ([Image export docs](https://tldraw.dev/sdk-features/image-export))
+- Options: `format: 'png'`, `background: true` (Greenroom paper background, not transparency), `scale` **clamped** (§9.4) — a fixed crisp default capped so a malicious/huge canvas can't request a multi-gigapixel raster.
 
 ---
 
-## 7. The agent → sketch DSL (the LLM-friendly format)
+## 7. The agent → sketch DSL (LLM-friendly format)
 
-### 7.1 Recommendation: a constrained shape-descriptor DSL, NOT raw snapshot JSON
+### 7.1 A constrained shape-descriptor DSL, NOT raw snapshot JSON
 
-An LLM asked to emit a **raw tldraw store snapshot** (the full document JSON) will produce brittle, frequently-invalid output: the snapshot format carries internal record types, schema versions, fractional `index` ordering keys, binding records, and `richText` ProseMirror nodes — exactly the kind of structure LLMs corrupt. **We do NOT ask the agent for snapshot JSON.**
+An LLM asked for a **raw tldraw store snapshot** produces brittle, frequently-invalid output (internal record types, schema versions, fractional `index` keys, binding records, ProseMirror `richText` nodes). **We do NOT ask the agent for snapshot JSON.** The agent emits a **small, flat, LLM-friendly descriptor list**; the **iframe translates** it via `editor.createShapes(...)`. Robust because: the agent only names primitives it understands; the iframe owns the brittle bits (`toRichText()`, IDs, indices, defaults, bindings); an invalid descriptor fails **one shape**, not the doc.
 
-Instead, the agent emits a **small, flat, LLM-friendly shape-descriptor list**, and the **iframe translates it** into tldraw shapes via `editor.createShapes(...)`. This is robust because: the agent only ever names primitives it understands (rect, ellipse, text, arrow, line) with plain coordinates/colors; the iframe owns all the brittle bits (`toRichText()`, IDs, indices, props defaults, bindings); and an invalid descriptor fails **one shape**, not the whole document.
+### 7.2 The DSL (extended per the LLM-feasibility review)
 
-### 7.2 The DSL
+The LLM-feasibility review found that **absolute-coordinate-only descriptors produce mush** — an LLM cannot reliably hand-place boxes, and arrows drawn by raw coordinates **drift** when the operator moves a box. The DSL is extended so the agent declares **structure** and the iframe computes pixels + bindings.
 
-A fenced code block with the info-string `sketch` containing a JSON array of descriptors. Coordinates are an abstract canvas space (the iframe fits-to-content on load). Colors are tldraw's named palette (`black blue green red orange yellow violet light-blue light-green light-red light-violet grey white`).
+A fenced block with info-string `sketch` containing a JSON object `{ "shapes": [...], "layout"?: {...} }` (an object, not a bare array, so we can carry doc-level `layout` and future fields). Colors are tldraw's named palette (`black blue green red orange yellow violet light-blue light-green light-red light-violet grey white`).
 
 ````markdown
 ```sketch
-[
-  { "type": "rect",    "x": 40,  "y": 40,  "w": 200, "h": 100, "text": "Orchestrator", "color": "blue" },
-  { "type": "rect",    "x": 40,  "y": 240, "w": 200, "h": 100, "text": "Proxy",        "color": "green" },
-  { "type": "ellipse", "x": 360, "y": 60,  "w": 160, "h": 80,  "text": "SQLite",       "color": "violet" },
-  { "type": "arrow",   "x1": 240, "y1": 90,  "x2": 360, "y2": 100, "text": "HTTP",     "color": "black" },
-  { "type": "line",    "points": [[40,400],[300,400],[300,520]], "color": "grey" },
-  { "type": "text",    "x": 40,  "y": 560, "text": "RFC-010 sketch", "color": "black" }
-]
+{
+  "shapes": [
+    { "id": "orch",  "type": "rect",    "text": "Orchestrator", "color": "blue",   "z": 1 },
+    { "id": "proxy", "type": "rect",    "text": "Proxy",        "color": "green",  "z": 1 },
+    { "id": "db",    "type": "ellipse", "text": "SQLite",       "color": "violet", "z": 1 },
+    { "id": "grp",   "type": "frame",   "text": "Docker :3000", "children": ["orch","db"] },
+    { "type": "arrow", "from": "orch", "to": "proxy", "text": "HTTP" },
+    { "type": "arrow", "from": "orch", "to": "db" }
+  ],
+  "layout": { "mode": "flow", "direction": "row", "gap": 48 }
+}
 ```
 ````
 
 **Descriptor schema (each item):**
 
-| `type`    | required fields | optional fields | maps to |
-|-----------|-----------------|-----------------|---------|
-| `rect`    | `x, y, w, h`    | `text, color, fill` | `geo` w/ `geo:'rectangle'`, `richText: toRichText(text)` |
-| `ellipse` | `x, y, w, h`    | `text, color, fill` | `geo` w/ `geo:'ellipse'` |
-| `text`    | `x, y, text`    | `color, w`      | `text` shape, `richText: toRichText(text)` |
-| `arrow`   | `x1, y1, x2, y2`| `text, color`   | `arrow` w/ `start:{x:x1,y:y1}, end:{x:x2,y:y2}` |
-| `line`    | `points: [[x,y],…]` | `color, dash` | `line` w/ points map |
-| `note`    | `x, y, text`    | `color`         | `note` (sticky) |
+| `type` | required | optional | notes |
+|---|---|---|---|
+| `rect` | (size/pos optional under layout) | `id, x, y, w, h, text, color, fill, z` | `geo` w/ `geo:'rectangle'` |
+| `ellipse` | — | `id, x, y, w, h, text, color, fill, z` | `geo` w/ `geo:'ellipse'` |
+| `text` | `text` | `id, x, y, w, color, z` | `text` shape |
+| `note` | `text` | `id, x, y, color, z` | sticky note |
+| `frame` | — | `id, x, y, w, h, text, children: id[], z` | container; `children` are shape ids it groups |
+| `arrow` | one of: (`from`+`to`) or (`x1,y1,x2,y2`) | `id, text, color, z` | **connector-by-id preferred**: `from`/`to` reference shape `id`s → the iframe computes endpoints AND creates tldraw **bindings** so the arrow follows the boxes when moved. Raw coords are the fallback. |
+| `line` | `points: [[x,y],…]` | `id, color, dash, z` | polyline |
 
-The iframe's translator is a `Record<descriptorType, (d) => TLShapePartial>` lookup (per `dispatch_is_a_lookup_not_a_chain`). Defaults fill anything omitted; `color` defaults to `black`, `fill` to `none`, `size` to `m`. Shape `props` are exactly the tldraw partials confirmed in the docs ([default shapes](https://tldraw.dev/sdk-features/default-shapes), [createShapes example](https://tldraw.dev/examples/api)):
+**New DSL features (all binding into Q2's checks):**
+- **`id`** — every shape may carry a stable id; referenced by connectors and frames. Ids are validated (string, bounded length, charset) and namespaced internally so a malicious id can't collide with tldraw record ids.
+- **Connector-by-id** — `arrow`/`line` with `from`/`to` referencing shape ids. The iframe resolves the referenced shapes, computes endpoints, and creates tldraw **arrow bindings** so connectors **don't drift** when the operator moves a box. Dangling refs (id not present) → that one connector is dropped with a `sketch:error`, not the whole doc.
+- **`frame`/container** — a `frame` shape grouping `children` ids, so the agent can express "these boxes live in this container."
+- **z-order** — optional `z` integer per shape; the iframe maps it to tldraw's fractional `index` ordering (the agent never touches fractional indices).
+- **Relative / flow layout** — optional doc-level `layout: { mode: 'flow', direction: 'row'|'col', gap, ... }` (or per-shape layout hints). When present, the agent may **omit absolute coords**; the iframe computes positions (row/col with gaps, simple flow). Absolute coords still work and override layout for a given shape. This is the lever that lets the agent declare structure and the iframe compute pixels.
 
+**Translation:** the iframe's translator is a `Record<descriptorType, (d, ctx) => TLShapePartial[]>` lookup (per `dispatch_is_a_lookup_not_a_chain`), where `ctx` carries the id→shape map (for connector resolution) and the computed layout positions. Defaults fill omissions (`color` → `black`, `fill` → `none`, `size` → `m`). Shape `props` are exactly the tldraw partials confirmed in the docs ([default shapes](https://tldraw.dev/sdk-features/default-shapes)).
+
+### 7.3 How the agent learns the DSL (UX default 1.1d)
+
+The DSL spec lives at **`/docs/sketch-dsl`**, rendered by the existing docs route. **Concrete wiring (from the codebase):** the docs route (`routes.ts` `/docs/:page`) reads `src/docs/<page>.md` and looks up the title in the **hardcoded `DOC_PAGES` array** in `src/docs/render.ts`. So `/docs/sketch-dsl` requires BOTH: a new file `src/docs/sketch-dsl.md` AND a new entry `{ slug: 'sketch-dsl', title: 'Sketch DSL' }` pushed into `DOC_PAGES`. **Without the `DOC_PAGES` entry the page renders with a fallback title and is missing from the docs nav** — Q2's check asserts both exist. Personas opt in by referencing `/docs/sketch-dsl` in their persona file; the convention is NOT injected into all agents' system context (§1.1d).
+
+### 7.4 Detection BEFORE escape+markdown — the trap (documented so Q2 doesn't rediscover it)
+
+**Binding LLM-feasibility/code finding.** In `chat.ts`, `renderMessageBody` (line ~584-588) does:
 ```ts
-// rect/ellipse → geo
-{ type: 'geo', x, y, props: { geo, w, h, color, fill, dash: 'solid', size: 'm', richText: toRichText(text ?? '') } }
-// text
-{ type: 'text', x, y, props: { richText: toRichText(text), color, size: 'm', autoSize: true } }
-// arrow
-{ type: 'arrow', x: x1, y: y1, props: { start: { x: 0, y: 0 }, end: { x: x2 - x1, y: y2 - y1 }, color, richText: toRichText(text ?? '') } }
-// line
-{ type: 'line', x: points[0][0], y: points[0][1], props: { color, dash, points: toPointsMap(points) } }
+const normalized = text.replace(/\n{3,}/g, '\n\n').trim();
+let html = escapeHtml(normalized);   // ← text is now HTML-escaped
+html = renderMarkdown(html);          // ← runs on already-escaped text
 ```
+And `renderMarkdown` (`src/shared/markdown.ts` line 14) extracts fences with:
+```ts
+escaped.replace(/```(?:\w*)\n([\s\S]*?)```/g, (_m, code) => { … })
+```
+**Two facts that bite if ignored:** (1) the info-string `(?:\w*)` is **non-capturing and DISCARDED** — by the time markdown runs, "is this a `sketch` fence?" is **unanswerable**; (2) the body is already **HTML-escaped**, so `"` is `&quot;`, breaking `JSON.parse`. **Therefore the sketch pre-pass MUST run on the RAW message text BEFORE `escapeHtml` and BEFORE `renderMarkdown`.** Q2's renderer change extracts ` ```sketch ` blocks from the raw `text` argument first (capturing the info-string and the raw, un-escaped body), validates with `parseSketchDsl`, replaces the block with a placeholder token, THEN runs the existing escape+markdown on the remaining text, THEN swaps the placeholder for the SVG-preview mount node. This ordering is non-negotiable and is asserted by a Q2 test that feeds a `sketch` block containing quotes/`<`/`&` and checks the JSON survived intact.
 
-### 7.3 How the agent is told to emit it
+### 7.5 Renderer flow (chat.ts)
 
-The DSL spec is documented in a docs page (`/docs/sketch-dsl`, rendered by the existing docs route) and referenced from the agent-facing system context. Agents are instructed: *"To draw a diagram, emit a fenced `sketch` code block containing a JSON array of shape descriptors (see /docs/sketch-dsl). The operator will see it as an interactive, editable canvas."* This is a **prompt/docs convention only** — no engine/adapter change. An agent that does not know the convention simply never emits a sketch block; everything is backward compatible.
-
-### 7.4 How the renderer detects a sketch and mounts the iframe
-
-In `chat.ts`, `renderMessageBody` already runs the message through `renderMarkdown`. We add a **pre-pass**: detect a fenced block with info-string `sketch`, extract + `JSON.parse` + validate the descriptor array (the same hand-rolled validator the iframe will trust, in `src/shared/sketch-dsl.ts` — `parseSketchDsl(raw: unknown): SketchShape[] | SketchDslFailure`). On a valid block:
-
-- Replace the code block in the rendered HTML with a **placeholder mount node** carrying a `data-sketch-id` and the validated shapes (stashed by id, not inlined as a giant attribute).
-- After the feed renders, a `wireSketches(root)` pass (sibling to `wireCollapsibleMessages`/`wireCopyOnClick`) finds mount nodes, lazily creates the iframe + Greenroom chrome (§8), and on the iframe's `sketch:ready` posts `sketch:init` + `sketch:load`.
-- An **invalid** `sketch` block renders as a normal fenced code block (graceful fallback) plus an inline ink-3 note "unparseable sketch — showing source."
+1. **Pre-pass on raw text** (§7.4): find ` ```sketch ` fences, `JSON.parse` + `parseSketchDsl` (§9.4) the un-escaped body.
+2. **Valid** → replace with a placeholder; after escape+markdown, swap for a **mount node** carrying a `data-sketch-id` (shapes stashed by id, not inlined as a giant attribute) that renders the **static SVG preview** + "open canvas" button.
+3. **Invalid** → render as a normal fenced code block (graceful fallback) + an inline ink-3 note "unparseable sketch — showing source."
+4. A `wireSketches(root)` pass (sibling to `wireCollapsibleMessages`/`wireCopyOnClick`) wires the "open canvas" buttons → lazily mounts the iframe and posts `sketch:init` + `sketch:load` on `sketch:ready`.
 
 ---
 
 ## 8. Greenroom integration (the message-canvas chrome)
 
-The **editing UI inside the iframe is tldraw's own** (its toolbar, color picker, shape tools) — we do not restyle tldraw's internals in v1. What we own is the **chrome around the canvas** in the chat message, and it follows Greenroom (per the `ui-theme` skill, `REFERENCE.md`).
+The editing UI **inside** the iframe is tldraw's own; we own the **chrome around the canvas** in the chat message, per the `ui-theme` skill (`REFERENCE.md`).
 
-- **Container**: the canvas sits in the message `.body` as a bordered block — `1px solid var(--rule)`, `--radius-lg`, NO card shadow (it is inline content, not a floating overlay). A 3px left identity-color border already marks the message as from an agent (Greenroom §9.2); the sketch block sits inside it.
-- **Header strip** (above the iframe): a mono eyebrow `SKETCH` (10.5px, uppercase, ink-4) on the left; on the right, two controls. The **canvas itself** gets a fixed inline height (e.g. 360px) with the iframe filling the width.
-- **Controls** (Greenroom §7 buttons):
-  - **Send** — the single **clay `.btn.primary`** (the one clay moment for this block). Disabled until the iframe reports `dirty: true` (no point sending an unedited copy of what the agent already sent) OR always-enabled if the operator wants to send the agent's original as a PNG — operator open question §12. Label: `Send sketch`.
-  - **Reset** — a default `.btn` (or `.btn.ghost`) that posts `sketch:reset` to discard staged edits.
-- **Edited marker**: when `dirty`, a small mono ink-3 `· edited` note next to the eyebrow (no badge, per §8 status-as-text rule).
-- **Status while loading**: an italic ink-3 "loading canvas…" empty-state line (Greenroom empty-state voice) until `sketch:ready`.
-- **No ambient motion**, transitions ≤200ms, one clay moment (Send). All consistent with the hard rules.
-
-The "made with tldraw" watermark (if on the hobby license) renders inside the iframe canvas — out of our control and acceptable.
+- **Inline preview state:** a bordered block (`1px solid var(--rule)`, `--radius-lg`, NO card shadow — inline content, not a floating overlay) containing the **static SVG** + a default `.btn` "Open canvas". The agent-identity 3px left border (Greenroom §9.2) already marks the message.
+- **Opened (canvas) state:** a header strip — mono eyebrow `SKETCH` (10.5px, uppercase, ink-4) left; controls right. Canvas gets a fixed inline height (e.g. 360px), iframe fills width.
+- **Controls** (Greenroom §7):
+  - **Send** — the single **clay `.btn.primary`** (the one clay moment). **Always enabled** (§1.1a — rasterizes current canvas). Label: `Send sketch`.
+  - **Reset** — a default `.btn`/`.btn.ghost`; posts `sketch:reset`.
+- **Edited marker:** when `dirty`, a small mono ink-3 `· edited` note next to the eyebrow (status-as-text, no badge).
+- **Loading:** italic ink-3 "loading canvas…" until `sketch:ready`.
+- **No ambient motion**, transitions ≤200ms, one clay moment. Consistent with hard rules.
+- The "made with tldraw" watermark renders inside the canvas (hobby license) — out of our control, acceptable.
 
 ---
 
 ## 9. Security
 
-- **Origin validation both ways.** Parent checks `event.origin === location.origin && event.source === iframe.contentWindow`. Iframe checks `event.origin === location.origin`. Messages failing the check are dropped silently.
-- **Sandbox**: `sandbox="allow-scripts allow-same-origin"` and nothing else (no top-nav, popups, forms, modals, pointer-lock, downloads). `referrerpolicy="no-referrer"`.
-- **The sketch payload is DATA, never code.** The DSL is `JSON.parse`d and run through a **hand-rolled validator** (`parseSketchDsl`, per `handroll_validation_at_boundaries`) on **both** sides: the dashboard validates before mounting; the iframe re-validates before `createShapes`. Validation: array length cap, per-shape `type` is one of the known set, numeric fields are finite numbers within sane bounds, `text` is a string capped in length and only ever passed to `toRichText()` (tldraw treats it as text content, never HTML/markup), `color` is one of the allowed palette names (reject unknown). No `eval`, no `Function`, no dynamic import of payload-derived paths.
-- **No HTML injection path**: text from the DSL goes to `toRichText()` inside tldraw (text node), not to `innerHTML`. The chat renderer continues to `escapeHtml` before markdown as it does today; the sketch placeholder node carries only a numeric/uuid `data-sketch-id`, never raw payload.
-- **Size / rate limits**:
-  - DSL: **max N shapes** (e.g. 500) and **max raw block size** (e.g. 64 KB) — over-cap blocks render as plain code with a note.
-  - Export PNG: bounded by the existing `FILE_MAX_BYTES` ceiling on `POST /api/files` (the upload simply 413s if the rasterized PNG is too large; the operator gets a toast via the existing path). A `scale` cap keeps normal exports well under it.
-  - The iframe is created **lazily and at most once per sketch message**; a feed with many sketch messages mounts iframes only for those actually rendered in the virtualized window (chat.ts already virtualizes to ~50–100 nodes).
-- **License key exposure** is sanctioned by tldraw (client-validated, domain-restricted) — but we still inject it via the `sketch:init` message / host-page config rather than committing it into the bundle source, so rotating the key does not require a rebuild.
+### 9.1 Origin / channel validation
+- Opaque-origin frame (§5.1): parent validates `event.source === iframe.contentWindow` and the **handshake nonce** (§5.3) on every frame→parent message; pre-handshake only `sketch:ready` is accepted. The iframe validates messages come from `window.parent` and carry the matching nonce. Failing messages are dropped silently.
+- Sandbox grants: `allow-scripts` **only** (NOT `allow-same-origin`); `referrerpolicy="no-referrer"`.
+
+### 9.2 CSP — the app has NONE today; add it (BLOCKER fix)
+The orchestrator sets only `content-type`/`etag`/`cache-control` headers — **no Content-Security-Policy anywhere**. Q1 adds CSP response headers on the dashboard surfaces:
+- **`/dashboard`** and **`/dashboard/sketch-frame`** (and the `srcdoc` host document) get:
+  `Content-Security-Policy: default-src 'self'; script-src 'self'; frame-src 'self'; frame-ancestors 'self'; connect-src 'self'; img-src 'self' data: blob:; font-src 'self' data:`
+  - `connect-src 'self'` is the key exfil-blocker: even if a tldraw/React 0-day executes in the frame, it cannot phone home to a third party.
+  - `img-src`/`font-src` include `data:`/`blob:` because the bundle inlines fonts/icons as data URIs and tldraw uses blob URLs for export.
+- **`style-src`:** tldraw may inject inline styles at runtime; whether it needs `style-src 'unsafe-inline'` (vs `'self'`) is **measured at vendor time** and the result recorded in `VENDOR.md`. The RFC's default policy string uses `style-src 'self'`; if the measurement shows tldraw requires inline styles, the policy adds `'unsafe-inline'` for `style-src` ONLY (never for `script-src`), with the justification recorded. Q1's check asserts the CSP header is present on both surfaces; the exact `style-src` token is finalized by the §13 Q1 vendor-time measurement.
+
+### 9.3 Path-traversal — fix the substring `..` check (BLOCKER fix)
+The existing asset/shared routes guard with `filePath.includes('..')` (`routes.ts:294`, `:328`) — a **substring** check that **misses** URL-encoded `%2e%2e` (decoded by `URLPattern` before the handler sees it) and absolute paths (`/etc/passwd`). The new vendor route (and, as a hardening follow-on, the existing asset/shared routes) MUST instead:
+```ts
+import { resolve, join, sep } from 'node:path';
+const root = resolve(import.meta.dirname!, '..', 'dashboard', 'vendor');
+const full = resolve(root, filePath);
+if (!(full === root || full.startsWith(root + sep))) { res.writeHead(400); res.end('Bad request'); return; }
+```
+Resolve the candidate path and assert it stays **under** the vendor root via `startsWith(root + sep)` (the `+ sep` prevents a `vendor-evil/` sibling from passing a bare `startsWith(root)`). Q1's check asserts `%2e%2e%2f…`, an absolute path, and a `vendor../`-style sibling are all rejected 400.
+
+### 9.4 `parseSketchDsl` — the validator (BLOCKER fixes, both sides)
+`parseSketchDsl(raw: unknown): SketchDoc | SketchDslFailure` lives in `src/shared/sketch-dsl.ts`, hand-rolled (per `handroll_validation_at_boundaries`), run on **both** sides (dashboard before SVG-preview/mount; iframe before `createShapes`). Required protections:
+- **Prototype-pollution:** reject any object containing `__proto__`, `constructor`, or `prototype` as a key (at any depth) → `SketchDslFailure { kind: 'proto_key' }`. Parse with a guard that walks keys; do NOT trust `JSON.parse` to be safe against `{"__proto__": …}` reaching downstream object construction.
+- **Explicit field-copy, never spread:** build each tldraw `TLShapePartial` by **copying named fields one-by-one** from the validated descriptor. NEVER `{ ...parsedDescriptor }` into `createShapes` — a parsed object must not smuggle unexpected keys into a tldraw record.
+- **Numeric bounds:** every numeric field (`x,y,w,h,x1,y1,x2,y2,gap,z`, points) must be a **finite** number (reject `NaN`/`Infinity`/`-Infinity`) AND within a **concrete max magnitude** (e.g. `|value| ≤ MAX_COORD = 100_000`; `0 < w,h ≤ MAX_DIM = 50_000`). Out-of-bound → that shape's failure variant.
+- **Caps:** `max N shapes` (e.g. 500), `max raw block size` (e.g. 64 KB), `text` length cap (e.g. 2 KB/shape), `id` length/charset cap, `points` count cap, `children` count cap. Over-cap → fail (block renders as plain code).
+- **Palette/enum:** `color` ∈ allowed palette, `fill`/`dash` ∈ allowed sets, `type` ∈ known set. Unknown → reject that shape.
+- **Export scale cap + raster ceiling INSIDE the iframe:** the `scale` in `sketch:export-request` is **clamped** to `[MIN_SCALE, MAX_SCALE]` (e.g. ≤ 2). **Before** calling `editor.toImage`, the iframe computes the would-be raster dimensions (canvas bounds × clamped scale) and enforces a **concrete raster ceiling** `width * height ≤ MAX_RASTER_PX` (e.g. 32 MP). Over-ceiling → `sketch:export-response { ok:false, error:'too large' }`, NOT an attempt. **We do NOT rely on the 100 MB `FILE_MAX_BYTES` upload backstop** (`routes.ts:1486`) to catch this — that is a last-resort net far above a sane image, and a 32 MP PNG can be well under 100 MB while still being an OOM/DoS risk to render. The ceiling lives at the rasterization point.
+- `text` is only ever passed to `toRichText()` (tldraw text node, never HTML/markup). No `eval`, no `Function`, no payload-derived dynamic import.
+
+### 9.5 License key handling
+- The key is injected via `sketch:init` (§1.0), never committed. Stored as an orchestrator config value (env var → exposed to the dashboard via the existing config path / `getDashboardHtml`), read at runtime. Q4 asserts the key is in `sketch:init` and absent from any committed source/bundle. Rotating the key changes config only, not the bundle.
+
+### 9.6 Lazy mount
+The iframe is created **only on "open canvas" click**, at most once per sketch message; inline previews are static SVG. A feed of many sketches mounts zero iframes until clicked (`chat.ts` already virtualizes to ~50–100 nodes).
 
 ---
 
 ## 10. Bundle-size / performance
 
-- **Normal text chat pays nothing.** The vendored bundle is excluded from `warmDashboardAssets` and is fetched **only** when the first sketch message is wired. No React, no tldraw on the critical path.
-- **Lazy, cached, shared.** The iframe `src` (`/dashboard/sketch-frame`) loads the bundle once; the browser caches it (etag/mtime, like every asset). Multiple sketch messages each get their own iframe but reuse the cached bundle bytes.
-- **Measured at build time.** `VENDOR.md` records the exact minified + gzipped size. Estimate ~1.5–2.5 MB min / ~400–700 KB gzip for the full editor; acceptable because it is off the default path and behind a deliberate "this message has a drawing" gate.
-- **Per-iframe cost** is one React tree; for a feed with many sketches we cap concurrently-mounted iframes to the virtualized window and could add an "click to load canvas" deferral if profiling shows pressure (open question §12).
+- **Normal text chat AND inline previews pay nothing** — no React/tldraw on those paths; previews are vanilla SVG.
+- **Bundle excluded from `warmDashboardAssets`** (§4.3.1); fetched only on first canvas-open; cached (etag/mtime).
+- **Measured at build time**, recorded in `VENDOR.md`, asserted by Q1. ~1.5–2.5 MB min / ~400–700 KB gzip for the full editor — acceptable behind a deliberate click.
+- **Per-iframe cost** is one React tree, mounted only on click; the SVG-preview default keeps the feed light by construction.
 
 ---
 
 ## 11. Rejected alternatives
 
-- **Option B — tldraw from a CDN (ESM via esm.sh / unpkg / jsdelivr).** Rejected. A runtime third-party fetch is a live supply-chain dependency that can change or vanish under us, violates the repo ethos (`assume_risk_from_all_supply_chain`, zero-runtime-dep), and adds a hard network dependency for an internal tool that may run on an isolated tailnet. Vendoring is strictly safer and self-contained.
-- **Option C — vanilla canvas, no tldraw (hand-rolled drawing).** Rejected. Building an interactive, editable, multi-shape canvas with selection, transforms, text, arrows, undo/redo, and PNG export is a large, bug-prone effort that re-implements exactly what tldraw already does well. The vendoring path takes tldraw's capability without taking it into the runtime — strictly better than rebuilding a worse editor. (If the license gate had killed Option A, C would be the fallback — but the gate is clear, §1.)
-- **Sub-rejected — round-trip the editable tldraw document back to the agent.** v1 sends a PNG only, because (a) it matches how agents already consume images (the file pipeline), with zero engine changes, and (b) feeding snapshot JSON to an agent is the brittle path we rejected in §7. A future RFC can attach the source DSL as a sidecar file alongside the PNG.
+- **Option B — tldraw from a CDN (esm.sh / unpkg / jsdelivr).** Rejected. A runtime third-party fetch is a live supply-chain dependency that can change or vanish under us, violates the repo ethos (`assume_risk_from_all_supply_chain`, zero-runtime-dep), and adds a hard network dependency for a tool that may run on an isolated tailnet. Vendoring is strictly safer and self-contained.
+
+- **Option C — zero-dep vanilla SVG/canvas renderer of the SAME DSL (COSTED, honest accounting).** **Rejected, but for cost reasons, not impossibility — recorded so the choice is honest.** Option C would build an interactive editor in vanilla TS that consumes the **identical** §7 DSL (so the agent side, the docs, and the inline SVG preview are shared work either way) and edits/exports it with **no tldraw, no React, no iframe, no license, no CVE-rot owner, no offline build step, no opaque-origin security dance.** What it would cost to reach feature-parity with what Option A gets for free:
+  - **Inline static SVG preview from the DSL** — ~0.5–1 day. *(Shared with Option A — we build this either way, §1.1c.)*
+  - **Selection + move + resize handles** for rects/ellipses/text/frames — ~3–4 days (hit-testing, drag math, multi-select, snapping).
+  - **Arrow/line drawing + connector re-binding on move** (so connectors don't drift) — ~2–3 days (the binding/geometry that tldraw gives free).
+  - **Inline text editing** in shapes — ~2 days (contenteditable overlay, caret, wrap).
+  - **Undo/redo** — ~1–2 days (command stack).
+  - **PNG export** of an SVG/canvas scene with the Greenroom background + raster ceiling — ~1 day (`SVG → canvas → toBlob`, mostly zero-dep).
+  - **Color picker / palette / dash / fill UI** — ~1 day.
+  - **Total ≈ 10–16 dev-days** for a **worse** editor than tldraw, with ongoing maintenance of every editor bug we'd re-introduce.
+  - **What C avoids (the honest other side):** the ~1.5–2.5 MB blob, the source-available license + watermark, the no-`npm-audit` CVE-rot surface, the offline build step the base project otherwise forbids, the iframe/opaque-origin security complexity, and tldraw upgrade churn. These are **real** costs Option A carries.
+  - **Why A was still chosen:** the operator approved A explicitly; tldraw's editing UX (selection, transforms, bindings, undo, text) is mature and would take ~2–3 weeks to half-replicate; the costs C avoids are all **bounded and owned** (license = $0 hobby; CVE-rot = §4.6; build step = dev-only like `typescript`; security = §5.1/§9). C remains the **documented fallback** if those owned costs ever turn unacceptable (e.g. tldraw changes its license), and because both options share the DSL + SVG-preview, switching A→C later is not a rewrite of the agent contract.
+
+- **Sub-rejected — round-trip the editable tldraw *snapshot* JSON back to the agent.** Rejected for v1. We send PNG (primary) + **original DSL sidecar** (§1.1b), because (a) PNG matches how agents consume images with zero engine changes, and (b) snapshot JSON is the brittle path rejected in §7.1. Round-tripping the *edited* DSL (reconstructed from the tldraw store) is a §14 open question for a later RFC.
 
 ---
 
 ## 12. Risks + mitigations
 
 | Risk | Mitigation |
-|------|------------|
-| **License tier choice** (watermark vs $6k). | §1 surfaces it as the single operator decision; architecture is identical either way; default = free hobby + watermark. |
-| **Bundle is large.** | Lazy-load, off the default path, cached; excluded from boot warm-up; size recorded + checked. |
-| **tldraw upgrade breaks the bundle / DSL translation.** | Upgrades are deliberate, human-run, behind a checksum-recorded rebuild (§4.3) + Q4 tests + manual verify; never automatic. |
-| **iframe message spoofing.** | Strict origin + source validation both ways; minimal sandbox; payload validated as data, never executed (§9). |
-| **Invalid agent DSL.** | Hand-rolled validator both sides; invalid block degrades to plain code with an inline note; one bad shape doesn't kill the doc. |
-| **`allow-same-origin`+`allow-scripts` weakens sandbox.** | The bundle is our own vendored, checksum-pinned code, not hostile; sandbox is defense-in-depth + clean boundary; data is validated. |
-| **Asset server can't serve `.html`/large `.js`.** | Q1: dedicated `/dashboard/sketch-frame` route for the host HTML; `/dashboard/vendor/:path+` route for the bundle; `warmDashboardAssets` skips `vendor/` (§4.2). |
-| **PNG export fails on edge shapes** (known historic tldraw bug on some text exports — [#3868](https://github.com/tldraw/tldraw/issues/3868)). | `toImage` returns `undefined` → `ok:false` → parent toasts "export failed, try again"; pinned tldraw version is verified at vendor time. |
+|---|---|
+| **`srcdoc`/opaque-origin breaks tldraw storage or license check.** | Tested at vendor time (Q1); documented same-origin fallback bounded by token-not-in-storage + strict CSP (§5.1); recorded in `VENDOR.md`. Default stays opaque-origin. |
+| **CSP breaks tldraw rendering (inline styles).** | `style-src` measured at vendor time; `'unsafe-inline'` added for `style-src` ONLY if required, recorded in `VENDOR.md` (§9.2). |
+| **Bundle is large.** | Lazy (click-to-open), off the default path, cached; excluded from boot warm-up; size recorded + checked (Q1). |
+| **Vendored bundle has no `npm audit` signal (CVE rot).** | Named owner (`agentic-collab-lead`) + quarterly + on-disclosure rebuild ritual in `VENDOR.md`/README (§4.6). |
+| **Committed "frozen" bundle silently tampered/rebuilt.** | CI sha256-match check vs `VENDOR.md` (§4.5); reproducible build on upgrade. |
+| **tldraw upgrade breaks bundle / DSL translation.** | Deliberate human rebuild (§4.4) + Q4 tests (incl. production mode) + manual verify; never automatic. |
+| **iframe message spoofing.** | Opaque origin + `event.source` identity + handshake nonce both ways; `allow-scripts` only; payload validated as data (§9). |
+| **Prototype pollution via DSL.** | `parseSketchDsl` rejects `__proto__`/`constructor`/`prototype`; explicit field-copy, never spread (§9.4). |
+| **Raster DoS / OOM via huge export.** | Scale clamp + raster ceiling INSIDE the iframe before `toImage`, not relying on the 100 MB upload net (§9.4). |
+| **Path traversal on vendor route.** | `resolve()` + `startsWith(root + sep)`, not substring `..` (§9.3). |
+| **Invalid agent DSL.** | Validator both sides; invalid block degrades to plain code + note; one bad shape/connector doesn't kill the doc. |
+| **Connector drift when boxes move.** | Connector-by-id → tldraw bindings (§7.2); raw-coord arrows are fallback only. |
+| **Detection-ordering trap (escaped text / discarded info-string).** | Pre-pass on RAW text before escape+markdown, documented + tested (§7.4). |
+| **PNG export fails on edge shapes** ([#3868](https://github.com/tldraw/tldraw/issues/3868)). | `toImage` → `undefined` → `ok:false` → parent toasts "export failed"; pinned version verified at vendor time. |
+| **LLM emits unusable sketches.** | Golden-corpus human-reviewed gate (Q4) validates the premise; green unit tests alone do not. |
 
 ---
 
-## 13. Decomposition — quantum DAG (each check-bound)
+## 13. Decomposition — Diamond DAG (each leaf check-bound)
 
-Four quanta. Q1 is the foundation; Q2 and Q3 depend on it; Q4 proves the whole.
+Four quanta. **DAG: `Q1 → {Q2, Q3} → Q4`.** Q2 (render/preview/DSL/iframe-mount) and Q3 (staging/Send/export/upload) are independent after Q1 and run in parallel; Q4 proves the whole, including the golden-corpus gate and the production-mode license path. Every leaf below names a `node --test` or Playwright check; substrate (the iframe-boundary stub, the SVG-render helper, the Playwright seeded-message fixture) is in scope by construction.
 
-### Q1 — Vendored bundle + iframe host + postMessage skeleton
-**Scope:** `tools/tldraw-bundle/` (package.json, entry.tsx, build.mjs, README); committed `src/dashboard/vendor/tldraw/*` + `VENDOR.md`; `src/shared/sketch-protocol.ts` (message types); routes: `GET /dashboard/sketch-frame` (host HTML) + `GET /dashboard/vendor/:path+` (bundle); `warmDashboardAssets` skips `vendor/`. The iframe runtime posts `sketch:ready`, accepts `sketch:init`, mounts `<Tldraw>` (with optional `licenseKey`).
-**Checks (build the substrate first):**
-- `node --test`: a route test asserts `GET /dashboard/sketch-frame` returns 200 `text/html` and references the vendor bundle URLs.
-- `node --test`: a route test asserts `GET /dashboard/vendor/tldraw/tldraw.bundle.js` returns 200 `application/javascript`, served un-stripped, with an etag; and that `..`-traversal is rejected 400.
-- `node --test`: `warmDashboardAssets` does NOT cache anything under `vendor/` (assert the cache has no `vendor/` key after a warm).
-- A committed `VENDOR.md` records tldraw version + build command + sha256 of each output + measured size; a test asserts the bundle file exists, is a single file, and is non-empty.
+### Q1 — Vendored bundle + opaque-origin iframe host + CSP + hardened routes + postMessage skeleton
+**Scope:** `tools/tldraw-bundle/` (package.json, entry.tsx skeleton, build.mjs, README incl. CVE-rot ritual + reproducible-build steps); committed `src/dashboard/vendor/tldraw/{tldraw.bundle.js,tldraw.bundle.css,VENDOR.md}`; `src/shared/sketch-protocol.ts` (message types + nonce); routes: `GET /dashboard/sketch-frame` (host HTML) + `GET /dashboard/vendor/:path+` (bundle, **hardened path guard**); `warmDashboardAssets` skips `vendor/`; **CSP headers** on `/dashboard` + `/dashboard/sketch-frame`; the iframe runtime mounts `<Tldraw>` (optional `licenseKey`), posts `sketch:ready`, accepts `sketch:init` with nonce. **Vendor-time measurements** (recorded in `VENDOR.md`): bundle sha256 + size; whether `style-src 'unsafe-inline'` is needed; whether `srcdoc`/opaque-origin works with tldraw storage + license.
+**Checks (build substrate first):**
+- `node --test` — `GET /dashboard/sketch-frame` → 200 `text/html`, body references the vendor bundle URLs. *(check: `routes.sketch-frame.test.ts`)*
+- `node --test` — `GET /dashboard/vendor/tldraw/tldraw.bundle.js` → 200 `application/javascript`, served un-stripped, with an etag. *(`routes.vendor-serve.test.ts`)*
+- `node --test` — **path-traversal hardening**: `%2e%2e%2f`-encoded traversal, an absolute path, and a `vendor../` sibling are each rejected 400 via the `resolve()`+`startsWith(root+sep)` guard. *(`routes.vendor-traversal.test.ts`)*
+- `node --test` — `warmDashboardAssets()` caches nothing under `vendor/` (assert no `vendor/` key in the asset cache after a warm). *(`routes.warm-skips-vendor.test.ts`)*
+- `node --test` — **CSP present**: `GET /dashboard` and `GET /dashboard/sketch-frame` both return a `Content-Security-Policy` header containing `script-src 'self'`, `frame-ancestors 'self'`, and `connect-src 'self'`. *(`routes.csp.test.ts`)*
+- `node --test` — **reproducible-build / frozen check**: recomputed sha256 of `tldraw.bundle.js` and `.css` equals the value in `VENDOR.md`; each output is a single non-empty file; recorded size within tolerance of actual. *(`vendor.sha256.test.ts`)*
+- `node --test` — `VENDOR.md` parses and contains all REQUIRED fields (§4.2): tldraw/react/esbuild versions, build command, both sha256s, both sizes, the `style-src` measurement, the licenseKey/deploy-prereq note, the CVE-rot owner + cadence. *(`vendor.manifest.test.ts`)*
+- `node --test` — `sketch-protocol.ts` round-trips: a sample of each `kind` validates against the type guards; the nonce handshake rejects a missing/mismatched nonce. *(`sketch-protocol.test.ts`)*
 
-### Q2 — Agent→sketch DSL + message-renderer detection + interactive mount
-**Scope:** `src/shared/sketch-dsl.ts` (`parseSketchDsl` validator + `SketchShape` type, shared by both sides); the iframe translator (`descriptor → TLShapePartial` lookup, `editor.createShapes`); `chat.ts` pre-pass that detects ` ```sketch ` blocks, validates, emits a placeholder mount node, and `wireSketches(root)` that lazily mounts the iframe and posts `sketch:init`+`sketch:load`; `/docs/sketch-dsl` docs page.
+### Q2 — DSL validator + inline SVG preview + detection-before-escape + interactive iframe mount + docs page
+**Scope:** `src/shared/sketch-dsl.ts` (`parseSketchDsl` per §9.4 + `SketchDoc`/`SketchShape`/`SketchDslFailure` types, shared both sides); the iframe translator (`descriptor → TLShapePartial[]` lookup with id-resolution, connector bindings, layout computation, z-order, field-copy); `chat.ts` **pre-pass on RAW text** (§7.4) → `parseSketchDsl` → placeholder → static-SVG-preview mount node + "open canvas"; `wireSketches(root)` lazily mounts the opaque-origin iframe and posts `sketch:init`+`sketch:load` on `sketch:ready`; `src/docs/sketch-dsl.md` + a `DOC_PAGES` entry `{ slug:'sketch-dsl', title:'Sketch DSL' }`.
 **Checks:**
-- `node --test`: `parseSketchDsl` — valid array → typed shapes; each invalid case (non-array, unknown `type`, non-finite coord, bad `color`, over-cap length/size, oversized `text`) → the right `SketchDslFailure` variant. Single `assert.deepEqual` per shape case.
-- `node --test`: the chat pre-pass turns a valid `sketch` block into a mount-node placeholder (assert the rendered HTML contains the placeholder + `data-sketch-id`, not the raw JSON) and turns an invalid block into a plain code block + note.
-- Manual + Q4 visual: a known DSL renders the expected shapes in the canvas.
+- `node --test` — `parseSketchDsl`: valid doc → typed shapes (single `assert.deepEqual` per shape case); each invalid case → the right `SketchDslFailure` variant: non-object/non-array `shapes`, unknown `type`, **`__proto__`/`constructor`/`prototype` key**, non-finite coord, **out-of-bound coord/dim**, bad `color`/`fill`/`dash`, over-cap shape count, over-cap raw size, oversized `text`, bad `id` charset/length, dangling connector `from`/`to`, over-cap `points`/`children`. *(`sketch-dsl.test.ts`)*
+- `node --test` — **field-copy, never spread**: a descriptor carrying an extra unexpected key produces a `TLShapePartial` that does NOT contain that key (assert the translated partial's keys are exactly the allowed set). *(`sketch-dsl.field-copy.test.ts`)*
+- `node --test` — **connector-by-id**: `arrow` with `from`/`to` referencing present ids resolves to endpoints + a binding intent; a dangling ref drops that one connector with a `sketch:error`, leaving other shapes intact. *(`sketch-translate.connectors.test.ts`)*
+- `node --test` — **layout/z-order**: a `layout: {mode:'flow',direction:'row',gap}` doc with omitted coords yields monotonically increasing x positions; `z` maps to ordered indices. *(`sketch-translate.layout.test.ts`)*
+- `node --test` — **detection-before-escape (the trap)**: a `sketch` block whose JSON contains `"`, `<`, `&`, and `__proto__`-adjacent text is detected on RAW text and `JSON.parse`s intact (assert the parsed doc equals expected); a NON-sketch fence is untouched and still renders as a normal code block. *(`chat.sketch-detect.test.ts`)*
+- `node --test` — the pre-pass turns a valid `sketch` block into an SVG-preview mount node (assert rendered HTML contains the mount node + `data-sketch-id`, NOT the raw JSON, and contains an "open canvas" control) and turns an invalid block into a plain code block + "unparseable sketch" note. *(`chat.sketch-render.test.ts`)*
+- `node --test` — **inline SVG preview**: the DSL→SVG helper renders the expected `<rect>/<ellipse>/<text>/<line>` elements for a known doc (single `assert` on the element set), with no React/tldraw import. *(`sketch-svg.test.ts`)*
+- `node --test` — **docs wiring**: `DOC_PAGES` contains `{slug:'sketch-dsl'}` and `src/docs/sketch-dsl.md` exists and is non-empty; `GET /docs/sketch-dsl` returns 200 with the page title in the nav. *(`docs.sketch-dsl.test.ts`)*
 
-### Q3 — Edit-staging + Send → export → upload → post-back
-**Scope:** the `dirty` tracking (iframe posts `sketch:dirty` on store change, debounced); Greenroom chrome (header eyebrow, `· edited` marker, Send clay-primary, Reset); Send flow: parent posts `sketch:export-request` → receives `sketch:export-response` (PNG dataURL) → converts to a `File` → `POST /api/files` (reusing `uploadFileToStorage` shape from `chat.ts`) → `POST /api/dashboard/send` with the resulting `fileId` (so it lands as an image attachment exactly like any uploaded file); `sketch:reset` discards staged edits.
+### Q3 — Edit-staging + Send (always-on) → export → upload (PNG + DSL sidecar) → post-back
+**Scope:** `dirty` tracking (iframe posts `sketch:dirty` on store change, debounced) driving ONLY the `· edited` marker (Send is always enabled, §1.1a); Greenroom chrome (eyebrow, `· edited`, Send clay-primary, Reset); Send flow — parent posts `sketch:export-request` (clamped scale) → receives `sketch:export-response` (PNG dataURL) → converts to a `File` → `POST /api/files` for the **PNG (primary)** AND a second `POST /api/files` for the **DSL sidecar** (the original validated DSL as a `.sketch.json`/`.txt` file, §1.1b) → `POST /api/dashboard/send` with BOTH `fileId`s (reusing the `uploadFileToStorage` shape from `chat.ts`); `sketch:reset` discards staged edits.
 **Checks:**
-- `node --test`: a unit test of the export-response→upload glue (mock the `fetch` to `/api/files`, assert a PNG `File` is posted and the returned `fileId` flows into the `/api/dashboard/send` body) — pure dashboard logic, no real iframe needed (the postMessage boundary is stubbed).
-- `node --test`: Send button disabled until `dirty:true`; Reset clears dirty; `requestId` correlation (a stale export-response for an old `requestId` is ignored).
-- Manual verify: draw → Send → the message appears in chat with a `📎` PNG attachment that opens to the edited drawing.
+- `node --test` — export-response→upload glue (stub the postMessage boundary; mock `fetch` to `/api/files`): a PNG `File` is posted as the primary, a DSL sidecar `File` is posted, and BOTH returned `fileId`s flow into the `/api/dashboard/send` body. *(`sketch-send.upload.test.ts`)*
+- `node --test` — **Send is always enabled** (asserts the button is enabled before any `dirty`), `dirty:true` only toggles the `· edited` marker, `sketch:reset` clears it. *(`sketch-send.dirty.test.ts`)*
+- `node --test` — **`requestId` correlation**: a stale export-response for an old `requestId` is ignored; only the matching response triggers upload. *(`sketch-send.requestid.test.ts`)*
+- `node --test` — **raster-ceiling guard** (iframe-runtime logic, unit-tested in isolation): an export whose computed `width*height` exceeds `MAX_RASTER_PX`, or `scale` outside `[MIN,MAX]`, returns `ok:false` WITHOUT calling `toImage` (assert the `toImage` stub was not called). *(`sketch-export.ceiling.test.ts`)*
 
-### Q4 — Tests + visual proof
-**Scope:** end-to-end coverage tying it together; a Playwright (ui-testing skill / playwright-workbench) flow that loads the dashboard with a seeded sketch message, asserts the iframe mounts and the canvas renders, edits a shape, clicks Send, and asserts a PNG attachment lands in the feed; a visual screenshot for the design record.
+### Q4 — End-to-end Playwright + production-mode license path + golden-corpus gate + visual proof
+**Scope:** an end-to-end Playwright flow (ui-testing skill / playwright-workbench) over a dashboard seeded with a sketch message; the production-mode license assertion (§1.0); the **golden-corpus** human-reviewed validation of the LLM premise; a committed screenshot for the design record; full-suite + typecheck gates.
 **Checks:**
-- Playwright: sketch message → iframe present → `sketch:ready` observed → canvas non-empty → Send → feed gains an image attachment. Green, non-flaky.
-- A committed screenshot (via visual-verify-html / playwright-workbench) of the rendered sketch block in Greenroom chrome, reviewed against the `ui-theme` rules (one clay moment = Send; bordered block; no card shadow; mono eyebrow).
-- Full `node --test` suite green; `pnpm typecheck` shows no new errors (judge by per-file delta per the repo's tsc-baseline note).
-
-**DAG:** `Q1 → {Q2, Q3} → Q4`. Q2 and Q3 are independent after Q1 (Q2 = render/mount/DSL; Q3 = staging/Send/export) and can run in parallel; Q4 depends on both.
+- **Playwright** — sketch message → inline SVG preview present → click "open canvas" → iframe mounts (sandbox `allow-scripts`, NO `allow-same-origin`) → `sketch:ready` observed → canvas non-empty → Send → feed gains a PNG image attachment AND a DSL sidecar attachment. Green, non-flaky. *(`e2e/mock/sketch.spec.ts`)*
+- **Playwright** — **production mode**: served over HTTPS on a non-localhost host (or detection inputs forced to the production branch), assert the canvas renders with a `licenseKey` injected in `sketch:init` and that no committed source/bundle contains the key. *(`e2e/mock/sketch-production-license.spec.ts`)*
+- **Golden-corpus gate** — 5–8 real prompts (e.g. "draw the orchestrator/proxy architecture", "wireframe the dashboard composer", "box-and-arrow the agent state machine") → an agent emits `sketch` DSL → each renders → a **human reviews each screenshot for non-garbage** (legible, structurally correct, not overlapping mush). Stored under `e2e/golden-corpus/` with the prompts, the emitted DSL, and the reviewed screenshots; the gate is a human sign-off recorded in the PR, NOT a pixel-diff. This validates the premise that LLMs can drive the DSL — **green unit tests alone do not.** *(`e2e/golden-corpus/` + PR sign-off)*
+- **Visual proof** — a committed screenshot (visual-verify-html / playwright-workbench) of the rendered sketch block (inline preview + opened canvas) in Greenroom chrome, reviewed against `ui-theme` (one clay moment = Send; bordered block; no card shadow; mono eyebrow). *(committed PNG + design review)*
+- **Suite gates** — full `node --test` green; `pnpm typecheck` shows no new errors (judge by per-file delta per the repo's tsc-baseline note). *(CI)*
 
 ---
 
-## 14. Open questions for the operator
+## 14. Open questions for the operator (residual — defaults already chosen; flag any veto)
 
-1. **License tier (§1):** free hobby license + "made with tldraw" watermark ($0, recommended), or paid commercial ($6,000/yr, no watermark)? Architecture is identical; this only changes which key we request.
-2. **Send-when-unedited:** should **Send** be enabled even when the operator hasn't touched the canvas (i.e. "send the agent's original sketch back as a PNG"), or only after an edit (`dirty`)? Default proposed: enabled only when `dirty`, with a separate affordance if you want to forward the original.
-3. **Round-trip the source DSL?** v1 sends a PNG only. Do you also want the source `sketch` DSL attached as a sidecar file (so an agent could re-edit), now or in a later RFC? Default: later RFC.
-4. **Inline canvas height + "click to load" deferral:** fixed 360px inline canvas with eager mount (proposed), or a "click to load canvas" placeholder for feeds with many sketches to avoid mounting many React trees? Default: eager mount within the virtualized window, revisit if profiling shows pressure.
-5. **Where does the agent learn the DSL?** A `/docs/sketch-dsl` page + a line in the agent-facing system context (proposed). Confirm you want the convention injected into agent context, or kept opt-in/documented-only.
+The license tier and the four UX defaults (§1.1) are **decided** (operator-approved). These remain genuinely open:
+
+1. **Round-trip the EDITED DSL?** v1's sidecar is the agent's **original** DSL (§1.1b). Reconstructing the *edited* DSL from the tldraw store (so an agent re-edits exactly what the operator drew) is harder (it inverts the §7 translation). Default: ship original-DSL sidecar now, edited-DSL round-trip in a later RFC. **Confirm or veto.**
+2. **`srcdoc`/opaque-origin vs same-origin fallback (§5.1):** the default is opaque-origin (no `allow-same-origin`). If vendor-time testing (Q1) shows tldraw's license check or storage genuinely needs same-origin, we take the documented fallback (token-not-in-storage + strict CSP). **Operator: confirm the fallback is acceptable if forced, or require a hard stop + escalation instead.**
+3. **Golden-corpus reviewer + threshold (§13 Q4):** who signs off the 5–8 corpus screenshots, and what counts as "passing" (all 8 legible? 6/8?). Default: the operator (or a delegated agent) signs off; ≥ 6/8 non-garbage to ship, with the failures logged as DSL/translation follow-ups. **Confirm the reviewer + threshold.**
+4. **Broader agent adoption (§1.1d):** when do we promote from opt-in-per-persona to injecting the DSL convention into all agents' system context? Default: after the golden corpus passes on 2–3 personas and the feature has run in production for a sprint. **Confirm the promotion trigger.**
