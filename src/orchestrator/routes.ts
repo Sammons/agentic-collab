@@ -8,7 +8,7 @@ import { request as httpRequest } from 'node:http';
 import { pipeline } from 'node:stream/promises';
 import { timingSafeEqual, randomUUID } from 'node:crypto';
 import { readdirSync, readFileSync, writeFileSync, mkdirSync, unlinkSync, existsSync, rmSync, statSync, createWriteStream, createReadStream } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 import { stripTypeScriptTypes } from 'node:module';
 import { DatabaseSync } from 'node:sqlite';
 import type { SQLInputValue } from 'node:sqlite';
@@ -200,6 +200,141 @@ const ASSET_TYPES: Record<string, string> = {
   '.css': 'text/css; charset=utf-8',
 };
 
+// ── RFC-010: CSP + vendored-bundle serving ──
+
+/**
+ * Content-types the vendored bundle route (`/dashboard/vendor/:path+`) serves.
+ * Narrower than the general asset set: the vendor dir only holds the built
+ * bundle's `.js` + `.css` (markdown/json provenance files are not served).
+ */
+const VENDOR_TYPES: Record<string, string> = {
+  '.js': 'application/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+};
+
+/**
+ * Content-Security-Policy for the dashboard surfaces (RFC-010 §9.2). The app had
+ * NO CSP before this. Tokens:
+ *   - script-src 'self'      — no inline/eval/CDN script (the bundle is same-site).
+ *   - frame-src 'self'       — the sketch iframe loads from our origin.
+ *   - frame-ancestors 'self' — no third-party can frame the dashboard.
+ *   - connect-src 'self' data: — KEY exfil-blocker: even a tldraw/React 0-day in
+ *                              the sandboxed frame cannot phone home to a third
+ *                              party. `data:` is required because tldraw fetches
+ *                              its inlined translation JSON via data: URLs
+ *                              (measured at vendor time); a data: URL is
+ *                              self-contained and cannot exfiltrate to a network
+ *                              destination, so this does not weaken the exfil net.
+ *   - img-src 'self' data: blob:  — the bundle inlines icons as data URIs; tldraw
+ *                              uses blob URLs for PNG export.
+ *   - font-src 'self' data: https://fonts.gstatic.com — sketch fonts inline as
+ *                              data URIs; the EXISTING dashboard loads its
+ *                              Greenroom typefaces (Bricolage Grotesque, Geist
+ *                              Mono) from Google Fonts, so gstatic is allowed to
+ *                              not break the dashboard (index.html <link>s it).
+ *   - style-src 'self' 'unsafe-inline' https://fonts.googleapis.com — MEASURED at
+ *                              vendor time: tldraw injects runtime inline <style>
+ *                              blocks; a strict style-src 'self' blocks them and
+ *                              breaks rendering. The dashboard also pulls its font
+ *                              CSS from fonts.googleapis.com. The relaxation is for
+ *                              style-src ONLY — script-src stays 'self' (no inline
+ *                              script, no third-party JS). (See VENDOR.md.)
+ *
+ * Why allowing the Google Fonts origins does not weaken the sketch isolation: the
+ * sketch iframe executes no third-party script (script-src 'self') and cannot
+ * exfiltrate (connect-src 'self' data:); font/style origins only let it FETCH
+ * static font CSS/woff2, which it doesn't even use (its fonts are inlined). The
+ * exfil + code-execution nets are intact.
+ */
+const DASHBOARD_CSP = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "frame-src 'self'",
+  "frame-ancestors 'self'",
+  "connect-src 'self' data:",
+  "img-src 'self' data: blob:",
+  "font-src 'self' data: https://fonts.gstatic.com",
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+].join('; ');
+
+/**
+ * RFC-010 §9.3 — the HARDENED path-traversal guard for the vendor route.
+ *
+ * Resolves `filePath` under `vendorRoot` and returns true only when the result
+ * stays UNDER the root. `resolve` collapses `..` segments and absorbs absolute
+ * paths (`/etc/passwd` resolves to itself, outside the root). `startsWith(root +
+ * sep)` rejects a `vendor-evil/` sibling that a bare `startsWith(root)` would let
+ * through. This replaces the legacy substring `..` check (`filePath.includes('..')`)
+ * which misses URL-encoded `%2e%2e` (decoded before the handler) and absolute
+ * paths. Exported for direct unit testing because a normal HTTP client normalizes
+ * `..` out of the URL before it reaches the server — the guard's correctness must
+ * be provable against the raw inputs a non-normalizing client could send.
+ */
+export function isUnderVendorRoot(vendorRoot: string, filePath: string): boolean {
+  const fullPath = resolve(vendorRoot, filePath);
+  return fullPath === vendorRoot || fullPath.startsWith(vendorRoot + sep);
+}
+
+/**
+ * The opaque-origin host page for the sketch iframe (RFC-010 §4.3.2, §5.1).
+ *
+ * The dashboard (Q2) mounts this HTML via `srcdoc` in a `sandbox="allow-scripts"`
+ * (NO allow-same-origin) iframe so the frame runs in an OPAQUE origin — a real
+ * isolation boundary. This route returns the same host HTML so it can also be
+ * used as the iframe `src` in the documented same-origin fallback path.
+ *
+ * CRITICAL (measured at vendor time): a `srcdoc` opaque-origin frame has NO base
+ * URL (`about:srcdoc`), so ROOT-RELATIVE paths like `/dashboard/vendor/...` do
+ * NOT resolve and the bundle never loads. The host therefore emits a `<base
+ * href="<origin>/">` AND absolute bundle URLs derived from the request origin, so
+ * the `<script>`/`<link>` resolve against the dashboard's origin regardless of
+ * whether the doc is loaded via `src=` (same-origin) or `srcdoc` (opaque). The
+ * subresource fetch is a permitted same-site GET; the vendor route sends
+ * `Access-Control-Allow-Origin: *` so the opaque-origin CORS fetch succeeds.
+ *
+ * tldraw mounts cleanly in this opaque-origin context (localStorage throws
+ * SecurityError but tldraw degrades gracefully).
+ *
+ * @param origin e.g. `https://collab.tail4ea214.ts.net` (no trailing slash). When
+ *   empty, falls back to root-relative paths (works only when loaded as a normal
+ *   same-origin page, not srcdoc) — callers that srcdoc-embed MUST pass an origin.
+ */
+function getSketchFrameHtml(origin: string): string {
+  const base = origin ? `${origin}/` : '/';
+  const cssUrl = `${origin}/dashboard/vendor/tldraw/tldraw.bundle.css`;
+  const jsUrl = `${origin}/dashboard/vendor/tldraw/tldraw.bundle.js`;
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <base href="${base}">
+  <title>sketch canvas</title>
+  <link rel="stylesheet" href="${cssUrl}">
+  <style>html, body, #root { margin: 0; height: 100%; width: 100%; }</style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="module" src="${jsUrl}"></script>
+</body>
+</html>`;
+}
+
+/**
+ * Resolve the request's origin (scheme + host) for emitting absolute URLs in the
+ * sketch-frame host. Uses the Host header; scheme is inferred from the proxy's
+ * `x-forwarded-proto` (the tailnet TLS terminates upstream) falling back to http.
+ */
+function requestOrigin(req: IncomingMessage): string {
+  const host = req.headers['host'];
+  if (typeof host !== 'string' || host.length === 0) return '';
+  const forwarded = req.headers['x-forwarded-proto'];
+  const proto = typeof forwarded === 'string' && forwarded.length > 0
+    ? forwarded.split(',')[0]!.trim()
+    : 'http';
+  return `${proto}://${host}`;
+}
+
 type AssetCacheEntry = { mtimeMs: number; body: string; etag: string; contentType: string };
 const assetCache = new Map<string, AssetCacheEntry>();
 
@@ -226,32 +361,44 @@ function loadAssetEntry(fullPath: string, ext: string, contentType: string): Ass
  *
  * Safe to call multiple times — entries are skipped when mtime is unchanged.
  * Errors on individual files are logged but don't abort the walk.
+ *
+ * Returns the dashboard-relative paths it warmed (RFC-010 §4.3.1 makes this
+ * verifiable: a test asserts no `vendor/` path is present). The production caller
+ * (`main.ts`) discards the return value.
  */
-export function warmDashboardAssets(): void {
+export function warmDashboardAssets(): string[] {
   const dashboardDir = join(import.meta.dirname!, '..', 'dashboard');
   const t0 = Date.now();
-  let count = 0;
+  const warmed: string[] = [];
   const walk = (dir: string): void => {
     let entries: { name: string; isDirectory: () => boolean; isFile: () => boolean }[];
     try { entries = readdirSync(dir, { withFileTypes: true }); }
     catch { return; }
     for (const ent of entries) {
       const full = join(dir, ent.name);
-      if (ent.isDirectory()) { walk(full); continue; }
+      if (ent.isDirectory()) {
+        // RFC-010 §4.3.1: skip the multi-MB vendored bundle dir. The tldraw
+        // bundle loads lazily on first canvas-open (cached on demand by
+        // loadAssetEntry, mtime-keyed), never at boot.
+        if (ent.name === 'vendor') continue;
+        walk(full);
+        continue;
+      }
       if (!ent.isFile()) continue;
       const ext = ent.name.slice(ent.name.lastIndexOf('.'));
       const contentType = ASSET_TYPES[ext];
       if (!contentType) continue;
       try {
         loadAssetEntry(full, ext, contentType);
-        count++;
+        warmed.push(full.slice(dashboardDir.length + 1));
       } catch (err) {
         console.warn(`[warm-assets] skip ${full}: ${(err as Error).message}`);
       }
     }
   };
   walk(dashboardDir);
-  console.log(`[warm-assets] cached ${count} dashboard files in ${Date.now() - t0}ms`);
+  console.log(`[warm-assets] cached ${warmed.length} dashboard files in ${Date.now() - t0}ms`);
+  return warmed;
 }
 
 function buildRoutes(): Route[] {
@@ -272,8 +419,76 @@ route('GET', '/dashboard', async (_req, res, _match, ctx) => {
   res.writeHead(200, {
     'content-type': 'text/html; charset=utf-8',
     'cache-control': 'no-cache, no-store, must-revalidate',
+    // RFC-010 §9.2 — the dashboard had no CSP. Add it without breaking the
+    // existing dashboard (script-src/style-src cover the vanilla-TS app + the
+    // measured tldraw inline-style need; the sketch iframe is frame-src 'self').
+    'content-security-policy': DASHBOARD_CSP,
   });
   res.end(ctx.getDashboardHtml());
+});
+
+// RFC-010 §4.3.2 — the opaque-origin host page for the sketch iframe. Served as a
+// dedicated route (not via the .html asset whitelist) for a narrow blast radius.
+// Carries the same CSP as /dashboard so the framed document is locked down too.
+route('GET', '/dashboard/sketch-frame', async (req, res) => {
+  res.writeHead(200, {
+    'content-type': 'text/html; charset=utf-8',
+    'cache-control': 'no-cache',
+    'content-security-policy': DASHBOARD_CSP,
+    // The opaque-origin frame fetches subresources cross-origin; the host doc
+    // itself is same-origin, but referrer is suppressed for the frame.
+    'referrer-policy': 'no-referrer',
+  });
+  // Emit absolute bundle URLs + <base> so the HTML works whether loaded as a
+  // same-origin page (src=) or as srcdoc in an opaque origin (no base URL).
+  res.end(getSketchFrameHtml(requestOrigin(req)));
+});
+
+// RFC-010 §4.3.3 + §9.3 — serve the committed vendored bundle ONLY from
+// src/dashboard/vendor/, with a HARDENED path guard (resolve() + startsWith(root
+// + sep)), NOT the substring `..` check the legacy asset routes use.
+route('GET', '/dashboard/vendor/:path+', async (req, res, match) => {
+  const filePath = match.pathname.groups['path'] ?? '';
+  const ext = filePath.slice(filePath.lastIndexOf('.'));
+  const contentType = VENDOR_TYPES[ext];
+  if (!contentType) {
+    res.writeHead(400); res.end('Bad request'); return;
+  }
+  // Hardened traversal guard (§9.3): resolve the candidate and assert it stays
+  // UNDER the vendor root. Catches %2e%2e (URLPattern decodes it before we see
+  // it), `/etc/passwd` absolute paths, and `vendor../`-style siblings — all of
+  // which the legacy substring `..` check misses.
+  const vendorRoot = resolve(import.meta.dirname!, '..', 'dashboard', 'vendor');
+  if (!isUnderVendorRoot(vendorRoot, filePath)) {
+    res.writeHead(400); res.end('Bad request'); return;
+  }
+  const fullPath = resolve(vendorRoot, filePath);
+  try {
+    const entry = loadAssetEntry(fullPath, ext, contentType);
+    if (req.headers['if-none-match'] === entry.etag) {
+      res.writeHead(304, {
+        'etag': entry.etag,
+        'cache-control': 'no-cache',
+        // Opaque-origin frames fetch the bundle as a CORS request (RFC §5.1).
+        'access-control-allow-origin': '*',
+      });
+      res.end();
+      return;
+    }
+    res.writeHead(200, {
+      'content-type': contentType,
+      'etag': entry.etag,
+      'cache-control': 'no-cache',
+      // The vendored bundle is a public static asset with no secrets. An
+      // opaque-origin (null) sandboxed frame fetches it as a CORS request, so it
+      // MUST carry Access-Control-Allow-Origin or the browser blocks the script
+      // (measured at vendor time, RFC §5.1).
+      'access-control-allow-origin': '*',
+    });
+    res.end(entry.body);
+  } catch {
+    res.writeHead(404); res.end('Not found');
+  }
 });
 
 route('GET', '/filter-test', async (_req, res) => {

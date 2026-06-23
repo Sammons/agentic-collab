@@ -1,0 +1,6 @@
+# pnpm 11 prompts for build-script approval per dependency. esbuild's postinstall
+# (the platform-binary symlink) is NOT needed here — pnpm already fetches the
+# @esbuild/<platform> package whose binary runs directly. Deny build scripts
+# explicitly so a fresh `pnpm install` in this dir does not prompt or run an
+# unaudited install-time script (per assume_risk_from_all_supply_chain).
+onlyBuiltDependencies: []

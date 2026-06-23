@@ -542,11 +542,12 @@ describe('API Routes', () => {
     });
     assert.equal(status, 200);
     assert.equal((data as Record<string, unknown>)['ok'], true);
-    assert.deepEqual(proxyCommands.at(-1), {
-      action: 'send_keys_raw',
-      sessionName: 'agent-api-agent-1',
-      keys: ['/exit', 'Enter'],
-    });
+    // Match by shape, not position: a background message-drain can land a stray
+    // send_keys between this command and the assertion under CI load.
+    assert.ok(
+      proxyCommands.some(c => c.action === 'send_keys_raw' && c.sessionName === 'agent-api-agent-1' && JSON.stringify(c.keys) === JSON.stringify(['/exit', 'Enter'])),
+      'tmux send-keys should map to a send_keys_raw command with [/exit, Enter]',
+    );
   });
 
   it('POST /api/agents/:name/tmux maps display-message through the proxy', async () => {
@@ -556,11 +557,10 @@ describe('API Routes', () => {
     });
     assert.equal(status, 200);
     assert.equal((data as Record<string, unknown>)['data'], '#{session_name}:0.0');
-    assert.deepEqual(proxyCommands.at(-1), {
-      action: 'display_message',
-      sessionName: 'agent-api-agent-1',
-      format: '#{session_name}:#{window_index}.#{pane_index}',
-    });
+    assert.ok(
+      proxyCommands.some(c => c.action === 'display_message' && c.sessionName === 'agent-api-agent-1' && c.format === '#{session_name}:#{window_index}.#{pane_index}'),
+      'tmux display-message should map to a display_message command',
+    );
   });
 
   it('POST /api/agents/:name/tmux rejects unsupported commands', async () => {

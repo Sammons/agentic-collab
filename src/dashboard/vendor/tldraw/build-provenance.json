@@ -1,0 +1,26 @@
+{
+  "builtAt": "2026-06-23T05:27:33.433Z",
+  "versions": {
+    "@tldraw/assets": "5.1.1",
+    "@types/node": "24.13.2",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "esbuild": "0.28.1",
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
+    "tldraw": "5.1.1",
+    "typescript": "5.8.3"
+  },
+  "files": {
+    "tldraw.bundle.js": {
+      "sha256": "014dd39c46e2499160ea9d402393f229a50c14813fbe716114f6c4fac691a7ef",
+      "minified": 5787960,
+      "gzipped": 2305631
+    },
+    "tldraw.bundle.css": {
+      "sha256": "073c17a72f279691acbe3ae79609f26a99fbe5cebf36e4e19fa05a99ea5f216c",
+      "minified": 77119,
+      "gzipped": 14396
+    }
+  }
+}

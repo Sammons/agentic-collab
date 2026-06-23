@@ -1,0 +1,22 @@
+{
+  "name": "@agentic-collab/tldraw-bundle",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "OFFLINE, dev-only build tool that vendors tldraw + React into a single self-contained ESM bundle for the dashboard's sketch canvas (RFC-010). NEVER part of the running app. The committed bundle (src/dashboard/vendor/tldraw/) is the artifact the runtime consumes; this package is the human-run bundler. tldraw/react/react-dom/esbuild MUST NOT appear in the repo-root package.json.",
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@tldraw/assets": "5.1.1",
+    "@types/node": "24.13.2",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "esbuild": "0.28.1",
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
+    "tldraw": "5.1.1",
+    "typescript": "5.8.3"
+  }
+}
