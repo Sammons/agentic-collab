@@ -9,7 +9,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { extractSketches, renderBodyWithSketches } from './sketch-chat.ts';
+import { extractSketches, renderBodyWithSketches, replaceSketchPlaceholders } from './sketch-chat.ts';
 
 test('a sketch block with quotes/</&/__proto__-adjacent text parses intact on RAW text', () => {
   // The text fields carry the exact chars that escape+markdown would mangle.
@@ -102,4 +102,43 @@ test('proto-pollution in a sketch block is rejected (block becomes ok:false)', (
   const raw = '```sketch\n{"shapes":[{"type":"rect","__proto__":{"x":1}}]}\n```';
   const { blocks } = extractSketches(raw);
   assert.equal(blocks[0]!.ok, false, 'proto-key sketch is not accepted');
+});
+
+test('an injected NUL sentinel in message text cannot spoof a sketch (anti-spoof gate)', () => {
+  // §7.4 gate: a message that embeds the raw sentinel bytes `\x00SK0\x00` must NOT
+  // be turned into a second sketch mount. The NUL is stripped before extraction, so
+  // only placeholders WE inject survive.
+  const raw = [
+    '```sketch',
+    '{"shapes":[{"type":"rect","text":"real"}]}',
+    '```',
+    'now the attacker tries: \x00SK0\x00 and also \x00SK7\x00',
+  ].join('\n');
+  const { text, blocks } = extractSketches(raw);
+  assert.equal(blocks.length, 1, 'exactly one real block detected');
+  // The injected sentinels are gone; the only NUL sentinel left is our own block 0.
+  const sentinels = text.match(/\x00SK\d+\x00/g) ?? [];
+  assert.deepEqual(sentinels, ['\x00SK0\x00'], 'only the genuine placeholder remains');
+  assert.ok(!text.includes('\x00SK7\x00'), 'injected out-of-range sentinel stripped');
+});
+
+test('full pipeline: an injected sentinel renders no extra sketch mount', () => {
+  const escapeAndMarkdown = (t: string): string =>
+    t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const raw = [
+    '```sketch',
+    '{"shapes":[{"type":"rect","text":"real"}]}',
+    '```',
+    'spoof attempt: \x00SK0\x00',
+  ].join('\n');
+  const { html, blocks } = renderBodyWithSketches(raw, escapeAndMarkdown);
+  assert.equal(blocks.length, 1);
+  const mounts = html.match(/data-sketch-id="/g) ?? [];
+  assert.equal(mounts.length, 1, 'one real sketch → exactly one mount node, not two');
+});
+
+test('replaceSketchPlaceholders drops an out-of-range index to empty (no crash, no leak)', () => {
+  // Even if a sentinel for a missing block reached this stage, it renders nothing.
+  const out = replaceSketchPlaceholders('before \x00SK9\x00 after', []);
+  assert.equal(out, 'before  after', 'out-of-range placeholder → empty string');
 });

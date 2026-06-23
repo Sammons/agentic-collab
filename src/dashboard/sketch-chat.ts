@@ -57,7 +57,14 @@ const SKETCH_FENCE = /```sketch[ \t]*\r?\n([\s\S]*?)```/g;
  */
 export function extractSketches(rawText: string): ExtractResult {
   const blocks: SketchBlock[] = [];
-  const text = rawText.replace(SKETCH_FENCE, (_match, body: string) => {
+  // Strip NUL bytes from the untrusted message text FIRST. Our placeholders use NUL
+  // (`\x00SK<n>\x00`) precisely because escape+markdown leave NUL intact. If raw
+  // content could carry a NUL, an author could embed `\x00SK0\x00` in their message
+  // and `replaceSketchPlaceholders` would substitute it — spoofing/duplicating a
+  // sketch mount at an arbitrary position (RFC §7.4 anti-spoof gate). Removing NUL
+  // here guarantees the only NUL sentinels in the pipeline are the ones we inject.
+  const cleaned = rawText.replace(/\x00/g, '');
+  const text = cleaned.replace(SKETCH_FENCE, (_match, body: string) => {
     const result = parseSketchDsl(body);
     const index = blocks.length;
     if (isSketchParseFailure(result)) {

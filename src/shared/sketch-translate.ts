@@ -41,9 +41,9 @@ export type PlannedBinding = {
   readonly key: string;
   readonly shape: Extract<SketchShape, { type: 'arrow' }>;
   /** Key of the source box (the iframe binds the arrow start here). */
-  readonly fromKey?: string;
+  readonly fromKey?: string | undefined;
   /** Key of the target box (the iframe binds the arrow end here). */
-  readonly toKey?: string;
+  readonly toKey?: string | undefined;
   /** Resolved endpoints (used when only one end is bound, or for initial geometry). */
   readonly endpoints: { x1: number; y1: number; x2: number; y2: number };
 };

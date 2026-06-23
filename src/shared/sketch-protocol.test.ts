@@ -65,7 +65,7 @@ test('guards reject non-objects / cross-kind confusion', () => {
 });
 
 test('nonce handshake: matching nonce accepted, mismatched/missing rejected', () => {
-  const load: SketchMessage = { kind: 'sketch:load', v: V, nonce: NONCE, doc: { shapes: [] } };
+  const load: SketchMessage = { kind: 'sketch:load', v: V, nonce: NONCE, doc: { shapes: [], notes: [] } };
   assert.ok(nonceMatches(load, NONCE), 'matching nonce passes');
   assert.ok(!nonceMatches(load, 'different-nonce'), 'mismatched nonce dropped');
 });
