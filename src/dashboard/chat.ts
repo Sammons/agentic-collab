@@ -20,6 +20,9 @@ import { registerRoute, go } from './routing.ts';
 import { renderMarkdown } from '../shared/markdown.ts';
 import { initVoice, voiceState, clearUsedFlag } from './voice.ts';
 import { escapeHtml, formatTime, toast, onActivate } from './util.ts';
+import { renderBodyWithSketches } from './sketch-chat.ts';
+import { mountSketchCanvas } from './sketch-mount.ts';
+import type { SketchDoc } from '../shared/sketch-dsl.ts';
 
 // Threads whose name isn't a registered agent but still belongs in the
 // merged feed — operator-visible system context (approval auto-notify,
@@ -376,6 +379,7 @@ async function renderFeed(forceScrollBottom = false): Promise<void> {
   wireFeedControls(root);
   wireCollapsibleMessages(root);
   wireCopyOnClick(root);
+  wireSketches(root);
 
   // Scroll handling
   if (pendingFocusId !== null) {
@@ -444,6 +448,36 @@ function wireCopyOnClick(root: HTMLElement): void {
       } catch {
         // Clipboard API may fail in some contexts
       }
+    });
+  }
+}
+
+/**
+ * Wire the "Open canvas" buttons on rendered sketch blocks (RFC-010 §7.5 step 4).
+ *
+ * Each click LAZILY mounts the opaque-origin tldraw iframe (the heavy bundle loads
+ * only on a deliberate click, §9.6) and posts the stashed DSL to it. The listener
+ * is attached once per button (guarded by `data-sketch-wired`) so re-renders /
+ * re-wires never stack listeners. The preview SVG is swapped for the live canvas on
+ * mount.
+ */
+function wireSketches(root: HTMLElement): void {
+  const buttons = root.querySelectorAll<HTMLButtonElement>('.sketch-open[data-sketch-open]');
+  for (const button of buttons) {
+    if (button.dataset['sketchWired'] === '1') continue;
+    button.dataset['sketchWired'] = '1';
+    onActivate(button, () => {
+      const blockEl = button.closest<HTMLElement>('.sketch-block');
+      const msgEl = button.closest<HTMLElement>('[data-msg-id]');
+      if (!blockEl || !msgEl) return;
+      const sketchId = Number(button.dataset['sketchOpen']);
+      const msgId = Number(msgEl.dataset['msgId']);
+      if (!Number.isFinite(sketchId) || !Number.isFinite(msgId)) return;
+      const doc = getSketchDoc(msgId, sketchId);
+      if (!doc) return;
+      // Mount once: if a canvas already exists in this block, do nothing.
+      if (blockEl.querySelector('.sketch-canvas')) return;
+      mountSketchCanvas(blockEl, doc, state.token ? { token: state.token } : {});
     });
   }
 }
@@ -573,6 +607,19 @@ function kindOf(agentName: string): 'per' | 'me' {
 const markdownCache = new Map<string, string>();
 const MARKDOWN_CACHE_MAX = 2000;
 
+/**
+ * Per-message stash of validated sketch DSL docs, keyed by `${msgId}:${sketchId}`.
+ * The rendered mount node carries only a `data-sketch-id` (a small index), not the
+ * raw JSON; `wireSketches` reads the doc back from here to drive the iframe.
+ * RFC-010 §7.5.
+ */
+const sketchDocs = new Map<string, SketchDoc>();
+
+/** Look up a stashed sketch doc by message id + local sketch id. */
+function getSketchDoc(msgId: number, sketchId: number): SketchDoc | undefined {
+  return sketchDocs.get(`${msgId}:${sketchId}`);
+}
+
 function renderMessageBody(text: string, msgId?: number): string {
   const cacheKey = msgId !== undefined ? `${msgId}:${text.length}` : null;
   if (cacheKey) {
@@ -583,14 +630,29 @@ function renderMessageBody(text: string, msgId?: number): string {
   // Normalize excessive whitespace: collapse 3+ newlines to 2 (one blank line)
   const normalized = text.replace(/\n{3,}/g, '\n\n').trim();
 
-  // Escape first, then apply markdown rendering
-  let html = escapeHtml(normalized);
-  html = renderMarkdown(html);
-  // Highlight @mentions (after markdown so they don't interfere with link syntax)
-  html = html.replace(/(^|[\s>])(@[a-zA-Z0-9_\-/]+)/g, (_, lead, mention) => {
-    return `${lead}<span class="mention">${mention}</span>`;
+  // RFC-010 §7.4: the sketch pre-pass MUST run on the RAW text BEFORE escape +
+  // markdown (the fence info-string is discarded by markdown and the body is
+  // HTML-escaped, which breaks JSON.parse). `renderBodyWithSketches` extracts the
+  // ```sketch fences from the raw text first, then runs the standard escape +
+  // markdown + @mention pipeline on the remaining text, then swaps in the previews.
+  const { html: rendered, blocks } = renderBodyWithSketches(normalized, (remaining) => {
+    let out = escapeHtml(remaining);
+    out = renderMarkdown(out);
+    // Highlight @mentions (after markdown so they don't interfere with link syntax)
+    out = out.replace(/(^|[\s>])(@[a-zA-Z0-9_\-/]+)/g, (_m, lead, mention) => {
+      return `${lead}<span class="mention">${mention}</span>`;
+    });
+    return out;
   });
 
+  // Stash the valid blocks' docs for this message so wireSketches can mount them.
+  if (msgId !== undefined) {
+    blocks.forEach((block, index) => {
+      if (block.ok) sketchDocs.set(`${msgId}:${index}`, block.doc);
+    });
+  }
+
+  const html = rendered;
   if (cacheKey) {
     // Evict oldest entries if cache is full
     if (markdownCache.size >= MARKDOWN_CACHE_MAX) {

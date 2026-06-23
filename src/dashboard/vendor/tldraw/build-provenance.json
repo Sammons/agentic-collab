@@ -1,5 +1,5 @@
 {
-  "builtAt": "2026-06-23T05:27:33.433Z",
+  "builtAt": "2026-06-23T07:49:36.785Z",
   "versions": {
     "@tldraw/assets": "5.1.1",
     "@types/node": "24.13.2",
@@ -13,9 +13,9 @@
   },
   "files": {
     "tldraw.bundle.js": {
-      "sha256": "014dd39c46e2499160ea9d402393f229a50c14813fbe716114f6c4fac691a7ef",
-      "minified": 5787960,
-      "gzipped": 2305631
+      "sha256": "87aebb5aaa4e80e000d69be666cf6724a1a745a8d0cad124c775ecc46cfab3e5",
+      "minified": 5794526,
+      "gzipped": 2308085
     },
     "tldraw.bundle.css": {
       "sha256": "073c17a72f279691acbe3ae79609f26a99fbe5cebf36e4e19fa05a99ea5f216c",

@@ -131,6 +131,20 @@ describe('RFC-010 Q1 routes (sketch-frame, vendor, CSP, warm-skip)', () => {
     assert.equal(resp.headers.get('access-control-allow-origin'), '*');
   });
 
+  // ── RFC-010 Q2 icon-sprite fix ──
+  // The merged icon spritesheet MUST be served as a REAL file so `#fragment`
+  // references resolve (a data: URI does not resolve fragments → filled squares).
+  it('GET /dashboard/vendor/tldraw/0_merged.svg → 200 image/svg+xml, with fragment-addressable ids', async () => {
+    const resp = await get('/dashboard/vendor/tldraw/0_merged.svg');
+    assert.equal(resp.status, 200);
+    assert.match(resp.headers.get('content-type') ?? '', /image\/svg\+xml/);
+    assert.equal(resp.headers.get('access-control-allow-origin'), '*', 'opaque-origin frame fetches it cross-origin');
+    const body = await resp.text();
+    assert.ok(body.includes('<svg'), 'is an svg');
+    // The :target CSS + per-icon ids are what make `#fragment` selection work.
+    assert.ok(/id="[a-z-]+"/.test(body), 'carries fragment-addressable icon ids');
+  });
+
   it('vendor route returns 304 on a matching If-None-Match', async () => {
     const first = await get('/dashboard/vendor/tldraw/tldraw.bundle.css');
     const etag = first.headers.get('etag') ?? '';

@@ -47,8 +47,15 @@ fetch** (see "No runtime CDN" below). CSS is emitted to a sibling
 
 | File | sha256 | minified bytes | gzipped bytes |
 |---|---|---|---|
-| `tldraw.bundle.js` | `014dd39c46e2499160ea9d402393f229a50c14813fbe716114f6c4fac691a7ef` | 5787960 (5.52 MB) | 2305631 (2.20 MB) |
+| `tldraw.bundle.js` | `87aebb5aaa4e80e000d69be666cf6724a1a745a8d0cad124c775ecc46cfab3e5` | 5794526 (5.53 MB) | 2308085 (2.20 MB) |
 | `tldraw.bundle.css` | `073c17a72f279691acbe3ae79609f26a99fbe5cebf36e4e19fa05a99ea5f216c` | 77119 (75.3 KB) | 14396 (14.1 KB) |
+
+> **Q2 rebuild (2026-06-23):** the bundle was rebuilt to carry the iframe-side
+> DSL→tldraw translator (`tools/tldraw-bundle/translate.tsx`) and the icon-sprite
+> fix (entry.tsx now points tldraw's icon URLs at the REAL vendored
+> `0_merged.svg`). The JS sha256 + size above are the Q2 build; the CSS is
+> unchanged. The `0_merged.svg` is committed alongside the bundle and served by the
+> vendor route (`.svg` added to `VENDOR_TYPES`).
 
 The JS is larger than the RFC's ~1.5–2.5 MB estimate because all fonts + the
 merged icon SVG + all locale JSON inline as base64 data URIs (base64 inflates
@@ -129,13 +136,15 @@ blob:` blocks any such fetch at the browser. Verified: 16 `data:font/woff2`
 inlines + 1 `data:image/svg+xml` inline; the CSS contains no non-`data:` `url()`
 except in-document SVG-filter fragment refs.
 
-> **Known cosmetic limitation (Q2/Q3 follow-up):** the merged icon spritesheet is
-> inlined as a single `data:` SVG referenced by `#fragment` (e.g.
-> `…0_merged.svg#zoom-in`). Browsers do not resolve fragment identifiers on
-> `data:` URIs, so toolbar icons render as filled squares (the color palette and
-> all functional UI render correctly). The fix (serve `0_merged.svg` as a real
-> vendored file so `#fragment` resolves, or split the sprite) is deferred to the
-> interactive-canvas quanta (Q2/Q3) — it does not gate Q1's no-op mount.
+> **Icon-sprite fix — DONE in Q2 (RFC §VENDOR "Known cosmetic limitation"):**
+> previously the merged icon spritesheet was inlined as a single `data:` SVG
+> referenced by `#fragment` (e.g. `…0_merged.svg#zoom-in`); browsers do not resolve
+> fragment identifiers on `data:` URIs, so toolbar icons rendered as filled
+> squares. Q2 fix: `entry.tsx` overrides tldraw's icon URL map to point at the REAL
+> committed `0_merged.svg` (served by the vendor route, which now whitelists
+> `.svg`), so the `#fragment` resolves against a real same-site file and the icons
+> render. The data-URI sprite still lives in the bundle (unused) — a future cleanup
+> could drop it from the dataurl loader to shave bundle size.
 
 ## License — free hobby tier + watermark (RFC §1)
 

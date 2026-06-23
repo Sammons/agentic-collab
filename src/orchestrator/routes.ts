@@ -204,12 +204,15 @@ const ASSET_TYPES: Record<string, string> = {
 
 /**
  * Content-types the vendored bundle route (`/dashboard/vendor/:path+`) serves.
- * Narrower than the general asset set: the vendor dir only holds the built
- * bundle's `.js` + `.css` (markdown/json provenance files are not served).
+ * Narrower than the general asset set: the vendor dir holds the built bundle's
+ * `.js` + `.css` plus the merged icon spritesheet `.svg` (RFC-010 Q2 icon fix —
+ * the sprite MUST be a real file so `#fragment` references resolve; a data: URI
+ * does not resolve fragments). Markdown/json provenance files are not served.
  */
 const VENDOR_TYPES: Record<string, string> = {
   '.js': 'application/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
+  '.svg': 'image/svg+xml; charset=utf-8',
 };
 
 /**
