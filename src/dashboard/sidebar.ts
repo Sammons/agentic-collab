@@ -27,7 +27,6 @@ const icons: Record<string, string> = {
   chat:      `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H6l-3 3v-3H3a1 1 0 0 1-1-1V4z"/></svg>`,
   brain:     `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 1.98-3A2.5 2.5 0 0 1 9.5 2Z"/><path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-1.98-3A2.5 2.5 0 0 0 14.5 2Z"/></svg>`,
   search:    `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="7" r="5"/><line x1="14" y1="14" x2="10.5" y2="10.5"/></svg>`,
-  approvals: `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8l3.5 3.5L13 5"/></svg>`,
   clock:     `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6"/><polyline points="8 4 8 8 10.5 9.5"/></svg>`,
   gear:      `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="2"/><path d="M8 1v2M8 13v2M14.36 5.64l-1.41 1.41M3.05 12.95l-1.41 1.41M15 8h-2M3 8H1M14.36 10.36l-1.41-1.41M3.05 3.05l-1.41-1.41"/></svg>`,
   chev:      `<svg width="9" height="9" viewBox="0 0 10 10" fill="currentColor"><path d="M2 3 L8 3 L5 7 z"/></svg>`,
@@ -123,11 +122,6 @@ function navActionsHtml(): string {
       <button class="nav-action ${active('search')}" data-go="search">
         <span class="ico">${icons['search']}</span>
         <span class="label">Search</span>
-      </button>
-      <button class="nav-action ${active('approvals')}" data-go="approvals">
-        <span class="ico">${icons['approvals']}</span>
-        <span class="label">Approvals</span>
-        ${badge(pendingCounts.approvals)}
       </button>
       <button class="nav-action ${active('reminders')}" data-go="reminders">
         <span class="ico">${icons['clock']}</span>
@@ -303,7 +297,6 @@ function wire(r: HTMLElement): void {
         case 'dashboard': go({ kind: 'dashboard' }); break;
         case 'agents':    go({ kind: 'agents' }); break;
         case 'search':    go({ kind: 'search' }); break;
-        case 'approvals': go({ kind: 'approvals' }); break;
         case 'reminders': go({ kind: 'reminders' }); break;
         case 'settings':  go({ kind: 'settings' }); break;
       }

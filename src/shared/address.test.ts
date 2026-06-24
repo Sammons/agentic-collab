@@ -12,14 +12,6 @@ describe('parseAddress', () => {
     { raw: 'agent:foo', expected: { class: 'agent', name: 'foo' } },
     { raw: 'agent:my_agent-2', expected: { class: 'agent', name: 'my_agent-2' } },
     {
-      raw: 'approval:my-channel',
-      expected: { class: 'approval', channel: 'my-channel' },
-    },
-    {
-      raw: 'approval:aws_account_provision',
-      expected: { class: 'approval', channel: 'aws_account_provision' },
-    },
-    {
       raw: 'telegram:almanac',
       expected: { class: 'telegram', agentName: 'almanac' },
     },
@@ -48,9 +40,6 @@ describe('parseAddress', () => {
     { raw: 'topic:', description: 'topic: prefix (removed by RFC-009)' },
     { raw: 'topic:foo', description: 'topic: prefix with name (removed by RFC-009)' },
     { raw: 'topic:foo/bar', description: 'topic: slash form (removed by RFC-009)' },
-    { raw: 'approval:', description: 'approval: with empty channel' },
-    { raw: 'approval:bad chan', description: 'approval: with whitespace' },
-    { raw: 'approval:BAD!', description: 'approval: with invalid chars' },
     { raw: 'telegram:', description: 'telegram: with empty agent name' },
     { raw: 'telegram:bad name', description: 'telegram: with whitespace' },
     { raw: 'telegram:BAD!', description: 'telegram: with invalid chars' },
@@ -114,11 +103,6 @@ describe('addressToString', () => {
     // Bare name parses to {class:'agent', name:'foo'}; canonical render is `agent:foo`.
     const addr = parseAddress('foo');
     assert.equal(addressToString(addr), 'agent:foo');
-  });
-
-  it('round-trips approval', () => {
-    const raw = 'approval:my-channel';
-    assert.equal(addressToString(parseAddress(raw)), raw);
   });
 
   it('round-trips telegram', () => {

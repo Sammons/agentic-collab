@@ -31,17 +31,6 @@ export type DefaultEngineConfig = {
 const UNSAFE_INDICATOR = { id: 'unsafe', regex: '.', badge: 'Unsafe', style: 'danger' } satisfies IndicatorDefinition;
 const LOW_CONTEXT_INDICATOR = { id: 'low-context', regex: 'Context left until', badge: 'Low Context', style: 'danger' } satisfies IndicatorDefinition;
 const CONTEXT_LIMIT_INDICATOR = { id: 'context-limit', regex: 'Context limit reached', badge: 'Context Limit', style: 'danger' } satisfies IndicatorDefinition;
-const CLAUDE_APPROVAL_INDICATOR = {
-  id: 'approval',
-  regex: '(Yes)\\s*/\\s*(No)\\s*/\\s*(Always allow)',
-  badge: 'Needs Approval',
-  style: 'warning',
-  actions: {
-    '$1': [{ type: 'keystroke', key: '$1' }],
-    '$2': [{ type: 'keystroke', key: '$2' }],
-    '$3': [{ type: 'keystroke', key: '$3' }],
-  },
-} satisfies IndicatorDefinition;
 const CLAUDE_FILE_PERMISSION_INDICATOR = {
   id: 'file-permission',
   regex: 'Do you want to .+\\?',
@@ -178,7 +167,6 @@ export const DEFAULT_ENGINE_CONFIGS: DefaultEngineConfig[] = [
     ]),
     indicators: JSON.stringify([
       UNSAFE_INDICATOR,
-      CLAUDE_APPROVAL_INDICATOR,
       CLAUDE_FILE_PERMISSION_INDICATOR,
       CLAUDE_PLAN_INDICATOR,
       CLAUDE_RESUME_PROMPT_INDICATOR,

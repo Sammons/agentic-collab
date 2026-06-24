@@ -735,15 +735,6 @@ function parseCustomButtons(
  * actions sub-key containing named action keys mapping to pipeline step arrays.
  *
  * indicators:
- *   approval:
- *     regex: '(Yes|No|Always allow)'
- *     badge: Needs Approval
- *     style: warning
- *     actions:
- *       approve:
- *         - keystroke: y
- *       deny:
- *         - keystroke: n
  *   low-context:
  *     regex: 'Context left until'
  *     badge: Low Context
@@ -1140,20 +1131,6 @@ Core commands:
   collab send <agent> --topic <t> <msg>       # message a peer agent
   collab agents                               # list all agents + status
   collab queue [--agent X] [--status S] [--limit N]  # message history
-
-Approvals (request human sign-off before taking sensitive actions):
-  collab approval create <channel> "<payload>"  # request approval, returns ID
-  collab approval await <id> [--timeout 5m]     # block until approved/rejected
-  collab approval get <id>                      # check status
-  collab approval withdraw <id>                 # cancel pending request
-
-  Use approvals for ANY persistent outstanding input you need from a human/the
-  operator — a question sent in chat scrolls away and gets lost, but a pending
-  approval stays visible on the dashboard until it's answered. That includes
-  sensitive actions to review first (destructive operations, external API calls,
-  spending money, sending emails, publishing content) AND any decision you're
-  blocked on (which option to take, whether to proceed, a value you need).
-  The operator sees pending approvals on the dashboard and can approve/reject them.
 
 Tmux (routed through orchestrator to the correct proxy):
   collab tmux <agent> -- capture-pane         # read agent's terminal output

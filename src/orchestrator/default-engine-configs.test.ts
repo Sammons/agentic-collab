@@ -219,13 +219,6 @@ describe('default-engine-configs', () => {
       }
     });
 
-    it('matches the claude approval prompt and captures the three options', () => {
-      const indicator = findIndicator(getConfig('claude'), 'approval');
-      const match = new RegExp(indicator.regex).exec('❯ Yes / No / Always allow');
-      assert.ok(match);
-      assert.deepEqual(match.slice(1), ['Yes', 'No', 'Always allow']);
-    });
-
     it('matches the claude file-permission prompt', () => {
       const indicator = findIndicator(getConfig('claude'), 'file-permission');
       const regex = new RegExp(indicator.regex);

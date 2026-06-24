@@ -16,7 +16,6 @@ import { setupSidebar } from './sidebar.ts';
 import { setupChat } from './chat.ts';
 import { setupAgents } from './agents.ts';
 import { setupWatch } from './watch.ts';
-import { setupApprovals } from './approvals.ts';
 import { setupReminders } from './reminders.ts';
 import { setupSettings } from './settings.ts';
 import { setupSearch } from './search.ts';
@@ -46,7 +45,6 @@ function boot(): void {
   setupChat();
   setupAgents();
   setupWatch();
-  setupApprovals();
   setupReminders();
   setupSettings();
   setupSearch();
