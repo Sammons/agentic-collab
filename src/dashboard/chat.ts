@@ -438,8 +438,8 @@ function wireCopyOnClick(root: HTMLElement): void {
   for (const body of bodies) {
     body.style.cursor = 'pointer';
     body.addEventListener('click', async (e) => {
-      // Don't copy if clicking a link or button inside the body
-      if ((e.target as HTMLElement).closest('a, button')) return;
+      // Don't copy if clicking a link, button, or inside the sketch frame
+      if ((e.target as HTMLElement).closest('a, button, .sketch-block')) return;
 
       const raw = body.dataset['rawMessage'] ?? body.textContent ?? '';
       try {
@@ -454,52 +454,46 @@ function wireCopyOnClick(root: HTMLElement): void {
 }
 
 /**
- * Wire the "Open canvas" buttons on rendered sketch blocks (RFC-010 §7.5 step 4).
+ * Auto-mount the tldraw canvas for every sketch block in `root`.
  *
- * Each click LAZILY mounts the opaque-origin tldraw iframe (the heavy bundle loads
- * only on a deliberate click, §9.6) and posts the stashed DSL to it. The listener
- * is attached once per button (guarded by `data-sketch-wired`) so re-renders /
- * re-wires never stack listeners. The preview SVG is swapped for the live canvas on
- * mount.
+ * Previously the canvas was lazily mounted on "Open canvas" button click; the
+ * static SVG preview shown before that point looked noticeably different from the
+ * tldraw render (different layout engine, colours, fonts). Auto-mounting removes
+ * that mismatch — the live canvas appears immediately when the message renders.
+ *
+ * Guard: `data-sketch-wired="1"` on the block prevents double-mount when
+ * `wireSketches` is called again on re-renders or new-message appends.
  */
 function wireSketches(root: HTMLElement): void {
-  const buttons = root.querySelectorAll<HTMLButtonElement>('.sketch-open[data-sketch-open]');
-  for (const button of buttons) {
-    if (button.dataset['sketchWired'] === '1') continue;
-    button.dataset['sketchWired'] = '1';
-    onActivate(button, () => {
-      const blockEl = button.closest<HTMLElement>('.sketch-block');
-      const msgEl = button.closest<HTMLElement>('[data-msg-id]');
-      if (!blockEl || !msgEl) return;
-      const sketchId = Number(button.dataset['sketchOpen']);
-      const msgId = Number(msgEl.dataset['msgId']);
-      if (!Number.isFinite(sketchId) || !Number.isFinite(msgId)) return;
-      const doc = getSketchDoc(msgId, sketchId);
-      if (!doc) return;
-      // Mount once: if a canvas already exists in this block, do nothing.
-      if (blockEl.querySelector('.sketch-canvas')) return;
-      // Resolve the reply target: the agent that drew the sketch (its source
-      // agent), falling back to the thread owner. Topic mirrors the message's
-      // topic so the reply lands in the same conversation.
-      const target = resolveSketchSendTarget(msgId);
-      mountSketchCanvas(blockEl, doc, {
-        ...(state.token ? { token: state.token } : {}),
-        // RFC-010 §1.0 — forward the production license key (set only when the
-        // server has TLDRAW_LICENSE_KEY) so the iframe drops the free-tier
-        // watermark on the prod domain. Null in dev → omitted → free-tier mount.
-        ...(state.sketchLicenseKey ? { licenseKey: state.sketchLicenseKey } : {}),
-        onSend: (driver: SketchCanvasDriver) => {
-          if (!target) {
-            toast('Cannot determine who to send this sketch to', 'error');
-            return;
-          }
-          void runSketchSend(driver, target, {
-            uploadFile: uploadSketchFile,
-            sendMessage: sendSketchMessage,
-            notify: toast,
-          });
-        },
-      });
+  const blocks = root.querySelectorAll<HTMLElement>('.sketch-block[data-sketch-id]');
+  for (const blockEl of blocks) {
+    if (blockEl.dataset['sketchWired'] === '1') continue;
+    blockEl.dataset['sketchWired'] = '1';
+    const msgEl = blockEl.closest<HTMLElement>('[data-msg-id]');
+    if (!msgEl) continue;
+    const sketchId = Number(blockEl.dataset['sketchId']);
+    const msgId = Number(msgEl.dataset['msgId']);
+    if (!Number.isFinite(sketchId) || !Number.isFinite(msgId)) continue;
+    const doc = getSketchDoc(msgId, sketchId);
+    if (!doc) continue;
+    if (blockEl.querySelector('.sketch-canvas')) continue;
+    // Resolve the reply target: the agent that drew the sketch (its source
+    // agent), falling back to the thread owner.
+    const target = resolveSketchSendTarget(msgId);
+    mountSketchCanvas(blockEl, doc, {
+      ...(state.token ? { token: state.token } : {}),
+      ...(state.sketchLicenseKey ? { licenseKey: state.sketchLicenseKey } : {}),
+      onSend: (driver: SketchCanvasDriver) => {
+        if (!target) {
+          toast('Cannot determine who to send this sketch to', 'error');
+          return;
+        }
+        void runSketchSend(driver, target, {
+          uploadFile: uploadSketchFile,
+          sendMessage: sendSketchMessage,
+          notify: toast,
+        });
+      },
     });
   }
 }
