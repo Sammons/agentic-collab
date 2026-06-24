@@ -19,7 +19,7 @@
  *
  * The mount node carries a `data-sketch-id` (an index into a per-message stash the
  * caller keeps), NOT the raw JSON inlined as a giant attribute. `wireSketches` in
- * chat.ts reads that stash to lazily mount the iframe on "open canvas".
+ * chat.ts reads that stash and auto-mounts the iframe immediately on render.
  */
 
 import { parseSketchDsl, isSketchParseFailure, type SketchDoc } from '../shared/sketch-dsl.ts';
