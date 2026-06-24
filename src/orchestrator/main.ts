@@ -20,7 +20,6 @@ import { shutdownAgents, restoreAllAgents } from './network.ts';
 import type { LifecycleContext } from './lifecycle.ts';
 import { syncPersonasToDb, syncPersonasWithDiff, getPersonasDir } from './persona.ts';
 import { backfillFrontmatterFromDb } from './persona-backfill.ts';
-import { ApprovalService } from './approvals.ts';
 import { AccountStore } from './accounts.ts';
 import { isRunning } from '../shared/agent-entity.ts';
 import { resolveSecret, getSecretPath } from '../shared/config.ts';
@@ -306,19 +305,6 @@ if (TLDRAW_LICENSE_KEY) {
 
 const telegramDispatcher = new TelegramDispatcher();
 
-// ── v3 Q5: Approvals service ──
-//
-// Auto-notifies requesters on state change via the existing message
-// dispatcher (persistent enqueue for agent: addresses). Emits
-// `approval_changed` WS events.
-const approvals = new ApprovalService({
-  db,
-  messageDispatcher,
-  onEvent: (event) => wss.broadcastEvent(event),
-  // Surface auto-notify dashboard rows over the same `message` WS event
-  // the chat surface already listens on — agent thread updates live.
-  onMessage: (msg) => wss.broadcast(JSON.stringify({ type: 'message', msg })),
-});
 
 const routeCtx: RouteContext = {
   db,
@@ -339,7 +325,6 @@ const routeCtx: RouteContext = {
   storesDir: STORES_DIR,
   filesDir: FILES_DIR,
   telegramDispatcher,
-  approvals,
   reloadPersonas: () => {
     const diff = syncPersonasWithDiff(db);
     // RFC-008 PR-C: re-reconcile per-agent Telegram bots on persona reload —

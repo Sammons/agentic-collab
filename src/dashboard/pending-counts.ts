@@ -1,5 +1,5 @@
 /**
- * Pending-count badges for the sidebar nav (Approvals + Reminders).
+ * Pending-count badges for the sidebar nav (Reminders).
  *
  * Counts are sourced from data the client already receives — no WS schema
  * change:
@@ -7,10 +7,6 @@
  *     heals any drift from events missed while disconnected.
  *   - `ws:reminder_update` carries the full reminders list, so the reminders
  *     count is derived straight from the event payload (no refetch).
- *   - `ws:approval_changed` carries a single-approval delta only (it fires on
- *     create and on every state change), so we refetch
- *     /api/approvals?state=pending — the same refetch-on-event pattern
- *     approvals.ts uses for its master list.
  *
  * Emits `pending-counts-changed` (only when a count actually moves) so the
  * sidebar re-renders its badges.
@@ -20,7 +16,6 @@ import { emit, on, authHeaders } from './state.ts';
 
 /** Live pending counts the sidebar badges render from. */
 export const pendingCounts = {
-  approvals: 0,
   reminders: 0,
 };
 
@@ -44,29 +39,13 @@ export function remindersFromEvent(detail: unknown): Reminder[] | null {
   return reminders as Reminder[];
 }
 
-function setCounts(approvals: number | null, reminders: number | null): void {
+function setCounts(reminders: number | null): void {
   let changed = false;
-  if (approvals !== null && approvals !== pendingCounts.approvals) {
-    pendingCounts.approvals = approvals;
-    changed = true;
-  }
   if (reminders !== null && reminders !== pendingCounts.reminders) {
     pendingCounts.reminders = reminders;
     changed = true;
   }
   if (changed) emit('pending-counts-changed');
-}
-
-async function refreshApprovals(): Promise<void> {
-  try {
-    const res = await fetch('/api/approvals?state=pending', { headers: authHeaders() });
-    if (!res.ok) return; // 503 (approvals not configured) / auth hiccup — keep last-known count
-    const rows = await res.json() as unknown[];
-    if (!Array.isArray(rows)) return;
-    setCounts(rows.length, null);
-  } catch {
-    // Network blip — keep the last-known count; the next init/event re-syncs.
-  }
 }
 
 async function refreshReminders(): Promise<void> {
@@ -75,7 +54,7 @@ async function refreshReminders(): Promise<void> {
     if (!res.ok) return;
     const rows = await res.json() as Reminder[];
     if (!Array.isArray(rows)) return;
-    setCounts(null, countPendingReminders(rows));
+    setCounts(countPendingReminders(rows));
   } catch {
     // Network blip — keep the last-known count; the next init/event re-syncs.
   }
@@ -83,13 +62,11 @@ async function refreshReminders(): Promise<void> {
 
 export function setupPendingCounts(): void {
   on('init', () => {
-    void refreshApprovals();
     void refreshReminders();
   });
-  on('ws:approval_changed', () => void refreshApprovals());
   on('ws:reminder_update', (detail) => {
     const rows = remindersFromEvent(detail);
-    if (rows) setCounts(null, countPendingReminders(rows));
+    if (rows) setCounts(countPendingReminders(rows));
     else void refreshReminders();
   });
 }

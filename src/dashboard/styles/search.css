@@ -1,5 +1,5 @@
 /* ──────────────────────────────────────────────────────────────────────
-   Search — global · agents · messages · approvals · reminders · pages
+   Search — global · agents · messages · reminders · pages
    tone: Greenroom — the input is the signature moment (oversized Bricolage,
    borderless underline). One clay use: the <mark> underline on matches.
    ────────────────────────────────────────────────────────────────────── */
@@ -178,7 +178,6 @@
 }
 .sr-result.agent .dot { background: var(--steel); }
 .sr-result.message .dot { background: var(--ink-3); }
-.sr-result.approval .dot { background: var(--clay); }
 .sr-result.reminder .dot { background: var(--steel); }
 .sr-result.page .dot { background: var(--plum); }
 .sr-result.completed .dot { background: var(--moss); }

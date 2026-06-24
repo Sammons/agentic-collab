@@ -8,7 +8,6 @@
  *   #/             -> dashboard (merged chat)
  *   #/agents       -> agents management
  *   #/watch/:name  -> watch a specific agent
- *   #/approvals    -> approvals master-detail
  *   #/reminders    -> reminders fan-out
  *   #/settings     -> settings (engine configs, prefs, etc.)
  *   #/search       -> global search
@@ -27,7 +26,6 @@ const renderers: Record<Route['kind'], RouteRenderer> = {
     const name = r.kind === 'watch' ? r.agentName : '(unknown)';
     placeholder(root, `Watching ${name}`, 'Live tmux peek. Implemented in PR 4.');
   },
-  approvals: (root) => placeholder(root, 'Approvals', 'Master-detail review. Implemented in PR 5.'),
   reminders: (root) => placeholder(root, 'Reminders', 'Per-agent recurring nudges. Implemented in PR 6.'),
   settings:  (root) => placeholder(root, 'Settings',  'Engine configs, prefs, pages, stores, destinations. Implemented in PR 7.'),
   'edit-engine': (root, r) => {
@@ -56,7 +54,6 @@ export function parseHash(hash: string): Route {
   const h = hash.replace(/^#\/?/, '').trim();
   if (h === '' || h === '/') return { kind: 'dashboard' };
   if (h === 'agents')     return { kind: 'agents' };
-  if (h === 'approvals')  return { kind: 'approvals' };
   if (h === 'reminders')  return { kind: 'reminders' };
   if (h === 'settings')   return { kind: 'settings' };
   if (h === 'search')     return { kind: 'search' };
@@ -82,7 +79,6 @@ export function go(route: Route): void {
     case 'dashboard': hash = '#/'; break;
     case 'agents':    hash = '#/agents'; break;
     case 'watch':     hash = `#/watch/${encodeURIComponent(route.agentName)}`; break;
-    case 'approvals': hash = '#/approvals'; break;
     case 'reminders': hash = '#/reminders'; break;
     case 'settings':  hash = '#/settings'; break;
     case 'edit-engine': hash = `#/edit-engine/${encodeURIComponent(route.name)}`; break;

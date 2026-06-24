@@ -21,7 +21,6 @@ export type Route =
   | { kind: 'dashboard' }
   | { kind: 'agents' }
   | { kind: 'watch'; agentName: string }
-  | { kind: 'approvals' }
   | { kind: 'reminders' }
   | { kind: 'settings' }
   | { kind: 'edit-engine'; name: string }

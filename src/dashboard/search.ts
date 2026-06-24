@@ -5,12 +5,11 @@
  *   - Agents (name + cwd substring match)
  *   - Messages (state.threads — substring on message body)
  *   - Reminders (loaded from /api/reminders)
- *   - Approvals (loaded from /api/approvals)
  *   - Pages (loaded from /api/pages)
  *
  * Scope-by-type chips narrow the result list. Cmd+K focuses the input.
  */
-import type { AgentRecord, DashboardMessage, Reminder, ApprovalRow, PageRecord } from '../shared/types.ts';
+import type { AgentRecord, DashboardMessage, Reminder, PageRecord } from '../shared/types.ts';
 import { state, on, authHeaders, enterFocusMode, emit } from './state.ts';
 import { registerRoute, go } from './routing.ts';
 import { focusMessage } from './chat.ts';
@@ -20,13 +19,11 @@ type Hit =
   | { kind: 'agent';     score: number; matched: string[]; record: AgentRecord }
   | { kind: 'message';   score: number; matched: string[]; record: DashboardMessage }
   | { kind: 'reminder';  score: number; matched: string[]; record: Reminder }
-  | { kind: 'approval';  score: number; matched: string[]; record: ApprovalRow }
   | { kind: 'page';      score: number; matched: string[]; record: PageRecord };
 
 let query = '';
 let scope: 'all' | Hit['kind'] = 'all';
 let reminders: Reminder[] = [];
-let approvals: ApprovalRow[] = [];
 let pages: PageRecord[] = [];
 const detachers: Array<() => void> = [];
 
@@ -48,7 +45,7 @@ function render(root: HTMLElement): void {
       <div class="sr-hdr">
         <div class="eyebrow">
           <span>Search</span>
-          <span class="stats" data-stats>type a query to search agents, messages, approvals, reminders, pages</span>
+          <span class="stats" data-stats>type a query to search agents, messages, reminders, pages</span>
           <span class="right"><kbd>⌘</kbd><kbd>K</kbd> from anywhere</span>
         </div>
         <div class="sr-input-wrap">
@@ -74,7 +71,6 @@ function render(root: HTMLElement): void {
   detachers.push(on('message', () => rerender()));
   detachers.push(on('agents-changed', () => rerender()));
   detachers.push(on('ws:reminder_update', () => void loadReminders().then(rerender)));
-  detachers.push(on('ws:approval_changed', () => void loadApprovals().then(rerender)));
   detachers.push(on('ws:pages_update', () => void loadPages().then(rerender)));
   detachers.push(on('route-changed', (r) => {
     if ((r as { kind?: string })?.kind !== 'search') teardown();
@@ -89,14 +85,11 @@ function teardown(): void {
 }
 
 async function loadAuxData(): Promise<void> {
-  await Promise.all([loadReminders(), loadApprovals(), loadPages()]);
+  await Promise.all([loadReminders(), loadPages()]);
   rerender();
 }
 async function loadReminders(): Promise<void> {
   try { const r = await fetch('/api/reminders', { headers: authHeaders() }); if (r.ok) reminders = await r.json() as Reminder[]; } catch {}
-}
-async function loadApprovals(): Promise<void> {
-  try { const r = await fetch('/api/approvals', { headers: authHeaders() }); if (r.ok) approvals = await r.json() as ApprovalRow[]; } catch {}
 }
 async function loadPages(): Promise<void> {
   try { const r = await fetch('/api/pages', { headers: authHeaders() }); if (r.ok) pages = await r.json() as PageRecord[]; } catch {}
@@ -135,7 +128,7 @@ function rerender(): void {
   if (!root) return;
   const hits = search(query);
 
-  const counts = { agent: 0, message: 0, reminder: 0, approval: 0, page: 0 };
+  const counts = { agent: 0, message: 0, reminder: 0, page: 0 };
   for (const h of hits) counts[h.kind]++;
 
   const chips = root.querySelector<HTMLElement>('[data-chips]');
@@ -149,7 +142,6 @@ function rerender(): void {
       ${chip('all', 'All', hits.length)}
       ${chip('agent', 'Agents', counts.agent)}
       ${chip('message', 'Messages', counts.message)}
-      ${chip('approval', 'Approvals', counts.approval)}
       ${chip('reminder', 'Reminders', counts.reminder)}
       ${chip('page', 'Pages', counts.page)}
     `;
@@ -165,7 +157,7 @@ function rerender(): void {
   const stats = root.querySelector<HTMLElement>('[data-stats]');
   if (stats) {
     if (!query.trim()) {
-      stats.textContent = 'type a query to search agents, messages, approvals, reminders, pages';
+      stats.textContent = 'type a query to search agents, messages, reminders, pages';
     } else {
       stats.innerHTML = `<span class="num">${hits.length}</span> results · scope: <span class="num">${state.selectedAgents.size}</span>/${state.agents.length} agents`;
     }
@@ -229,17 +221,6 @@ function search(q: string): Hit[] {
     }
   }
 
-  // Approvals (no scope filter — approvals span agents)
-  for (const a of approvals) {
-    const hitChannel = a.channel.toLowerCase().includes(needle);
-    const hitPayload = a.payload.toLowerCase().includes(needle);
-    const hitId = a.id.toLowerCase().includes(needle);
-    if (hitChannel || hitPayload || hitId) {
-      const matched = [hitChannel && 'channel', hitPayload && 'payload', hitId && 'id'].filter(Boolean) as string[];
-      hits.push({ kind: 'approval', score: 60, matched, record: a });
-    }
-  }
-
   // Pages
   for (const p of pages) {
     if (p.slug.toLowerCase().includes(needle)) {
@@ -254,13 +235,12 @@ function search(q: string): Hit[] {
 /* ── result rendering ──────────────────────────────────────────────── */
 
 function renderSections(hits: Hit[]): string {
-  const groups: Record<Hit['kind'], Hit[]> = { agent: [], message: [], reminder: [], approval: [], page: [] };
+  const groups: Record<Hit['kind'], Hit[]> = { agent: [], message: [], reminder: [], page: [] };
   for (const h of hits) groups[h.kind].push(h);
   const out: string[] = [];
 
   if (groups.agent.length > 0) out.push(sectionHtml('Agents', groups.agent));
   if (groups.message.length > 0) out.push(sectionHtml('Messages', groups.message));
-  if (groups.approval.length > 0) out.push(sectionHtml('Approvals', groups.approval));
   if (groups.reminder.length > 0) out.push(sectionHtml('Reminders', groups.reminder));
   if (groups.page.length > 0) out.push(sectionHtml('Pages', groups.page));
 
@@ -311,24 +291,6 @@ function resultHtml(h: Hit): string {
               <span class="state">${formatTime(m.createdAt)}</span>
             </div>
             <div class="snippet">${highlight(m.message.slice(0, 240))}${m.message.length > 240 ? '…' : ''}</div>
-          </div>
-        </div>
-      `;
-    }
-    case 'approval': {
-      const a = h.record;
-      return `
-        <div class="sr-result approval" data-kind="approval" data-approval="${escapeHtml(a.id)}">
-          <span class="dot"></span>
-          <div class="body">
-            <div class="hdr">
-              <span class="nm">${escapeHtml(a.id)}</span>
-              <span class="kind">channel:</span>
-              <span class="nm">${highlight(a.channel)}</span>
-              <span class="state ${a.state}">● ${a.state}</span>
-            </div>
-            <div class="snippet quote"><span class="gl">›</span><span>${highlight(a.payload.slice(0, 240))}${a.payload.length > 240 ? '…' : ''}</span></div>
-            <div class="meta">matched in <span style="color:var(--ink-2);">${h.matched.join(', ')}</span></div>
           </div>
         </div>
       `;
@@ -395,11 +357,6 @@ function wireResults(scope: HTMLElement): void {
       go({ kind: 'dashboard' });
     });
   });
-  scope.querySelectorAll<HTMLElement>('.sr-result.approval').forEach((el) => {
-    el.addEventListener('click', () => {
-      go({ kind: 'approvals' });
-    });
-  });
   scope.querySelectorAll<HTMLElement>('.sr-result.reminder').forEach((el) => {
     el.addEventListener('click', () => {
       go({ kind: 'reminders' });
@@ -427,4 +384,3 @@ function highlight(text: string): string {
   }
   return out.join('');
 }
-

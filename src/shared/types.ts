@@ -324,45 +324,6 @@ export type ProxyRegistration = {
   registeredAt: string;
 };
 
-// ── Approvals (v3 Q5) ──
-
-/**
- * State machine for an approval row:
- *   pending  → approved | rejected | amended | withdrawn (terminal)
- *
- * Terminal states are immutable; `setState` rejects callers that try to
- * mutate a terminal row. `withdrawn` is creator-only while pending.
- */
-export type ApprovalState = 'pending' | 'approved' | 'rejected' | 'amended' | 'withdrawn';
-
-/**
- * Row in the `approvals` table. Approvals are first-class CRUD records
- * categorised by `channel` (`approval:<channel>`); they are *not* a
- * message-routing surface — auto-notification on state change routes
- * through the existing message dispatcher to the requester's address.
- */
-export type ApprovalRow = {
-  id: string;
-  requesterAddr: string;
-  channel: string;
-  payload: string;
-  state: ApprovalState;
-  amendmentsJson: string | null;
-  createdAt: string;
-  updatedAt: string;
-  decidedBy: string | null;
-  decidedAt: string | null;
-};
-
-/** Row in the `approval_events` audit table — one per state transition / lifecycle event. */
-export type ApprovalEventRow = {
-  id: number;
-  approvalId: string;
-  eventType: string;
-  payload: string | null;
-  createdAt: string;
-};
-
 // ── WebSocket Events (Orchestrator → Dashboard) ──
 
 export type WsInitEvent = {
@@ -419,24 +380,6 @@ export type WsNotificationEvent = {
   priority: string;
 };
 
-// ── v3 events: approvals ──
-//
-// Snake-case `type` values follow the existing WS convention. Dashboard
-// consumers currently ignore unknown event types (see
-// `src/dashboard/connection.ts`'s default-less switch) so adding these
-// is non-breaking.
-
-/**
- * Emitted by the approvals service when an approval row's `state` column
- * changes. Subscribed dashboard clients narrow on `type` to react.
- */
-export type WsApprovalChangedEvent = {
-  type: 'approval_changed';
-  approvalId: string;
-  state: string;
-  channel: string;
-};
-
 export type WsEvent =
   | WsInitEvent
   | WsAgentUpdateEvent
@@ -446,8 +389,7 @@ export type WsEvent =
   | WsIndicatorUpdateEvent
   | WsStoresUpdateEvent
   | WsDestinationsUpdateEvent
-  | WsNotificationEvent
-  | WsApprovalChangedEvent;
+  | WsNotificationEvent;
 
 // ── Proxy API ──
 

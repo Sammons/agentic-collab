@@ -1,8 +1,8 @@
 /* ──────────────────────────────────────────────────────────────────────
    Settings — engine configs · prefs · pages · stores · destinations
    tone: typographic-forward, no card chrome, single clay accent on the
-   primary "New / Add / Save" buttons. YAML view reuses the approvals
-   payload syntax-tint vocabulary (.key, .str, .num, .punc, .gutter).
+   primary "New / Add / Save" buttons. YAML view uses a syntax-tint
+   vocabulary (.key, .str, .num, .punc, .gutter).
    ────────────────────────────────────────────────────────────────────── */
 .st-hdr {
   display: flex;

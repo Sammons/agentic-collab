@@ -4,8 +4,6 @@
      • Sidebar becomes a slide-in drawer (left edge), reachable via the
        hamburger button at top-left.
      • Page headers stack vertically. Filter chip rows scroll horizontally.
-     • Master-detail (Approvals) becomes a navigable stack — show master
-       first; selecting an item swaps in the detail with a back button.
      • Modal overlays become near-full-screen.
      • Touch targets bump to ≥40px tall.
    ────────────────────────────────────────────────────────────────────── */
@@ -308,42 +306,6 @@
   .watch-type .input-wrap { min-width: 100%; flex: 1 0 100%; order: 1; }
   .watch-type .send { order: 2; flex: 1; }
   .watch-type input { font-size: 16px; }
-
-  /* ── approvals master/detail → stacked ── */
-
-  .ap-page {
-    display: block !important;
-    grid-template-columns: none !important;
-  }
-  .ap-master { width: 100%; border-right: none; }
-  .ap-detail { width: 100%; min-height: 100vh; }
-
-  /* When body has .ap-show-detail (set by approvals.ts), hide master and
-     show detail; back button in detail returns to master. */
-  body.ap-show-detail .ap-master { display: none; }
-  body:not(.ap-show-detail) .ap-detail { display: none; }
-
-  .ap-detail-hdr {
-    padding: 14px 18px !important;
-  }
-  .ap-detail-hdr .id-row { flex-wrap: wrap; gap: 6px; }
-  .ap-detail-body { padding: 14px 18px; }
-  .ap-detail-back {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    background: transparent;
-    border: 0;
-    color: var(--ink-3);
-    font-size: 12.5px;
-    font-weight: 500;
-    cursor: pointer;
-    padding: 6px 0 10px;
-  }
-  .ap-detail-back:hover { color: var(--ink); }
-  .ap-actions { flex-wrap: wrap; gap: 6px; }
-  .ap-actions .btn { flex: 1 0 calc(50% - 3px); min-height: 38px; }
-  .ap-payload { font-size: 11px; }
 
   /* ── reminders ── */
 
